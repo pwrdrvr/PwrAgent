@@ -4480,12 +4480,14 @@ a.button {
   position: absolute;
   /* Center the toggle on the title's FIRST line, not the row's geometric
      center — same anchoring (and the same token-derived math) as
-     .thread-row__actions: title-line midpoint = 4px padding +
-     (size × 1.25 line + 2px descender pad) / 2, minus half the toggle's
-     18px height, rounded to a whole pixel (same golden-stability
-     rationale as the actions rule). Resolves to 4px at the md notch and
-     tracks every user-selected notch of `--sidebar-title-size`. */
-  top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 9px), 1px);
+     .thread-row__actions: title-line midpoint = 1px card border + 4px
+     padding + (size × 1.25 line + 2px descender pad) / 2, minus half the
+     toggle's 18px height, rounded to a whole pixel (same golden-stability
+     rationale as the actions rule; the border term is explained there,
+     since this toggle is positioned against the shell too). Resolves to
+     5px at the md notch and tracks every user-selected notch of
+     `--sidebar-title-size`. */
+  top: round(calc(5px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 9px), 1px);
   left: 8px;
   z-index: 4;
   display: grid;
@@ -4735,12 +4737,17 @@ a.button {
      row is multi-line (chips present) the title is still the FIRST
      line, so the same offset keeps the cluster anchored to it. Derived
      from the user-adjustable title token so every notch stays aligned:
-     title-line midpoint = 4px padding + (size × 1.25 line + 2px
-     descender pad) / 2; subtract half the 24px cluster height, rounded
-     to a whole pixel so the cluster never sits on a fractional
-     boundary (which would antialias-shift the visual goldens). At the
-     md notch (13px) this resolves to 1. */
-  top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
+     title-line midpoint = 1px card border + 4px padding + (size × 1.25
+     line + 2px descender pad) / 2; subtract half the 24px cluster
+     height, rounded to a whole pixel so the cluster never sits on a
+     fractional boundary (which would antialias-shift the visual
+     goldens). At the md notch (13px) this resolves to 2. The border
+     term matters because this cluster is positioned against the SHELL,
+     whose edge is the card's outer border edge. `.thread-row__open`
+     measures from the card's padding box, where 4px alone is right.
+     Without the border the cluster sat 0.5-2px above the title
+     midpoint and touched the card's top border at the xs notch. */
+  top: round(calc(5px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
   /* 11px (from 9): the card's own right inset is 10px padding + 1px
      border, so 9 put the kebab's edge 2px inside the border while its
      6px corner radius sat against the card's 8px one — the two curves
@@ -4887,11 +4894,23 @@ a.button {
 }
 
 /* The paint above is the hover paint, so on its own a focused button looked
-   hovered and drew Chromium's `outline: auto` ring. */
+   hovered and drew Chromium's `outline: auto` ring.
+
+   Every control in the card's title band rings INSET. The band has no
+   room for an outset ring: the cluster and the subthread toggle sit 1-6px
+   below the card's outer edge, and the in-title pin's 24px box overhangs
+   its 18px line slot by 3px. Measured before this rule, the rings (1px
+   and 2px offsets) crossed that edge by up to 4px at every title-size
+   notch, drawing the kebab's ring over the selected card's border. At
+   -2px the ring's reach is 0, so it clears the card's 1px border wherever
+   the control itself does. */
+.thread-row__subthread-toggle:focus-visible,
+.thread-row__heading-pin:focus-visible,
 .thread-row__pin-button:focus-visible,
+.thread-row__chip--add-reaction:focus-visible,
 .thread-row__overflow-button:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* Reaction + add-reaction controls share the .thread-row__chip primitive
@@ -4920,8 +4939,6 @@ a.button {
 .thread-row__chip--add-reaction:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 .thread-row__chip--add-reaction {
@@ -5258,11 +5275,6 @@ a.button {
 .thread-row__heading-pin:hover,
 .thread-row__heading-pin:focus-visible {
   background: var(--accent-soft);
-}
-
-.thread-row__heading-pin:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 /* Read-only variant for surfaces without a pin handler — same mark,

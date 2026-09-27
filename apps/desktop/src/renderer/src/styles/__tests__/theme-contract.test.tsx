@@ -1146,6 +1146,63 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
   });
 
+  // The card's title band has no room for an outset ring. The hover cluster
+  // and the subthread toggle sit 1-6px below the card's outer edge, and the
+  // in-title pin's 24px box overhangs its 18px line slot by 3px. At their
+  // old 1px and 2px offsets, every one of those rings crossed the card's
+  // top edge at some title-size notch. The kebab's ring crossed it by 2px
+  // at md and was drawn over the selected card's border. One shared rule
+  // rings all five inset. The cluster also needs its `top` to count the
+  // card's border: it is positioned against the shell, whose edge is the
+  // card's OUTER edge. Without the border it sat on that border at the xs
+  // notch, and even an inset ring landed on the border there.
+  it("keeps the thread card's title-band focus rings inside the card", () => {
+    const controls = [
+      ".thread-row__subthread-toggle",
+      ".thread-row__heading-pin",
+      ".thread-row__pin-button",
+      ".thread-row__chip--add-reaction",
+      ".thread-row__overflow-button",
+    ];
+    const sharedSelector = controls
+      .map((control) => `${control}:focus-visible`)
+      .join(",\n");
+    const ring = extractRuleBody(css, sharedSelector);
+    expect(ring).toContain("outline: 2px solid var(--focus-ring);");
+    expect(ring).toContain("outline-offset: -2px;");
+
+    // No other rule may give one of them its own ring back. Comments are
+    // stripped first, because several of them name these selectors.
+    const rules = css
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .matchAll(/(?<selectors>[^{}]+)\{(?<body>[^{}]*)\}/g);
+    for (const { groups } of rules) {
+      const selectors = groups?.selectors.trim() ?? "";
+      if (selectors === sharedSelector) {
+        continue;
+      }
+      for (const control of controls) {
+        if (selectors.includes(`${control}:focus-visible`)) {
+          expect(groups?.body, selectors).not.toMatch(/outline/);
+        }
+      }
+    }
+
+    const card = extractRuleBody(css, ".thread-row");
+    const cardBorder = Number(card.match(/border:\s*(\d+)px\s+solid/)?.[1]);
+    const cardBlockPadding = Number(card.match(/padding:\s*(\d+)px\s/)?.[1]);
+    expect(cardBorder).toBeGreaterThan(0);
+    for (const selector of [
+      ".thread-row__actions",
+      ".thread-row__subthread-toggle",
+    ]) {
+      const titleBandStart = Number(
+        extractRuleBody(css, selector).match(/top:\s*round\(calc\((\d+)px \+/)?.[1],
+      );
+      expect(titleBandStart, selector).toBe(cardBorder + cardBlockPadding);
+    }
+  });
+
   it("does not pull an unpinned first directory thread under the sticky header", () => {
     // An empty pinned lane still renders its zero-height append target before
     // the first unpinned row. Its ordinary -2px margins cancel the 2px flex
