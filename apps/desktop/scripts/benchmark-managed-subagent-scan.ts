@@ -1,3 +1,4 @@
+import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "../src/main/state/navigation-backend-metadata";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -51,7 +52,7 @@ raw.transaction(() => {
     lastSnapshotHash: "baseline",
   }));
 })();
-raw.transaction(() => raw.exec(THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA))();
+raw.transaction(() => raw.exec(THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA + NAVIGATION_BACKEND_METADATA_SCHEMA))();
 const stateDb = { raw } as StateDb;
 const baseline = new BaselineStore(stateDb);
 const current = new SqliteOverlayStore(stateDb);

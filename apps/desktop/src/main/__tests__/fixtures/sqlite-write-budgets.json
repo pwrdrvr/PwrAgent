@@ -412,6 +412,20 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "navigation-backend-digest-reconciliation": {
+    "commits": 1,
+    "note": "One changed complete snapshot commits compact metadata and index; unchanged and partial reads add no commits.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "navigation-detail-twenty-point-reads": {
+    "commits": 0,
+    "note": "Twenty selected configuration projections: no reconciliation, no persistence.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "navigation-mark-directory-seen-100-threads": {
     "commits": 1,
     "note": "Explicit owner directory action commits 100 watermarks in one transaction, no per-thread commits or idle writes; conservative 4 KiB/row is ~0.4 MB/action (~4 MB/day at 10 such actions)",

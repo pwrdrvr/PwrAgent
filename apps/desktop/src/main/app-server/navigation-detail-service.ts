@@ -9,7 +9,6 @@ import type {
   NavigationSelectedDetailResponse,
 } from "@pwragent/shared";
 import {
-  buildThreadIdentityKey,
   NAVIGATION_DETAIL_COLLECTION_NAMES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -18,7 +17,6 @@ import {
 import type { DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
-import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
@@ -160,7 +158,6 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
-    const threadKey = buildThreadIdentityKey(summary.source, summary.id);
     if (request.collection) {
       const name = request.collection.name;
       if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
@@ -197,20 +194,11 @@ export class NavigationDetailService {
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey([
       summary,
     ]);
-    const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
-      backend: summary.source,
-      fetchedAt: Date.now(),
+    const projected = await getDesktopOverlayStore().projectNavigationThreadDetail({
+      thread: summary,
       messagingBindingsByThreadKey,
-      partial: true,
-      queuedExecutionModesByThreadKey: {
-        [threadKey]: this.registry.getQueuedExecutionModeForThread(request.ref),
-      },
-      threads: [summary],
-      workspaceRoots: resolveScratchProjectsRoots(),
+      queuedExecutionMode: this.registry.getQueuedExecutionModeForThread(request.ref),
     });
-    const projected = snapshot.threads.find(
-      (thread) => buildThreadIdentityKey(thread.source, thread.id) === threadKey,
-    );
     // Live gate events and selected-detail refreshes must expose the same
     // helpers, including their parent-turn links, before persistence at turn end.
     if (projected?.source === "codex") {
