@@ -23,6 +23,29 @@ const resolveHeapMonitorConfigMock = vi.fn<
   (...args: unknown[]) => { enabled: boolean; [key: string]: unknown }
 >(() => ({ enabled: false }));
 const createHeapSessionMock = vi.fn();
+const resolveHotCpuProfileConfigMock = vi.fn(() => ({ enabled: false }));
+const createHotCpuProfileSessionMock = vi.fn();
+const hotRendererStart = vi.fn();
+const hotRendererStop = vi.fn();
+const hotMainStart = vi.fn();
+const hotMainStop = vi.fn();
+const mainHotTarget = {};
+vi.mock("../diagnostics/hot-cpu-profile-config", () => ({
+  resolveHotCpuProfileConfig: resolveHotCpuProfileConfigMock,
+}));
+vi.mock("../diagnostics/hot-cpu-profile-session", () => ({
+  createHotCpuProfileSession: createHotCpuProfileSessionMock,
+}));
+vi.mock("../diagnostics/main-process-hot-cpu-target", () => ({
+  createMainProcessHotCpuTarget: () => mainHotTarget,
+}));
+vi.mock("../diagnostics/hot-cpu-profiler", () => ({
+  HotCpuProfiler: vi.fn(function (options: { target: unknown }) {
+    return options.target === mainHotTarget
+      ? { start: hotMainStart, stop: hotMainStop }
+      : { start: hotRendererStart, stop: hotRendererStop };
+  }),
+}));
 const rendererMonitorStartMock = vi.fn();
 const rendererMonitorStopMock = vi.fn();
 const mainMonitorStartMock = vi.fn();
@@ -121,6 +144,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
   browserWindowState.show = vi.fn(() => emitWindowEvent("show"));
 
   return {
+    id: BrowserWindowMock.mock.calls.length,
     isDestroyed: () => false,
     loadFile: browserWindowState.loadFile,
     loadURL: browserWindowState.loadURL,
@@ -226,6 +250,13 @@ describe("createMainWindow", () => {
     resolveHeapMonitorConfigMock.mockReset();
     resolveHeapMonitorConfigMock.mockReturnValue({ enabled: false });
     createHeapSessionMock.mockReset();
+    resolveHotCpuProfileConfigMock.mockReset().mockReturnValue({ enabled: false });
+    createHotCpuProfileSessionMock.mockReset().mockResolvedValue({
+      ok: true, session: { directoryPath: "/fixture/hot-cpu" },
+    });
+    for (const mock of [hotMainStart, hotMainStop, hotRendererStart, hotRendererStop]) {
+      mock.mockReset().mockResolvedValue(undefined);
+    }
     rendererMonitorStartMock.mockReset();
     rendererMonitorStopMock.mockReset();
     mainMonitorStartMock.mockReset();
@@ -599,6 +630,57 @@ describe("createMainWindow", () => {
     expect(onShown).toHaveBeenCalledTimes(1);
   });
 
+  it("drains renderer and shared main captures, including an already closed window", async () => {
+    resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
+    let finishRenderer!: () => void;
+    let finishMain!: () => void;
+    hotRendererStop.mockReturnValue(new Promise<void>((resolve) => { finishRenderer = resolve; }));
+    hotMainStop.mockReturnValue(new Promise<void>((resolve) => { finishMain = resolve; }));
+    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await import("../window");
+    createMainWindow();
+    const firstLoad = webContentsOnceHandlers.get("did-finish-load")!;
+    createMainWindow();
+    firstLoad();
+    emitWebContentsEvent("did-finish-load");
+    await vi.waitFor(() => expect(hotRendererStart).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(hotMainStart).toHaveBeenCalledOnce());
+    emitWindowEvent("closed");
+    const finished = vi.fn();
+    const flush = stopWindowDiagnostics("app-quit").then(finished);
+    await vi.waitFor(() => expect(hotRendererStop).toHaveBeenCalledTimes(2));
+    expect(hotMainStop).toHaveBeenCalledOnce();
+    finishRenderer();
+    await Promise.resolve();
+    expect(finished).not.toHaveBeenCalled();
+    finishMain();
+    await flush;
+    syncHotCpuProfilersFromSettings("settings-changed");
+    await stopWindowDiagnostics("app-quit");
+    expect(hotRendererStop).toHaveBeenCalledTimes(2);
+    expect(hotMainStop).toHaveBeenCalledOnce();
+    expect(hotMainStart).toHaveBeenCalledOnce();
+  });
+
+  it("waits for profiler creation already queued when quit starts", async () => {
+    resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
+    let finishCreation!: (result: unknown) => void;
+    createHotCpuProfileSessionMock.mockReturnValueOnce(new Promise((resolve) => { finishCreation = resolve; }));
+    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await import("../window");
+    createMainWindow();
+    emitWebContentsEvent("did-finish-load");
+    await vi.waitFor(() => expect(createHotCpuProfileSessionMock).toHaveBeenCalledOnce());
+    const finished = vi.fn();
+    const flush = stopWindowDiagnostics("app-quit").then(finished);
+    syncHotCpuProfilersFromSettings("settings-changed");
+    expect(finished).not.toHaveBeenCalled();
+    finishCreation({ ok: true, session: { directoryPath: "/fixture/hot-cpu" } });
+    await flush;
+    expect(hotRendererStop).toHaveBeenCalledOnce();
+    expect(hotMainStop).toHaveBeenCalledOnce();
+    expect(hotMainStart).toHaveBeenCalledOnce();
+    expect(hotRendererStart).toHaveBeenCalledOnce();
+  });
+
   it("starts and stops heap diagnostics when enabled", async () => {
     resolveHeapMonitorConfigMock.mockReturnValue({
       enabled: true,
@@ -659,7 +741,7 @@ describe("createMainWindow", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(rendererMonitorStopMock).toHaveBeenCalledWith("window-closed");
-    expect(mainMonitorStopMock).toHaveBeenCalledWith("window-closed");
+    expect(rendererMonitorStopMock).toHaveBeenCalledOnce();
+    expect(mainMonitorStopMock).toHaveBeenCalledOnce();
   });
 });

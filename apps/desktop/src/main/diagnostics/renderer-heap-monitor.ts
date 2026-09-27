@@ -69,6 +69,9 @@ export class RendererHeapMonitor {
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private stopped = false;
+  private stopPromise?: Promise<void>;
+  private samplePromise?: Promise<void>;
+  private snapshotPromise?: Promise<void>;
   private paused = false;
   private debuggerAttached = false;
   private snapshotInFlight = false;
@@ -90,7 +93,7 @@ export class RendererHeapMonitor {
   }
 
   async start(): Promise<void> {
-    if (this.started) {
+    if (this.started || this.stopped) {
       return;
     }
 
@@ -119,6 +122,7 @@ export class RendererHeapMonitor {
         deltaThresholdBytes: this.config.deltaThresholdBytes,
       });
 
+      if (this.stopped) return;
       if (this.config.settleDelayMs === 0) {
         await this.beginMonitoring();
         return;
@@ -139,13 +143,16 @@ export class RendererHeapMonitor {
     }
   }
 
-  async stop(reason = "stopped"): Promise<void> {
-    if (this.stopped) {
-      return;
-    }
-
+  stop(reason = "stopped"): Promise<void> {
     this.stopped = true;
     this.pauseSampling();
+    this.stopPromise ??= this.stopInner(reason);
+    return this.stopPromise;
+  }
+
+  private async stopInner(reason: string): Promise<void> {
+    await this.samplePromise;
+    await this.snapshotPromise;
     const targetDestroyed = this.isTargetDestroyed();
     if (!targetDestroyed) {
       try {
@@ -211,7 +218,12 @@ export class RendererHeapMonitor {
     this.scheduleNextSample();
   }
 
-  private async captureSample(forceBaseline: boolean): Promise<void> {
+  private captureSample(forceBaseline: boolean): Promise<void> {
+    this.samplePromise = this.captureSampleInner(forceBaseline);
+    return this.samplePromise;
+  }
+
+  private async captureSampleInner(forceBaseline: boolean): Promise<void> {
     const capturedAt = this.now().toISOString();
 
     try {
@@ -279,7 +291,7 @@ export class RendererHeapMonitor {
     const filename = createSnapshotFilename(snapshotIndex);
     const filePath = path.join(this.session.directoryPath, filename);
     this.snapshotInFlight = true;
-    void this.captureSnapshot({
+    this.snapshotPromise = this.captureSnapshot({
       capturedAt: sample.capturedAt,
       deltaBytes,
       filename,
