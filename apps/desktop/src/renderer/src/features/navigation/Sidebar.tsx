@@ -262,6 +262,7 @@ type SidebarProps = {
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
+  onArchiveDirectories?: (directoryKeys: string[]) => Promise<void>;
   onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
@@ -1808,6 +1809,8 @@ export function Sidebar(props: SidebarProps) {
   const directoryContextMenuIsBulk =
     directoryContextMenuDirectories.length > 1;
   const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen);
+  const directoryMenuCanArchive = Boolean(props.onArchiveDirectories
+    && directoryContextMenuDirectories.some((directory) => directory.kind === "directory" || directory.kind === "workspace"));
   const directoryMenuCanPin = Boolean(
     !directoryContextMenuIsBulk
       && directoryContextMenu
@@ -2152,7 +2155,7 @@ export function Sidebar(props: SidebarProps) {
                 hoverReleasedListHandlers.setDirectoryThreadsCollapsed
               }
               onOpenDirectoryContextMenu={
-                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen
+                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen || props.onArchiveDirectories
                   ? openDirectoryContextMenu
                   : undefined
               }
@@ -2833,6 +2836,26 @@ export function Sidebar(props: SidebarProps) {
                   </button>
                 </>
               ) : null}
+            </div>
+          ) : null}
+          {directoryMenuCanArchive ? (
+            <div className="thread-context-menu__section">
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  const keys = directoryContextMenuDirectories
+                    .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
+                    .map((directory) => directory.key);
+                  setDirectoryContextMenu(undefined);
+                  hoverStableSnapshot.release();
+                  void props.onArchiveDirectories?.(keys);
+                }}
+              >
+                {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
+                  ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
+                  : "Archive Threads"}
+              </button>
             </div>
           ) : null}
           {directoryMenuCanRemove

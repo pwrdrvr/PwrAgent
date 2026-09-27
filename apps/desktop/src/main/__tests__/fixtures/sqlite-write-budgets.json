@@ -377,6 +377,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "navigation-archive-project-registration": {
+    "commits": 1,
+    "note": "Archive orchestration with provider mocked: one existing registration removal commit (~8 KiB); 100 projects/day is ~0.8 MB/day plus unchanged provider archive costs; no idle writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "navigation-mark-directory-seen-100-threads": {
     "commits": 1,
     "note": "Explicit owner directory action commits 100 watermarks in one transaction, no per-thread commits or idle writes; conservative 4 KiB/row is ~0.4 MB/action (~4 MB/day at 10 such actions)",

@@ -4403,6 +4403,46 @@ describe("Sidebar", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("Shift-selects visible threads across expanded projects", () => {
+    const secondThread = { ...sharedThread, id: "across-project", title: "Across project" };
+    const thirdThread = { ...sharedThread, id: "last-project", title: "Last project" };
+    const projects = [sharedThread, secondThread, thirdThread].map((thread, index) => ({
+      ...directories[0]!, key: `directory:/project-${index}`, label: `Project ${index}`,
+      path: `/project-${index}`, threadKeys: [`codex:${thread.id}`],
+    }));
+    render(<Sidebar backends={backends} browseMode="directories" directories={projects}
+      inboxThreads={[]} threads={[sharedThread, secondThread, thirdThread]} loading={false}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onSelectThread={() => undefined} />);
+    for (let index = 0; index < 3; index++) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Project ${index}(,|$)`) }));
+    }
+    const first = screen.getByRole("button", { name: sharedThread.title });
+    const middle = screen.getByRole("button", { name: secondThread.title });
+    const last = screen.getByRole("button", { name: thirdThread.title });
+    fireEvent.click(first);
+    fireEvent.click(last, { shiftKey: true });
+    for (const button of [first, middle, last]) expect(button).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("archives selected projects through complete owner membership", () => {
+    const onArchiveDirectories = vi.fn(async () => undefined);
+    const projects = [0, 1].map((index) => ({ ...directories[0]!,
+      key: `directory:/project-${index}`, label: `Project ${index}`, path: `/project-${index}`, threadKeys: [],
+    }));
+    render(<Sidebar backends={backends} browseMode="directories" directories={projects}
+      inboxThreads={[]} threads={[]} loading={false} onArchiveDirectories={onArchiveDirectories}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onSelectThread={() => undefined} />);
+    const first = screen.getByRole("button", { name: "Project 0" });
+    const last = screen.getByRole("button", { name: "Project 1" });
+    fireEvent.click(first, { metaKey: true });
+    fireEvent.click(last, { shiftKey: true });
+    fireEvent.contextMenu(last);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" }));
+    expect(onArchiveDirectories).toHaveBeenCalledWith(projects.map((project) => project.key));
+  });
+
   it("marks unread threads read across a Shift-selected range of collapsed directories", () => {
     const onMarkThreadsSeen = vi.fn(async () => undefined);
     const onSetDirectoryPin = vi.fn(async () => undefined);

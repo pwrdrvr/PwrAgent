@@ -2,6 +2,7 @@ import type { ForgeCli } from "../forge-product";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
+  ArchiveThreadCleanupResult,
   AppServerBackendScope,
   AppServerBuiltinBackendKind,
   AppServerBackendKind,
@@ -2951,12 +2952,14 @@ export type ThreadBranchDriftPair = {
 
 export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;
 
-/** Revalidate complete owner membership before removing an empty registration. */
+/** Revalidate complete owner membership before removing a registration. */
 export type RemoveNavigationDirectoryRequest = {
   directoryKey: string;
+  /** Archive owner-resolved members first, then recheck that the directory is empty. */
+  archiveThreads?: boolean;
   federationTarget?: FederationTarget;
 };
-export type RemoveNavigationDirectoryResponse = { directoryKey: string };
+export type RemoveNavigationDirectoryResponse = { directoryKey: string; cleanup?: ArchiveThreadCleanupResult[] };
 
 /** Resolve complete directory membership on its owner; never accept a renderer row allowlist. */
 export type MarkNavigationDirectorySeenRequest = {

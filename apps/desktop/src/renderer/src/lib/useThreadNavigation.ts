@@ -2777,6 +2777,7 @@ export function useThreadNavigation(
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
   removeDirectory: (directoryKey: string) => Promise<void>;
   markDirectoriesSeen: (directoryKeys: string[]) => Promise<void>;
+  archiveDirectories: (directoryKeys: string[]) => Promise<void>;
   /** Select an existing launchpad without creating or resetting its draft. */
   selectDirectoryLaunchpad: (directoryKey: string) => void;
   selectedDirectory?: NavigationDirectorySummary;
@@ -6434,6 +6435,37 @@ export function useThreadNavigation(
     }
   }, [desktopApi, refresh]);
 
+  const archiveDirectories = useCallback(async (directoryKeys: string[]): Promise<void> => {
+    setArchiveThreadError(undefined);
+    setArchiveThreadNotice(undefined);
+    const failures: string[] = [];
+    for (const directoryKey of new Set(directoryKeys)) {
+      try {
+        if (!desktopApi?.removeNavigationDirectory) throw new Error("Upgrade this instance to archive projects through owner navigation.");
+        const response = await desktopApi.removeNavigationDirectory({
+          directoryKey, archiveThreads: true, federationTarget: readRendererFederationTarget(),
+        });
+        const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
+        if (notice) setArchiveThreadNotice(notice);
+        if (!directoryKey.startsWith("directory:")) continue;
+        removedDirectoryKeysRef.current.add(directoryKey);
+        setLocalLaunchpads((current) => {
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
+        setSelectedItemKey((current) =>
+          current === buildLaunchpadSelectionKey(directoryKey) ? undefined : current,
+        );
+      } catch (error) {
+        failures.push(`${directoryKey.replace(/^directory:/, "")}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    boundedNavigation.invalidate();
+    await refresh();
+    if (failures.length) setArchiveThreadError(failures.join("\n"));
+  }, [desktopApi, boundedNavigation.invalidate, refresh]);
+
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
     async (directoryKey: string): Promise<void> => {
@@ -8100,6 +8132,7 @@ export function useThreadNavigation(
     resetDirectoryLaunchpad,
     removeDirectory,
     markDirectoriesSeen,
+    archiveDirectories,
     selectDirectoryLaunchpad,
     selectPendingLaunchpad,
     selectedDirectory,

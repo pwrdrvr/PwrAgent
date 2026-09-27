@@ -27,6 +27,32 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it.each([FEDERATION_BACKEND_METHODS.removeNavigationDirectory, FEDERATION_BACKEND_METHODS.archiveNavigationDirectory])(
+    "prevents navigation-only peers archiving projects through %s", async (method) => {
+      const removeNavigationDirectory = vi.fn();
+      const replies: FederationProtocolEnvelope[] = [];
+      const router = new FederationRouter({ localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+      router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_navigation"],
+        sendEnvelope: (envelope) => replies.push(envelope) });
+      registerFederationBackendHandlers({ router, backend: { removeNavigationDirectory } as unknown as FederationBackendOperations });
+      await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: {
+        id: "archive-project", kind: "request", method, params: { directoryKey: "directory:/repo", archiveThreads: true },
+        protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1_000,
+      } });
+      expect(replies[0]).toMatchObject({ kind: "error" });
+      expect(removeNavigationDirectory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("routes project archiving through the thread-control method", async () => {
+    const request = vi.fn(async () => ({ directoryKey: "directory:/repo" }));
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await client.removeNavigationDirectory({ directoryKey: "directory:/repo", archiveThreads: true });
+    expect(request).toHaveBeenCalledWith({ method: FEDERATION_BACKEND_METHODS.archiveNavigationDirectory,
+      params: { directoryKey: "directory:/repo", archiveThreads: true } });
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.archiveNavigationDirectory]).toBe("turn_control");
+  });
+
   it("gates explicit review modes before sending them to an old Federation owner", async () => {
     const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
