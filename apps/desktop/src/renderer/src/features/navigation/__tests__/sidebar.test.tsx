@@ -8066,7 +8066,8 @@ it("opens a project launchpad from the palette and reveals its expanded, focused
       expect(document.activeElement).toHaveClass("directory-row__summary");
       expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
     });
-    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement);
   } finally {
     restore();
   }
