@@ -730,7 +730,7 @@ async function runAppUpdateCheck(
       }
     | undefined;
 
-  updateCheckInFlight = (async () => {
+  updateCheckInFlight = (async (): Promise<AppUpdateCheckResult> => {
     try {
       const {
         channel: updateChannel,
