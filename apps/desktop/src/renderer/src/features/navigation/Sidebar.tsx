@@ -244,6 +244,7 @@ type SidebarProps = {
   threadJumpOpen?: boolean;
   onThreadJumpOpenChange?: (open: boolean) => void;
   onJumpToThread?: (thread: NavigationThreadSummary) => void;
+  onJumpToProject?: (directory: NavigationDirectorySummary) => void;
   /** ⌘K result owned by another instance: pin it locally, then open it. */
   onJumpToRemoteThread?: (thread: NavigationThreadSummary) => void;
   /**
@@ -444,6 +445,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
+  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -1853,6 +1855,13 @@ export function Sidebar(props: SidebarProps) {
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
+          projects={props.directories}
+          onJumpToProject={(directory) => {
+            props.onBrowseModeChange("directories");
+            setProjectReveal({ key: directory.key });
+            if (props.onJumpToProject) props.onJumpToProject(directory);
+            else void props.onOpenLaunchpad(directory);
+          }}
           onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
           onJumpToRemoteThread={props.onJumpToRemoteThread}
           onClose={() => props.onThreadJumpOpenChange?.(false)}
@@ -2101,6 +2110,8 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
+              projectReveal={projectReveal}
+              onProjectRevealComplete={() => setProjectReveal(undefined)}
               pagedNavigation={props.pagedNavigation}
               presentationOrder={hoverStableSnapshot.value.order}
               selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}

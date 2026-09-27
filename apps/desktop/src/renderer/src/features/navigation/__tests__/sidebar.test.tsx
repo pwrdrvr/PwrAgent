@@ -8041,3 +8041,55 @@ describe("Sidebar menus from the keyboard", () => {
     expect(chip).toHaveFocus();
   });
 });
+
+it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {
+  const { scrollIntoView, restore } = withMockScrollIntoView();
+  const onOpenLaunchpad = vi.fn(async () => undefined);
+  const onBrowseModeChange = vi.fn();
+  const onThreadJumpOpenChange = vi.fn();
+  const props = {
+    backends, directories: [...directories, {
+      ...directories[0]!, key: "directory:/repos/PwrSnap", label: "PwrSnap", path: "/repos/PwrSnap",
+    }], inboxThreads: [sharedThread], loading: false,
+    threads: [sharedThread], onBrowseModeChange, onCreateThread: async () => undefined,
+    onOpenLaunchpad, onSelectThread: () => undefined, onThreadJumpOpenChange,
+  };
+  try {
+    const { rerender } = render(<Sidebar {...props} browseMode="inbox" threadJumpOpen />);
+    const input = screen.getByRole("textbox", { name: "Jump to thread or project" });
+    fireEvent.change(input, { target: { value: "PwrAgent" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }));
+    expect(onBrowseModeChange).toHaveBeenCalledWith("directories");
+    expect(onThreadJumpOpenChange).toHaveBeenCalledWith(false);
+    rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
+      selectedItemKey={`launchpad:${directories[0]!.key}`} />);
+    await waitFor(() => {
+      expect(document.activeElement).toHaveClass("directory-row__summary");
+      expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+    });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+
+    // Visit another project, then return to the already expanded first one.
+    // Its sticky header may be visible while its threads are above the viewport;
+    // the normal-flow section must remain the scroll target on repeated jumps.
+    for (const project of [props.directories[1]!, props.directories[0]!]) {
+      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen />);
+      const search = screen.getByRole("textbox", { name: "Jump to thread or project" });
+      fireEvent.change(search, { target: { value: project.label } });
+      fireEvent.keyDown(search, { key: "Enter" });
+      scrollIntoView.mockClear();
+      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
+        selectedItemKey={`launchpad:${project.key}`} />);
+      await waitFor(() => {
+        expect(document.activeElement).toHaveClass("directory-row__summary");
+        expect(document.activeElement).toHaveTextContent(project.label);
+        expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+        expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+      });
+    }
+  } finally {
+    restore();
+  }
+});

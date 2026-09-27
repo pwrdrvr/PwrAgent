@@ -377,10 +377,10 @@ describe("App", () => {
       key: "k",
     });
     const quickSearch = await screen.findByRole("dialog", {
-      name: "Jump to thread",
+      name: "Jump to thread or project",
     });
     fireEvent.change(
-      within(quickSearch).getByRole("textbox", { name: "Jump to thread" }),
+      within(quickSearch).getByRole("textbox", { name: "Jump to thread or project" }),
       { target: { value: "something" } },
     );
 
@@ -392,7 +392,7 @@ describe("App", () => {
     });
 
     expect(
-      screen.queryByRole("dialog", { name: "Jump to thread" }),
+      screen.queryByRole("dialog", { name: "Jump to thread or project" }),
     ).not.toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { level: 2, name: "Search" }),

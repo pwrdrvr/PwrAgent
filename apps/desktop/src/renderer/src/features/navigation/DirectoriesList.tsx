@@ -100,6 +100,8 @@ type DirectoriesListProps = {
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
   directories: NavigationDirectorySummary[];
+  projectReveal?: { key: string };
+  onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
   selectedDirectoryKeys?: ReadonlySet<string>;
@@ -846,6 +848,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [props.directories],
   );
+  const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
+  const handledProjectReveal = useRef<{ key: string } | undefined>(undefined);
+
   const pinnedDirectories = useMemo(
     () =>
       visibleDirectories
@@ -906,6 +911,32 @@ export function DirectoriesList(props: DirectoriesListProps) {
     },
     [pagedNavigation, visibleDirectories],
   );
+  useEffect(() => {
+    const request = props.projectReveal;
+    if (!request || handledProjectReveal.current === request
+      || props.selectedItemKey !== buildLaunchpadSelectionKey(request.key)) return;
+    const header = projectHeaders.current.get(request.key);
+    if (!header) return;
+    if (expandedByKey[request.key] !== true) {
+      setExpandedByKey((current) => ({ ...current, [request.key]: true }));
+      return;
+    }
+    // Loaded threads provide the scroll extent below the header and can
+    // shift it when another expanded directory above finishes loading.
+    if (revealPagesInFlight) return;
+    // Wait until the palette's modal cleanup has restored its prior focus.
+    const frame = requestAnimationFrame(() => {
+      // The header is sticky: its visual top may already be at the viewport
+      // edge while the project's threads are scrolled out above it. Reveal the
+      // section's normal-flow start, then focus without moving the scroll.
+      header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
+      header.focus({ preventScroll: true });
+      handledProjectReveal.current = request;
+      props.onProjectRevealComplete?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey, revealPagesInFlight]);
+
   // Released monotonically: once the rows have been handed a request it is
   // never taken back. ThreadRow re-runs its scroll on EVERY change of the
   // request it is given, so a gate that reopened and closed with each later
@@ -1700,6 +1731,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
           }
         >
           <button
+            ref={(element) => {
+              if (element) projectHeaders.current.set(directory.key, element);
+              else projectHeaders.current.delete(directory.key);
+            }}
             data-hover-stable-release="directory"
             aria-label={directorySummaryLabel}
             aria-expanded={expanded}
