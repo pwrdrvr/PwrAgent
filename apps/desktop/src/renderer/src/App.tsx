@@ -2630,7 +2630,7 @@ function DesktopAppShell(props: {
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
     monitorJobSuggestionsDefaultEnabled:
-      settings.snapshot?.general.toolOutputAlerts.monitorJobSuggestionsEnabled?.value ?? true,
+      settings.snapshot?.general.toolOutputAlerts?.monitorJobSuggestionsEnabled?.value ?? true,
     tokenMiserDefaultEnabled:
       settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
     platform: threadOwnerPlatform({
