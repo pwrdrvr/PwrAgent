@@ -17,6 +17,37 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("balances the two summary cards without rounding the usage rows or accounting", () => {
+  const { pricing, accounting } = buildTokenMiserPricingFixture();
+  pricing.lines[0] = { ...pricing.lines[0]!, totalCostMicros: 30_039_073 };
+  pricing.lines[1] = { ...pricing.lines[1]!, totalCostMicros: 113_330 };
+  pricing.summaries = [spend.aggregateUsageLines(pricing.lines)!];
+  accounting.savings = {
+    ...accounting.savings!,
+    withoutGateCostMicros: 29_486_274,
+    gateCostMicros: 113_330,
+    revealedCostMicros: 16_310_766,
+    savingsMicros: 13_062_178,
+  };
+  // The fixture has a $12.26 gap, bringing the exact total to $42.412403.
+  const display = spend.buildThreadPricingDisplay({ pricing, tokenMiserAccounting: accounting });
+  const before = structuredClone(display);
+  const view = render(<PricingPanel display={display} />);
+  const pricingCard = view.container.querySelector(".pricing-summary-card")!;
+  const savingsCard = view.container.querySelector(".token-miser-summary-card")!;
+  expect(pricingCard.querySelector(".rail-summary-card__primary")).toHaveTextContent("$42.41 estimated");
+  expect(Array.from(pricingCard.querySelectorAll(".pricing-spend-row__cost")).map((row) => row.textContent))
+    .toEqual(["$42.30 estimated", "$0.11"]);
+  expect(savingsCard).toHaveTextContent("$13.06 saved");
+  expect(savingsCard).toHaveTextContent("$55.47 unfiltered");
+  expect(Array.from(savingsCard.querySelectorAll(".rail-summary-card__row-value")).slice(0, 3).map((row) => row.textContent))
+    .toEqual(["$29.48", "$0.11", "$16.31"]);
+  expect(savingsCard.querySelector(".token-miser-summary-card__figure"))
+    .toHaveAttribute("title", "$13.062178 before display rounding");
+  expect(view.container.querySelector(".pricing-usage-row")).toHaveTextContent("$30.04");
+  expect(display).toEqual(before);
+});
+
 it.each([true, false])("includes historical usage in the savings baseline (provider summary: %s)", (hasSummary) => {
   const { pricing, accounting } = buildTokenMiserPricingFixture();
   if (!hasSummary) pricing.summaries = [];

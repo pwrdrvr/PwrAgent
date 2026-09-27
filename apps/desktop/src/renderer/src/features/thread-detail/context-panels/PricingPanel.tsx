@@ -54,6 +54,11 @@ import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
 import {
+  exactSummaryMoneyTitle,
+  formatRoundedSummaryMoney,
+  roundPricingSummary,
+} from "../pricing-summary-rounding";
+import {
   type PricingModelSpend,
   prunePricingSpendOverrides,
 } from "../pricing-spend-by-model";
@@ -122,6 +127,14 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
     activeTurnId: props.activeTurnId, threadReasoningEffort: props.threadReasoningEffort, turnFailures: props.turnFailures,
   }), [props.display, props.pricing, props.subAgents, props.tokenMiserAccounting, props.activeTurnId, props.threadReasoningEffort, props.turnFailures]);
   const { summary, spendByModel, tokenMiserSummary, observedCostMicros, totals: pricingTotals } = model;
+  const roundedSummary = useMemo(() => summary?.currency === "USD"
+    && tokenMiserSummary?.terms && tokenMiserSummary.decisionCount > 0
+    ? roundPricingSummary(observedCostMicros, tokenMiserSummary.terms,
+        spendByModel.flatMap((group) => group.models.map((spend) => spend.summary.totalCostMicros)))
+    : undefined, [summary?.currency, tokenMiserSummary, observedCostMicros, spendByModel]);
+  const roundedModelCosts = new Map(spendByModel.flatMap((group) => group.models)
+    .flatMap((spend, index) => roundedSummary?.modelCostsMicros
+      ? [[spend.key, roundedSummary.modelCostsMicros[index]!] as const] : []));
   const pricingHistoryKey = summary ? `${summary.backend}:${summary.threadId}` : "empty";
   const [usagePage, setUsagePage] = useState({ count: PRICING_USAGE_PAGE_SIZE, key: pricingHistoryKey });
   const visibleUsageRowCount = props.display ? model.rows.length : usagePage.key === pricingHistoryKey ? usagePage.count : PRICING_USAGE_PAGE_SIZE;
@@ -197,12 +210,16 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
               </span>
             </div>
             <div className="rail-summary-card__headline">
-              <span className="rail-summary-card__primary">
+              <span
+                className="rail-summary-card__primary"
+                title={roundedSummary ? exactSummaryMoneyTitle(observedCostMicros) : undefined}
+              >
                 {formatSummaryEstimates({
                   codexCreditMicros: pricingTotals.totalCreditMicros,
                   displayOptions,
                   hasEstimates: pricingTotals.hasEstimatedRows,
                   summary,
+                  roundedCostMicros: roundedSummary?.costMicros,
                 })}
               </span>
             </div>
@@ -238,6 +255,9 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
                               currency: group.currency,
                               displayOptions,
                               totalCostMicros: group.totalCostMicros,
+                              roundedCostMicros: roundedSummary?.modelCostsMicros
+                                ? group.models.reduce((sum, spend) => sum + roundedModelCosts.get(spend.key)!, 0)
+                                : undefined,
                             })}
                             {" · "}
                             {formatUsageRowCount(group.usageLineCount)}
@@ -252,6 +272,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
                           onToggle={() => toggleSpendRow(modelSpend.key)}
                           showProvider={!showGroupHead}
                           spend={modelSpend}
+                          roundedCostMicros={roundedModelCosts.get(modelSpend.key)}
                         />
                       ))}
                     </div>
@@ -281,6 +302,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
             : {})}
           {...(observedCostMicros > 0 ? { observedCostMicros } : {})}
           summary={tokenMiserSummary}
+          rounded={roundedSummary}
         />
       ) : null}
 
@@ -496,6 +518,7 @@ function PricingModelSpendRow(props: {
   /** True when no provider heading sits above this row to name it. */
   showProvider: boolean;
   spend: PricingModelSpend;
+  roundedCostMicros?: number;
 }) {
   const summary = props.spend.summary;
   // A bucket that is entirely unpriced is not a bucket that cost nothing, and
@@ -521,6 +544,7 @@ function PricingModelSpendRow(props: {
         displayOptions: props.displayOptions,
         hasEstimates: props.spend.hasEstimatedRows,
         totalCostMicros: summary.totalCostMicros,
+        roundedCostMicros: props.roundedCostMicros,
       });
   const origin = formatModelSpendOrigin(props.spend);
   // When helpers share this model, the token volume the operator wants is the
@@ -549,7 +573,12 @@ function PricingModelSpendRow(props: {
         </span>
         <span className="pricing-spend-row__meta">{meta}</span>
         {cost ? (
-          <span className="pricing-spend-row__cost">{cost}</span>
+          <span
+            className="pricing-spend-row__cost"
+            title={props.roundedCostMicros === undefined ? undefined : exactSummaryMoneyTitle(summary.totalCostMicros)}
+          >
+            {cost}
+          </span>
         ) : null}
       </button>
       {props.expanded ? (
@@ -595,11 +624,14 @@ function formatSpendMoney(params: {
   displayOptions: PricingDisplayOptions;
   hasEstimates?: boolean;
   totalCostMicros: number;
+  roundedCostMicros?: number;
 }): string | undefined {
   if (!params.displayOptions.usd) {
     return undefined;
   }
-  const money = formatMoney(params.totalCostMicros, params.currency);
+  const money = params.roundedCostMicros === undefined
+    ? formatMoney(params.totalCostMicros, params.currency)
+    : formatRoundedSummaryMoney(params.roundedCostMicros);
   return params.hasEstimates ? `${money} estimated` : money;
 }
 
@@ -913,10 +945,13 @@ function formatSummaryEstimates(params: {
   displayOptions: PricingDisplayOptions;
   hasEstimates?: boolean;
   summary: ThreadPricingSummary;
+  roundedCostMicros?: number;
 }): string {
   const estimates: string[] = [];
   if (params.displayOptions.usd) {
-    estimates.push(formatMoney(params.summary.totalCostMicros, params.summary.currency));
+    estimates.push(params.roundedCostMicros === undefined
+      ? formatMoney(params.summary.totalCostMicros, params.summary.currency)
+      : formatRoundedSummaryMoney(params.roundedCostMicros));
   }
   if (
     params.displayOptions.codexCredits &&

@@ -84,11 +84,11 @@ export function TooltipValue(props: {
   );
 }
 
-export function RailSummaryRow(props: { label: string; value: string }) {
+export function RailSummaryRow(props: { label: string; value: string; title?: string }) {
   return (
     <div className="rail-summary-card__row">
       <span className="rail-summary-card__row-label">{props.label}</span>
-      <span className="rail-summary-card__row-value">{props.value}</span>
+      <span className="rail-summary-card__row-value" title={props.title}>{props.value}</span>
     </div>
   );
 }
