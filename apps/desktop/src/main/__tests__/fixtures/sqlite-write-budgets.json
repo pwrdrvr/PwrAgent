@@ -349,6 +349,13 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "monitor-job-suggestion-claim": {
+    "commits": 1,
+    "note": "one durable claim per qualifying turn; 100 duplicate events and store reopen write nothing",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "move-thread-project": {
     "commits": 1,
     "note": "one operator project move replaces the workspace and clears project runtime atomically",

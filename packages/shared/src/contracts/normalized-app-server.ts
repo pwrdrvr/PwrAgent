@@ -614,6 +614,7 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
+  systemReason?: "monitor-job-suggestion";
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;
@@ -1178,6 +1179,8 @@ export type AppServerReadThreadResponse = {
   tokenMiserEnabled?: boolean;
   /** Persisted per-thread Token Miser override; absent follows the default. */
   tokenMiserOverride?: boolean;
+  /** Persisted monitor suggestion override; absent follows the profile default. */
+  monitorJobSuggestionsEnabled?: boolean;
   replay: AppServerThreadReplay;
   /**
    * A server request still awaiting an operator response. This lets a freshly

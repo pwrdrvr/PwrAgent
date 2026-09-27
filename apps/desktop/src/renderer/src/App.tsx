@@ -2629,6 +2629,8 @@ function DesktopAppShell(props: {
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
+    monitorJobSuggestionsDefaultEnabled:
+      settings.snapshot?.general.toolOutputAlerts.monitorJobSuggestionsEnabled?.value ?? true,
     tokenMiserDefaultEnabled:
       settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
     platform: threadOwnerPlatform({

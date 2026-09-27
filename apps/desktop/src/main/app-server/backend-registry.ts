@@ -1,3 +1,4 @@
+import { MonitorJobSuggestionDetector, MONITOR_JOB_SUGGESTION } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
@@ -8887,6 +8888,7 @@ export class DesktopBackendRegistry {
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
+  private readonly monitorJobSuggestionDetector = new MonitorJobSuggestionDetector();
   private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
@@ -12109,6 +12111,9 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       ...(overlay?.tokenMiserEnabled !== undefined
         ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
+      ...(overlay?.monitorJobSuggestionsEnabled !== undefined
+        ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
         : {}),
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
@@ -28785,7 +28790,46 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async suggestMonitorJob(invocation: ThreadToolInvocationRecord): Promise<void> {
+    const { backend, threadId, turnId } = invocation;
+    // ACP may implement steering as a queued next turn. A cost reminder must
+    // never wake a finished parent, so use native Codex active-turn steering.
+    if (backend !== "codex" || !turnId) return;
+    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return;
+    if (Array.from(this.taskMonitorDelegations.values()).some(
+      (record) => record.backend === backend && record.monitorThreadId === threadId,
+    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return;
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    if (!(overlay?.monitorJobSuggestionsEnabled
+      ?? this.toolOutputAlertPolicy.monitorJobSuggestionsEnabled ?? true)) return;
+    if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return;
+    if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return;
+    await this.steerTurn({
+      backend,
+      threadId,
+      expectedTurnId: turnId,
+      requestId: `monitor-job-suggestion:${backend}:${threadId}:${turnId}`,
+      input: [{ type: "text", text: MONITOR_JOB_SUGGESTION }],
+    }, { kind: "pwragent", systemReason: "monitor-job-suggestion" });
+  }
+
   private async recordToolInvocationAccounting(event: AgentEvent): Promise<void> {
+    if (event.notification.method === "item/completed" && event.backend === "codex") {
+      const observed = toolInvocationFromNotification({
+        backend: event.backend,
+        notification: event.notification,
+        includeSmallTools: true,
+      });
+      if (observed && this.monitorJobSuggestionDetector.observe(observed)) {
+        void this.suggestMonitorJob(observed).catch((error) => {
+          backendRegistryLog.warn("monitor job suggestion was not delivered", {
+            threadId: observed.threadId,
+            turnId: observed.turnId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
     if (
       event.notification.method === "turn/completed"
       || event.notification.method === "turn/failed"
@@ -28795,6 +28839,7 @@ export class DesktopBackendRegistry {
       const threadId = readNonEmptyString(params?.threadId);
       const turnId = readNonEmptyString(params?.turnId);
       if (threadId && turnId) {
+        this.monitorJobSuggestionDetector.clear(event.backend, threadId);
         this.liveToolOutputIncidents.delete(
           `large-output:${event.backend}:${threadId}:${turnId}`,
         );
@@ -40851,6 +40896,9 @@ function toThreadInspectionSummary(
     ...(overlay?.tokenMiserEnabled !== undefined
       ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
       : {}),
+    ...(overlay?.monitorJobSuggestionsEnabled !== undefined
+      ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
+      : {}),
     handoffOrigin: overlay?.handoffOrigin,
     executionMode: thread.executionMode,
     model: thread.model,
@@ -40899,6 +40947,9 @@ function toThreadInspectionSummaryFromSearchResult(
     agent: overlay?.agent,
     ...(overlay?.tokenMiserEnabled !== undefined
       ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+      : {}),
+    ...(overlay?.monitorJobSuggestionsEnabled !== undefined
+      ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
       : {}),
     handoffOrigin: overlay?.handoffOrigin,
     model: result.model,

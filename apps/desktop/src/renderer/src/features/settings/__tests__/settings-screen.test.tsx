@@ -1508,6 +1508,14 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Usage & pricing" }),
     ).toBeInTheDocument();
+    const monitorSuggestions = screen.getByRole("switch", { name: "Monitor job suggestions" });
+    expect(monitorSuggestions).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(monitorSuggestions);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { toolOutputAlerts: { monitorJobSuggestionsEnabled: false } },
+      });
+    });
     expect(
       screen.getByRole("heading", { name: "Alerts" }),
     ).toBeInTheDocument();

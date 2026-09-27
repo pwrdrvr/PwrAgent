@@ -144,6 +144,8 @@ import {
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
   type SetThreadTokenMiserRequest,
+  type SetThreadMonitorJobSuggestionsRequest,
+  type SetThreadMonitorJobSuggestionsResponse,
   type SetThreadTokenMiserResponse,
   type SetThreadAgentResponse,
   type SetThreadPinRequest,
@@ -301,6 +303,7 @@ import {
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
+  NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
@@ -6450,6 +6453,41 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadMonitorJobSuggestions(
+    request: SetThreadMonitorJobSuggestionsRequest,
+  ): Promise<SetThreadMonitorJobSuggestionsResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadMonitorJobSuggestions({
+      backend,
+      threadId: request.threadId,
+      enabled: request.enabled,
+    });
+    logDebug("setThreadMonitorJobSuggestions", {
+      backend,
+      threadId: request.threadId,
+      monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled ?? null,
+    });
+    // Reuse the thread-agent notification path: it already tells every window
+    // to re-read this thread's summary, and the override lives on the same
+    // overlay row.
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: {
+          threadId: request.threadId,
+        },
+      },
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      ...(overlay.monitorJobSuggestionsEnabled !== undefined
+        ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
+        : {}),
+    };
+  }
+
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
@@ -8442,6 +8480,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadTokenMiserRequest,
     ): Promise<SetThreadTokenMiserResponse> => {
       return await appServerService.setThreadTokenMiser(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
+    async (
+      _event,
+      request: SetThreadMonitorJobSuggestionsRequest,
+    ): Promise<SetThreadMonitorJobSuggestionsResponse> => {
+      return await appServerService.setThreadMonitorJobSuggestions(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REORDER_THREAD_PINS_CHANNEL);

@@ -24616,6 +24616,75 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each([
+    { name: "default on", global: undefined, override: undefined, active: true, claimed: true, expected: 1 },
+    { name: "global off", global: false, override: undefined, active: true, claimed: true, expected: 0 },
+    { name: "thread off", global: true, override: false, active: true, claimed: true, expected: 0 },
+    { name: "thread on", global: false, override: true, active: true, claimed: true, expected: 1 },
+    { name: "stale turn", global: true, override: undefined, active: false, claimed: true, expected: 0 },
+    { name: "already claimed", global: true, override: undefined, active: true, claimed: false, expected: 0 },
+    { name: "failed steer is not retried", global: true, override: undefined, active: true, claimed: true, expected: 1, fail: true },
+    { name: "monitor child", global: true, override: undefined, active: true, claimed: true, expected: 0, monitor: true },
+  ])("delivers a monitor job suggestion only to the eligible active turn: $name", async (scenario) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+      ...(scenario.fail ? { steerTurnError: new Error("stale active turn") } : {}),
+    });
+    const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
+    const claim = vi.fn(() => scenario.claimed);
+    const getThreadOverlayState = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", extraLinkedDirectories: [],
+      executionMode: "full-access" as const,
+      monitorJobSuggestionsEnabled: scenario.override,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: { ...overlayStore, getThreadOverlayState, claimMonitorJobSuggestion: claim },
+      resolveToolOutputAlertPolicy: () => ({
+        outputCapHitsEnabled: false, repeatedLargeOutputsEnabled: false,
+        repeatedLargeOutputMinimumCalls: 5, repeatedLargeOutputMinimumPercent: 50,
+        repeatedQueuedChecksEnabled: false,
+        monitorJobSuggestionsEnabled: scenario.global,
+      }),
+    });
+    try {
+      const turn = await registry.startTurn({
+        backend: "codex", threadId: "thread-1",
+        input: [{ type: "text", text: "Wait for CI" }],
+      });
+      const steer = vi.spyOn(registry, "steerTurn");
+      if (scenario.monitor) {
+        (registry as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
+          .completedTaskMonitorsByThread.set("codex:thread-1", {});
+      }
+      if (!scenario.active) vi.spyOn(registry, "getActiveTurnForThread").mockReturnValue(undefined);
+      const record = (registry as unknown as {
+        recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
+      }).recordToolInvocationAccounting.bind(registry);
+      const now = vi.spyOn(Date, "now");
+      for (let index = 0; index < 5; index++) {
+        now.mockReturnValue(1_000_000 + index * 120_000);
+        await record({ backend: "codex", notification: { method: "item/completed", params: {
+          threadId: "thread-1", turnId: turn.turnId,
+          item: { id: `poll-${index}`, type: "commandExecution", command: "gh run view 123 --repo owner/repo --json status", status: "completed", aggregatedOutput: "queued" },
+        } } } as AgentEvent);
+      }
+      now.mockRestore();
+      await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(scenario.expected));
+      if (scenario.expected) {
+        expect(claim).toHaveBeenCalledTimes(1);
+        expect(steer).toHaveBeenCalledWith(expect.objectContaining({
+          threadId: "thread-1", expectedTurnId: turn.turnId,
+          input: [{ type: "text", text: expect.stringContaining("create_monitor_delegation") }],
+        }), { kind: "pwragent", systemReason: "monitor-job-suggestion" });
+        await vi.waitFor(() => expect(codexClient.steerTurnCallCount).toBe(1));
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await registry.close();
+    }
+  });
+
   it("steers Codex turns through the single client and surfaces its error", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },

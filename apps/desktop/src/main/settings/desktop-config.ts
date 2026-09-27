@@ -664,6 +664,12 @@ export function desktopSettingsPatchToEdits(
       patch.general.toolOutputAlerts.repeatedLargeOutputMinimumPercent,
     );
   }
+  if (patch.general?.toolOutputAlerts?.monitorJobSuggestionsEnabled !== undefined) {
+    set(
+      ["general", "tool_output_alerts", "monitor_job_suggestions_enabled"],
+      patch.general.toolOutputAlerts.monitorJobSuggestionsEnabled,
+    );
+  }
   if (
     patch.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled !== undefined
   ) {
@@ -1784,6 +1790,9 @@ function normalizeDesktopConfig(
         ),
         repeatedLargeOutputMinimumPercent: readNumber(
           generalToolOutputAlerts?.repeated_large_output_minimum_percent,
+        ),
+        monitorJobSuggestionsEnabled: readBoolean(
+          generalToolOutputAlerts?.monitor_job_suggestions_enabled,
         ),
         repeatedQueuedChecksEnabled: readBoolean(
           generalToolOutputAlerts?.repeated_queued_checks_enabled,

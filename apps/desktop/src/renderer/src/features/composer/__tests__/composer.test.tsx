@@ -1206,6 +1206,83 @@ describe("Composer", () => {
     expect(setThreadAgent).not.toHaveBeenCalled();
   });
 
+  it("shows the profile default and lets a thread clear its monitor suggestion override", async () => {
+    const setThreadMonitorJobSuggestions = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
+    const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const { rerender } = render(<Composer desktopApi={{ setThreadMonitorJobSuggestions }}
+      disabled={false} skills={[]} thread={thread} monitorJobSuggestionsDefaultEnabled={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: "Monitor job suggestions" })).toHaveAttribute("aria-checked", "false");
+    rerender(<Composer desktopApi={{ setThreadMonitorJobSuggestions }} disabled={false} skills={[]}
+      thread={{ ...thread, monitorJobSuggestionsEnabled: true }} monitorJobSuggestionsDefaultEnabled={false} />);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Monitor job suggestions" })).toHaveAttribute("aria-checked", "true");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Use default for monitor suggestions" }));
+    });
+    expect(setThreadMonitorJobSuggestions).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", enabled: null });
+  });
+
+  it("toggles monitor job suggestions for this thread from the composer menu", async () => {
+    const setThreadMonitorJobSuggestions = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      monitorJobSuggestionsEnabled: false,
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{ setThreadMonitorJobSuggestions }}
+        disabled={false}
+        onRefreshNavigation={onRefreshNavigation}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const monitorJobSuggestions = screen.getByRole("menuitemcheckbox", {
+      name: /Monitor job suggestions/,
+    });
+    // No override yet: reflects the inherited default, and says nothing about
+    // "this thread".
+    expect(monitorJobSuggestions).toHaveAttribute("aria-checked", "true");
+    expect(monitorJobSuggestions).not.toHaveTextContent("this thread");
+
+    await act(async () => {
+      fireEvent.click(monitorJobSuggestions);
+      await Promise.resolve();
+    });
+
+    expect(setThreadMonitorJobSuggestions).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: false,
+    });
+    expect(onRefreshNavigation).toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Thread options" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread options" }))
+      .toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menu", { name: "Thread options" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu", { name: "Thread options" }))
+      .not.toBeInTheDocument();
+  });
+
   // Gating adds a synchronous helper round trip per large tool result, so a
   // thread needs a way to opt out — or in — without touching Settings. The
   // menu shows the effective state (override, else global) and writes the
