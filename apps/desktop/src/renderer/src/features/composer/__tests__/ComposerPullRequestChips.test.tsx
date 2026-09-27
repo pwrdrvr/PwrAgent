@@ -1,8 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Editor } from "@tiptap/react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
+import { Composer } from "../Composer";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
 import { createComposerPullRequestToken, serializeDraftWithSkillTokens } from "../composer-mention-tokens";
 
@@ -110,4 +112,34 @@ it("releases on-demand interest when the composer unmounts", async () => {
   expect(set).toHaveBeenLastCalledWith({ updates: [], removedUrls: [fork.url] });
   expect(unsubscribe).toHaveBeenCalledOnce();
   expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+});
+
+it.each(["rich text", "plain text"])("preserves the exact PR identity when copied as %s into another composer", (format) => {
+  const url = `${fork.url}/files#diff-123`;
+  const source = render(<ComposerTiptapInput id="source" label="Source reply" value="See " placeholder="Reply"
+    markdownConversion onChange={() => undefined} skillTokens={[createComposerPullRequestToken({ ...fork, url }, 4)]} />);
+  const editor = (screen.getByRole("textbox", { name: "Source reply" }) as HTMLElement & { editor: Editor }).editor;
+  act(() => { editor.commands.selectAll(); });
+  const clipboard = new Map<string, string>();
+  fireEvent.copy(editor.view.dom, { clipboardData: { clearData: () => clipboard.clear(), setData: (type: string, value: string) => clipboard.set(type, value) } });
+  expect(clipboard.get("text/plain")).toBe(`See [contributor/diskhound#4](${url})`);
+  expect(clipboard.get("text/html")).toContain(url);
+  source.unmount();
+
+  const otherPr = { ...fork, repo: "disktree", url: "https://github.com/contributor/disktree/pull/4" };
+  const destinationThread: NavigationThreadSummary = {
+    source: "codex", id: "destination", title: "DiskTree", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: true }, prs: [otherPr],
+  };
+  const destination = render(<PullRequestLinkProvider activeThread={destinationThread} threads={[destinationThread]}>
+    <Composer disabled={false} skills={[]} thread={destinationThread} threads={[destinationThread]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startTurn: vi.fn() }} />
+  </PullRequestLinkProvider>);
+  fireEvent.paste(screen.getByRole("textbox", { name: "Reply" }), {
+    clipboardData: { getData: (type: string) => format === "plain text" && type === "text/html" ? "" : clipboard.get(type) ?? "", files: [], items: [], types: format === "plain text" ? ["text/plain"] : ["text/plain", "text/html"] },
+  });
+  const chip = destination.container.querySelector(".composer-pr-chip");
+  expect(chip).toHaveTextContent("contributor/diskhound#4");
+  expect(chip).toHaveAttribute("data-skill-path", url);
+  expect(chip).not.toHaveTextContent("contributor/disktree#4");
 });

@@ -340,10 +340,14 @@ const SkillMention = Mention.extend({
     ];
   },
   renderText: ({ node }) => {
-    if (
-      node.attrs.kind === "thread"
-      || node.attrs.kind === "pull-request"
-    ) {
+    if (node.attrs.kind === "pull-request") {
+      const path = String(node.attrs.path ?? node.attrs.name ?? "");
+      const pr = parsePullRequestUrl(path);
+      // Plain-text clipboard consumers need the URL as well as the label.
+      // Markdown also lets another composer rebuild the repository-scoped chip.
+      return pr ? `[${pr.org}/${pr.repo}#${pr.number}](${path})` : path;
+    }
+    if (node.attrs.kind === "thread") {
       return String(node.attrs.path ?? node.attrs.name ?? "");
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
