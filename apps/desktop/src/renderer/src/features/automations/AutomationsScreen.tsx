@@ -1,3 +1,4 @@
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
@@ -92,6 +93,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
       throw new Error("Desktop bridge is missing setThreadAgent().");
     }
     const response = await props.desktopApi.setThreadAgent({
+      federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
       agent: { name: thread.title },
       backend: thread.source,
       threadId: thread.id,

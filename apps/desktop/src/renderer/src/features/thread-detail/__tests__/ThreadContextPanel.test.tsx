@@ -4520,6 +4520,23 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
   });
 
+  it.each(["row", "window"] as const)("routes Agent designation to the %s owner", async (surface) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const remoteWindow = window as typeof window & { __pwragentFederationTarget?: typeof target };
+    if (surface === "window") remoteWindow.__pwragentFederationTarget = target;
+    const setThreadAgent = vi.fn();
+    try {
+      renderPanel({ pinned: true, desktopApi: { setThreadAgent }, thread: {
+        ...baseThread,
+        ...(surface === "row" ? { federation: { instanceLabel: "Owner", ref: { backend: baseThread.source, threadId: baseThread.id, target } } } : {}),
+      } });
+      fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
+      await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: baseThread.source, threadId: baseThread.id, agent: DEFAULT_DESKTOP_AGENT_THREAD, federationTarget: target }));
+    } finally {
+      delete remoteWindow.__pwragentFederationTarget;
+    }
+  });
+
   it.each(["codex", "acp:gemini"] as const)("marks an ordinary %s thread as an Agent from the context panel", async (backend) => {
     const setThreadAgent = vi.fn(async () => ({
       backend,

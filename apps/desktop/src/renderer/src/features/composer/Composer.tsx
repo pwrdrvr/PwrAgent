@@ -431,26 +431,29 @@ type ComposerProps = {
   threadModelSettingsError?: string;
 };
 
-const providerCatalogsRefreshedThisSession = new Set<AppServerBackendKind>();
+const providerCatalogsRefreshedThisSession = new Set<string>();
 
 async function refreshProviderCatalogOnFirstSelection(
   desktopApi: DesktopApi | undefined,
   backend: AppServerBackendKind,
+  federationTarget?: FederationTarget,
 ): Promise<void> {
+  const key = JSON.stringify([federationTarget?.scope === "remote" ? federationTarget.instanceId : null, backend]);
   if (
-    providerCatalogsRefreshedThisSession.has(backend)
+    providerCatalogsRefreshedThisSession.has(key)
     || !desktopApi?.listBackends
   ) {
     return;
   }
-  providerCatalogsRefreshedThisSession.add(backend);
+  providerCatalogsRefreshedThisSession.add(key);
   try {
     await desktopApi.listBackends({
       includeUnavailable: true,
+      federationTarget,
     });
     window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
   } catch {
-    providerCatalogsRefreshedThisSession.delete(backend);
+    providerCatalogsRefreshedThisSession.delete(key);
   }
 }
 
@@ -9193,6 +9196,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.setThreadAgent({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? rendererFederationTarget,
         threadId: thread.id,
         agent: agentThread ? createDesktopAgentThread() : null,
       });
@@ -9250,6 +9254,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.setThreadTokenMiser({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? rendererFederationTarget,
         threadId: thread.id,
         enabled,
       });
@@ -9301,7 +9306,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           && latestLaunchpad.model === automaticModel
           && latestLaunchpad.reasoningEffort === automaticReasoningEffort;
         const refreshedModels = refreshedBackend.launchpadOptions?.models ?? [];
-        const configuredDefaults = props.providerModelDefaults?.[backend];
+        const configuredDefaults = filesystemFederationTarget?.scope === "remote"
+          ? refreshedBackend.modelDefaults
+          : props.providerModelDefaults?.[backend];
         const configuredModelOption = refreshedModels.find(
           (model) => model.id === configuredDefaults?.model,
         );
@@ -9362,6 +9369,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     props.onProviderSelected,
     props.onUpdateLaunchpad,
     props.providerModelDefaults,
+    filesystemFederationTarget?.scope,
   ]);
 
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
@@ -9488,6 +9496,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     void props.onSetThreadModelSettings(patch);
   };
 
+  // Remote controls use the owner's feature gate/default, never the viewer's.
+  // Older owners omit this metadata, so the override control stays hidden.
+  const tokenMiserEnabled = filesystemFederationTarget?.scope === "remote"
+    ? backend?.tokenMiser?.enabled
+    : props.tokenMiserEnabled;
+  const tokenMiserDefaultEnabled = filesystemFederationTarget?.scope === "remote"
+    ? backend?.tokenMiser?.defaultEnabled
+    : props.tokenMiserDefaultEnabled;
   const currentSettings = props.launchpad ?? props.thread;
   const backgroundPrPollingEnabled =
     props.backgroundPrPollingEnabled ?? true;
@@ -9518,7 +9534,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       )
     : undefined;
   const profileModelDefaults = backend
-    ? props.providerModelDefaults?.[backend.kind]
+    ? filesystemFederationTarget?.scope === "remote"
+      ? backend.modelDefaults
+      : props.providerModelDefaults?.[backend.kind]
     : undefined;
   const profileModelOption =
     modelOptions.find((option) => option.id === profileModelDefaults?.model)
@@ -9546,7 +9564,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     );
   const supportsFast =
     backend?.kind === "codex"
-    && props.codexFastAllowed !== false
+    && (filesystemFederationTarget?.scope === "remote"
+      ? backend?.codexFastAllowed !== false
+      : props.codexFastAllowed !== false)
       ? selectedModelOption?.supportsFast ??
         backend.launchpadOptions?.supportsFastMode ??
         false
@@ -12195,6 +12215,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   void refreshProviderCatalogOnFirstSelection(
                     props.desktopApi,
                     nextBackend,
+                    filesystemFederationTarget,
                   );
                 }
                 handleLaunchpadPatch({
@@ -12779,15 +12800,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   },
                 }
               : {})}
-            {...(props.tokenMiserEnabled === true
+            {...(tokenMiserEnabled === true
               && ((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
                 || (props.thread?.source === "codex"
-                  && props.thread.federation?.ref.target.scope !== "remote"
                   && props.desktopApi?.setThreadTokenMiser))
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled
-                    ?? props.tokenMiserDefaultEnabled
+                    ?? tokenMiserDefaultEnabled
                     ?? true,
                   tokenMiserOverridden:
                     (props.launchpad?.tokenMiserEnabled

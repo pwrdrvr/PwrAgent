@@ -83,6 +83,10 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
+  SetThreadTokenMiserRequest,
+  SetThreadTokenMiserResponse,
   SetThreadModelSettingsResponse,
   StartReviewResponse,
   StartThreadResponse,
@@ -5859,7 +5863,15 @@ function localBackendOperations(): FederationBackendOperations {
       };
     },
     async listBackends(request = {}) {
-      return await getDesktopBackendRegistry().listBackends(request);
+      const registry = getDesktopBackendRegistry();
+      const response = await registry.listBackends(request);
+      return {
+        ...response,
+        backends: response.backends.map((backend) => ({
+          ...backend,
+          ...registry.readBackendComposerSettings(backend.kind),
+        })),
+      };
     },
     async markThreadSeen(
       request: MarkThreadSeenRequest,
@@ -6300,6 +6312,18 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetAcpSessionRuntimeOptionRequest,
     ): Promise<SetAcpSessionRuntimeOptionResponse> {
       return await getDesktopBackendRegistry().setAcpSessionRuntimeOption(request);
+    },
+    async setThreadAgent(request: SetThreadAgentRequest): Promise<SetThreadAgentResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopBackendRegistry().setThreadAgent({
+        backend,
+        threadId: request.threadId,
+        agent: request.agent,
+      });
+      return { backend, threadId: request.threadId, agent: overlay.agent };
+    },
+    async setThreadTokenMiser(request: SetThreadTokenMiserRequest): Promise<SetThreadTokenMiserResponse> {
+      return await getDesktopBackendRegistry().setThreadTokenMiser(request);
     },
     async setThreadModelSettings(
       request: SetThreadModelSettingsRequest,

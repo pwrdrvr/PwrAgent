@@ -1172,6 +1172,65 @@ describe("Composer", () => {
     }
   });
 
+  it.each(["catalog-owner-one", "catalog-owner-two"])("refreshes provider catalogs on the selected owner %s", async (instanceId) => {
+    const federationTarget = { scope: "remote" as const, instanceId };
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1, backends: [] }));
+    render(<Composer skills={[]} desktopApi={{ listBackends }}
+      backends={[backendSummary("codex"), backendSummary("acp:grok")]}
+      launchpad={{ directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo", directoryPath: "/repo", backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1, federationTarget }}
+      onUpdateLaunchpad={vi.fn()} />);
+    chooseDropdownOption("Provider", "Grok");
+    await waitFor(() => expect(listBackends).toHaveBeenCalledExactlyOnceWith({ includeUnavailable: true, federationTarget }));
+  });
+
+  it.each([true, false])("uses the owner's Fast mode policy (%s), independent of the viewer", (allowed) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    render(<Composer skills={[]} codexFastAllowed={!allowed}
+      backends={[{ ...backendSummary("codex", { models: [{ id: "fixture", supportsFast: true }] }), codexFastAllowed: allowed }]}
+      thread={{ id: "collision", title: "Remote", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false }, federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "collision", target } } }} />);
+    expect(Boolean(screen.queryByLabelText("Fast mode"))).toBe(allowed);
+  });
+
+  it.each(["row", "window"] as const)("routes Agent and Token Miser controls to the %s owner and uses owner defaults", async (surface) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const setThreadAgent = vi.fn();
+    const setThreadTokenMiser = vi.fn();
+    const remoteWindow = window as typeof window & { __pwragentFederationTarget?: typeof target };
+    if (surface === "window") remoteWindow.__pwragentFederationTarget = target;
+    try {
+      const thread = {
+        id: "collision", title: "Remote", titleSource: "explicit" as const,
+        source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false },
+        ...(surface === "row" ? { federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "collision", target } } } : {}),
+      };
+      render(<Composer disabled={false} skills={[]} thread={thread}
+        backends={[{ ...backendSummary("codex"), tokenMiser: { enabled: true, defaultEnabled: false } }]}
+        tokenMiserEnabled={false} tokenMiserDefaultEnabled={true}
+        desktopApi={{ setThreadAgent, setThreadTokenMiser }} />);
+      fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Agent thread/ }));
+      await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: "codex", threadId: "collision", agent: DEFAULT_DESKTOP_AGENT_THREAD, federationTarget: target }));
+      const toggle = screen.getByRole("menuitemcheckbox", { name: /Token Miser/ });
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      await waitFor(() => expect(toggle).toBeEnabled());
+      fireEvent.click(toggle);
+      await waitFor(() => expect(setThreadTokenMiser).toHaveBeenCalledWith({ backend: "codex", threadId: "collision", enabled: true, federationTarget: target }));
+    } finally {
+      delete remoteWindow.__pwragentFederationTarget;
+    }
+  });
+
+  it.each([undefined, { enabled: false, defaultEnabled: true }])("hides remote Token Miser when the owner gate is unavailable or off (%j)", (tokenMiser) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    render(<Composer disabled={false} skills={[]} tokenMiserEnabled
+      desktopApi={{ setThreadTokenMiser: vi.fn() }}
+      backends={[{ ...backendSummary("codex"), tokenMiser }]}
+      thread={{ id: "collision", title: "Remote", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false },
+        federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "collision", target } } }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /Token Miser/ })).toBeNull();
+  });
+
   it("promotes an existing Codex thread and refreshes navigation", async () => {
     const setThreadAgent = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
     const onRefreshNavigation = vi.fn(async () => undefined);
@@ -18186,13 +18245,13 @@ describe("Composer", () => {
     });
   });
 
-  it("resets one launchpad to the profile model and reasoning baseline", async () => {
+  it.each([false, true])("resets one launchpad to its owner profile baseline (remote=%s)", async (remote) => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
 
     render(
       <Composer
         backends={[
-          backendSummary("codex", {
+          { ...backendSummary("codex", {
             models: [
               {
                 id: "gpt-5.5",
@@ -18210,7 +18269,7 @@ describe("Composer", () => {
                 supportsReasoning: true,
               },
             ],
-          }),
+          }), ...(remote ? { modelDefaults: { model: "gpt-5.6-sol", reasoningEffortsByModel: { "gpt-5.6-sol": "high" } } } : {}) },
         ]}
         directory={{
           key: "directory:/repo",
@@ -18219,6 +18278,7 @@ describe("Composer", () => {
           path: "/repo",
         }}
         launchpad={{
+          ...(remote ? { federationTarget: { scope: "remote" as const, instanceId: "owner" } } : {}),
           directoryKey: "directory:/repo",
           directoryKind: "directory",
           directoryLabel: "Repo",
@@ -18235,7 +18295,7 @@ describe("Composer", () => {
         }}
         providerModelDefaults={{
           codex: {
-            model: "gpt-5.6-sol",
+            model: remote ? "gpt-5.5" : "gpt-5.6-sol",
             reasoningEffortsByModel: {
               "gpt-5.6-sol": "high",
             },

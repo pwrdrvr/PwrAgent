@@ -234,6 +234,8 @@ import {
   type PwrAgentMcpConnectionResponse,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
+  type SetThreadTokenMiserRequest,
+  type SetThreadTokenMiserResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
   type SetThreadPrAutoDispatchRequest,
@@ -11121,6 +11123,49 @@ export class DesktopBackendRegistry {
         }
       }
     }
+  }
+
+  readBackendComposerSettings(
+    backend: AppServerBackendKind,
+  ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "codexFastAllowed"> {
+    return {
+      modelDefaults: this.resolveProviderModelDefaultsFn()[backend],
+      ...(backend === "codex" ? {
+        tokenMiser: {
+          enabled: this.resolveTokenMiserEnabledFn(),
+          defaultEnabled: this.resolveTokenMiserDefaultEnabledFn(),
+        },
+        codexFastAllowed: this.resolveCodexFastAllowedFn(),
+      } : {}),
+    };
+  }
+
+  async setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> {
+    this.assertNotBootstrap("setThreadTokenMiser");
+    const backend = request.backend ?? "codex";
+    const overlay = await this.overlayStore.setThreadTokenMiser({
+      backend,
+      threadId: request.threadId,
+      enabled: request.enabled,
+    });
+    this.invalidateThreadListCache(backend);
+    // The same overlay notification refreshes local windows and remote viewers.
+    await this.publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: { threadId: request.threadId },
+      },
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      ...(overlay.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
+    };
   }
 
   async getThreadAgentMetadata(params: {

@@ -4377,6 +4377,36 @@ describe("DesktopBackendRegistry", () => {
     expect(generateStructuredObject).not.toHaveBeenCalled();
   });
 
+  it("publishes owner Token Miser settings and persists overrides through the registry", async () => {
+    const overlayStore = createOverlayStoreMock();
+    let enabled = true;
+    let defaultEnabled = false;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }), overlayStore,
+    });
+    const internals = registry as unknown as {
+      resolveTokenMiserEnabledFn: () => boolean;
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => enabled;
+    internals.resolveTokenMiserDefaultEnabledFn = () => defaultEnabled;
+    const publish = vi.spyOn(registry, "publishLocalEvent");
+    try {
+      expect(registry.readBackendComposerSettings("codex").tokenMiser).toEqual({ enabled: true, defaultEnabled: false });
+      enabled = false;
+      defaultEnabled = true;
+      expect(registry.readBackendComposerSettings("codex").tokenMiser).toEqual({ enabled: false, defaultEnabled: true });
+      const identity = { backend: "codex" as const, threadId: "fixture" };
+      for (const override of [true, false, null]) {
+        await expect(registry.setThreadTokenMiser({ ...identity, enabled: override })).resolves.toEqual({ ...identity, ...(override === null ? {} : { tokenMiserEnabled: override }) });
+        expect((await overlayStore.getThreadOverlayState(identity))?.tokenMiserEnabled).toBe(override ?? undefined);
+        expect(publish).toHaveBeenLastCalledWith({ backend: "codex", notification: { method: "thread/agent/updated", params: { threadId: "fixture" } } });
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
   describe("existing Codex Agent designation", () => {
     const agent = { name: "Fixture manager", instructions: "Manage requested messaging attachments." };
     const capabilities = { codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } };

@@ -2144,6 +2144,7 @@ export type FederationJumpSearchProgress = FederationJumpSearchResponse & {
 };
 
 export type SetThreadAgentRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /**
@@ -2163,6 +2164,7 @@ export type SetThreadAgentResponse = {
 };
 
 export type SetThreadTokenMiserRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /** Null clears the override so the thread follows the global setting. */

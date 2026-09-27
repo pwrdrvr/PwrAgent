@@ -2714,6 +2714,89 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.counts?.total).toBe(1);
   });
 
+  it.each([
+    ["thread/modelSettings/updated", { model: "remote-model", reasoningEffort: "high", serviceTier: "fast", fastMode: true }],
+    ["thread/executionMode/updated", { executionMode: "full-access" }],
+    ["thread/executionMode/queued", { queuedExecutionMode: "full-access", queuedAt: 100 }],
+    ["thread/acpRuntime/updated", { acpRuntime: { currentModeId: "remote-mode" } }],
+    ["thread/codexEnvironment/updated", { codexEnvironmentRuntime: { environmentName: "Remote environment" } }],
+  ])("scopes composer state event %s to its owner with colliding IDs", async (method, patch) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const local = { id: "collision", title: "Local", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const remote = { ...local, title: "Remote", federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "collision", target } } };
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const readPopulation = vi.fn(async () => ({ backend: "all" as const, fetchedAt: 1_000, unchanged: false, inboxThreadKeys: [], threads: [local, remote], directories: [], launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const } }));
+    const desktopApi: DesktopApi = { readPopulation, onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    const before = result.current.threads.find((thread) => !thread.federation)!;
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex", federationTarget: target, notification: { method, params: { threadId: "collision", ...patch } } } as AgentEvent);
+    });
+    const changed = result.current.threads.find((thread) => thread.federation)!;
+    if ("queuedAt" in patch) {
+      expect(changed).toMatchObject({ queuedExecutionMode: "full-access", queuedExecutionModeAt: 100 });
+      await act(async () => {
+        for (const listener of listeners) listener({ backend: "codex", federationTarget: target, notification: { method: "thread/executionMode/queueCleared", params: { threadId: "collision", reason: "cancelled" } } });
+      });
+      expect(result.current.threads.find((thread) => thread.federation)?.queuedExecutionMode).toBeUndefined();
+    } else {
+      expect(changed).toMatchObject(patch);
+    }
+    expect(result.current.threads.find((thread) => !thread.federation)).toEqual(before);
+  });
+
+  it.each(["model", "acp"] as const)("scopes optimistic %s settings and the RPC to the owner", async (control) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const source = control === "model" ? "codex" as const : "acp:gemini" as const;
+    const local = { id: "collision", title: "Local", titleSource: "explicit" as const, source, linkedDirectories: [], inbox: { inInbox: false } };
+    const remote = { ...local, title: "Remote", federation: { instanceLabel: "Owner", ref: { backend: source, threadId: "collision", target } } };
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const change = vi.fn(async (request) => { await pending; return { ...request, updatedAt: 1 }; });
+    const readPopulation = vi.fn(async () => ({ backend: "all" as const, fetchedAt: 1_000, unchanged: false, inboxThreadKeys: [], threads: [local, remote], directories: [], launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const } }));
+    const desktopApi: DesktopApi = { readPopulation, setThreadModelSettings: change, setAcpSessionRuntimeOption: change, onAgentEvent: () => () => undefined };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    const before = result.current.threads.find((thread) => !thread.federation);
+    let operation!: Promise<void>;
+    try {
+      await act(async () => {
+        operation = control === "model"
+          ? result.current.setThreadModelSettings(remote, { model: "owner-model", fastMode: true })
+          : result.current.setAcpSessionRuntimeOption(remote, { source: "configOption", optionId: "mode", value: "owner-mode" });
+      });
+      await waitFor(() => expect(change).toHaveBeenCalledWith(expect.objectContaining({ backend: source, threadId: "collision", federationTarget: target })));
+      expect(result.current.threads.find((thread) => !thread.federation)).toEqual(before);
+      expect(result.current.threads.find((thread) => thread.federation)).toMatchObject(control === "model"
+        ? { model: "owner-model", fastMode: true }
+        : { acpRuntime: { configValues: { mode: "owner-mode" } } });
+    } finally {
+      await act(async () => { finish(); await operation; });
+    }
+  });
+
+  it("updates only the owning thread when Agent designation changes with colliding IDs", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const local = { id: "collision", title: "Local", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const remote = { ...local, title: "Remote", federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "collision", target } } };
+    const agent = { name: "Manager", instructionLineCount: 0, instructionsTooLong: false, updatedAt: 1 };
+    const setThreadAgent = vi.fn(async (request) => ({ backend: "codex" as const, threadId: request.threadId, agent: request.agent ? agent : undefined }));
+    const readPopulation = vi.fn(async () => ({ backend: "all" as const, fetchedAt: 1_000, unchanged: false, inboxThreadKeys: [], threads: [local, remote], directories: [], launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const } }));
+    const desktopApi: DesktopApi = { readPopulation, setThreadAgent, onAgentEvent: () => () => undefined };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    await act(async () => { await result.current.setThreadAgent(remote, { name: "Manager" }); });
+    expect(setThreadAgent).toHaveBeenLastCalledWith({ backend: "codex", threadId: "collision", agent: { name: "Manager" }, federationTarget: target });
+    expect(result.current.threads.find((thread) => !thread.federation)?.agent).toBeUndefined();
+    expect(result.current.threads.find((thread) => thread.federation)?.agent).toEqual(agent);
+    await act(async () => { await result.current.setThreadAgent(local, { name: "Manager" }); });
+    await act(async () => { await result.current.setThreadAgent(remote, null); });
+    expect(setThreadAgent).toHaveBeenLastCalledWith({ backend: "codex", threadId: "collision", agent: null, federationTarget: target });
+    expect(result.current.threads.find((thread) => !thread.federation)?.agent).toEqual(agent);
+    expect(result.current.threads.find((thread) => thread.federation)?.agent).toBeUndefined();
+  });
+
   it("pins a main-window remote row through the viewer-owned local pin API", async () => {
     const federationTarget = {
       scope: "remote" as const,

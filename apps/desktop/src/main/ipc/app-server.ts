@@ -6385,6 +6385,11 @@ class DesktopAppServerService {
   async setThreadAgent(
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .setThreadAgent(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
 
     const overlay = await getDesktopBackendRegistry().setThreadAgent({
@@ -6403,36 +6408,12 @@ class DesktopAppServerService {
   async setThreadTokenMiser(
     request: SetThreadTokenMiserRequest,
   ): Promise<SetThreadTokenMiserResponse> {
-    const backend = request.backend ?? "codex";
-    const overlay = await this.getOverlayStore().setThreadTokenMiser({
-      backend,
-      threadId: request.threadId,
-      enabled: request.enabled,
-    });
-    logDebug("setThreadTokenMiser", {
-      backend,
-      threadId: request.threadId,
-      tokenMiserEnabled: overlay.tokenMiserEnabled ?? null,
-    });
-    // Reuse the thread-agent notification path: it already tells every window
-    // to re-read this thread's summary, and the override lives on the same
-    // overlay row.
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "thread/agent/updated",
-        params: {
-          threadId: request.threadId,
-        },
-      },
-    });
-    return {
-      backend,
-      threadId: request.threadId,
-      ...(overlay.tokenMiserEnabled !== undefined
-        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
-        : {}),
-    };
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .setThreadTokenMiser(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadTokenMiser(request);
   }
 
   async setThreadMonitorJobSuggestions(

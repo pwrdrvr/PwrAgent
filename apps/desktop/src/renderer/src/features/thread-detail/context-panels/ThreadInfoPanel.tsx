@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../../lib/execution-mode";
 import {
@@ -53,6 +54,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
     try {
       await props.desktopApi.setThreadAgent({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ?? readRendererFederationTarget(),
         threadId: props.thread.id,
         agent,
       });
