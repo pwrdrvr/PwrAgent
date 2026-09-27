@@ -21,9 +21,10 @@ checkout did not reproduce the incident or inspect the remote desktop:
 | A 2880 × 1920 source-reused PNG was 516,524 bytes; a later composed PNG was 579,354 bytes wide 2880 pixels. | Neither compressed size nor pixel count establishes an overload or malformed-image cause. |
 | Replacement `pboard` started at 11:30:51 EDT. Two named-image helper failures were logged at .552 and .673, with Electron fallback successes at .672 and .766. A later helper completed at .800. | These timestamps are completion observations, not the times the stalled operations started. |
 | Unified logs show three helpers connecting at 11:06:57.930755, 11:26:18.306119, and 11:26:40.947061, then reconnecting at the reset and disappearing shortly afterward. | Helpers had remained alive for approximately 23m54s, 4m33s, and 4m11s after those connections. Original blocked stacks are unavailable; failed app log messages cannot yet be paired with helper PIDs or exit codes. |
-| Launchd logs show 35 Splashtop inactive/spawn cycles at roughly 42-second intervals from 11:06:53 through 11:30:35; the last process remained after recovery. Earlier logs enabled clipboard sync in both directions; a later setting update omitted its value. | This is consistent with automatic supervision/relaunch during the blockage, not proof of a user restart or of Splashtop causing it. Incident-time clipboard sync settings are unproven. |
+| Launchd logs show Splashtop inactive/spawn cycles at roughly 42-second intervals by 10:52:38, before the 11:06 copy, through 11:30:35; the last process remained after recovery. Earlier logs enabled clipboard sync in both directions; a later setting update omitted its value. | This is consistent with automatic supervision/relaunch, not proof of a user restart or of Splashtop causing the blockage. Incident-time and current active-session clipboard sync settings are unproven. The earlier 09:27 crash was in an audio callback, not clipboard code. |
 | Claude logged its main process blocked for 170,358 ms at 11:30:51, heuristically labeled sleep. | This is not a stack-based diagnosis. |
 | A controlled synthetic 2880 × 1920 PNG probe on M4 completed: shipped helper 33 ms, native PNG read 12 ms, native TIFF read 49 ms / 16.6 MB; no reset. | Dimensions and one normal helper/reader round trip did not reproduce the incident. This does not cover the original multi-app/clipboard-sync scenario. |
+| A second watchdog-protected probe using the incident RGBA PNG (516,524 bytes) completed: installed helper 13 ms, native PNG read 10 ms, native TIFF read 36 ms / 22,123,206 bytes. Neither probe required a `pboard` reset or app restart. | The incident image also passed this isolated round trip. No blocked stacks were collected because neither probe stalled. The clipboard now contains test state, not the original evidence. |
 
 The producer investigation reports that PwrSnap's named-image writer used an
 unbounded `execFile`. Its containment change adds a 10-second timeout with
@@ -39,6 +40,10 @@ The investigated writer source matches v1.1.7. The timeout contains the
 producer's helper wait; it does not fix Chromium's consumer paste path or prove
 the original root cause. Remote evidence is retained by the diagnostics thread
 in its `.local/clipboard-incident-20260927` directory, outside this checkout.
+The completed private report and its 62 hashed artifacts must not be published
+unredacted. The observations support shared pasteboard blockage; a strict
+deadlock, its owner, conversion failure, or a clipboard-sync trigger remains
+unproven.
 
 ## PwrAgent paths
 
@@ -122,6 +127,11 @@ controlled stall. Avoid a second investigator controlling that desktop.
 - Record exact app, Electron, Chromium and macOS build versions; the producer
   operation; PNG dimensions/byte count/hash; and clipboard-sync settings at
   reproduction time. Use a synthetic image suitable for sharing.
+- For the next discriminating test, establish a known active remote session
+  and document both endpoints' clipboard sync on/off settings. Use synthetic
+  content and draft-only app pastes. Allocate a fresh watchdog namespace and
+  completion markers for each run; the earlier reproduction artifacts are
+  one-shot and must not be reused to infer a new run's completion.
 - From the still-responsive SSH session, sample the Electron browser/main
   process, affected renderer, `pboard`, and producer helper concurrently or
   within the same short time window. For each known PID, macOS
