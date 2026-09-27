@@ -206,7 +206,8 @@ test("Cancel stops the download and says so without crying failure", async () =>
 });
 
 for (const theme of ["dark", "light"] as const) {
-  test(`restart controls use a solid primary CTA in ${theme} mode`, async ({}, testInfo) => {
+  test(`restart controls use a solid primary CTA in ${theme} mode`, async () => {
+    const testInfo = test.info();
     const app = await launchElectronApp({
       env: { ...FAKE_UPDATE_ENV, PWRAGENT_DEV_FAKE_UPDATE_STEP_MS: "10" },
       appearance: { theme },
