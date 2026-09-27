@@ -39373,6 +39373,7 @@ script = "printf setup"
     expect(codexClient.lastSteerTurnParams).toEqual({
       threadId: "target-thread",
       expectedTurnId: "target-turn",
+      onInputTextPrepared: expect.any(Function),
       input: [{
         type: "text",
         text: "Use the smaller fixture before continuing.",
@@ -40283,6 +40284,86 @@ script = "printf setup"
       threadId: turn.threadId,
       queueEntryId: queued.entry.id,
     })).toMatchObject({ input: queued.entry.input });
+  });
+
+  it.each([
+    { operation: "start", fileType: "file" },
+    { operation: "start", fileType: "localFile" },
+    { operation: "steer", fileType: "file" },
+    { operation: "steer", fileType: "localFile" },
+  ])("persists prepared file-message provenance through live events and replay ($operation, $fileType)", async ({ operation, fileType }) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-file-provenance-"));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const filePath = path.join(directory, "report.txt");
+    await writeFile(filePath, "Fixture report.");
+    const prompt = "Review the report.";
+    const wireText = `Prepared file reference: ${filePath}\n${prompt}`;
+    const message = { id: "file-message", role: "user" as const, text: wireText };
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [{ ...message, type: "message", turn: { id: "turn-1", status: "completed" } }],
+        messages: [message],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    if (operation === "steer") {
+      await registry.startTurn({
+        backend: "codex", threadId: "target-thread", input: [{ type: "text", text: "Start work." }],
+      });
+    }
+    const sendPreparedInput = async (params: {
+      threadId: string;
+      onInputTextPrepared?: (text: string | undefined) => void;
+    }) => {
+      params.onInputTextPrepared?.(wireText);
+      for (const method of ["item/started", "item/completed"] as const) {
+        await codexClient.emit({
+          method,
+          params: {
+            threadId: params.threadId,
+            turnId: "turn-1",
+            item: { id: message.id, type: "userMessage", content: [{ type: "text", text: wireText }] },
+          },
+        });
+      }
+      return { threadId: params.threadId, turnId: "turn-1" };
+    };
+    vi.spyOn(codexClient, "startTurn").mockImplementation(sendPreparedInput);
+    vi.spyOn(codexClient, "steerTurn").mockImplementation(sendPreparedInput);
+    const input: AppServerTurnInputItem[] = [
+      { type: "text", text: prompt },
+      fileType === "file"
+        ? { type: "file", name: "report.txt", mimeType: "text/plain", data: Buffer.from("Fixture report.").toString("base64") }
+        : { type: "localFile", path: filePath, name: "report.txt", mimeType: "text/plain" },
+    ];
+    const origin = fileType === "file"
+      ? { kind: "messaging" as const }
+      : { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "child-thread" } };
+    if (operation === "start") {
+      await registry.startTurn({ backend: "codex", threadId: "target-thread", input, messageOrigin: origin });
+    } else {
+      await registry.steerTurn({
+        backend: "codex", threadId: "target-thread", expectedTurnId: "turn-1", input, requestId: "file-steer",
+      }, origin);
+    }
+    const userEvents = events.filter((event) =>
+      event.notification.method === "item/started" || event.notification.method === "item/completed"
+    );
+    expect(userEvents).toHaveLength(2);
+    for (const event of userEvents) {
+      expect(event).toMatchObject({ notification: { params: { item: { id: message.id, origin } } } });
+    }
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex", threadId: "target-thread", messageId: message.id, origin,
+    });
+    const response = await registry.readThread({ backend: "codex", threadId: "target-thread" });
+    expect(response.replay.entries[0]).toMatchObject({ id: message.id, origin });
+    expect(response.replay.messages[0]).toMatchObject({ id: message.id, origin });
   });
 
   it("binds pending provenance to the started item when identical steers complete out of order", async () => {

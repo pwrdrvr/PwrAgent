@@ -911,6 +911,7 @@ type BackendClient = {
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
     approvalPolicy?: string;
     approvalsReviewer?: "user" | "auto_review";
@@ -973,6 +974,7 @@ type BackendClient = {
   steerTurn?(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
     expectedTurnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
   setTurnApprovalReviewer?(params: {
@@ -16966,6 +16968,11 @@ export class DesktopBackendRegistry {
           const started = await client.startTurn({
             threadId: params.threadId,
             input,
+            ...(pendingMessageContextId ? {
+              onInputTextPrepared: (text: string | undefined) => {
+                this.updatePendingThreadMessageText(pendingMessageContextId, text);
+              },
+            } : {}),
             ...(cwd ? { cwd } : {}),
             collaborationMode: params.collaborationMode,
             ...turnParams,
@@ -17181,6 +17188,13 @@ export class DesktopBackendRegistry {
       ...(params.turnId ? { turnId: params.turnId } : {}),
     });
     return id;
+  }
+
+  private updatePendingThreadMessageText(id: string, text: string | undefined): void {
+    const pending = this.pendingThreadMessageContexts.get(id);
+    if (pending) {
+      pending.text = text;
+    }
   }
 
   private bindPendingThreadMessageContext(
@@ -19329,6 +19343,11 @@ export class DesktopBackendRegistry {
       return await client.steerTurn({
         threadId: params.threadId,
         input,
+        ...(pendingMessageContextId ? {
+          onInputTextPrepared: (text: string | undefined) => {
+            this.updatePendingThreadMessageText(pendingMessageContextId, text);
+          },
+        } : {}),
         expectedTurnId: params.expectedTurnId,
       });
     };
