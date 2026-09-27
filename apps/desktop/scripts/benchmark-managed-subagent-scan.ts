@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import type { StateDb } from "../src/main/state/state-db";
+import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "../src/main/state/thread-navigation-relationships";
 
 // Supply a git-exported baseline module under apps/desktop/.local so it uses
 // this checkout's dependencies. Only synthetic data is opened by this probe.
@@ -50,6 +51,7 @@ raw.transaction(() => {
     lastSnapshotHash: "baseline",
   }));
 })();
+raw.transaction(() => raw.exec(THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA))();
 const stateDb = { raw } as StateDb;
 const baseline = new BaselineStore(stateDb);
 const current = new SqliteOverlayStore(stateDb);
@@ -70,7 +72,9 @@ function measure(run: () => unknown, before: () => void = () => {}): object {
   samples.sort((left, right) => left - right);
   return { medianMs: samples[10], p95Ms: samples[18] };
 }
-const invalidate = () => raw.prepare("UPDATE backends SET payload = payload WHERE scope = ?").run("all");
+// A raw thread write invalidates both the old total_changes cache and the
+// newer thread-local counter. Unrelated-table writes no longer invalidate both.
+const invalidate = () => raw.prepare("UPDATE threads SET payload = payload WHERE thread_id = ?").run("codex:parent-0");
 
 function transferredRows(read: () => unknown): object[] {
   const prepare = raw.prepare;
