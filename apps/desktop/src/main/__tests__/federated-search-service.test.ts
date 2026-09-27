@@ -32,6 +32,26 @@ function thread(
 }
 
 describe("FederatedSearchService", () => {
+  it("matches quoted literal mentions and phrases on the owner without requiring quotes", async () => {
+    const listThreads = vi.fn(async () => ({
+      threads: [
+        { ...thread("literal", "Fix @disk handling", 3000), projectKey: "Other" },
+        { ...thread("quoted", 'Fix "@disk" handling', 2000), projectKey: "Other" },
+        { ...thread("project", "Unrelated", 1000), projectKey: "DiskHound" },
+        { ...thread("phrase", "An ad hoc task", 1000), projectKey: "Other" },
+        { ...thread("separate", "An ad with hoc later", 1000), projectKey: "Other" },
+      ], backend: "codex" as const, fetchedAt: 1000,
+    }));
+    for (const query of ['"@disk"', '"@disk" @other']) {
+      const result = await searchFederatedThreadsOnOwner({ listThreads }, { query, limit: 20 });
+      expect(result.threads.map((thread) => thread.id)).toEqual(["literal", "quoted"]);
+    }
+    const phrase = await searchFederatedThreadsOnOwner({ listThreads }, { query: '"ad hoc"', limit: 20 });
+    expect(phrase.threads.map((thread) => thread.id)).toEqual(["phrase"]);
+    const project = await searchFederatedThreadsOnOwner({ listThreads }, { query: "@disk", limit: 20 });
+    expect(project.threads.map((thread) => thread.id)).toEqual(["project"]);
+  });
+
   it("applies project mentions on the owner before the remote result limit", async () => {
     const listThreads = vi.fn(async () => ({
       threads: [

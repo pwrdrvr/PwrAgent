@@ -1,3 +1,4 @@
+import { threadSearchTextTerms } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
@@ -147,7 +148,9 @@ function turnIdForMessage(
 }
 
 function tokenizeQuery(query: string): string[] {
-  const tokens = query.toLowerCase().match(/[\p{L}\p{N}_./:-]+/gu) ?? [];
+  const tokens = threadSearchTextTerms(query.toLowerCase()).flatMap((term) =>
+    term.quoted ? [term.text] : term.text.match(/[\p{L}\p{N}_./:-]+/gu) ?? [],
+  );
   return [...new Set(tokens.filter((token) => token.length > 1))].slice(0, 8);
 }
 

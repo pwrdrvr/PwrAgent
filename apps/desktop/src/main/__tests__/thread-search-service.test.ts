@@ -17,6 +17,25 @@ afterEach(() => {
 });
 
 describe("ThreadSearchService", () => {
+  it("keeps quoted phrases together in metadata search", async () => {
+    const service = buildService([
+      threadSummary({ id: "phrase", title: "An ad hoc task" }),
+      threadSummary({ id: "quoted", title: 'An "ad hoc" task' }),
+      threadSummary({ id: "separate", title: "An ad with hoc later" }),
+    ]);
+    const result = await service.search({ query: '"ad hoc"', contentMode: "metadata" });
+    expect(result.results.map((thread) => thread.threadId).sort()).toEqual(["phrase", "quoted"]);
+  });
+
+  it("keeps quoted phrases together in transcript search", async () => {
+    for (const text of ["An Ad Hoc task", 'An "ad hoc" task', "An ad with hoc later"]) {
+      const service = buildService([threadSummary({ id: "phrase" })], text);
+      const result = await service.search({ query: '"ad hoc"' });
+      expect(result.results.map((thread) => thread.threadId))
+        .toEqual(text.includes("with") ? [] : ["phrase"]);
+    }
+  });
+
   it("scopes project prefixes before limiting metadata and supports project-only queries", async () => {
     const service = buildService([
       threadSummary({ id: "other", projectKey: "/repos/Other", updatedAt: 3000 }),

@@ -241,6 +241,20 @@ describe("basename", () => {
 });
 
 describe("highlightSnippet", () => {
+  it("highlights whole quoted phrases with or without quotes in the snippet", () => {
+    const text = 'An Ad Hoc task, an "ad hoc" fix, and ad with hoc later';
+    const { container } = render(<>{highlightSnippet(text, '"ad hoc"')}</>);
+    expect(Array.from(container.querySelectorAll("mark"), (mark) => mark.textContent))
+      .toEqual(["Ad Hoc", "ad hoc"]);
+    expect(container.textContent).toBe(text);
+  });
+
+  it("highlights a quoted literal mention and unquoted terms together", () => {
+    const { container } = render(<>{highlightSnippet("Fix @disk handling", 'fix "@disk"')}</>);
+    expect(Array.from(container.querySelectorAll("mark"), (mark) => mark.textContent))
+      .toEqual(["Fix", "@disk"]);
+  });
+
   it("wraps each query token occurrence in a <mark>, case-insensitively", () => {
     const { container } = render(<>{highlightSnippet("the Bar and a bar", "bar")}</>);
     const marks = container.querySelectorAll("mark");

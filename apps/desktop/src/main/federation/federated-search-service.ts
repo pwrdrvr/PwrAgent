@@ -12,6 +12,7 @@ import {
   buildFederatedThreadRef,
   buildThreadIdentityKey,
   parseThreadSearchQuery,
+  threadSearchTextTerms,
   matchesThreadSearchProjects,
 } from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
@@ -280,8 +281,9 @@ export async function searchFederatedThreadsOnOwner(
     request,
     rpcOptions,
   );
-  const exact = looksLikeExactThreadId(query);
-  const normalized = query.toLowerCase();
+  const text = threadSearchTextTerms(query).map((term) => term.text).join(" ");
+  const exact = looksLikeExactThreadId(text);
+  const normalized = text.toLowerCase();
   const matches = threads
     .filter((thread) => matchesThreadSearchProjects(thread, projects))
     .filter((thread) => exact
@@ -385,7 +387,8 @@ function withTimeout<T>(
 }
 
 function scoreThread(thread: AppServerThreadSummary, query: string): number {
-  query = parseThreadSearchQuery(query).query;
+  query = threadSearchTextTerms(parseThreadSearchQuery(query).query)
+    .map((term) => term.text).join(" ");
   if (!query) return 0;
   const normalized = query.toLowerCase();
   const title = thread.title.toLowerCase();

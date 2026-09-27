@@ -9,6 +9,7 @@ import {
 import {
   buildThreadIdentityKey,
   parseThreadSearchQuery,
+  threadSearchTextTerms,
   matchesThreadSearchProjects,
   type AppServerBackendKind,
   type MessagingChannelKind,
@@ -136,9 +137,8 @@ export function basename(value: string): string {
 export function highlightSnippet(text: string, query: string): ReactNode[] {
   const tokens = Array.from(
     new Set(
-      query
-        .toLowerCase()
-        .split(/\s+/)
+      threadSearchTextTerms(query)
+        .map((term) => term.text.toLowerCase())
         .filter((token) => token.length >= 2),
     ),
   ).sort((a, b) => b.length - a.length);
@@ -381,7 +381,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         {helpOpen ? (
           <div id={helpId} className="thread-search__help" role="region" aria-label="Search syntax">
             <strong>Search tips</strong>
-            <p>Search titles, message content, branches, PR numbers (like #779), or Agent names.</p>
+            <p>Search titles, message content, branches, PR numbers (like #779), or Agent names. Use <code>"ad hoc"</code> to search a phrase.</p>
             <p><code>build @disk</code> or <code>build in:@disk</code> searches projects whose names start with “disk”. Names are case-insensitive.</p>
             <p><code>build @PwrAgent @PwrSnap</code> searches either project. Use <code>@"My Project"</code> for spaces, or a full path to distinguish checkouts.</p>
             <p>A project mention alone lists its recent threads. Quote a literal mention, like <code>"@disk"</code>, to search its text.</p>

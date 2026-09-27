@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesThreadSearchProjects, parseThreadSearchQuery } from "../thread-search-query";
+import { matchesThreadSearchProjects, parseThreadSearchQuery, threadSearchTextTerms } from "../thread-search-query";
 
 describe("project search mentions", () => {
   it("extracts either syntax, deduplicates names and preserves text", () => {
@@ -26,5 +26,17 @@ describe("project search mentions", () => {
       id: "d", kind: "worktree", label: "My Project", path: "/repos/source",
       worktreePath: "/worktrees/feature",
     }] }, ["my project"])).toBe(true);
+  });
+});
+
+describe("threadSearchTextTerms", () => {
+  it("decodes phrases after extracting projects without reinterpreting literals", () => {
+    const parsed = parseThreadSearchQuery('fix "ad hoc" "@disk" @other');
+    expect(parsed.projects).toEqual(["other"]);
+    expect(threadSearchTextTerms(parsed.query)).toEqual([
+      { text: "fix", quoted: false },
+      { text: "ad hoc", quoted: true },
+      { text: "@disk", quoted: true },
+    ]);
   });
 });

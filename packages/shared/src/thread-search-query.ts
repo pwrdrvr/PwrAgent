@@ -28,3 +28,13 @@ export function matchesThreadSearchProjects(
     return name.startsWith(project) || path.startsWith(project.replaceAll("\\", "/"));
   }));
 }
+
+/** Decode text only after project mentions have been extracted. Do not reparse
+ * decoded literals as mentions: quoted "@disk" must remain searchable text.
+ */
+export function threadSearchTextTerms(query: string): { text: string; quoted: boolean }[] {
+  return (query.match(/"[^"]*"|[^\s"]+/g) ?? []).map((token) => ({
+    text: token.startsWith('"') ? token.slice(1, -1) : token,
+    quoted: token.startsWith('"'),
+  })).filter((term) => term.text.length > 0);
+}
