@@ -181,7 +181,7 @@ import {
   recordBootDecision,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
-import { createMainWindow } from "./window";
+import { createMainWindow, stopWindowDiagnostics } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
@@ -285,9 +285,7 @@ let rendererWindowShutdownPromise: Promise<void> | undefined;
 let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
-let startupCpuProfilerForNewWindows:
-  | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
-  | undefined;
+let startupCpuProfilerForNewWindows: StartupCpuProfiler | undefined;
 
 // --- Boot failure surfacing -------------------------------------------------
 // A rejected startup must never leave the app "running but unusable" with no
@@ -779,8 +777,30 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
   ],
 });
 
+const flushDiagnostics = createShutdownBarrier({
+  globalTimeoutMs: 10_000,
+  logger: mainLog,
+  phases: [{
+    name: "diagnostics",
+    timeoutMs: 10_000,
+    run: async () => {
+      // Start both even if one throws, and wait for every capture's final writes.
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => startupCpuProfilerForNewWindows?.stop("app-quit")),
+        Promise.resolve().then(() => stopWindowDiagnostics("app-quit")),
+      ]);
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    },
+  }],
+});
+
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    // Diagnostics consumes the existing 2s window + 12s resource allowance;
+    // it must not add another serial 10s wait to application shutdown.
+    const deadline = performance.now()
+      + RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS + MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS;
     // Includes immediate paths (signals and update installation). Send while
     // the tunnel and sockets are still alive; never wait on peer acknowledgments.
     getDesktopFederationRuntime().shutdown.exiting();
@@ -788,12 +808,13 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();
     try {
+      await flushDiagnostics(source);
       // Electron emits before-quit while renderer windows are still live. Close
       // them first so in-flight renderer work cannot cross the boundary where
       // IPC handlers and their backing stores are disposed.
       await closeRendererWindowsBeforeResourceShutdown(source);
       disposeMainProcessResourcesSync({ releaseFederationLease: false });
-      await runMainProcessShutdownBarrier(source);
+      await runMainProcessShutdownBarrier(source, deadline - performance.now());
       // Keep the scheduler subscribed until the app-server registry is closed.
       // A queued registry entry can otherwise start after its durable lease was
       // released, leaving the next process free to dispatch the same action.
@@ -842,8 +863,11 @@ function quitAfterResourceShutdown(source: string): void {
     })
     .finally(() => {
       mainProcessShutdownComplete = true;
-      appQuitManager.allowImmediateQuit();
-      app.quit();
+      // An accepted update may take ownership while this normal quit waits.
+      if (!isUpdateInstallInProgress()) {
+        appQuitManager.allowImmediateQuit();
+        app.quit();
+      }
     });
 }
 
@@ -1300,9 +1324,13 @@ export function bootstrapApp(): void {
     })) {
       return;
     }
+    if (mainProcessShutdownPromise) return;
     const startupCpuProfiler = new StartupCpuProfiler();
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
+    // A quit may have joined an in-flight profiler start. Do not resume boot
+    // and create fresh windows or captures after diagnostics shutdown began.
+    if (mainProcessShutdownPromise) return;
     recordStartupProfileEvent({ type: "app-when-ready" });
     installDevelopmentDockIcon();
     registerManagedGrokSignatureRejectionBroadcast();

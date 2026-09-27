@@ -88,6 +88,44 @@ describe("StartupCpuProfiler", () => {
     vi.resetModules();
   });
 
+  it("joins a stop already writing its manifest and waits for startup in flight", async () => {
+    const session = createSession();
+    let finishStart!: (started: boolean) => void;
+    let finishManifest!: () => void;
+    const mainProfiler = {
+      start: vi.fn(() => new Promise<boolean>((resolve) => { finishStart = resolve; })),
+      stop: vi.fn(async () => true),
+    };
+    session.complete = vi.fn(() => new Promise<void>((resolve) => { finishManifest = resolve; }));
+    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const profiler = new StartupCpuProfiler({
+      config: createEnabledConfig(),
+      createSession: async () => ({ ok: true, session }),
+      createMainProfiler: () => mainProfiler,
+      analyzeSession: async () => undefined,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const start = profiler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const stopped = vi.fn();
+    const first = profiler.stop("hard-timeout");
+    void first.then(stopped);
+    expect(profiler.stop("app-quit")).toBe(first);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mainProfiler.stop).not.toHaveBeenCalled();
+    finishStart(true);
+    await start;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mainProfiler.stop).toHaveBeenCalledOnce();
+    expect(session.complete).toHaveBeenCalledOnce();
+    expect(stopped).not.toHaveBeenCalled();
+    expect(profiler.stop("window-closed")).toBe(first);
+    finishManifest();
+    await first;
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("captures both profilers and analyzes the session after the startup window", async () => {
     const session = createSession();
     const createSessionMock = vi.fn(async () => ({
