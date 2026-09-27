@@ -37578,7 +37578,7 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-connections p { margin: 4px 0; }
 .federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
 .federation-status-control__details p { margin: 6px 0; }
-.federation-status-control__instance-id { -webkit-user-select: text; user-select: text; }
+.federation-status-control__title { display: flex; align-items: center; gap: 4px; }
 /* This report owns its scroll area; the shared Activity chrome stays outside it. */
 .federation-activity-content { display: block; overflow: auto; }
 .federation-activity { max-width: 1000px; margin: 0 auto; padding: 16px; font-size: 13px; }

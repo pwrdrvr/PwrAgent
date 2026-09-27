@@ -31,16 +31,24 @@ function fixture(): ReadFederationActivityResponse {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Federation activity surfaces", () => {
-  it("shows the viewer instance ID in the status popup", async () => {
+  it("shows the viewer instance ID only in a tooltip and copies it", async () => {
     const snapshot = fixture();
     snapshot.health.instanceId = "pwr_viewer";
+    const copyText = vi.fn(async () => {});
     render(<FederationStatusControl
-      desktopApi={{ readFederationActivity: async () => snapshot }}
+      desktopApi={{ readFederationActivity: async () => snapshot, copyText }}
       onOpen={vi.fn()}
     />);
     fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
-    expect(await screen.findByText("pwr_viewer")).toBeInTheDocument();
-    expect(screen.getByText(/Instance ID/)).toBeInTheDocument();
+    const copy = await screen.findByRole("button", { name: "Copy Federation instance ID" });
+    expect(screen.queryByText(/pwr_viewer/)).not.toBeInTheDocument();
+    fireEvent.focus(copy);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Instance ID: pwr_viewer");
+    fireEvent.click(copy);
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith("pwr_viewer"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Copied instance ID");
+    fireEvent.blur(copy);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it.each(["popup", "activity"])("starts and stops detailed capture in the %s", async (surface) => {
