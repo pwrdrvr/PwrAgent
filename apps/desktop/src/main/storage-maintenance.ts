@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
 import { join } from "node:path";
 import type { StateDb } from "./state/state-db";
 import { findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolveActiveProfilePath } from "./profile";
-import { readStorageMaintenance, storageMaintenanceDue, storageProcessAlive, writeStorageMaintenance, type StorageThreadIdentity } from "./state/storage-maintenance";
+import { readStorageMaintenance, setStorageHistoryPreference, storageHistoryPolicy, storageMaintenanceDue, storageProcessAlive, writeStorageMaintenance, type StorageThreadIdentity } from "./state/storage-maintenance";
 import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMaintenanceCommand, type StorageMaintenanceStatus } from "../shared/storage-maintenance";
 import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./settings/appearance-bootstrap";
 import { themedWindowBackgroundColor } from "./native-appearance";
@@ -21,6 +21,7 @@ export async function runStartupStorageMaintenance(options: {
 }): Promise<void> {
   const db = options.state.raw;
   const record = readStorageMaintenance(db);
+  const policy = storageHistoryPolicy(record);
   const bytes = (db.pragma("page_count", { simple: true }) as number) * (db.pragma("page_size", { simple: true }) as number);
   if (!storageMaintenanceDue({ ...options, bytes, attemptedAt: record.attemptedAt, now: Date.now() })) return;
   const otherInstances = () => {
@@ -42,7 +43,7 @@ export async function runStartupStorageMaintenance(options: {
     },
   });
   let status: StorageMaintenanceStatus = {
-    phase: "ready", historyEnabled: record.historyEnabled ?? null, beforeBytes: bytes,
+    phase: "ready", historyEnabled: policy.historyEnabled, beforeBytes: bytes,
     completedThreads: 0, eligibleThreads: 0,
   };
   let held = false;
@@ -75,14 +76,15 @@ export async function runStartupStorageMaintenance(options: {
     else {
       const latest = readStorageMaintenance(db);
       if (latest.attemptedAt === undefined || Date.now() - latest.attemptedAt >= 24 * 60 * 60 * 1000) {
-        writeStorageMaintenance(db, { ...latest, historyEnabled: status.historyEnabled ?? latest.historyEnabled, attemptedAt: Date.now() });
+        writeStorageMaintenance(db, { ...latest, attemptedAt: Date.now() });
       }
       finish();
     }
   };
   interruptMaintenance = async () => { cancel(); await done; };
   app.once("before-quit", cancel);
-  const start = async (historyEnabled: boolean) => {
+  const start = async () => {
+    const { historyEnabled } = storageHistoryPolicy(readStorageMaintenance(db));
     if (running || finished) return;
     running = true;
     publish({ historyEnabled, phase: "discovering" });
@@ -121,7 +123,7 @@ export async function runStartupStorageMaintenance(options: {
       }
       const latest = readStorageMaintenance(db);
       if (latest.attemptedAt === undefined || Date.now() - latest.attemptedAt >= 24 * 60 * 60 * 1000) {
-        writeStorageMaintenance(db, { ...latest, historyEnabled, attemptedAt: Date.now() });
+        writeStorageMaintenance(db, { ...latest, attemptedAt: Date.now() });
       }
       publish({ phase: "error", message: "Archived thread status could not be verified. Nothing was removed; PwrAgent will try again later." });
       finish();
@@ -132,10 +134,9 @@ export async function runStartupStorageMaintenance(options: {
     if (command.action === "hold") { held = true; window.setAlwaysOnTop(true); if (closeTimer) clearTimeout(closeTimer); }
     if (command.action === "cancel") cancel();
     if (command.action === "dismiss") window.close();
-    if (command.action === "start" && typeof command.historyEnabled === "boolean") void start(command.historyEnabled);
-    if (command.action === "preference" && finished && typeof command.historyEnabled === "boolean") {
-      const latest = readStorageMaintenance(db);
-      if (latest.historyEnabled !== command.historyEnabled) writeStorageMaintenance(db, { ...latest, historyEnabled: command.historyEnabled });
+    if (command.action === "start") void start();
+    if (command.action === "preference" && (status.phase === "ready" || finished) && typeof command.historyEnabled === "boolean") {
+      setStorageHistoryPreference(db, command.historyEnabled);
       publish({ historyEnabled: command.historyEnabled });
     }
     return status;
@@ -149,7 +150,7 @@ export async function runStartupStorageMaintenance(options: {
     if (process.env.ELECTRON_RENDERER_URL) await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/storage-maintenance.html`);
     else await window.loadFile(join(__dirname, "../renderer/storage-maintenance.html"));
     window.show();
-    if (record.historyEnabled !== undefined) void start(record.historyEnabled);
+    if (policy.automatic) void start();
     await done;
   } catch {
     cancel();

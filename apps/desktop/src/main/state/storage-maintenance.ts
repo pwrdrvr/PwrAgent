@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 
+export const STORAGE_HISTORY_DEFAULT = false;
 export const STORAGE_MIN_BYTES = 100 * 1024 * 1024;
 export const STORAGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const STORAGE_GRACE_MS = 7 * STORAGE_INTERVAL_MS;
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS thread_storage_retention (
 );
 `;
 export type StorageMaintenanceRecord = {
+  /** Explicit checkbox override; absence follows the application default. */
   historyEnabled?: boolean;
   attemptedAt?: number;
   completedAt?: number;
@@ -39,6 +41,19 @@ export function writeStorageMaintenance(db: Database.Database, state: StorageMai
     .run(STORAGE_MAINTENANCE_KEY, JSON.stringify(state));
 }
 
+export function storageHistoryPolicy(record: StorageMaintenanceRecord, defaultEnabled = STORAGE_HISTORY_DEFAULT) {
+  const historyEnabled = record.historyEnabled ?? defaultEnabled;
+  return {
+    historyEnabled,
+    automatic: record.historyEnabled !== undefined || record.attemptedAt !== undefined || historyEnabled,
+  };
+}
+
+export function setStorageHistoryPreference(db: Database.Database, historyEnabled: boolean): void {
+  const record = readStorageMaintenance(db);
+  if (record.historyEnabled !== historyEnabled) writeStorageMaintenance(db, { ...record, historyEnabled });
+}
+
 export function storageProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (error) {
@@ -46,12 +61,12 @@ export function storageProcessAlive(pid: number): boolean {
   }
 }
 
-export function claimStorageMaintenance(db: Database.Database, historyEnabled: boolean, now = Date.now(), ownerPid = process.pid): boolean {
+export function claimStorageMaintenance(db: Database.Database, now = Date.now(), ownerPid = process.pid): boolean {
   return db.transaction(() => {
     const record = readStorageMaintenance(db);
     if ((record.ownerPid && storageProcessAlive(record.ownerPid))
       || (record.attemptedAt !== undefined && now - record.attemptedAt < STORAGE_INTERVAL_MS)) return false;
-    writeStorageMaintenance(db, { ...record, historyEnabled, attemptedAt: now, ownerPid });
+    writeStorageMaintenance(db, { ...record, attemptedAt: now, ownerPid });
     return true;
   }).immediate();
 }

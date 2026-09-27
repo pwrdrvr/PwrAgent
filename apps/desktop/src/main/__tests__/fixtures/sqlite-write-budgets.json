@@ -594,6 +594,13 @@
     "rowsChanged": 129,
     "statements": 2
   },
+  "storage-maintenance-explicit-preference": {
+    "commits": 2,
+    "note": "Explicit on/off choices persist; duplicate choice does not write",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "storage-maintenance-initial-expiry": {
     "commits": 1,
     "note": "One deferred ordinary expiry transaction and capped reclamation per startup, including profiles that skip maintenance",

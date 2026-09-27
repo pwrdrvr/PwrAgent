@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
-import { claimStorageMaintenance, compactStorage, eligibleStorageThreads, fenceStorageRetention, observeStorageArchive, readStorageMaintenance, STORAGE_GRACE_MS, STORAGE_INTERVAL_MS, STORAGE_MIN_BYTES, storageDetailStatements, storageMaintenanceDue, writeStorageMaintenance } from "../state/storage-maintenance";
+import { storageHistoryPolicy, setStorageHistoryPreference, claimStorageMaintenance, compactStorage, eligibleStorageThreads, fenceStorageRetention, observeStorageArchive, readStorageMaintenance, STORAGE_GRACE_MS, STORAGE_INTERVAL_MS, STORAGE_MIN_BYTES, storageDetailStatements, storageMaintenanceDue, writeStorageMaintenance } from "../state/storage-maintenance";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -74,7 +74,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     });
     expectSqliteWriteBudget({ scenario: "storage-maintenance-archive-lifecycle", note: "Archive receipt, duplicate observation and restore; duplicate writes no pages", writes: lifecycle });
     const { writes: bookkeeping } = await measureSqliteWrites(() => {
-      expect(claimStorageMaintenance(state.raw, true, 100)).toBe(true);
+      expect(claimStorageMaintenance(state.raw, 100)).toBe(true);
       writeStorageMaintenance(state.raw, { ...readStorageMaintenance(state.raw), completedAt: 101 });
     });
     expectSqliteWriteBudget({ scenario: "storage-maintenance-daily-bookkeeping", note: "Daily admission and completion; no timer heartbeat", writes: bookkeeping });
@@ -131,10 +131,10 @@ it("caps logical bytes within a slice, not only record count", () => {
 it("does not steal a living maintenance owner even after the daily interval", () => {
   const state = StateDb.open(":memory:");
   try {
-    expect(claimStorageMaintenance(state.raw, true, 0)).toBe(true);
-    expect(claimStorageMaintenance(state.raw, true, 2 * STORAGE_INTERVAL_MS)).toBe(false);
+    expect(claimStorageMaintenance(state.raw, 0)).toBe(true);
+    expect(claimStorageMaintenance(state.raw, 2 * STORAGE_INTERVAL_MS)).toBe(false);
     writeStorageMaintenance(state.raw, { attemptedAt: 0, ownerPid: -1 });
-    expect(claimStorageMaintenance(state.raw, true, 2 * STORAGE_INTERVAL_MS)).toBe(true);
+    expect(claimStorageMaintenance(state.raw, 2 * STORAGE_INTERVAL_MS)).toBe(true);
   } finally { state.close(); }
 });
 
@@ -186,4 +186,32 @@ it("budgets the independent initial expiry sweep", async () => {
     });
     expectSqliteWriteBudget({ scenario: "storage-maintenance-initial-expiry", note: "One deferred ordinary expiry transaction and capped reclamation per startup, including profiles that skip maintenance", writes });
   } finally { state.close(); removeTempStateDbDir(fixture.tempDir); vi.useRealTimers(); }
+});
+
+it("daily claim and completion preserve an unset history override", () => {
+  const state = StateDb.open(":memory:");
+  try {
+    expect(claimStorageMaintenance(state.raw, 100)).toBe(true);
+    writeStorageMaintenance(state.raw, { ...readStorageMaintenance(state.raw), completedAt: 101, ownerPid: undefined });
+    const record = readStorageMaintenance(state.raw);
+    expect(record.historyEnabled).toBeUndefined();
+    expect(storageHistoryPolicy(record, false)).toEqual({ historyEnabled: false, automatic: true });
+    expect(storageHistoryPolicy(record, true)).toEqual({ historyEnabled: true, automatic: true });
+  } finally { state.close(); }
+});
+
+it("budgets explicit preference changes without writing repeated values", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("storage-preference-");
+  const state = StateDb.open(fixture.dbPath);
+  try {
+    const { writes } = await measureSqliteWrites(() => {
+      setStorageHistoryPreference(state.raw, true);
+      setStorageHistoryPreference(state.raw, false);
+      setStorageHistoryPreference(state.raw, false);
+    });
+    expect(readStorageMaintenance(state.raw).historyEnabled).toBe(false);
+    expect(storageHistoryPolicy(readStorageMaintenance(state.raw), true).historyEnabled).toBe(false);
+    expectSqliteWriteBudget({ scenario: "storage-maintenance-explicit-preference", note: "Explicit on/off choices persist; duplicate choice does not write", writes });
+  } finally { state.close(); removeTempStateDbDir(fixture.tempDir); }
 });

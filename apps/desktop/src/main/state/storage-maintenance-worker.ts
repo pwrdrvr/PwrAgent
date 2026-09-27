@@ -35,7 +35,7 @@ async function run(request: Request): Promise<void> {
     process.parentPort?.postMessage(status);
   };
   try {
-    const admitted = claimStorageMaintenance(db, request.historyEnabled);
+    const admitted = claimStorageMaintenance(db);
     if (!admitted) { send({ phase: "deferred", message: "Storage was already checked today." }); return; }
     const activeKeys = new Set(request.active.map((id) => JSON.stringify([id.backend, id.threadId])));
     const archivedThreads = request.archived.filter((id) => !activeKeys.has(JSON.stringify([id.backend, id.threadId])));

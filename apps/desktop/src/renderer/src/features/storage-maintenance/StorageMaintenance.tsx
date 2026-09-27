@@ -32,7 +32,7 @@ export function StorageMaintenance() {
     <label className="storage-maintenance__choice">
       <input type="checkbox" checked={enabled} disabled={!ready && !terminal} onChange={(event) => {
         setEnabled(event.target.checked);
-        if (terminal) void api.command({ action: "preference", historyEnabled: event.target.checked });
+        void api.command({ action: "preference", historyEnabled: event.target.checked });
       }} />
       Remove archived tool inspection history after 7 days
     </label>
@@ -42,11 +42,11 @@ export function StorageMaintenance() {
         ? `${size(status.beforeBytes)} → ${size(status.afterBytes)}. ${size(Math.max(0, status.beforeBytes - status.afterBytes))} recovered.`
         : status?.phase === "cleanup" ? `${status.completedThreads} of ${status.eligibleThreads} eligible archived threads checked.`
           : status?.phase === "vacuum" ? "Reclaiming unused space. You can stop safely."
-            : ready ? "This choice is saved for future daily checks." : "Your app will continue starting when this step finishes.")}
+            : ready ? "Changes to this checkbox are saved for future checks." : "Your app will continue starting when this step finishes.")}
     </div>
     <footer>
       <span>{terminal ? "You can change the preference for the next cleanup." : held ? "This window will stay open until you close it. The app will continue after cleanup." : "Move the pointer here to keep this window open afterward."}</span>
-      {ready ? <><button onClick={() => void api.command({ action: "cancel" })}>Not now</button><button className="storage-maintenance__primary" onClick={() => void api.command({ action: "start", historyEnabled: enabled })}>Optimize</button></>
+      {ready ? <><button onClick={() => void api.command({ action: "cancel" })}>Not now</button><button className="storage-maintenance__primary" onClick={() => void api.command({ action: "start" })}>Optimize</button></>
         : terminal ? <button onClick={() => void api.command({ action: "dismiss" })}>Close</button>
           : <button onClick={() => void api.command({ action: "cancel" })}>Stop</button>}
     </footer>

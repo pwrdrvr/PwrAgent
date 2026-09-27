@@ -9,9 +9,15 @@ not been run against the live default profile or released.
 - The setup wizard takes priority. New databases, incomplete onboarding, and
   databases below 100 MiB skip maintenance. Eligible profiles check at startup
   at most once in 24 hours, including unsuccessful or cancelled attempts.
-- First use asks for a saved, initially unchecked preference: remove archived
-  tool inspection history after seven days. Declining history removal still
-  permits existing expiry policies and compaction. “Not now” skips the attempt.
+- The current application default is off. First use shows an unchecked option
+  to remove archived tool inspection history after seven days. Only changing
+  the checkbox saves an explicit override, including toggling on and back off.
+  Optimize, cancellation, failures and successful completion preserve an unset
+  override. Untouched profiles follow `STORAGE_HISTORY_DEFAULT` on later
+  versions; explicit true/false choices take precedence. Subsequent attempts
+  run automatically with the effective value; a future true default also
+  enables automatic maintenance on first use. “Not now” skips the attempt.
+  Existing expiry policies and compaction do not require history removal.
 - Hovering or keyboard focus keeps the window open until Close, including
   interaction during the four-second completion grace period. Startup waits for
   the job, not dismissal. The retained window can change the next run's
@@ -122,6 +128,8 @@ on 29 pages, one commit, 119,512 bytes. The subsequent compaction phase writes
 255 frames on 254 pages, two WAL commit markers, 1,050,632 bytes (including its
 auto-vacuum pragma). Direct frame measurement occurs before checkpointing;
 the generic instrumentation alone cannot measure VACUUM or WAL truncation.
+An explicit on/off preference pair writes 12,360 bytes in two commits, with
+no writes for repeated identical choices (about **0.0124 MB** per pair).
 Daily admission/completion writes 12,360 bytes in two commits, about
 **0.0124 MB/day**. The independent initial-expiry fixture removes one expired
 browse session in one commit / 12,360 bytes; ten equivalent startups per day
@@ -152,9 +160,12 @@ validation, not expected operator savings. A headless Chromium check of the buil
 screen verified layout, hover, opt-in and preference changes after completion.
 No live-profile mutation or headed desktop E2E was used for these checks.
 
-The full SQLite write survey passed 972 test files / 14,439 tests (one file and
-nine tests skipped). Regression coverage includes cold-provider readiness, strict provider failure
-propagation, and the initial expiry sweep when optional maintenance is skipped. Build, workspace typecheck, ESLint (zero
+The latest full SQLite write survey passed 14,518 tests and hit 12 timeouts
+across 11 suites (nine tests skipped). All 11 affected suites plus the two
+storage-maintenance suites then passed with normal timeouts and concurrency:
+13 files / 1,139 tests passed, one skipped. The preference suites cover leaving
+the checkbox untouched, explicit on/off overrides, job bookkeeping, cancellation,
+discovery failure and a simulated future default change. Build, workspace typecheck, ESLint (zero
 errors; existing warnings), SQL, Codex-storage boundary, renderer-color and
 dependency-boundary checks passed. A real utility-process stop followed by a
 simulated later eligible attempt also passed integrity and completed successfully
