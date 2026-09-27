@@ -11,6 +11,7 @@ import {
   isRemoteFederationTarget,
   isSharedSkillName,
   parseThreadUrl,
+  resolvePullRequestIdentity,
 } from "@pwragent/shared";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { formatHashReferenceThreadLabel } from "../../lib/hash-references";
@@ -165,12 +166,13 @@ export function createComposerPullRequestToken(
   pullRequest: PrSummary,
   index: number,
 ): ComposerSkillToken {
+  const identity = resolvePullRequestIdentity(pullRequest);
   return {
     kind: "pull-request",
-    name: `#${pullRequest.number}`,
+    name: `${identity.org}/${identity.repo}#${identity.number}`,
     path: pullRequest.url,
     description: pullRequest.title,
-    shortDescription: `${pullRequest.org}/${pullRequest.repo}`,
+    shortDescription: `${identity.org}/${identity.repo}`,
     id: `${pullRequest.url}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
     // Every PR chip in the composer is minted here — picker, pasted URL, and

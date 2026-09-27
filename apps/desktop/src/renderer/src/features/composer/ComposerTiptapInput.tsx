@@ -34,6 +34,8 @@ import {
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
+import { parsePullRequestUrl } from "../../lib/pull-request-links";
+import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
 import {
   ChipContextMenu,
@@ -233,8 +235,10 @@ const SkillMention = Mention.extend({
       ];
     }
     if (node.attrs.kind === "pull-request") {
-      const label = String(node.attrs.name ?? "pull request");
       const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
+      const pr = parsePullRequestUrl(path);
+      // Restored editor documents may still carry the old bare #number name.
+      const label = pr ? `${pr.org}/${pr.repo}#${pr.number}` : String(node.attrs.name ?? "pull request");
       // A chip minted before any status was known keeps the gray dot; that is
       // the honest reading of "we have never seen this PR", not a default.
       const modifiers = readMentionPrChipModifiers(node.attrs) ?? [
@@ -256,7 +260,9 @@ const SkillMention = Mention.extend({
           "data-label": label,
           "data-skill-name": label,
           ...(path ? { "data-skill-path": path } : {}),
-          ...(path ? { "data-tooltip": path } : {}),
+          ...(node.attrs.description ? { "data-skill-description": node.attrs.description } : {}),
+          tabindex: "0",
+          "aria-label": `Pull request ${label}`,
         },
         ["span", { class: "pr-chip__dot", "aria-hidden": "true" }],
         ["span", { class: "pr-chip__label" }, label],
@@ -2938,6 +2944,8 @@ export const ComposerTiptapInput = forwardRef<
       );
     },
   });
+  const pullRequestTooltip = useComposerPullRequestHover(editor?.view.dom);
+
   editorRef.current = editor;
 
   useLayoutEffect(() => {
@@ -3290,6 +3298,7 @@ export const ComposerTiptapInput = forwardRef<
           }
           return;
         }
+        if (attrs["data-mention-kind"] === "pull-request") return;
         // `data-skill-name`, not the text: a chip that names its origin
         // carries the origin label after the name.
         const tooltip = buildSkillTooltip(
@@ -3455,6 +3464,7 @@ export const ComposerTiptapInput = forwardRef<
       }}
     >
       <EditorContent editor={editor} />
+      {pullRequestTooltip}
       {threadContextMenu ? (
         <ChipContextMenu
           items={threadCopyTargets(
