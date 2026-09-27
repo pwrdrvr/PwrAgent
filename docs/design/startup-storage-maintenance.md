@@ -36,6 +36,12 @@ establish age or move a receipt forward after rearchive. Without one, age begins
 at first positive observation. Absence or a disconnected provider never means
 deletion. A positive active observation wins over a conflicting archived result.
 
+Retention discovery starts settings discovery and awaits Codex executable
+readiness before listing threads. It uses the strict `archive-cleanup` caller
+reason, so provider failures reach the maintenance error screen instead of
+being interpreted as empty archives. Other startup discovery probes may finish
+in the background.
+
 The combined provider listing now forwards `forceRefresh` to its Codex child
 request; otherwise a fresh outer request could reuse stale inner results.
 No Codex-owned files are accessed.
@@ -76,8 +82,11 @@ No progress heartbeat is persisted. Atomic, idempotent deletion is the resume
 record; the daily attempt and completion markers are stored separately.
 
 Normal expiry runs off main during maintenance. The ordinary hourly GC remains
-on main but no longer runs synchronously at startup, and its incremental vacuum
-is capped at 256 pages. Its existing expiry transaction is otherwise unchanged.
+on main, with an initial sweep deferred to the next timer turn independently of
+optional maintenance admission. This preserves expiry for small profiles and
+sessions shorter than an hour. Closing the database cancels the pending sweep.
+Incremental vacuum is capped at 256 pages; no full rewrite or auto-vacuum
+conversion runs in this sweep. Its existing expiry transaction is unchanged.
 
 Full VACUUM is a separate visible phase, once per admitted day. Admission requires
 free disk of at least three times the pre-cleanup logical database size. SQLite
@@ -114,7 +123,10 @@ on 29 pages, one commit, 119,512 bytes. The subsequent compaction phase writes
 auto-vacuum pragma). Direct frame measurement occurs before checkpointing;
 the generic instrumentation alone cannot measure VACUUM or WAL truncation.
 Daily admission/completion writes 12,360 bytes in two commits, about
-**0.0124 MB/day**. One archive/repeat-observation/restore cycle writes 16,480
+**0.0124 MB/day**. The independent initial-expiry fixture removes one expired
+browse session in one commit / 12,360 bytes; ten equivalent startups per day
+project **0.124 MB/day**, with actual cost depending on expired data and page
+layout. One archive/repeat-observation/restore cycle writes 16,480
 bytes; 100 such cycles/day projects **1.65 MB/day**. Deletion and VACUUM volume
 depend on actual content and page layout and must be accounted for separately.
 
@@ -140,9 +152,9 @@ validation, not expected operator savings. A headless Chromium check of the buil
 screen verified layout, hover, opt-in and preference changes after completion.
 No live-profile mutation or headed desktop E2E was used for these checks.
 
-The full SQLite write survey passed 972 test files / 14,429 tests (one file and
-nine tests skipped). The additional queued-progress cancellation regression
-passed in its focused window suite. Build, workspace typecheck, ESLint (zero
+The full SQLite write survey passed 972 test files / 14,439 tests (one file and
+nine tests skipped). Regression coverage includes cold-provider readiness, strict provider failure
+propagation, and the initial expiry sweep when optional maintenance is skipped. Build, workspace typecheck, ESLint (zero
 errors; existing warnings), SQL, Codex-storage boundary, renderer-color and
 dependency-boundary checks passed. A real utility-process stop followed by a
 simulated later eligible attempt also passed integrity and completed successfully

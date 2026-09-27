@@ -427,6 +427,16 @@ function logBootDecision(decision: ProfileBootDecision): void {
   }
 }
 
+function startStartupSettingsDiscovery(permit: ProviderDiscoveryPermit): void {
+  void getDesktopSettingsService()
+    .refreshStartupDiscovery(permit)
+    .catch((error) => {
+      mainLog.warn("startup settings discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
 function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
@@ -441,13 +451,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     return;
   }
   const startedAt = Date.now();
-  void getDesktopSettingsService()
-    .refreshStartupDiscovery(permit)
-    .catch((error) => {
-      mainLog.warn("startup settings discovery failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  startStartupSettingsDiscovery(permit);
   // The durable thread snapshot painted below is allowed to appear
   // immediately. A cold profile has no executable selection yet, though, so
   // this live provider refresh waits only until Codex has a usable selection.
@@ -1409,9 +1413,13 @@ export function bootstrapApp(): void {
         existingDatabase: hadExistingAppStateDatabase(),
         onboardingCompleted: getDesktopConfigStore().read("onboarding").completed === true,
         discover: async () => {
+          // Discovery is normally started after the main window appears. This
+          // earlier consumer must start it and await only Codex readiness.
+          startStartupSettingsDiscovery(issueProviderDiscoveryPermit("startup"));
+          await getDesktopSettingsService().resolveCodexCommand();
           const [archived, active] = await Promise.all([
-            registry.listThreads({ archived: true, forceRefresh: true, enrichDirectories: false, skipArchivedMetadataRefresh: true }),
-            registry.listThreads({ archived: false, forceRefresh: true, enrichDirectories: false }),
+            registry.listThreads({ callerReason: "archive-cleanup", archived: true, forceRefresh: true, enrichDirectories: false, skipArchivedMetadataRefresh: true }),
+            registry.listThreads({ callerReason: "archive-cleanup", archived: false, forceRefresh: true, enrichDirectories: false }),
           ]);
           return {
             archived: archived.map((thread) => ({ backend: thread.source, threadId: thread.id, archivedAt: thread.archivedAt })),

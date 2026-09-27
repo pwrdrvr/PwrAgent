@@ -594,6 +594,13 @@
     "rowsChanged": 129,
     "statements": 2
   },
+  "storage-maintenance-initial-expiry": {
+    "commits": 1,
+    "note": "One deferred ordinary expiry transaction and capped reclamation per startup, including profiles that skip maintenance",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 16
+  },
   "streamed-command-output": {
     "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",

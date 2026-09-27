@@ -98,7 +98,7 @@ const mainLogInfoMock = vi.fn();
 const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
 const initializeAppStateMock = vi.fn();
-const runStartupStorageMaintenanceMock = vi.fn<() => Promise<void>>();
+const runStartupStorageMaintenanceMock = vi.fn<typeof import("../storage-maintenance").runStartupStorageMaintenance>();
 const disposeAppStateMock = vi.fn();
 const isAppStateInitializedMock = vi.fn();
 const prewarmWindowsJobWrapperMock = vi.fn<() => Promise<void>>();
@@ -1054,6 +1054,38 @@ describe("bootstrapApp", () => {
     expect(StartupCpuProfilerMock).not.toHaveBeenCalled();
     expect(initializeAppStateMock).not.toHaveBeenCalled();
     expect(createMainWindowMock).not.toHaveBeenCalled();
+  });
+
+  it("starts discovery before retention and waits only for Codex readiness", async () => {
+    let select!: (value: { command: string; source: "config" }) => void;
+    refreshStartupDiscoveryMock.mockReturnValue(new Promise(() => {}));
+    resolveCodexCommandMock.mockImplementation(() => {
+      expect(refreshStartupDiscoveryMock).toHaveBeenCalled();
+      return new Promise((resolve) => { select = resolve; });
+    });
+    runStartupStorageMaintenanceMock.mockImplementation(async (options) => { await options.discover(); });
+    await import("../index");
+    await flushMicrotasks();
+    expect(listThreadsMock).not.toHaveBeenCalled();
+    expect(createMainWindowMock).not.toHaveBeenCalled();
+    resolveCodexCommandMock.mockResolvedValue({ command: "/discovered/codex", source: "config" });
+    select({ command: "/discovered/codex", source: "config" });
+    await flushMicrotasks();
+    expect(listThreadsMock).toHaveBeenCalledWith(expect.objectContaining({ callerReason: "archive-cleanup", archived: true, forceRefresh: true }));
+    expect(listThreadsMock).toHaveBeenCalledWith(expect.objectContaining({ callerReason: "archive-cleanup", archived: false, forceRefresh: true }));
+    expect(createMainWindowMock).toHaveBeenCalledOnce();
+  });
+
+  it("reports missing provider readiness to maintenance instead of an empty archive list", async () => {
+    resolveCodexCommandMock.mockRejectedValue(new Error("No Codex selection"));
+    runStartupStorageMaintenanceMock.mockImplementation(async (options) => {
+      await expect(options.discover()).rejects.toThrow("No Codex selection");
+      expect(listThreadsMock).not.toHaveBeenCalled();
+    });
+    await import("../index");
+    await flushMicrotasks();
+    expect(runStartupStorageMaintenanceMock).toHaveBeenCalledOnce();
+    expect(createMainWindowMock).toHaveBeenCalledOnce();
   });
 
   it("continues startup after the storage job, including when its window closes", async () => {

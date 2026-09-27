@@ -9313,6 +9313,15 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it.each([true, false])("propagates retention evidence failures for archived=%s", async (archived) => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    vi.spyOn(codexClient, "listThreads").mockRejectedValue(new Error("Provider unavailable"));
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.listThreads({ archived, forceRefresh: true, callerReason: "archive-cleanup" })).rejects.toThrow("Provider unavailable");
+    } finally { await registry.close(); }
+  });
+
   it("propagates an authoritative refresh through the combined provider listing", async () => {
     const codexClient = new MockBackendClient({
       threads: [{ id: "fixture", title: "Before", titleSource: "explicit", linkedDirectories: [], source: "codex" }],

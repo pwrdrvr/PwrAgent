@@ -1323,6 +1323,7 @@ CREATE TABLE IF NOT EXISTS token_miser_retention (
 export class StateDb {
   private db: BetterSqlite3.Database;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
+  private initialGcTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor(db: BetterSqlite3.Database) {
     this.db = db;
@@ -1983,15 +1984,24 @@ export class StateDb {
   }
 
   stopGc(): void {
+    if (this.initialGcTimer) {
+      clearTimeout(this.initialGcTimer);
+      this.initialGcTimer = null;
+    }
     if (this.gcTimer) {
       clearInterval(this.gcTimer);
       this.gcTimer = null;
     }
   }
 
-  /** Startup maintenance owns initial cleanup and full rewrites off main. */
+  /** Ordinary expiry is independent of optional compaction admission. */
   startDeferredGc(intervalMs = 60 * 60 * 1000): void {
     this.stopGc();
+    this.initialGcTimer = setTimeout(() => {
+      this.initialGcTimer = null;
+      this.cleanupExpired(Date.now(), 256);
+    }, 0);
+    this.initialGcTimer.unref?.();
     this.gcTimer = setInterval(() => this.cleanupExpired(Date.now(), 256), intervalMs);
     this.gcTimer.unref?.();
   }

@@ -138,16 +138,52 @@ it("does not steal a living maintenance owner even after the daily interval", ()
   } finally { state.close(); }
 });
 
-it("defers startup GC and caps the later reclamation call", () => {
+it("sweeps expiry on the next timer turn even when a small profile skips maintenance", () => {
   vi.useFakeTimers();
   const state = StateDb.open(":memory:");
   const cleanup = vi.spyOn(state, "cleanupExpired");
   const convert = vi.spyOn(state, "ensureIncrementalAutoVacuum");
   try {
+    const bytes = Number(state.raw.pragma("page_count", { simple: true })) * Number(state.raw.pragma("page_size", { simple: true }));
+    expect(storageMaintenanceDue({ existingDatabase: true, onboardingCompleted: true, bytes, now: Date.now() })).toBe(false);
+    state.raw.prepare("INSERT INTO browse_sessions VALUES (?,NULL,0,0,'{}')").run("expired");
     state.startDeferredGc(1000);
     expect(cleanup).not.toHaveBeenCalled();
     expect(convert).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(0);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(state.raw.prepare("SELECT count(*) n FROM browse_sessions").get()).toEqual({ n: 0 });
+    expect(convert).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1000);
+    expect(cleanup).toHaveBeenCalledTimes(2);
     expect(cleanup).toHaveBeenCalledWith(expect.any(Number), 256);
   } finally { state.close(); vi.useRealTimers(); }
+});
+
+it("cancels deferred expiry when the database closes before its first sweep", () => {
+  vi.useFakeTimers();
+  const state = StateDb.open(":memory:");
+  const cleanup = vi.spyOn(state, "cleanupExpired");
+  state.startDeferredGc();
+  state.close();
+  try {
+    vi.runAllTimers();
+    expect(cleanup).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it("budgets the independent initial expiry sweep", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("storage-initial-expiry-");
+  const state = StateDb.open(fixture.dbPath);
+  try {
+    state.raw.prepare("INSERT INTO browse_sessions VALUES (?,NULL,0,0,'{}')").run("expired");
+    const { writes } = await measureSqliteWrites(() => {
+      state.startDeferredGc();
+      vi.advanceTimersByTime(0);
+      state.stopGc();
+    });
+    expectSqliteWriteBudget({ scenario: "storage-maintenance-initial-expiry", note: "One deferred ordinary expiry transaction and capped reclamation per startup, including profiles that skip maintenance", writes });
+  } finally { state.close(); removeTempStateDbDir(fixture.tempDir); vi.useRealTimers(); }
 });
