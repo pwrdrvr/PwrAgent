@@ -1114,6 +1114,8 @@ export type DesktopSettingsSnapshot = {
     tokenMiserDefaultEnabled?: DesktopSettingsValue<boolean>;
     /** Load PwrAgent tool schemas on demand in Codex Code Mode. */
     codexToolDiscovery?: DesktopSettingsValue<boolean>;
+    /** Opt-in focused questions over retained output; independent of ordinary gating. */
+    tokenMiserFocusedSummariesEnabled?: DesktopSettingsValue<boolean>;
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
@@ -1403,6 +1405,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
+    tokenMiserFocusedSummariesEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     /** Legacy round-trip field; per-review runMode now selects the engine. */

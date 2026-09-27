@@ -1,3 +1,4 @@
+import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
 import type {
   AgentToolCatalogId,
   AgentToolCatalogSummary,
@@ -61,6 +62,7 @@ export function resolveAgentToolCatalogs(params: {
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
   tokenMiserStore?: TokenMiserStore;
+  tokenMiserFocused?: TokenMiserFocusedSummaries;
   starMapHandler?: PwrAgentStarMapHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
@@ -97,7 +99,7 @@ export function resolveAgentToolCatalogs(params: {
   );
   const mcpConnectionDynamicTools = mcpConnectionRouter.buildDynamicToolSpecs();
   const tokenMiserRouter = new AgentToolRouter(
-    buildTokenMiserToolDefinitions(params.tokenMiserStore),
+    buildTokenMiserToolDefinitions(params.tokenMiserStore, params.tokenMiserFocused),
   );
   const tokenMiserDynamicTools = tokenMiserRouter.buildDynamicToolSpecs();
   const starMapRouter = buildPwrAgentStarMapToolRouter(params.starMapHandler);

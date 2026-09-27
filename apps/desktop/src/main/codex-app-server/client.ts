@@ -673,16 +673,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function buildCodexHelperConfig(
   baseConfig: NonNullable<CodexThreadStartParams["config"]>,
   serverNames: string[],
+  disableExecution = false,
 ): NonNullable<CodexThreadStartParams["config"]> {
-  if (serverNames.length === 0) {
-    return baseConfig;
-  }
-
   return {
     ...baseConfig,
-    mcp_servers: Object.fromEntries(
-      serverNames.map((name) => [name, { enabled: false }]),
-    ),
+    ...(disableExecution ? {
+      features: {
+        ...(asRecord(baseConfig.features) ?? {}),
+        shell_tool: false,
+        unified_exec: false,
+        js_repl: false,
+        code_mode: false,
+        code_mode_only: false,
+        multi_agent: false,
+        multi_agent_v2: false,
+        enable_fanout: false,
+      },
+    } : {}),
+    ...(serverNames.length > 0 ? {
+      mcp_servers: Object.fromEntries(
+        serverNames.map((name) => [name, { enabled: false }]),
+      ),
+    } : {}),
   };
 }
 
@@ -9304,6 +9316,8 @@ export class CodexAppServerClient {
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
+    /** Explicitly remove execution and delegation tools for data-only helpers. */
+    disableExecution?: boolean;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
     turnTimeoutMs?: number;
@@ -9416,6 +9430,7 @@ export class CodexAppServerClient {
     /** Omitted by a tool turn, whose product is its tool calls. */
     schema?: Record<string, unknown>;
     system?: string;
+    disableExecution?: boolean;
     isMatch?: StructuredRecordPredicate;
     /**
      * PwrAgent tools this helper may call. Supplying these also supplies
@@ -9467,10 +9482,12 @@ export class CodexAppServerClient {
       const helperConfig = buildCodexHelperConfig(
         CODEX_THREAD_TITLE_CONFIG,
         mcpServerNames,
+        params.disableExecution,
       );
       const legacyHelperConfig = buildCodexHelperConfig(
         LEGACY_CODEX_THREAD_TITLE_CONFIG,
         mcpServerNames,
+        params.disableExecution,
       );
       const threadStartResult = await requestWithFallbacks({
         client: this.connection,

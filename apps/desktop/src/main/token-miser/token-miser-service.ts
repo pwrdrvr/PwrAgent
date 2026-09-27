@@ -1,3 +1,4 @@
+import { TokenMiserFocusedSummaries } from "./token-miser-focused";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
 import { randomUUID } from "node:crypto";
 import {
@@ -93,6 +94,8 @@ const TOKEN_MISER_SYSTEM_PROMPT = [
 ].join("\n");
 
 const TOKEN_MISER_RETRIEVAL_TOOL_NAMES = [
+  "summarize_token_miser_output",
+  "read_token_miser_segment",
   "search_token_miser_output",
   "read_token_miser_output",
   "read_all_token_miser_output",
@@ -146,6 +149,7 @@ export type TokenMiserServiceOptions = {
   store: TokenMiserStore;
   isEnabled: () => boolean;
   isEnabledByDefault?: () => boolean;
+  isFocusedEnabled?: () => boolean;
   /**
    * Per-thread override. `undefined` inherits `isEnabledByDefault`; neither
    * value can bypass the outer experiment gate in `isEnabled`.
@@ -153,11 +157,18 @@ export type TokenMiserServiceOptions = {
   isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
     reasoningEffort: "medium";
+    disableExecution?: boolean;
     system: string;
     prompt: string;
     schema: Record<string, unknown>;
     timeoutMs: number;
   }) => Promise<TokenMiserStructuredGenerationResult>;
+  onFocusedInference?: (params: {
+    threadId: string;
+    turnId: string;
+    inferenceId: string;
+    usage: TokenMiserStructuredGenerationResult;
+  }) => Promise<void>;
   onInterceptionStored?: (
     metadata: TokenMiserObjectMetadata,
   ) => void | Promise<void>;
@@ -178,12 +189,14 @@ export type TokenMiserServiceOptions = {
 };
 
 export class TokenMiserService {
+  readonly focused: TokenMiserFocusedSummaries;
   private readonly thresholdCharacters: number;
   private readonly summaryTimeoutMs: number;
   private readonly capturedGroups = new Map<string, Omit<CapturedGroup, "members">>();
   private readonly capturedOutputs = new TokenMiserOutputCache();
 
   constructor(private readonly options: TokenMiserServiceOptions) {
+    this.focused = new TokenMiserFocusedSummaries(options);
     this.thresholdCharacters =
       options.thresholdCharacters ?? TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS;
     this.summaryTimeoutMs = options.summaryTimeoutMs ?? 45_000;

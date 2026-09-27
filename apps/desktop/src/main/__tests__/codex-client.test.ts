@@ -11095,7 +11095,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("forwards structured helper system instructions and the requested model", async () => {
+  it.each([false, true])("forwards structured helper instructions and model (execution disabled=%s)", async (disableExecution) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
     MockTransport.threadStartResult = {
@@ -11120,6 +11120,7 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     await expect(client.generateStructuredObject({
+      disableExecution,
       system: "Keep behavioral and uncertain changes visible.",
       prompt: "Classify these serialized diff hunks.",
       model: "gpt-5.6-luna",
@@ -11158,6 +11159,10 @@ describe("CodexAppServerClient", () => {
             include_environment_context: false,
             project_doc_max_bytes: 0,
             features: expect.objectContaining({
+              ...(disableExecution ? {
+                shell_tool: false, unified_exec: false, js_repl: false,
+                code_mode: false, multi_agent: false, multi_agent_v2: false,
+              } : {}),
               apps: false,
               hooks: false,
               plugins: false,

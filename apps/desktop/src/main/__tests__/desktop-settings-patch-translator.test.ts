@@ -188,6 +188,14 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes focused summaries independently of the Token Miser gate", () => {
+    expect(desktopSettingsPatchToEdits({
+      experimental: { tokenMiserFocusedSummariesEnabled: true },
+    })).toEqual([{
+      op: "set", path: ["experimental", "token_miser_focused_summaries_enabled"], value: true,
+    }]);
+  });
+
   it("writes the inherited Token Miser thread default", () => {
     expect(
       desktopSettingsPatchToEdits({

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { StateDb } from "../state/state-db";
-import { attachSqliteWriteMetrics, measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 
@@ -89,7 +89,7 @@ it("uses the thread index for scoped accounting and observation reads", async ()
 
 it("budgets durable acceptance, observations, replay buffering and turn flushes", async () => {
   const { store, root, stateDb } = await fixture();
-  attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: path.join(root, "state.db") });
+  if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: path.join(root, "state.db") });
   const { result: entry, writes: accepted } = await measureSqliteWrites(() => store.store(params));
   const { writes: observed } = await measureSqliteWrites(() => store.recordCodeModeObservation({
     threadId: "owner", turnId: "turn", callId: "call", cellId: "cell", outputCharacters: 100,

@@ -131,6 +131,8 @@ export type TokenMiserObjectMetadata = {
   replacementCharacters: number;
   /** Legacy field name; new records store UTF-8 bytes for Codex token estimates. */
   retrievedCharacters: number;
+  /** Subset of retrievedCharacters delivered as focused answers, in UTF-8 bytes. */
+  focusedSummaryCharacters?: number;
   /** Versioned opt-in so pre-replay-accounting objects are not tracked forever. */
   replayTrackingVersion?: 2;
   parentRequestsObservedAfterGate?: number;

@@ -121,6 +121,7 @@ type PendingRetrievalDelivery = {
   threadId: string;
   visibleText: string;
   visibleTextOffset: number;
+  kind?: "summary" | "source";
   wrappedText: string;
 };
 
@@ -445,6 +446,30 @@ export class TokenMiserStore {
     return row ? JSON.parse(row.payload) as TokenMiserObjectMetadata : undefined;
   }
 
+  /** Internal read: no delivery marker and no parent retrieval accounting. */
+  async readSelectionSource(params: {
+    objectId: string;
+    memberId?: string;
+    groupId?: string;
+    threadId: string;
+  }): Promise<{ text: string; turnId: string; objectId: string; memberId?: string } | undefined> {
+    const objectId = params.groupId
+      ? (await this.listMetadata(params.threadId)).find((entry) => entry.groupId === params.groupId)?.objectId
+      : params.objectId;
+    if (!objectId) return undefined;
+    const stored = await this.readAuthorizedObject(objectId, params.threadId);
+    if (!stored) return undefined;
+    const memberId = params.groupId ? params.objectId : params.memberId;
+    if (memberId) {
+      if (!stored.metadata.groupId) return undefined;
+      const group = parseGroupStoredOutput(stored.output, stored.metadata.groupId);
+      const member = group?.members.find((entry) => entry.objectId === memberId);
+      return member ? { text: member.output, turnId: stored.metadata.turnId, objectId, memberId } : undefined;
+    }
+    if (stored.metadata.groupId) return undefined;
+    return { text: stored.output, turnId: stored.metadata.turnId, objectId };
+  }
+
   async readLines(params: {
     objectId: string;
     threadId: string;
@@ -598,6 +623,7 @@ export class TokenMiserStore {
     objectId: string;
     threadId: string;
     visibleText: string;
+    kind?: "summary" | "source";
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
     const generation = this.outputGenerations.get(params.objectId);
     if (generation === undefined || !await this.isCurrentRetention(params.threadId, generation)) return undefined;
@@ -634,6 +660,7 @@ export class TokenMiserStore {
     threadId: string;
     turnId: string;
     visibleText: string;
+    kind?: "summary" | "source";
     generation: string;
   }): TokenMiserRetrievalDelivery | undefined {
     const now = Date.now();
@@ -653,6 +680,7 @@ export class TokenMiserStore {
       threadId: params.threadId,
       visibleText: params.visibleText,
       visibleTextOffset: begin.length + 1,
+      kind: params.kind,
       wrappedText,
     }))) return undefined;
     this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: params.turnId });
@@ -756,7 +784,7 @@ export class TokenMiserStore {
           occurrence + pending.wrappedText.length,
         );
       }
-      await this.recordRetrieval(pending.objectId, visibleCharacters);
+      await this.recordRetrieval(pending.objectId, visibleCharacters, pending.kind);
       confirmedCharacters += visibleCharacters;
     }
     return confirmedCharacters;
@@ -1168,12 +1196,13 @@ export class TokenMiserStore {
     return output === undefined ? undefined : { metadata, output };
   }
 
-  private async recordRetrieval(objectId: string, characters: number): Promise<void> {
+  private async recordRetrieval(objectId: string, characters: number, kind?: "summary" | "source"): Promise<void> {
     if (characters <= 0) {
       return;
     }
     await this.updateMetadata(objectId, (metadata) => {
       metadata.retrievedCharacters += characters;
+      if (kind === "summary") metadata.focusedSummaryCharacters = (metadata.focusedSummaryCharacters ?? 0) + characters;
       return true;
     });
   }
@@ -1343,7 +1372,7 @@ function safeTokenUsage(value: unknown, depth = 0): unknown {
 function safeMetadata(value: TokenMiserObjectMetadata): TokenMiserObjectMetadata {
   const result = {} as TokenMiserObjectMetadata;
   // Deliberate allowlist: legacy JSON and helper objects may have extra content.
-  const keys = ["version", "objectId", "threadId", "turnId", "toolUseId", "toolName", "createdAt", "originalCharacters", "baselineParentTokens", "replacementCharacters", "retrievedCharacters", "replayTrackingVersion", "parentRequestsObservedAfterGate", "lastParentCumulativeInputTokens", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens", "replayTrackingStoppedAt", "parentRequestEpoch", "disposition", "groupId", "parentModel", "parentServiceTier"] as const;
+  const keys = ["version", "objectId", "threadId", "turnId", "toolUseId", "toolName", "createdAt", "originalCharacters", "baselineParentTokens", "replacementCharacters", "retrievedCharacters", "focusedSummaryCharacters", "replayTrackingVersion", "parentRequestsObservedAfterGate", "lastParentCumulativeInputTokens", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens", "replayTrackingStoppedAt", "parentRequestEpoch", "disposition", "groupId", "parentModel", "parentServiceTier"] as const;
   for (const key of keys) {
     Object.assign(result, { [key]: value[key] });
   }

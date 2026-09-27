@@ -523,7 +523,7 @@ import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
-import { TokenMiserService } from "../token-miser/token-miser-service";
+import { TokenMiserService, type TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   estimateTokenCount,
@@ -840,6 +840,7 @@ type BackendClient = {
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
+    disableExecution?: boolean;
     isMatch: (record: Record<string, unknown>) => boolean;
     timeoutMs?: number;
     /** Model answering budget, separate from the protocol round-trips. */
@@ -7428,12 +7429,13 @@ function buildCodexParentDynamicToolSpecs(
 
 function buildCodexTokenMiserDynamicToolSpecs(
   store: TokenMiserStore | undefined,
+  focused?: TokenMiserService["focused"],
 ): CodexDynamicToolSpec[] {
   if (!store) {
     return [];
   }
   return buildCodexParentDynamicToolSpecs(
-    resolveAgentToolCatalogs({ tokenMiserStore: store }).filter(
+    resolveAgentToolCatalogs({ tokenMiserStore: store, tokenMiserFocused: focused }).filter(
       (catalog) => catalog.id === "token_miser",
     ),
   );
@@ -8890,6 +8892,7 @@ export class DesktopBackendRegistry {
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
   private readonly tokenMiserStore?: TokenMiserStore;
+  private readonly tokenMiserService?: TokenMiserService;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private tokenMiserCodeModeReducerDescriptorPath?: string;
   private readonly tokenMiserServerCapabilities = new WeakMap<
@@ -9404,6 +9407,14 @@ export class DesktopBackendRegistry {
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
+        isFocusedEnabled: () => {
+          try {
+            return (settingsService ?? getDesktopSettingsService())
+              .resolveTokenMiserFocusedSummariesEnabled?.() ?? false;
+          } catch {
+            return false;
+          }
+        },
         isEnabledByDefault: () => this.resolveTokenMiserDefaultEnabledFn(),
         // A thread can override the inherited default while the experiment is
         // available; the global experimental flag remains the outer gate.
@@ -9419,6 +9430,7 @@ export class DesktopBackendRegistry {
           this.tokenMiserCodeModeGroupingVersion,
         postToolUseExactOutputVersion: () =>
           this.tokenMiserPostToolUseExactOutputVersion,
+        onFocusedInference: (params) => this.recordTokenMiserFocusedInference(params),
         generateSummary: async (params) => {
           if (!this.codexClient.generateStructuredObject) {
             return {
@@ -9429,7 +9441,9 @@ export class DesktopBackendRegistry {
           return await this.codexClient.generateStructuredObject({
             ...params,
             isMatch: (record) =>
-              (record.disposition === "pass_through"
+              params.schema.properties && "answers" in (params.schema.properties as Record<string, unknown>)
+                ? Array.isArray(record.answers)
+                : (record.disposition === "pass_through"
                 || record.disposition === "summarize")
               && typeof record.summary === "string"
               && Array.isArray(record.usefulDetails)
@@ -9441,6 +9455,7 @@ export class DesktopBackendRegistry {
           });
         },
       });
+      this.tokenMiserService = tokenMiserService;
       this.tokenMiserHookBridge = new TokenMiserHookBridge({
         stateDir: tokenMiserStateDir,
         service: tokenMiserService,
@@ -9508,6 +9523,7 @@ export class DesktopBackendRegistry {
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
                 tokenMiserStore: this.tokenMiserStore,
+                tokenMiserFocused: this.tokenMiserService?.focused,
                 starMapHandler: this.starMapHandler,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
@@ -15241,7 +15257,7 @@ export class DesktopBackendRegistry {
       // constructed for any live Codex client, so passing it unconditionally
       // advertised three retrieval tools into every turn of an operator who
       // never enabled the feature.
-      ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
+      ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
       starMapHandler: this.starMapHandler,
     });
     const pdfMcpRegistration =
@@ -17933,7 +17949,7 @@ export class DesktopBackendRegistry {
         enabled: params.tokenMiserEnabled,
       });
     const tokenMiserDynamicTools = params.tokenMiserEnabled
-      ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
+      ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore, this.tokenMiserService?.focused)
       : [];
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -23501,7 +23517,7 @@ export class DesktopBackendRegistry {
           await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
         threadOrchestrationHandler: this.threadOrchestrationHandler,
-        ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
+        ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
       }),
     ), discoveryEnabled);
@@ -31001,6 +31017,30 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async recordTokenMiserFocusedInference(
+    params: Parameters<NonNullable<TokenMiserServiceOptions["onFocusedInference"]>>[0],
+  ): Promise<void> {
+    const { threadId, turnId, inferenceId, usage: result } = params;
+    if (result.status !== "ok" || !result.tokenUsage) return;
+    const usage = buildTaskMonitorUsageSnapshot({
+      model: result.model,
+      serviceTier: result.serviceTier,
+      tokenUsage: result.tokenUsage,
+    });
+    if (!usage) return;
+    const line = buildTaskMonitorUsageLine({
+      backend: "codex", parentThreadId: threadId,
+      monitorId: `system:token-miser-focused:${inferenceId}`,
+      monitorThreadId: result.helperThreadId ?? `token-miser-focused:${inferenceId}`,
+      monitorTurnId: result.helperTurnId ?? turnId,
+      model: result.model, reasoningEffort: result.reasoningEffort,
+      serviceTier: result.serviceTier, source: "monitor", usage,
+    });
+    logUnpricedThreadUsageLine(line);
+    await this.overlayStore.upsertThreadUsageLine({ line });
+    await this.emitThreadPricingUpdated({ backend: "codex", threadId });
+  }
+
   private initializeTokenMiserLedger(): Promise<void> {
     this.tokenMiserStoragePreparation = this.tokenMiserStoragePreparation
       .catch(() => undefined)
@@ -31665,9 +31705,18 @@ export class DesktopBackendRegistry {
       parentModel ??= accounting.originalModel;
     }
 
-    // No priced gate means no equation. Returning a zeroed ledger rendered
-    // "Net saved $0.00" as measured fact and made the token-only fallback,
-    // which says the dollars are not in yet, unreachable.
+    // Focused helper work is billed once per inference, independently of
+    // whether its answer was emitted. It creates no additional source gate.
+    for (const line of pricing.lines) {
+      if (line.sourceItemId?.startsWith("system:token-miser-focused:")) {
+        if (line.priceStatus !== "priced") return undefined;
+        const cost = line.totalCostMicros;
+        gateCostMicros += cost;
+        savingsMicros -= cost;
+      }
+    }
+    // No priced gate means no equation. Preserve the token-only fallback
+    // rather than rendering an incomplete dollar estimate as measured fact.
     if (pricedGateCount === 0) {
       return undefined;
     }
@@ -32306,7 +32355,7 @@ export class DesktopBackendRegistry {
     }
 
     const tokenMiserRouter = new AgentToolRouter(
-      buildTokenMiserToolDefinitions(this.tokenMiserStore),
+      buildTokenMiserToolDefinitions(this.tokenMiserStore, this.tokenMiserService?.focused),
     );
     if (
       hostToolCall

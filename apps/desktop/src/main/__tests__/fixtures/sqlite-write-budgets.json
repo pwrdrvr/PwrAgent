@@ -587,6 +587,27 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "token-miser-focused-delivery": {
+    "commits": 1,
+    "note": "One authenticated focused batch emission updates its anchor source once.",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "token-miser-focused-inference": {
+    "commits": 1,
+    "note": "One actual focused helper inference writes one parent-attributed usage line, independent of answer delivery.",
+    "observedWalBytes": 65920,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "token-miser-focused-selection": {
+    "commits": 0,
+    "note": "One 15-answer batch with mocked inference accounting: selection, references and unused delivery remain in RAM.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "token-miser-observation": {
     "commits": 1,
     "note": "One Code Mode output observation.",

@@ -1393,6 +1393,23 @@ describe("DesktopSettingsService", () => {
       .toBeUndefined();
   });
 
+  it("defaults focused summaries off and persists their toggle without changing ordinary Token Miser", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, "# keep this comment\n[experimental]\ntoken_miser_enabled = true\n");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect(service.resolveTokenMiserFocusedSummariesEnabled()).toBe(false);
+    expect((await service.readSettingsProjection()).experimental.tokenMiserFocusedSummariesEnabled).toEqual({ value: false, source: "default" });
+    for (const enabled of [true, false]) {
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserFocusedSummariesEnabled: enabled } });
+      expect(service.resolveTokenMiserFocusedSummariesEnabled()).toBe(enabled);
+      expect(service.resolveTokenMiserEnabled()).toBe(true);
+      expect((await service.readSettingsProjection()).experimental.tokenMiserFocusedSummariesEnabled).toEqual({ value: enabled, source: "config" });
+      expect(fs.readFileSync(configPath, "utf8")).toContain("# keep this comment");
+      const reopened = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+      expect(reopened.resolveTokenMiserFocusedSummariesEnabled()).toBe(enabled);
+    }
+  });
+
   it("defaults Token Miser unavailable with inherited thread use on", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
