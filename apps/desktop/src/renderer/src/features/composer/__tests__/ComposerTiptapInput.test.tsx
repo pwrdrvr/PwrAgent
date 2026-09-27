@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef, useState } from "react";
-import type { JSONContent } from "@tiptap/react";
+import type { Editor, JSONContent } from "@tiptap/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ComposerTiptapInput,
@@ -959,6 +959,66 @@ describe("ComposerTiptapInput", () => {
     )
       .toHaveLength(0);
   });
+
+  it.each(["blockquote", "codeBlock", "markdown", "rich blockquote"])(
+    "keeps a %s paste separate from nearby typing in undo and redo",
+    async (destination) => {
+      renderTiptapInput({ value: "Type a bunch. Pause." });
+      const textbox = await screen.findByRole("textbox", { name: "Reply" });
+      const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+      // Keep every edit inside the grouping window without relying on machine speed.
+      const now = vi.spyOn(Date, "now").mockReturnValue(10000);
+      try {
+        act(() => {
+          editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+          editor.view.dispatch(editor.state.tr.insertText(" Type a little more."));
+          editor.commands.splitBlock();
+          if (destination.includes("blockquote")) {
+            editor.commands.toggleBlockquote();
+          } else if (destination === "codeBlock") {
+            editor.commands.toggleCodeBlock();
+          }
+          editor.view.dispatch(editor.state.tr.insertText("Prefix: "));
+        });
+        const beforePaste = editor.getJSON();
+        const beforeSelection = editor.state.selection.toJSON();
+        const pastedText = destination === "markdown" ? "- Wrong thing" : "Wrong thing";
+        fireEvent.paste(textbox, {
+          clipboardData: {
+            files: [],
+            items: [],
+            types: ["text/plain", "text/html"],
+            getData: (type: string) => type === "text/plain"
+              ? pastedText
+              : destination === "rich blockquote" ? "<p><strong>Wrong thing</strong></p>" : "",
+          },
+        });
+        expect(editor.getText()).toContain("Wrong thing");
+        const afterPaste = editor.getJSON();
+        act(() => {
+          editor.view.dispatch(editor.state.tr.insertText(" After paste"));
+        });
+        fireEvent.keyDown(textbox, { key: "z", metaKey: true });
+        expect(editor.getJSON()).toEqual(afterPaste);
+
+        fireEvent.keyDown(textbox, { key: "z", metaKey: true });
+        expect(editor.getJSON()).toEqual(beforePaste);
+        expect(editor.state.selection.toJSON()).toEqual(beforeSelection);
+        fireEvent.keyDown(textbox, { key: "z", metaKey: true, shiftKey: true });
+        expect(editor.getJSON()).toEqual(afterPaste);
+
+        act(() => {
+          editor.view.dispatch(editor.state.tr.insertText(" After paste"));
+        });
+        fireEvent.keyDown(textbox, { key: "z", metaKey: true });
+        expect(editor.getJSON()).toEqual(afterPaste);
+        fireEvent.keyDown(textbox, { key: "z", metaKey: true });
+        expect(editor.getJSON()).toEqual(beforePaste);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 
   it("keeps HTML-only double-blank-line SQL paste inside an active blockquote", async () => {
     const onChange = vi.fn();
