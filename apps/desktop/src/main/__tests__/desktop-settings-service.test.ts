@@ -4684,6 +4684,24 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults tool discovery on and preserves an explicit opt-out without replacing other config", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "# keep this comment\n[experimental]\nmanaged_review = true\n");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await service.readSettingsProjection()).experimental.codexToolDiscovery).toEqual({ value: true, source: "default" });
+    expect(service.resolveCodexToolDiscovery()).toBe(true);
+    for (const enabled of [false, true]) {
+      await service.writeConfigPatchTargeted({ experimental: { codexToolDiscovery: enabled } });
+      expect(service.resolveCodexToolDiscovery()).toBe(enabled);
+      expect((await service.readSettingsProjection()).experimental.codexToolDiscovery).toEqual({ value: enabled, source: "config" });
+      const config = fs.readFileSync(configPath, "utf8");
+      expect(config).toContain(`codex_tool_discovery = ${enabled}`);
+      expect(config).toContain("# keep this comment");
+      expect(config).toContain("managed_review = true");
+    }
+  });
+
   it("defaults managed review to false and persists the additive flag", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

@@ -1112,6 +1112,8 @@ export type DesktopSettingsSnapshot = {
      * override. This only has an effect while the experiment gate is enabled.
      */
     tokenMiserDefaultEnabled?: DesktopSettingsValue<boolean>;
+    /** Load PwrAgent tool schemas on demand in Codex Code Mode. */
+    codexToolDiscovery?: DesktopSettingsValue<boolean>;
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
@@ -1400,6 +1402,7 @@ export type DesktopSettingsConfigPatch = {
     threadPricingDisplayCodexCredits?: boolean;
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
+    codexToolDiscovery?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     /** Legacy round-trip field; per-review runMode now selects the engine. */

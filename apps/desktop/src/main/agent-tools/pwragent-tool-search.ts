@@ -1,0 +1,122 @@
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
+import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
+import { AgentToolRouter } from "./agent-tool-router";
+import type { TokenMiserStore } from "../token-miser/token-miser-store";
+
+export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
+Search when the user wants to:
+- Find, read, inspect, rename, pin, archive/close, restore, or change settings on threads; check their status, activity, usage, model, fast mode, or reasoning effort.
+- Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
+- Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
+- Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
+- Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
+- Attach, check, or watch a pull request/merge request and CI; request a code review.
+- Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
+- Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
+- Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
+- Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
+Use a short query describing the desired action, or an exact tool name. Search separately for unrelated tasks. Returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.
+In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. If no tools match, retry with a more specific action; do not invent a tool name.`;
+
+// Small domain vocabulary supplies words users use that need not appear in a
+// tool's literal name. Ranking otherwise follows the live catalog, not a copy.
+const SEARCH_ALIASES: Record<string, string> = {
+  handoff_task: "delegate delegation child subagent split parallel tasks worktree",
+  create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
+  mutate_thread: "close closing archive restore rename pin model fast priority mode settings",
+  attach_thread_directory: "link repository project folder worktree",
+  move_thread_workspace: "move project folder checkout worktree",
+  list_federation_instances: "federation machines computers hosts load capacity",
+  list_instance_projects: "federation remote machine projects folders",
+  create_instance_thread: "federation run work another remote machine computer",
+  get_current_messaging_surface: "telegram discord slack line lark feishu mattermost messaging conversation",
+  attach_thread_here: "telegram discord slack line lark feishu mattermost messaging attach topic",
+  rename_current_messaging_conversation: "telegram discord slack line lark feishu mattermost rename topic",
+  send_private_response: "telegram discord slack line lark feishu mattermost message private reply dm",
+  send_messaging_file: "telegram discord slack line lark feishu mattermost send attachment file",
+};
+
+const STOP_WORDS = new Set(["a", "an", "and", "can", "for", "i", "in", "is", "it", "me", "my", "of", "on", "or", "our", "please", "the", "to", "use", "want", "with"]);
+
+function words(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word && !STOP_WORDS.has(word));
+}
+
+export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, limit = 3) {
+  const terms = [...new Set(words(query))];
+  const exact = query.trim().toLowerCase().replace(/^tools\./, "").replace(/^pwragent(?:__|\.)/, "");
+  const tools = catalog.flatMap((spec) =>
+    spec.type === "namespace" && spec.name === PWRAGENT_TOOL_NAMESPACE
+      ? spec.tools.filter((tool) => tool.name !== "tool_search")
+      : []
+  );
+  return tools.map((tool) => {
+    const name = new Set(words(tool.name));
+    const aliases = new Set(words(SEARCH_ALIASES[tool.name] ?? ""));
+    const description = new Set(words(tool.description));
+    const score = tool.name === exact ? 10_000 : terms.reduce((total, term) =>
+      total + (name.has(term) ? 8 : aliases.has(term) ? 6 : description.has(term) ? 1 : 0), 0);
+    return { tool, score };
+  }).filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
+    .slice(0, Math.min(5, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 3)))
+    .map(({ tool }) => ({
+      namespace: PWRAGENT_TOOL_NAMESPACE,
+      name: tool.name,
+      codeModeName: `${PWRAGENT_TOOL_NAMESPACE}__${tool.name}`,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    }));
+}
+
+export function buildPwrAgentToolSearchDefinition(
+  catalog: DynamicToolSpec[],
+  store?: TokenMiserStore,
+): AgentToolDefinition {
+  return {
+    namespace: PWRAGENT_TOOL_NAMESPACE,
+    name: "tool_search",
+    description: PWRAGENT_TOOL_SEARCH_DESCRIPTION,
+    deferLoading: false,
+    advertiseMcp: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 500 },
+        limit: { type: "integer", minimum: 1, maximum: 5 },
+      },
+    },
+    dispatch: async (args, context) => {
+      if (
+        typeof args.query !== "string" || !args.query.trim() || args.query.length > 500
+        || (args.limit !== undefined && (!Number.isInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 5))
+      ) {
+        return agentToolFailure({ code: "invalid_arguments", message: "Provide a nonempty query of at most 500 characters and an optional integer limit from 1 to 5." });
+      }
+      const result = { tools: searchPwrAgentTools(catalog, args.query, args.limit as number | undefined) };
+      const visibleText = JSON.stringify(result);
+      const delivery = store && context.turnId
+        ? await store.prepareToolDefinitionDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText })
+        : undefined;
+      return agentToolSuccess(result, {
+        contentItems: [{ type: "inputText", text: delivery?.text ?? visibleText }],
+      });
+    },
+  };
+}
+
+/** Only parent Codex catalogs opt in; MCP and restricted helper catalogs stay unchanged. */
+export function withPwrAgentToolDiscovery(catalog: DynamicToolSpec[], enabled: boolean): DynamicToolSpec[] {
+  if (!enabled) return catalog;
+  const bootstrap = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]).buildDynamicToolSpecs()[0];
+  return catalog.map((spec) => {
+    if (spec.type !== "namespace" || spec.name !== PWRAGENT_TOOL_NAMESPACE || bootstrap.type !== "namespace") return spec;
+    return {
+      ...spec,
+      tools: [...bootstrap.tools, ...spec.tools.filter((tool) => tool.name !== "tool_search").map((tool) => ({ ...tool, deferLoading: true }))],
+    };
+  });
+}

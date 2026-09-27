@@ -117,7 +117,7 @@ export type TokenMiserRetrievalDelivery = {
 type PendingRetrievalDelivery = {
   generation: string;
   createdAt: number;
-  objectId: string;
+  objectId?: string;
   threadId: string;
   visibleText: string;
   visibleTextOffset: number;
@@ -600,7 +600,7 @@ export class TokenMiserStore {
     visibleText: string;
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
     const generation = this.outputGenerations.get(params.objectId);
-    if (!await this.isCurrentRetention(params.threadId, generation)) return undefined;
+    if (generation === undefined || !await this.isCurrentRetention(params.threadId, generation)) return undefined;
     const metadata = await this.readMetadata(params.objectId, params.threadId);
     if (
       !metadata
@@ -611,6 +611,31 @@ export class TokenMiserStore {
     ) {
       return undefined;
     }
+    return this.prepareExactDelivery({ ...params, generation, turnId: metadata.turnId });
+  }
+
+  /** Host-owned tool schemas must survive reduction, without charging a retrieval.
+   * Callers supply generated catalog text, never arbitrary agent-provided output.
+   * The receipt is ephemeral; issuing or consuming it makes no SQLite writes.
+   */
+  async prepareToolDefinitionDelivery(params: {
+    threadId: string;
+    turnId: string;
+    visibleText: string;
+  }): Promise<TokenMiserRetrievalDelivery | undefined> {
+    if (!this.isCurrentTurn(params.threadId, params.turnId) || await this.isArchived(params.threadId)) return undefined;
+    const generation = await this.readRetentionGeneration(params.threadId);
+    if (!this.isCurrentTurn(params.threadId, params.turnId)) return undefined;
+    return this.prepareExactDelivery({ ...params, generation });
+  }
+
+  private prepareExactDelivery(params: {
+    objectId?: string;
+    threadId: string;
+    turnId: string;
+    visibleText: string;
+    generation: string;
+  }): TokenMiserRetrievalDelivery | undefined {
     const now = Date.now();
     for (const [deliveryId, pending] of this.pendingRetrievalDeliveries) {
       if (now - pending.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
@@ -622,7 +647,7 @@ export class TokenMiserStore {
     const end = `</pwragent_token_miser_retrieval id="${deliveryId}">`;
     const wrappedText = `${begin}\n${params.visibleText}\n${end}`;
     if (!this.outputs.put(deliveryId, JSON.stringify({
-      generation,
+      generation: params.generation,
       createdAt: now,
       objectId: params.objectId,
       threadId: params.threadId,
@@ -630,7 +655,7 @@ export class TokenMiserStore {
       visibleTextOffset: begin.length + 1,
       wrappedText,
     }))) return undefined;
-    this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: metadata.turnId });
+    this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: params.turnId });
     return { deliveryId, text: wrappedText };
   }
 
@@ -710,6 +735,8 @@ export class TokenMiserStore {
     for (const { deliveryId, outputOffset, pending } of candidates) {
       this.abandonRetrievalDelivery(deliveryId);
       if (pending.generation !== generation) continue;
+      // Catalog delivery is protected transport, not retrieval of a saved result.
+      if (!pending.objectId) continue;
       let visibleCharacters = 0;
       let occurrence = outputOffset;
       // A cell can emit the same delivery more than once. Each visible copy
