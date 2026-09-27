@@ -35,7 +35,14 @@ import {
 import type { DesktopSettingsConfig } from "../desktop-config";
 
 export const CONFIG_STORE_DURABLE_SCHEMA_VERSION = 1;
-export const PROVIDER_IDS = ["codex", "gemini", "grok", "kimi", "qwen"] as const;
+export const PROVIDER_IDS = [
+  "codex",
+  "gemini",
+  "grok",
+  "kimi",
+  "qwen",
+  "claude-acp",
+] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -170,7 +177,9 @@ export function normalizeConfigDomains(params: {
     PROVIDER_IDS.map((provider) => {
       const commandOverride = provider === "codex"
         ? config.models?.codex?.path?.trim() || undefined
-        : config.acpAgents?.[provider]?.cliPath?.trim() || undefined;
+        : provider === "claude-acp"
+          ? undefined
+          : config.acpAgents?.[provider]?.cliPath?.trim() || undefined;
       const enabled = provider === "codex"
         ? true
         : config.acpAgents?.[provider]?.enabled !== false;

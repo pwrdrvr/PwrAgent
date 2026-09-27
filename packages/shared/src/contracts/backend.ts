@@ -138,6 +138,10 @@ export type BackendAcpSummary = {
   websiteUrl?: string;
   allowlistRuleId?: string;
   runtime?: BackendAcpRuntimeCapabilities;
+  /** Credentials are read only by the PwrAgent instance that owns and launches
+   *  this backend. Federation transports capability metadata, never secrets. */
+  credentialScope?: "owning-instance";
+  supportLevel?: "experimental";
 };
 
 export type BackendCapabilities = {
@@ -365,6 +369,22 @@ export type AcpAgentSettingsEntry = {
   managedBuild?: AcpManagedBuildStatus;
   enabled?: boolean;
   preference?: AcpAgentPreference;
+  managedRuntime?: AcpManagedRuntimeSettings;
+};
+
+/** PwrAgent-owned policy for an external ACP runtime. This is display and
+ *  control metadata only; it never contains tokens, cookies, or credentials. */
+export type AcpManagedRuntimeSettings = {
+  kind: "pwragent-managed";
+  packageName: string;
+  pinnedVersion: string;
+  integrity: string;
+  credentialScope: "owning-instance";
+  supportLevel: "experimental";
+  authMethod: "local-terminal";
+  subscriptionAuthBlocked: boolean;
+  consoleAuthCommand?: string;
+  subscriptionAuthCommand?: string;
 };
 
 /**
@@ -540,6 +560,16 @@ export type ReadProviderCatalogRefreshResponse = {
 
 export type CancelProviderCatalogRefreshRequest = {
   runId: number;
+};
+
+export type InstallAcpAgentRequest = {
+  registryId: string;
+  expectedVersion: string;
+};
+
+export type InstallAcpAgentResponse = {
+  fetchedAt: number;
+  entry: AcpAgentSettingsEntry;
 };
 
 export type AcknowledgeAcpAgentUpdateRequest = {

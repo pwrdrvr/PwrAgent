@@ -1067,6 +1067,11 @@ function SettingsSectionBody(props: {
             experimental: { codexDefaultModeRequestUserInput: enabled },
           });
         }}
+        onClaudeAcpChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { claudeAcp: enabled },
+          });
+        }}
       />
     );
   }
