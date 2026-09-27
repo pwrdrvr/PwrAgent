@@ -100,6 +100,7 @@ describe("FederationSettings", () => {
 
   it("renders configured endpoints and sanitized peer health", async () => {
     const health: FederationHealthStatus = {
+      instanceId: "pwr_viewer",
       enabled: true,
       role: "gateway",
       status: "listening",
@@ -142,6 +143,8 @@ describe("FederationSettings", () => {
       screen.getByText("wss://pwragent.example.com/federation"),
     ).toBeInTheDocument();
     expect(screen.getByText("Studio Mac")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Instance ID" })).toHaveValue("pwr_viewer");
+    expect(screen.getByRole("textbox", { name: "Instance ID" })).toHaveAttribute("readonly");
     expect(screen.queryByRole("button", { name: "Revoke" }))
       .not.toBeInTheDocument();
     expect(screen.queryByText("secret-public-key")).not.toBeInTheDocument();

@@ -73,6 +73,9 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
             {snapshot ? (
               <div className="federation-status-control__details">
                 <strong>{federationRuntimeLabel(snapshot)}</strong>
+                {snapshot.health.instanceId ? (
+                  <p>Instance ID: <code className="federation-status-control__instance-id">{snapshot.health.instanceId}</code></p>
+                ) : null}
                 <FederationConnections health={snapshot.health} />
                 {snapshot.health.leaseHolder ? <p>Holder: {snapshot.health.leaseHolder.instanceId}
                   {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}

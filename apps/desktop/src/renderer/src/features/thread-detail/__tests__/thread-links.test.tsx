@@ -31,6 +31,7 @@ function threadSummary(
 function renderWithLinks(
   text: string,
   options: {
+    localInstanceId?: string;
     onOpenRemoteViewer?: (request: {
       backend: AppServerBackendKind;
       instanceId: string;
@@ -53,6 +54,7 @@ function renderWithLinks(
   const onShowThread = options.onShowThread ?? vi.fn();
   return render(
     <ThreadLinkProvider
+      localInstanceId={options.localInstanceId}
       onOpenRemoteViewer={onOpenRemoteViewer}
       onShowThread={onShowThread}
       threads={options.threads ?? [threadSummary()]}
@@ -260,6 +262,55 @@ describe("thread links in transcript markdown", () => {
     });
   });
 
+  it.each([true, false])("resolves an explicit viewer-owned return link locally (loaded: %s)", (loaded) => {
+    const onShowThread = vi.fn();
+    const onOpenRemoteViewer = vi.fn();
+    renderWithLinks(
+      `See [parent thread](pwragent://thread/${CHILD_THREAD_ID}`
+        + "?backend=codex&instanceId=pwr_viewer&messageId=parent-message)",
+      {
+        localInstanceId: "pwr_viewer",
+        threadLinkSource: { backend: "codex", instanceId: "pwr_remote" },
+        threads: loaded ? [threadSummary()] : [],
+        onShowThread,
+        onOpenRemoteViewer,
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: `Open thread ${loaded ? "RELATED query deranking issue" : "parent thread"}`,
+    }));
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: CHILD_THREAD_ID,
+      messageId: "parent-message",
+    });
+    expect(screen.queryByRole("button", { name: /Open remote viewer/ })).not.toBeInTheDocument();
+    expect(onOpenRemoteViewer).not.toHaveBeenCalled();
+  });
+
+  it("re-resolves a return link when the viewer identity arrives after navigation", () => {
+    const onShowThread = vi.fn();
+    const threads = [threadSummary()];
+    const markdown = <ThreadMarkdown
+      text={`[parent](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_viewer)`}
+      threadLinkSource={{ backend: "codex", instanceId: "pwr_remote" }}
+    />;
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={threads}>
+        {markdown}
+      </ThreadLinkProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Open thread parent" })).toBeInTheDocument();
+    rerender(
+      <ThreadLinkProvider localInstanceId="pwr_viewer" onShowThread={onShowThread} threads={threads}>
+        {markdown}
+      </ThreadLinkProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }));
+    expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: CHILD_THREAD_ID });
+  });
+
   it("keeps an arbitrary remote thread actionable with its owning instance", () => {
     const onShowThread = vi.fn();
     const onOpenRemoteViewer = vi.fn();
@@ -269,6 +320,7 @@ describe("thread links in transcript markdown", () => {
       {
         onOpenRemoteViewer,
         onShowThread,
+        localInstanceId: "pwr_viewer",
         threads: [],
       },
     );
@@ -304,6 +356,7 @@ describe("thread links in transcript markdown", () => {
       `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
       {
         onShowThread,
+        localInstanceId: "pwr_viewer",
         threadLinkSource: {
           backend: "codex",
           instanceId: "pwr_harold",

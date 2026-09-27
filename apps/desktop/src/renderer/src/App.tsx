@@ -2864,6 +2864,7 @@ function DesktopAppShell(props: {
 
   return (
     <TranscriptLinkProvider
+      localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
       onOpenRemoteViewer={openRemoteViewerFromLink}
       onShowThread={showThreadFromLink}

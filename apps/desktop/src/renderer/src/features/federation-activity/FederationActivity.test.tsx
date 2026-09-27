@@ -31,6 +31,18 @@ function fixture(): ReadFederationActivityResponse {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Federation activity surfaces", () => {
+  it("shows the viewer instance ID in the status popup", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "pwr_viewer";
+    render(<FederationStatusControl
+      desktopApi={{ readFederationActivity: async () => snapshot }}
+      onOpen={vi.fn()}
+    />);
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    expect(await screen.findByText("pwr_viewer")).toBeInTheDocument();
+    expect(screen.getByText(/Instance ID/)).toBeInTheDocument();
+  });
+
   it.each(["popup", "activity"])("starts and stops detailed capture in the %s", async (surface) => {
     const snapshot = fixture();
     const setFederationTrafficCapture = vi.fn(async (enabled: boolean) => {
