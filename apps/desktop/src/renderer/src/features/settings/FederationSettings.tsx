@@ -635,6 +635,19 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
           />
           <SettingsField
+            label="Instance ID"
+            sub="Identifies this PwrAgent profile in Federation and thread links."
+            control={
+              <input
+                className="settings-input"
+                aria-label="Instance ID"
+                value={effectiveHealth.instanceId ?? ""}
+                placeholder="Not available"
+                readOnly
+              />
+            }
+          />
+          <SettingsField
             label="Instance name"
             sub="Shown to peers instead of the raw instance id. Defaults to this machine's hostname."
             control={

@@ -3,6 +3,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatTrafficBytes } from "./format-traffic-bytes";
+import { CopyIcon } from "../../icons/CopyIcon";
+import { copyText } from "../../lib/copy-text";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { StarMapIcon } from "../../icons/StarMapIcon";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
 
@@ -56,7 +59,12 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
           <div className="messaging-status-popover__panel">
             <div className="messaging-status-popover__head">
               <div>
-                <div className="messaging-status-popover__title">Federation</div>
+                <div className="messaging-status-popover__title federation-status-control__title">
+                  Federation
+                  {snapshot?.health.instanceId ? (
+                    <InstanceIdCopyButton instanceId={snapshot.health.instanceId} desktopApi={props.desktopApi} />
+                  ) : null}
+                </div>
                 <div className="messaging-status-popover__summary">
                   {snapshot ? `Configured ${snapshot.configuredMode !== "disabled" ? `on · ${snapshot.configuredMode}` : "off"}` : "Loading…"}
                 </div>
@@ -98,5 +106,31 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
         </div>
       ) : null}
     </div>
+  );
+}
+
+function InstanceIdCopyButton(props: { instanceId: string; desktopApi?: DesktopApi }) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const label = `Instance ID: ${props.instanceId}\nClick to copy to clipboard`;
+  return (
+    <>
+      <button type="button" className="messaging-status-popover__settings"
+        aria-label="Copy Federation instance ID"
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
+        onFocus={(event) => tooltip.show(event.currentTarget, label)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, label)}
+        onBlur={tooltip.hide}
+        onMouseLeave={tooltip.hide}
+        onClick={(event) => {
+          const anchor = event.currentTarget;
+          void copyText(props.instanceId, props.desktopApi).then(
+            () => { if (anchor.isConnected) tooltip.show(anchor, "Copied instance ID"); },
+            () => { if (anchor.isConnected) tooltip.show(anchor, "Could not copy instance ID"); },
+          );
+        }}>
+        <CopyIcon size={12} />
+      </button>
+      {tooltip.tooltipNode}
+    </>
   );
 }
