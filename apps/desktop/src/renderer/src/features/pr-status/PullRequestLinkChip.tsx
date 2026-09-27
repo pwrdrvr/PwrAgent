@@ -1,19 +1,36 @@
-import type { PrSummary } from "@pwragent/shared";
-import type { ReactNode } from "react";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared";
+import { useCallback, useState, type ReactNode } from "react";
+import { useTranscriptPullRequest } from "../../lib/transcript-pr-status";
+import { isFederationViewerWindow } from "../../lib/federation-window";
 import {
   useLivePullRequest,
   useLivePullRequestNumber,
+  usePullRequestLinks,
 } from "../../lib/pull-request-links";
 import { PrChip } from "./PrChip";
 
 export function PullRequestLinkChip(props: { pr: PrSummary }) {
-  const pr = useLivePullRequest(props.pr);
+  const key = buildPullRequestStatusKey(props.pr);
+  const [interest, setInterest] = useState({ key, seen: false, visible: false });
+  const onVisibilityChange = useCallback((visible: boolean) => {
+    setInterest((previous) => previous.key === key && previous.visible === visible ? previous : {
+      key,
+      seen: (previous.key === key && previous.seen) || visible,
+      visible,
+    });
+  }, [key]);
+  const links = usePullRequestLinks();
+  const navigationPr = useLivePullRequest(props.pr);
+  const pr = useTranscriptPullRequest(navigationPr,
+    interest.key === key ? interest : { seen: false, visible: false },
+    isFederationViewerWindow() && Boolean(links?.hasSnapshot(props.pr)));
 
   return (
     <PrChip
       pr={pr}
       showRepoPrefix
       onOpen={openPullRequest}
+      onVisibilityChange={onVisibilityChange}
     />
   );
 }

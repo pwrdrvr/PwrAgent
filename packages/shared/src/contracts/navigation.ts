@@ -2313,6 +2313,16 @@ export type SetPullRequestPollingFocusRequest = {
   threadKeys: string[];
 };
 
+/** Ephemeral, window-owned interest in PR links; never attaches a PR to a thread. */
+export type SetTranscriptPullRequestsRequest = {
+  updates: { url: string; visible: boolean }[];
+  removedUrls: string[];
+};
+
+export type TranscriptPullRequestStatuses = {
+  statuses: { pr: PrSummary; fetchedAt: number }[];
+};
+
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   /** Route the lookup to the instance that owns the thread and its checkout. */

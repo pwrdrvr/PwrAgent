@@ -578,3 +578,73 @@ describe("GitLab request admission", () => {
     expect(tryTakeToken).toHaveBeenCalledOnce();
   });
 });
+
+describe("transcript interest", () => {
+  it("keeps unseen-in-navigation targets on cold rather than warm or icebox", () => {
+    const now = 10 * ICEBOX_AFTER_MS;
+    expect(assignTier({
+      target: { ...target(1, []), subscriptionTier: "cold" },
+      focusedThreadKeys: new Set(),
+      lastChangedAt: 0,
+      lastInteractionAt: 0,
+      now,
+    })).toBe("cold");
+  });
+
+  it("keeps attached focus and deduplicates transcript interest into the same request", async () => {
+    const t = { ...target(1), subscriptionTier: "cold" as const };
+    const h = harness({ listTargets: () => [t], getFocusedThreadKeys: () => new Set(["codex:t1"]) });
+    await h.scheduler.tick();
+    h.advance(TIER_CADENCE_MS.focused);
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1, 1]);
+  });
+
+  it("reuses a fresh observation after remount instead of fetching immediately", async () => {
+    const t = { ...target(1, []), subscriptionTier: "focused" as const, fetchedAt: 1_000_000 };
+    const h = harness({ listTargets: () => [t] });
+    await h.scheduler.tick();
+    expect(h.fetched).toEqual([]);
+    h.advance(TIER_CADENCE_MS.focused);
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1]);
+  });
+
+  it("refreshes closed links that can reopen, but never merged links", async () => {
+    const closed = { ...target(1, []), subscriptionTier: "focused" as const };
+    closed.pr = pr({ number: 1, lifecycleState: "closed", state: "closed" });
+    const merged = { ...target(2, []), subscriptionTier: "focused" as const };
+    merged.pr = pr({ number: 2, lifecycleState: "merged", state: "merged" });
+    const h = harness({ listTargets: () => [closed, merged] });
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1]);
+  });
+
+  it("admits newly subscribed chips after an in-flight batch completes", async () => {
+    const targets = [{ ...target(1, []), subscriptionTier: "focused" as const }];
+    let finish!: (prs: PrSummary[]) => void;
+    const fetch = vi.fn().mockImplementationOnce(() => new Promise<PrSummary[]>((resolve) => { finish = resolve; }))
+      .mockResolvedValue([]);
+    const h = harness({ listTargets: () => targets, fetchPullRequests: fetch });
+    const pending = h.scheduler.tick();
+    targets.push({ ...target(2, []), subscriptionTier: "focused" });
+    await h.scheduler.tick();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    finish([]);
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1]?.[0]).toMatchObject([{ number: 2 }]);
+  });
+});
+
+it("refreshes changed chips without enumerating all polling targets or dropping their clocks", async () => {
+  const listTargets = vi.fn(() => [target(1)]);
+  const h = harness({ listTargets });
+  await h.scheduler.tick();
+  listTargets.mockClear();
+  await h.scheduler.tick(() => [{ ...target(2, []), subscriptionTier: "focused" }]);
+  expect(listTargets).not.toHaveBeenCalled();
+  expect(polledNumbers(h.fetched)).toEqual([1, 2]);
+  await h.scheduler.tick();
+  expect(polledNumbers(h.fetched)).toEqual([1, 2]);
+});
