@@ -265,6 +265,15 @@ export function buildPricingDisplayLines(lines: ThreadUsageLineRecord[]): Pricin
   ].sort(compareUsageLinesDescending);
 }
 
+/** The displayed thread estimate, including projected gaps and a line-only fallback. */
+export function buildPricingDisplaySummary(
+  summaries: ThreadPricingSummary[],
+  displayLines: PricingUsageLine[],
+): ThreadPricingSummary | undefined {
+  return aggregateSummaries(addEstimatedLinesToSummaries(summaries, displayLines.filter(isEstimatedUsageGap)))
+    ?? aggregateUsageLines(displayLines);
+}
+
 export function addEstimatedLinesToSummaries(
   summaries: ThreadPricingSummary[],
   estimatedLines: PricingUsageLine[],
@@ -508,8 +517,7 @@ export function buildThreadPricingDisplay(params: {
   const allDisplayLines = buildPricingDisplayLines(params.pricing?.lines ?? []);
   const subAgentsById = new Map((params.subAgents ?? []).map((agent) => [agent.monitorId, agent]));
   const { displayLines, gateLinesByTurn, orphanGroupsByAnchor } = partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
-  const summary = aggregateSummaries(addEstimatedLinesToSummaries(summaries, allDisplayLines.filter(isEstimatedUsageGap)))
-    ?? aggregateUsageLines(allDisplayLines);
+  const summary = buildPricingDisplaySummary(summaries, allDisplayLines);
   const totals = buildPricingRunningTotals(allDisplayLines);
   const compactionsByRow = groupCompactionsByRow(params.pricing?.compactions ?? []);
   const claimedCompactionTurns = new Set<string>();
@@ -564,7 +572,8 @@ export function buildThreadPricingDisplay(params: {
       accounting: params.tokenMiserAccounting,
       gateAccountings: (params.subAgents ?? []).filter((agent) => agent.monitorId.startsWith(TOKEN_MISER_SOURCE_PREFIX)).map((agent) => agent.tokenMiserAccounting),
     }),
-    observedCostMicros: summaries.reduce((total, provider) => total + provider.totalCostMicros, 0),
+    // The savings comparison must start from the same estimate as the headline.
+    observedCostMicros: summary?.totalCostMicros ?? 0,
     totals: { hasEstimatedRows: totals.hasEstimatedRows, totalCreditMicros: totals.totalCreditMicros },
     rows: pageLines.slice(offset, params.limit === undefined ? undefined : offset + params.limit).map((line) => buildRow(line, params.gateSelection !== undefined)),
     totalRows: pageLines.length,

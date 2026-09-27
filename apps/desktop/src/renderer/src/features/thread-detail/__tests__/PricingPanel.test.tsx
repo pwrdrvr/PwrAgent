@@ -9,11 +9,41 @@ import { PricingPanel } from "../context-panels/PricingPanel";
 import * as spend from "@pwragent/shared";
 import * as formatting from "../context-panels/subagent-format";
 import * as rail from "../context-panels/context-rail-shared";
+import { buildTokenMiserPricingFixture } from "./token-miser-pricing-fixture";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it.each([true, false])("includes historical usage in the savings baseline (provider summary: %s)", (hasSummary) => {
+  const { pricing, accounting } = buildTokenMiserPricingFixture();
+  if (!hasSummary) pricing.summaries = [];
+  const display = spend.buildThreadPricingDisplay({ pricing, tokenMiserAccounting: accounting });
+  const view = render(<PricingPanel display={display} />);
+  expect(view.container.querySelector(".pricing-summary-card")).toHaveTextContent("$32.45 estimated");
+  const card = view.container.querySelector(".token-miser-summary-card");
+  expect(card).toHaveTextContent("$7.71 saved");
+  expect(card).toHaveTextContent("$40.16 unfiltered");
+  expect(card).toHaveTextContent("19.2% less");
+});
+
+it("prices historical gaps at the small-context rate without a known context window", () => {
+  const { pricing } = buildTokenMiserPricingFixture();
+  const display = spend.buildThreadPricingDisplay({ pricing });
+  const gap = display.rows.find((row) => row.line.estimatedUsageGap)?.line;
+  expect(gap).toMatchObject({
+    inputTokens: 10_226_000,
+    cachedInputTokens: 10_000_000,
+    uncachedInputTokens: 226_000,
+    priceStatus: "priced",
+    pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+    totalCostMicros: 12_260_000,
+  });
+  // Missing context metadata alone must never manufacture a historical gap.
+  const complete = { ...pricing.lines[0]!, cumulativeInputTokens: 2_100_000, cumulativeCachedInputTokens: 100_000 };
+  expect(spend.buildPricingDisplayLines([complete]).some((line) => line.estimatedUsageGap)).toBe(false);
 });
 
 function buildMonitorLine(

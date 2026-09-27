@@ -23,6 +23,8 @@ import type {
   ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
 import {
+  buildPricingDisplayLines,
+  buildPricingDisplaySummary,
   buildThreadToolIncidentPrompt,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isFlaggedToolInvocation,
@@ -329,12 +331,12 @@ export function ToolOutputIncidentExplorerWindow() {
     (total, line) => total + line.totalCostMicros,
     0,
   );
-  // The thread's own billed total, for "cost X, would have cost Y". Provider
-  // summaries are the same rows the Pricing rail totals.
-  const threadCostMicros = latest?.pricing?.summaries.reduce(
-    (total, provider) => total + provider.totalCostMicros,
-    0,
-  ) ?? 0;
+  // Use the Pricing rail's estimate, including cumulative usage missing from
+  // stored rows. Raw provider summaries alone omit those historical gaps.
+  const threadCostMicros = useMemo(() => buildPricingDisplaySummary(
+    latest?.pricing?.summaries ?? [],
+    buildPricingDisplayLines(usageLines ?? []),
+  )?.totalCostMicros ?? 0, [latest?.pricing?.summaries, usageLines]);
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
       largeOutputThresholdChars,
