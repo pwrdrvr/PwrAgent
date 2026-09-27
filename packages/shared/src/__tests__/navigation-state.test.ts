@@ -55,6 +55,20 @@ describe("buildNavigationSnapshotHash", () => {
 
     expect(changed).not.toBe(baseline);
   });
+
+  it("changes when the monitor job suggestion override changes", () => {
+    const thread = navigationThread({ monitorJobSuggestionsEnabled: false });
+    const baseline = buildNavigationSnapshotHash({
+      backend: "codex",
+      threads: [thread],
+    });
+    const changed = buildNavigationSnapshotHash({
+      backend: "codex",
+      threads: [{ ...thread, monitorJobSuggestionsEnabled: true }],
+    });
+
+    expect(changed).not.toBe(baseline);
+  });
 });
 
 describe("materializeNavigationThreads", () => {
@@ -76,6 +90,26 @@ describe("materializeNavigationThreads", () => {
     });
 
     expect(materialized?.tokenMiserEnabled).toBe(true);
+  });
+
+  it("projects the persisted monitor job suggestion override onto navigation", () => {
+    const thread = appServerThread();
+    const overlay: ThreadOverlayState = {
+      backend: "codex",
+      threadId: thread.id,
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      monitorJobSuggestionsEnabled: true,
+    };
+
+    const [materialized] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: { [`codex:${thread.id}`]: overlay },
+      previousKnownThreadKeys: [],
+      threads: [thread],
+    });
+
+    expect(materialized?.monitorJobSuggestionsEnabled).toBe(true);
   });
 });
 

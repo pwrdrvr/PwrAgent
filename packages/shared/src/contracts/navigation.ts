@@ -158,6 +158,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * sensitive thread wants a way to opt out without touching Settings.
    */
   tokenMiserEnabled?: boolean;
+  /** Absent follows the profile default. */
+  monitorJobSuggestionsEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -2172,6 +2174,19 @@ export type SetThreadTokenMiserResponse = {
   tokenMiserEnabled?: boolean;
 };
 
+export type SetThreadMonitorJobSuggestionsRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Null clears the override so the thread follows the global setting. */
+  enabled: boolean | null;
+};
+
+export type SetThreadMonitorJobSuggestionsResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  monitorJobSuggestionsEnabled?: boolean;
+};
+
 export type NavigationRelativePinMove = {
   key: string;
 } & (
@@ -2532,6 +2547,10 @@ export type DirectoryOverlayState = {
 };
 
 export type ThreadOverlayState = {
+  /** Absent follows the profile default. */
+  monitorJobSuggestionsEnabled?: boolean;
+  /** Durable once-per-turn reminder claim, including failed delivery attempts. */
+  monitorJobSuggestionTurnId?: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;

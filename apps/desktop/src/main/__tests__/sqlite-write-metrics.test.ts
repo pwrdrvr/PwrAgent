@@ -71,6 +71,22 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("claims a monitor suggestion once per turn, durably, with no per-poll writes", async () => {
+    const target = { backend: "codex" as const, threadId: "monitor-parent", turnId: "turn-1" };
+    await store.setThreadMonitorJobSuggestions({ ...target, enabled: false });
+    expect((await store.getThreadOverlayState(target))?.monitorJobSuggestionsEnabled).toBe(false);
+    await store.setThreadMonitorJobSuggestions({ ...target, enabled: null });
+    expect((await store.getThreadOverlayState(target))?.monitorJobSuggestionsEnabled).toBeUndefined();
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(store.claimMonitorJobSuggestion(target)).toBe(true);
+      for (let i = 0; i < 100; i++) expect(store.claimMonitorJobSuggestion(target)).toBe(false);
+      const reopened = new SqliteOverlayStore(stateDb);
+      expect(reopened.claimMonitorJobSuggestion(target)).toBe(false);
+    });
+    expectSqliteWriteBudget({ scenario: "monitor-job-suggestion-claim", note: "one durable claim per qualifying turn; 100 duplicate events and store reopen write nothing", writes });
+    expect(store.claimMonitorJobSuggestion({ ...target, turnId: "turn-2" })).toBe(true);
+  });
+
   it("persists an operator Auto selection and audit entry without per-review writes", async () => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "auto-thread", executionMode: "default" });
     const { writes } = await measureSqliteWrites(async () => {

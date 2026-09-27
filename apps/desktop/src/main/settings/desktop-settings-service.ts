@@ -960,6 +960,10 @@ export class DesktopSettingsService {
             MIN_REPEATED_LARGE_OUTPUT_PERCENT,
             MAX_REPEATED_LARGE_OUTPUT_PERCENT,
           ),
+          monitorJobSuggestionsEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.monitorJobSuggestionsEnabled,
+            true,
+          ),
           repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
             config.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled,
             DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,

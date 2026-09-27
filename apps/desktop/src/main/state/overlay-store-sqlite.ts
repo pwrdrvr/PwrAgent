@@ -4026,6 +4026,47 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  claimMonitorJobSuggestion(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+  }): boolean {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    if (this.getThread(threadKey)?.monitorJobSuggestionTurnId === params.turnId) return false;
+    // Recheck under the write lock so reconnecting instances cannot both claim.
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (current.monitorJobSuggestionTurnId === params.turnId) return false;
+      this.putThread(threadKey, { ...current, monitorJobSuggestionTurnId: params.turnId });
+      return true;
+    }).immediate();
+  }
+
+  async setThreadMonitorJobSuggestions(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const { monitorJobSuggestionsEnabled: _cleared, ...rest } = current;
+    const nextState: ThreadOverlayState = params.enabled === null
+      ? rest
+      : { ...current, monitorJobSuggestionsEnabled: params.enabled };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadHandoffOrigin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -8768,6 +8809,8 @@ export type OverlayStoreLike = Pick<
   | "setThreadParent"
   | "setThreadAgent"
   | "setThreadTokenMiser"
+  | "setThreadMonitorJobSuggestions"
+  | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
   | "reorderThreadPins"

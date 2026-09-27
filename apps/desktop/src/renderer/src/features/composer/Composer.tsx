@@ -325,6 +325,7 @@ type ComposerProps = {
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
   tokenMiserDefaultEnabled?: boolean;
+  monitorJobSuggestionsDefaultEnabled?: boolean;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -1645,6 +1646,9 @@ function ComposerThreadOptionsMenu(props: {
   /**
    * Effective Token Miser state for this thread. Undefined hides the item.
    */
+  monitorJobSuggestions?: boolean;
+  monitorJobSuggestionsOverridden?: boolean;
+  onMonitorJobSuggestionsChange?: (enabled: boolean | null) => void;
   tokenMiser?: boolean;
   tokenMiserOverridden?: boolean;
   onTokenMiserChange?: (enabled: boolean | null) => void;
@@ -1787,6 +1791,37 @@ function ComposerThreadOptionsMenu(props: {
               </span>
             </button>
           </div>
+          {props.onMonitorJobSuggestionsChange ? (
+            <>
+              <button
+                aria-checked={props.monitorJobSuggestions ?? true}
+                className="composer-dropdown__option composer-thread-options__option"
+                disabled={props.disabled}
+                role="menuitemcheckbox"
+                type="button"
+                title="Suggest a monitor job once per turn when repeated polling is detected."
+                onClick={() => props.onMonitorJobSuggestionsChange?.(!(props.monitorJobSuggestions ?? true))}
+              >
+                <span className="composer-thread-options__label">Monitor job suggestions</span>
+                <span aria-hidden="true" className={`composer-thread-options__toggle${
+                  (props.monitorJobSuggestions ?? true) ? " is-checked" : ""
+                }`}>
+                  <span className="composer-thread-options__toggle-thumb" />
+                </span>
+              </button>
+              {props.monitorJobSuggestionsOverridden ? (
+                <button
+                  className="composer-dropdown__option"
+                  disabled={props.disabled}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => props.onMonitorJobSuggestionsChange?.(null)}
+                >
+                  Use default for monitor suggestions
+                </button>
+              ) : null}
+            </>
+          ) : null}
           {props.tokenMiser !== undefined && props.onTokenMiserChange ? (
             <>
               <div
@@ -9172,6 +9207,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   };
 
+  const changeMonitorJobSuggestions = async (enabled: boolean | null): Promise<void> => {
+    const thread = props.thread;
+    if (!thread || !props.desktopApi?.setThreadMonitorJobSuggestions) return;
+    setAgentThreadSaving(true);
+    setAgentThreadError(undefined);
+    try {
+      await props.desktopApi.setThreadMonitorJobSuggestions({
+        backend: thread.source,
+        threadId: thread.id,
+        enabled,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setAgentThreadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentThreadSaving(false);
+    }
+  };
+
   // Per-thread Token Miser override. A launchpad persists the choice before
   // materialization; an existing thread writes it to the thread overlay.
   const changeTokenMiser = async (enabled: boolean | null): Promise<void> => {
@@ -12717,6 +12771,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }
+            {...(props.thread?.source === "codex"
+              && props.thread.federation?.ref.target.scope !== "remote"
+              && props.desktopApi?.setThreadMonitorJobSuggestions
+              ? {
+                  monitorJobSuggestions: props.thread.monitorJobSuggestionsEnabled
+                    ?? props.monitorJobSuggestionsDefaultEnabled ?? true,
+                  monitorJobSuggestionsOverridden: props.thread.monitorJobSuggestionsEnabled !== undefined,
+                  onMonitorJobSuggestionsChange: (enabled: boolean | null) => {
+                    void changeMonitorJobSuggestions(enabled);
+                  },
+                }
+              : {})}
             {...(props.tokenMiserEnabled === true
               && ((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
                 || (props.thread?.source === "codex"
