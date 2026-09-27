@@ -24,6 +24,7 @@ import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
 import { AgentThreadChip } from "../navigation/AgentThreadChip";
+import { ProjectSearchInput } from "./ProjectSearchInput";
 import { mergeAgentMatches, mergePrNumberMatches } from "./thread-match";
 import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
 
@@ -346,18 +347,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
 
       <div className="thread-search__body">
         <form className="thread-search__form" onSubmit={(event) => void submit(event)}>
-          <div className="thread-search__field">
-            <span className="thread-search__field-icon" aria-hidden>
-              <SearchIcon size={16} />
-            </span>
-            <input
-              autoFocus
-              aria-label="Search threads"
-              value={query}
-              placeholder="Search threads · @project to narrow"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
+          <ProjectSearchInput value={query} onChange={setQuery} desktopApi={props.desktopApi} />
           <button
             className="button button--primary thread-search__submit"
             disabled={loading || !query.trim() || searchUnavailable}
@@ -381,6 +371,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         {helpOpen ? (
           <div id={helpId} className="thread-search__help" role="region" aria-label="Search syntax">
             <strong>Search tips</strong>
+            <p>Type <code>@</code> or <code>in:@</code> to choose a project. Use ↑ / ↓ to browse and Enter or Tab to select. Add another mention to search multiple projects.</p>
             <p>Search titles, message content, branches, PR numbers (like #779), or Agent names. Use <code>"ad hoc"</code> to search a phrase.</p>
             <p><code>build @disk</code> or <code>build in:@disk</code> searches projects whose names start with “disk”. Names are case-insensitive.</p>
             <p><code>build @PwrAgent @PwrSnap</code> searches either project. Use <code>@"My Project"</code> for spaces, or a full path to distinguish checkouts.</p>
