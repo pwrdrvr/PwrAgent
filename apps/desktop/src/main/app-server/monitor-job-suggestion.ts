@@ -42,7 +42,10 @@ export class MonitorJobSuggestionDetector {
       (time) => record.observedAt - time <= 10 * 60_000,
     );
     checks.push(record.observedAt);
-    state.checks.set(key, checks.slice(-3));
+    // Keep the window's first observation as well as the latest two. Keeping
+    // only the latest three loses sustained duration at short poll intervals.
+    // The latest two retain the minimum-count evidence when the first expires.
+    state.checks.set(key, checks.length > 3 ? [checks[0]!, ...checks.slice(-2)] : checks);
     if (state.checks.size > 32) state.checks.delete(state.checks.keys().next().value!);
     if (checks.length < 3 || record.observedAt - checks[0]! < 30_000) return false;
     state.suggested = true;
