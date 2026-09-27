@@ -103,7 +103,7 @@ describe("monitor job suggestions", () => {
         now += intervals[random % intervals.length]!;
         history.push(now);
         const recent = history.filter((time) => now - time <= 600_000);
-        const expected = !suggested && recent.length >= 3 && now - recent[0]! >= 30_000;
+        const expected: boolean = !suggested && recent.length >= 3 && now - recent[0]! >= 30_000;
         expect(detector.observe(record(i, undefined, "turn-1", now))).toBe(expected);
         suggested ||= expected;
       }
