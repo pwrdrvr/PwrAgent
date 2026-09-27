@@ -51,6 +51,7 @@ export function ExperimentalSettings(props: {
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
+  onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -59,6 +60,8 @@ export function ExperimentalSettings(props: {
     boolean | undefined
   >();
   const condensation = props.snapshot.experimental.diffCondensation;
+  const codexToolDiscovery = props.snapshot.experimental.codexToolDiscovery
+    ?? { value: false, source: "default" as const };
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
@@ -120,6 +123,26 @@ export function ExperimentalSettings(props: {
         title="Experimental features"
         help="Features that may change shape or be removed without notice."
       />
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Codex Tool Discovery"
+        description="Reduce startup context by letting Codex search for PwrAgent tools and load their instructions when needed. Disabled by default."
+        chip={codexToolDiscovery.value ? "On" : "Off"}
+        chipKind={codexToolDiscovery.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={codexToolDiscovery.value}
+            disabled={props.saving}
+            label="Load PwrAgent tools on demand"
+            sub="Use tool search in Codex Code Mode."
+            help="Applies to new threads and the next turn when the Codex runtime supports refreshing tools. Start a new thread on older runtimes. Other providers are unchanged."
+            source={sourceBadge(codexToolDiscovery)}
+            onChange={props.onCodexToolDiscoveryChange}
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="Experimental"

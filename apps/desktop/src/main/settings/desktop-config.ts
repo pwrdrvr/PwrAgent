@@ -133,6 +133,7 @@ export type DesktopSettingsConfig = {
     threadPricingDisplayCodexCredits?: boolean;
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
+    codexToolDiscovery?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
@@ -768,6 +769,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "thread_tool_accounting"],
       patch.experimental.threadToolAccounting,
+    );
+  }
+  if (patch.experimental?.codexToolDiscovery !== undefined) {
+    set(
+      ["experimental", "codex_tool_discovery"],
+      patch.experimental.codexToolDiscovery,
     );
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
@@ -1833,6 +1840,7 @@ function normalizeDesktopConfig(
         ?? readBoolean(general?.token_miser_enabled),
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
+      codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
       threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,

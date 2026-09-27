@@ -3504,6 +3504,23 @@ describe("SettingsScreen", () => {
     expect(readTokenMiserUsage).toHaveBeenCalledTimes(1);
   });
 
+  it("offers tool discovery as an off-by-default experimental toggle", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState(snapshot);
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    const toggle = screen.getByRole("switch", { name: "Load PwrAgent tools on demand" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { codexToolDiscovery: true } }));
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };

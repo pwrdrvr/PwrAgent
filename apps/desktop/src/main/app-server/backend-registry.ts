@@ -510,6 +510,7 @@ import {
 } from "../agent-tools/agent-tool-router";
 import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
+import { buildPwrAgentToolSearchDefinition, withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";
 import {
   getTokenMiserBridgeDescriptorPath,
   TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
@@ -8863,6 +8864,7 @@ export class DesktopBackendRegistry {
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
+  private readonly resolveCodexToolDiscoveryFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -8984,6 +8986,7 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
+    resolveCodexToolDiscovery?: () => boolean;
     /** Legacy injection accepted for older callers; runMode owns routing. */
     resolveManagedReviewEnabled?: () => boolean;
     resolveDefaultPrAutoDispatchEnabled?: () => boolean;
@@ -9104,6 +9107,16 @@ export class DesktopBackendRegistry {
           return false;
         }
       });
+    this.resolveCodexToolDiscoveryFn = options?.resolveCodexToolDiscovery ?? (() => {
+      try {
+        return settingsService?.resolveCodexToolDiscovery() ?? false;
+      } catch (error) {
+        backendRegistryLog.warn("failed to resolve Codex tool discovery setting", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+    });
     this.resolveDefaultPrAutoDispatchEnabledFn =
       options?.resolveDefaultPrAutoDispatchEnabled ??
       (() => {
@@ -15237,7 +15250,7 @@ export class DesktopBackendRegistry {
         : undefined;
     const resolvedDynamicTools =
       backend === "codex"
-        ? buildCodexParentDynamicToolSpecs(agentToolCatalogs)
+        ? withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(agentToolCatalogs), this.resolveCodexToolDiscoveryFn())
         : undefined;
     // Custom MCP servers can report READY without Codex exposing their tools
     // to the model. Keep the dynamic PDF surface as the compatible fallback.
@@ -23474,8 +23487,9 @@ export class DesktopBackendRegistry {
 
   private buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
+    discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
   ): CodexDynamicToolSpec[] {
-    return buildCodexParentDynamicToolSpecs(
+    return withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
@@ -23488,8 +23502,9 @@ export class DesktopBackendRegistry {
         threadInspectionHandler: this.threadInspectionHandler,
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
+        starMapHandler: this.starMapHandler,
       }),
-    );
+    ), discoveryEnabled);
   }
 
   private async buildSupportedCodexDynamicToolsRefresh(params: {
@@ -32254,6 +32269,24 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
+    // Keep dispatch available after disabling the experiment: older runtimes
+    // can retain the previously advertised schema until a new thread starts.
+    const toolSearchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]);
+    if (hostToolCall && toolSearchRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (backend !== "codex" || !this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message: "Tool search must originate from an active Codex turn on the owning thread.",
+        });
+      }
+      const tokenMiserEnabled = await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall);
+      const router = new AgentToolRouter([buildPwrAgentToolSearchDefinition(
+        this.buildCodexParentDynamicTools(tokenMiserEnabled, false),
+        tokenMiserEnabled ? this.tokenMiserStore : undefined,
+      )]);
+      return await router.handleDynamicToolCall({ backend, call: hostToolCall });
+    }
     const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
       async (connectionRequest) =>
         await this.handleAgentMcpConnectionRequest(connectionRequest),

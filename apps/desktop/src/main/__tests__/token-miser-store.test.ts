@@ -15,6 +15,32 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
+  it("preserves only authenticated catalog text with no SQLite writes or retrieval charges", async () => {
+    const store = await createStore();
+    store.startTurn("thread-owner", "turn-1");
+    const changes = store.stateDb.raw.prepare("SELECT total_changes() AS count").get();
+    const delivery = await store.prepareToolDefinitionDelivery({
+      threadId: "thread-owner", turnId: "turn-1", visibleText: '{"inputSchema":{"type":"object"}}',
+    });
+    expect(delivery).toBeDefined();
+    const text = delivery!.text;
+    expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: `logs before\n${text}\nlogs after` })).toEqual([
+      { text: "logs before\n", retrieval: false },
+      { text, retrieval: true },
+      { text: "\nlogs after", retrieval: false },
+    ]);
+    expect(await store.partitionRetrievalOutput({ threadId: "other-thread", output: text })).toEqual([{ text, retrieval: false }]);
+    const altered = text.replace("object", "array");
+    expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: altered })).toEqual([{ text: altered, retrieval: false }]);
+    expect(await store.confirmModelVisibleRetrievals({ threadId: "thread-owner", output: text })).toBe(0);
+    expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: text })).toEqual([{ text, retrieval: false }]);
+    const stale = await store.prepareToolDefinitionDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "schema" });
+    store.startTurn("thread-owner", "turn-2");
+    expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: stale!.text })).toEqual([{ text: stale!.text, retrieval: false }]);
+    expect(await store.prepareToolDefinitionDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "stale" })).toBeUndefined();
+    expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+  });
+
   it("inspects retained originals and summaries without charging agent retrieval", async () => {
     const store = await createStore();
     const output = "x".repeat(20_000);

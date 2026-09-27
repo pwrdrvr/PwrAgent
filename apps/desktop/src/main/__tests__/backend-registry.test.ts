@@ -4374,6 +4374,47 @@ describe("DesktopBackendRegistry", () => {
     expect(generateStructuredObject).not.toHaveBeenCalled();
   });
 
+  it("refreshes tool discovery in both directions and authorizes only live searches", async () => {
+    let enabled = false;
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(),
+      resolveCodexToolDiscovery: () => enabled,
+    });
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      const initial = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools);
+      expect(initial.some((tool) => tool.name === "tool_search")).toBe(false);
+      enabled = true;
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      const deferred = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools);
+      expect(deferred.find((tool) => tool.name === "tool_search")).toMatchObject({ deferLoading: false });
+      expect(deferred.filter((tool) => tool.name !== "tool_search").every((tool) => (tool as { deferLoading?: boolean }).deferLoading)).toBe(true);
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Continue." }] });
+      expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).map((tool) => tool.name)).toEqual(deferred.map((tool) => tool.name));
+      await emitCompletedTurn(registry, "codex", "thread-1");
+      enabled = false;
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Continue." }] });
+      expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools)).toEqual(initial);
+
+      const call = {
+        method: "item/tool/call",
+        params: { threadId: "thread-1", turnId: "turn-discovery", callId: "search-1", requestId: "search-1", namespace: "pwragent", tool: "tool_search", arguments: { query: "get_thread_status", limit: 1 } },
+      } as AppServerPendingRequestNotification;
+      expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "turn-discovery", turn: { id: "turn-discovery" } } } });
+      // A persisted bootstrap remains usable after switching the experiment off.
+      const result = await codexClient.emitRequest(call) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(result.success).toBe(true);
+      expect(JSON.parse(result.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({
