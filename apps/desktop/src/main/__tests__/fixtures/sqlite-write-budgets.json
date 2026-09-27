@@ -230,6 +230,55 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "managed-relationship-delete-parent": {
+    "commits": 1,
+    "note": "1 thread deletions; autocommit; page frames separately bounded including trigger writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "managed-relationship-delete-random-autocommit": {
+    "commits": 512,
+    "note": "512 thread deletions; autocommit; page frames separately bounded including trigger writes",
+    "observedWalBytes": 16710720,
+    "rowsChanged": 512,
+    "statements": 512
+  },
+  "managed-relationship-delete-random-batch": {
+    "commits": 1,
+    "note": "512 thread deletions; one transaction; page frames separately bounded including trigger writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 512,
+    "statements": 512
+  },
+  "managed-relationship-delete-random-small-cache": {
+    "commits": 1,
+    "note": "512 thread deletions; one transaction; page frames separately bounded including trigger writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 512,
+    "statements": 512
+  },
+  "managed-relationship-delete-shared-child": {
+    "commits": 1,
+    "note": "1 thread deletions; autocommit; page frames separately bounded including trigger writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "managed-relationship-delete-wide-parent": {
+    "commits": 1,
+    "note": "1 thread deletions; autocommit; page frames separately bounded including trigger writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "managed-relationship-delete-wide-secure-delete": {
+    "commits": 1,
+    "note": "1 thread deletions; autocommit; page frames separately bounded including trigger writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "managed-relationships-lifecycle": {
     "commits": 5,
     "note": "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; no separate relationship commits",

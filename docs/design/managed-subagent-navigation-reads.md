@@ -74,6 +74,110 @@ real tradeoff: it touches the changed overlay, even when projection rows remain
 unchanged. Migration duration scales with existing payload size and temporarily
 holds the writer lock. These measurements are fixture observations, not limits.
 
+## Deletion cost and archive retention audit
+
+Archive does not delete `threads` rows or this projection. Codex archive invokes
+the provider, records Token Miser retention state and flushes pending accounting,
+cleans messaging intents/bindings, detaches active ordinary children, and handles
+worktree cleanup. ACP archive persists its session's `archivedAt` and follows the
+corresponding cleanup path. Neither is a general cascade purge of thread state.
+Token Miser archive drops in-memory output bodies but retains SQLite accounting
+metadata. Ordinary child detachment calls `setThreadParent` separately for each
+child, each with its own transaction; an archive with many children therefore
+already has a write cost beyond this projection. That path was inspected, not
+measured by the deletion fixture below.
+
+Startup/hourly `StateDb.cleanupExpired` deletes selected expired/capped records
+(browse sessions, intents, callback handles, revoked bindings, delivery/activity
+logs, runtime records, federation audit, drafts, and completed PR watches) in one
+transaction. It then invokes `incremental_vacuum` without a page cap. It does not
+purge archived overlays, managed relationships, or general thread accounting
+history. These records can continue growing as historical threads accumulate.
+Vacuum can reclaim free pages, not rows that retention still keeps. Older files
+with auto-vacuum disabled may also undergo a one-time full VACUUM at GC startup.
+
+`managed-relationship-delete-cost.test.ts` measures a fresh production-schema WAL
+database with 2,048 ordinary parents, four references per parent, a child shared
+by all parents, and one parent with 10,000 IDs padded by 256 characters. Each
+scenario starts from the same seeded layout. Baseline disables only the new
+delete trigger and deliberately leaves the projection allocated. The changed
+case includes both overlay and projection deletion. No user database is opened.
+
+Measured with 4,096-byte pages, incremental auto-vacuum, secure-delete off, and
+the bundled SQLite's 16,000 KiB cache unless explicitly overridden:
+
+| Delete scenario | Commits | Baseline WAL frames | With projection cleanup | Unique pages with cleanup | WAL MB with cleanup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| One ordinary parent | 1 | 4 | 6 | 6 | 0.025 |
+| One child referenced by 2,048 parents | 1 | 4 | 6 | 6 | 0.025 |
+| One parent with 10,000 long references | 1 | 11 | 15 | 15 | 0.062 |
+| 512 scattered parents, one transaction | 1 | 352 | 471 | 471 | 1.941 |
+| Same 512 parents, separate commits | 512 | 3,015 | 4,062 | 471 | 16.735 |
+| Same batch, 32 KiB cache stress case | 1 | 353 | 472 | 471 | 1.945 |
+| Wide parent, secure-delete ON stress case | 1 | 718 | 1,466 | 1,466 | 6.040 |
+
+The child deletion changes exactly two rows, not its thousands of incoming
+references. A transaction coalesces most repeated page writes here, but the small
+cache case has 472 frames for 471 pages: it does not guarantee one write per page.
+Secure deletion demonstrates that a single large record can still be expensive.
+These are fixture observations, not universal per-thread limits. Frame ceilings
+in the test allow page-layout variation while failing substantial write growth;
+commit budgets alone would miss it. All seven cases have checked-in write budgets.
+
+Space reclamation is measured separately after checkpointing the deletion WAL.
+For the scattered batch, `incremental_vacuum` adds 152 frames / 0.626 MB with the
+projection, beyond the 1.941 MB deletion cost. For the wide parent it adds one
+frame after deleting both records, but 713 frames when the baseline leaves the
+projection allocated: where free pages lie determines how much must move. Both
+phases have frame ceilings. WAL bytes exclude checkpoint writes to the main DB,
+filesystem/device amplification, and reads; they are not total physical I/O.
+
+At 100 ordinary parent deletions/day, the measured incremental projection cost
+is `100 × 2 × 4,120 / 1,000,000 = 0.824 MB/day`. One 512-parent batch/day adds
+0.490 MB/day of deletion WAL for the projection; separate commits add 4.314
+MB/day instead. Reclamation must be budgeted separately. There is no new archive
+purge in this PR, so these rates are workload examples, not new periodic traffic.
+
+To reproduce, run the test with `PWRAGENT_DELETE_COST_REPORT` pointing at an
+ignored output path; it appends baseline/changed JSON measurements, including
+settings, frames, distinct pages, commit markers, and reclamation. Auto-checkpoint
+is disabled only in the fixture to preserve all frames for counting. Production
+settings are unchanged. The trigger affects one indexed relationship row; these
+tests do not represent deletion of every related table in the profile.
+
+### Proposed maintenance path, not implemented
+
+An opt-in retained-data rebuild is worth evaluating for large purges: construct a
+new database from records selected for retention, then rebuild derived indexes
+and projections instead of deleting scattered old rows. This is a retention
+decision as well as a space-reclamation operation. Copying only currently running
+threads, or even only unarchived threads, would discard restorable PwrAgent
+metadata and may discard references required by retained children. Disconnected
+provider state must not be interpreted as proof that a thread is disposable.
+
+First define a per-table retention manifest: preserve profile configuration and
+secrets, automations and schedules, retained thread metadata/accounting, remote
+identities/pins, and required relationship dependencies. Separate derived caches
+that can be rebuilt from durable records. Decide explicitly whether archived
+history is retained, reduced to metadata, exported, or permanently discarded.
+Offer a dry-run showing retained/discarded counts and estimated space, followed by
+the concrete data-loss approval when purging is requested. A compact-only rebuild
+such as `VACUUM INTO` preserves live records; it cannot select active-only rows.
+
+Use a maintenance window that stops all profile writers and closes their SQLite
+connections, including supported older app instances. Renaming over a live WAL
+database can leave old processes writing the old file while new ones use the new
+file. A snapshot copy alone does not solve writes arriving before cutover. Build
+the replacement with spare-disk checks, validate integrity, foreign keys and
+application-level JSON references, verify retained counts, checkpoint/close it,
+and perform a crash-recoverable swap with a rollback copy. No second profile DB
+lock file or implicit on-archive rebuild is proposed. Measure copy/index-build,
+validation, cutover, and subsequent reclamation costs before implementing this.
+
+SQLite references: [cache spilling](https://www.sqlite.org/pragma.html#pragma_cache_spill),
+[incremental vacuum](https://www.sqlite.org/pragma.html#pragma_incremental_vacuum),
+and [VACUUM INTO](https://www.sqlite.org/lang_vacuum.html).
+
 ## Historical measurement: PR #2032 and its integration
 
 The following records the earlier projection/cache optimization. It retained the
