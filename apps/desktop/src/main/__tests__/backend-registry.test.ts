@@ -39551,6 +39551,7 @@ script = "printf setup"
     expect(codexClient.lastSteerTurnParams).toEqual({
       threadId: "target-thread",
       expectedTurnId: "target-turn",
+      onInputTextPrepared: expect.any(Function),
       input: [{
         type: "text",
         text: "Use the smaller fixture before continuing.",
@@ -40361,6 +40362,240 @@ script = "printf setup"
     });
 
     await registry.close();
+  });
+
+  it.each([
+    { payload: "text", agentStarted: false },
+    { payload: "content", agentStarted: false },
+    { payload: "text", agentStarted: true },
+    { payload: "content", agentStarted: true },
+  ])("keeps a manual steer separate from pending agent provenance ($payload, started=$agentStarted)", async ({ payload, agentStarted }) => {
+    const codexClient = new MockBackendClient({});
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const turn = await registry.startTurn({
+      backend: "codex",
+      threadId: "target-thread",
+      input: [{ type: "text", text: "Investigate performance." }],
+    });
+    const origin = {
+      kind: "agent" as const,
+      sourceThread: { backend: "codex" as const, threadId: "child-thread" },
+    };
+    const queued = await registry.submitTurn({
+      backend: "codex",
+      threadId: turn.threadId,
+      input: [{ type: "text", text: "Queued child report." }],
+      messageOrigin: origin,
+    });
+    expect(queued.status).toBe("queued");
+    const agentText = "The child is still investigating.";
+    const manualText = "I did not ask to stop the Mac work.";
+    const emitUserItem = async (
+      method: "item/started" | "item/completed",
+      id: string,
+      text: string,
+    ) => {
+      await codexClient.emit({
+        method,
+        params: {
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          item: {
+            id,
+            type: "userMessage",
+            ...(payload === "text" ? { text } : { content: [{ type: "text", text }] }),
+          },
+        },
+      });
+    };
+    await registry.steerTurn({
+      backend: "codex",
+      threadId: turn.threadId,
+      expectedTurnId: turn.turnId,
+      input: [{ type: "text", text: agentText }],
+      requestId: "agent-steer",
+    }, origin);
+    if (agentStarted) {
+      await emitUserItem("item/started", "agent-message", agentText);
+    }
+    await registry.steerTurn({
+      backend: "codex",
+      threadId: turn.threadId,
+      expectedTurnId: turn.turnId,
+      input: [{ type: "text", text: manualText }],
+      requestId: "manual-steer",
+    });
+    await emitUserItem("item/started", "manual-message", manualText);
+    await emitUserItem("item/completed", "manual-message", manualText);
+    await emitUserItem("item/completed", "agent-message", agentText);
+
+    const items = events.flatMap((event) => {
+      const notification = event.notification;
+      return notification.method === "item/started" || notification.method === "item/completed"
+        ? [notification.params.item as { id: string; origin?: unknown }]
+        : [];
+    });
+    expect(items.filter((item) => item.id === "manual-message")).toHaveLength(2);
+    for (const item of items.filter((item) => item.id === "manual-message")) {
+      expect(item).not.toHaveProperty("origin");
+    }
+    expect(items.at(-1)).toMatchObject({ id: "agent-message", origin });
+    expect(overlayStore.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "manual-message" }),
+    );
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: turn.threadId,
+      messageId: "agent-message",
+      origin,
+    });
+    expect(await registry.readQueuedTurn({
+      backend: "codex",
+      threadId: turn.threadId,
+      queueEntryId: queued.entry.id,
+    })).toMatchObject({ input: queued.entry.input });
+  });
+
+  it.each([
+    { operation: "start", fileType: "file" },
+    { operation: "start", fileType: "localFile" },
+    { operation: "steer", fileType: "file" },
+    { operation: "steer", fileType: "localFile" },
+  ])("persists prepared file-message provenance through live events and replay ($operation, $fileType)", async ({ operation, fileType }) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-file-provenance-"));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const filePath = path.join(directory, "report.txt");
+    await writeFile(filePath, "Fixture report.");
+    const prompt = "Review the report.";
+    const wireText = `Prepared file reference: ${filePath}\n${prompt}`;
+    const message = { id: "file-message", role: "user" as const, text: wireText };
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [{ ...message, type: "message", turn: { id: "turn-1", status: "completed" } }],
+        messages: [message],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    if (operation === "steer") {
+      await registry.startTurn({
+        backend: "codex", threadId: "target-thread", input: [{ type: "text", text: "Start work." }],
+      });
+    }
+    const sendPreparedInput = async (params: {
+      threadId: string;
+      onInputTextPrepared?: (text: string | undefined) => void;
+    }) => {
+      params.onInputTextPrepared?.(wireText);
+      for (const method of ["item/started", "item/completed"] as const) {
+        await codexClient.emit({
+          method,
+          params: {
+            threadId: params.threadId,
+            turnId: "turn-1",
+            item: { id: message.id, type: "userMessage", content: [{ type: "text", text: wireText }] },
+          },
+        });
+      }
+      return { threadId: params.threadId, turnId: "turn-1" };
+    };
+    vi.spyOn(codexClient, "startTurn").mockImplementation(sendPreparedInput);
+    vi.spyOn(codexClient, "steerTurn").mockImplementation(sendPreparedInput);
+    const input: AppServerTurnInputItem[] = [
+      { type: "text", text: prompt },
+      fileType === "file"
+        ? { type: "file", name: "report.txt", mimeType: "text/plain", data: Buffer.from("Fixture report.").toString("base64") }
+        : { type: "localFile", path: filePath, name: "report.txt", mimeType: "text/plain" },
+    ];
+    const origin = fileType === "file"
+      ? { kind: "messaging" as const }
+      : { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "child-thread" } };
+    if (operation === "start") {
+      await registry.startTurn({ backend: "codex", threadId: "target-thread", input, messageOrigin: origin });
+    } else {
+      await registry.steerTurn({
+        backend: "codex", threadId: "target-thread", expectedTurnId: "turn-1", input, requestId: "file-steer",
+      }, origin);
+    }
+    const userEvents = events.filter((event) =>
+      event.notification.method === "item/started" || event.notification.method === "item/completed"
+    );
+    expect(userEvents).toHaveLength(2);
+    for (const event of userEvents) {
+      expect(event).toMatchObject({ notification: { params: { item: { id: message.id, origin } } } });
+    }
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex", threadId: "target-thread", messageId: message.id, origin,
+    });
+    const response = await registry.readThread({ backend: "codex", threadId: "target-thread" });
+    expect(response.replay.entries[0]).toMatchObject({ id: message.id, origin });
+    expect(response.replay.messages[0]).toMatchObject({ id: message.id, origin });
+  });
+
+  it("binds pending provenance to the started item when identical steers complete out of order", async () => {
+    const codexClient = new MockBackendClient({});
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    onTestFinished(() => registry.close());
+    const turn = await registry.startTurn({
+      backend: "codex",
+      threadId: "target-thread",
+      input: [{ type: "text", text: "Investigate performance." }],
+    });
+    const text = "Continue the investigation.";
+    const origins = ["child-a", "child-b"].map((threadId) => ({
+      kind: "agent" as const,
+      sourceThread: { backend: "codex" as const, threadId },
+    }));
+    for (const [index, origin] of origins.entries()) {
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: turn.threadId,
+        expectedTurnId: turn.turnId,
+        input: [{ type: "text", text }],
+        requestId: `steer-${index}`,
+      }, origin);
+      await codexClient.emit({
+        method: "item/started",
+        params: {
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          item: { id: `message-${index}`, type: "userMessage", content: [{ type: "text", text }] },
+        },
+      });
+    }
+    for (const index of [1, 0]) {
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          item: { id: `message-${index}`, type: "userMessage" },
+        },
+      });
+    }
+    for (const [index, origin] of origins.entries()) {
+      const writes = vi.mocked(overlayStore.upsertThreadMessageOrigin!).mock.calls
+        .filter(([call]) => call.messageId === `message-${index}`);
+      expect(writes).toHaveLength(2);
+      for (const [write] of writes) expect(write.origin).toEqual(origin);
+    }
   });
 
   it("does not copy one message origin to another user message in the same turn", async () => {

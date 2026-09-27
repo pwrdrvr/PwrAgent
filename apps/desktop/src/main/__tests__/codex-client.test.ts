@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerNotification, AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerNotification, AppServerThreadSummary, AppServerTurnInputItem } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
@@ -10142,6 +10142,51 @@ describe("CodexAppServerClient", () => {
     );
 
     await client.close();
+  });
+
+  it.each([
+    { operation: "start", fileType: "file" },
+    { operation: "start", fileType: "localFile" },
+    { operation: "steer", fileType: "file" },
+    { operation: "steer", fileType: "localFile" },
+  ])("reports prepared file-message text before sending the wire request ($operation, $fileType)", async ({ operation, fileType }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const method = operation === "start" ? "turn/start" : "turn/steer";
+    const requests = () => MockTransport.instances.flatMap((transport) =>
+      transport.sentMessages.map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: { input?: Array<{ type: string; text?: string; path?: string }> };
+      })
+    ).filter((request) => request.method === method);
+    const onInputTextPrepared = vi.fn((_text: string | undefined) => {
+      expect(requests()).toHaveLength(0);
+    });
+    const input: AppServerTurnInputItem[] = [
+      { type: "text", text: "Review the report." },
+      fileType === "file"
+        ? { type: "file", name: "prepared-provenance.txt", mimeType: "text/plain", data: Buffer.from("Fixture report.").toString("base64") }
+        : { type: "localFile", path: "/fixtures/report.txt", name: "report.txt", mimeType: "text/plain", textPreview: "Fixture report." },
+    ];
+    try {
+      const params = { threadId: "thread-3", input, onInputTextPrepared };
+      if (operation === "start") {
+        await client.startTurn(params);
+      } else {
+        await client.steerTurn({ ...params, expectedTurnId: "turn-1" });
+      }
+      const wireInput = requests()[0]?.params?.input;
+      expect(wireInput?.[0]?.text).toContain("Files attached or referenced from PwrAgent");
+      const text = wireInput?.filter((item) => item.type === "text")
+        .map((item) => item.text?.trim()).filter(Boolean).join("\n");
+      expect(onInputTextPrepared).toHaveBeenCalledExactlyOnceWith(text);
+    } finally {
+      if (fileType === "file") {
+        const filePath = requests()[0]?.params?.input?.find((item) => item.type === "mention")?.path;
+        if (filePath) await fs.rm(path.dirname(filePath), { force: true, recursive: true });
+      }
+      await client.close();
+    }
   });
 
   it("stores file inputs as local file references before sending Codex turns", async () => {
