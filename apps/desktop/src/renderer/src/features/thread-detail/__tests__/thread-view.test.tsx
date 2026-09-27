@@ -3298,6 +3298,84 @@ describe("ThreadView", () => {
     expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();
   });
 
+  it.each(["removed", "hydrated", "extended"] as const)(
+    "keeps the open image gallery stable when transcript images are %s",
+    (update) => {
+      const entries: AppServerThreadEntry[] = [{
+        type: "message",
+        id: "optimistic-images",
+        role: "user",
+        text: "Inspect these images",
+        parts: [
+          { type: "image", url: "file:///tmp/first.png", alt: "First" },
+          { type: "image", url: "file:///tmp/second.png", alt: "Second" },
+        ],
+      }];
+      const viewProps = {
+        addOptimisticUserMessage: (_text: string) => "optimistic-images",
+        backends: [],
+        composerDisabled: false,
+        desktopApi: {},
+        loading: false,
+        loadingMore: false,
+        messageCount: 1,
+        selectedThread: {
+          id: "thread-gallery",
+          title: "Inspect images",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          updatedAt: 1,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+        skills: [],
+        clearPendingRequest: () => undefined,
+        onLoadOlder: async () => undefined,
+        removeOptimisticMessage: (_id: string) => undefined,
+      };
+      const { rerender } = render(<ThreadView {...viewProps} transcriptEntries={entries} />);
+      fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+      const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+      expect(dialog).toHaveTextContent("1 / 2");
+
+      const hydrated: AppServerThreadEntry[] = [{
+        type: "message",
+        id: "hydrated-images",
+        role: "user",
+        text: "Inspect these images",
+        parts: [
+          { type: "image", url: "https://example.test/first.png", alt: "First hydrated" },
+          { type: "image", url: "https://example.test/second.png", alt: "Second hydrated" },
+        ],
+      }];
+      const updated = update === "removed" ? []
+        : update === "hydrated" ? hydrated : [...entries, ...hydrated];
+      rerender(<ThreadView {...viewProps} transcriptEntries={updated} />);
+
+      expect(screen.getByRole("dialog", { name: "Expanded image" })).toBe(dialog);
+      expect(dialog).toHaveTextContent("1 / 2");
+      expect(within(dialog).getByRole("img", { name: "First" }))
+        .toHaveAttribute("src", "file:///tmp/first.png");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Next image" }));
+      expect(dialog).toHaveTextContent("2 / 2");
+      expect(within(dialog).getByRole("img", { name: "Second" }))
+        .toHaveAttribute("src", "file:///tmp/second.png");
+      expect(within(dialog).getByRole("button", { name: "Next image" }))
+        .toHaveAttribute("aria-disabled", "true");
+      fireEvent.keyDown(window, { key: "ArrowLeft" });
+      expect(dialog).toHaveTextContent("1 / 2");
+      expect(within(dialog).getByRole("img", { name: "First" })).toBeInTheDocument();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+      rerender(<ThreadView {...viewProps} transcriptEntries={hydrated} />);
+      fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 2" }));
+      const reopened = screen.getByRole("dialog", { name: "Expanded image" });
+      expect(reopened).toHaveTextContent("2 / 2");
+      expect(within(reopened).getByRole("img", { name: "Second hydrated" }))
+        .toHaveAttribute("src", "https://example.test/second.png");
+    },
+  );
+
   it("clears an expanded transcript image when the selected thread changes", () => {
     const viewProps = {
       addOptimisticUserMessage: (_text: string) => "optimistic-1",

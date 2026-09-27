@@ -1235,7 +1235,11 @@ export function ThreadView(props: ThreadViewProps) {
   // one waits in the queue. Kept here so a card mounted again still has them.
   const [sentAsyncQuestionAnswers, setSentAsyncQuestionAnswers] =
     useState<ReadonlyMap<string, string>>(() => new Map());
-  const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
+  const [expandedGallery, setExpandedGallery] = useState<{
+    images: AppServerThreadImagePart[];
+    index: number;
+  }>();
+  const expandedImage = expandedGallery?.images[expandedGallery.index];
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
@@ -1323,7 +1327,7 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingRequestError(undefined);
     setSetupFailureArchiving(false);
     setContextRailResizing(false);
-    setExpandedImage(undefined);
+    setExpandedGallery(undefined);
     setPendingTranscriptTurnTarget(undefined);
     transcriptTurnPageLoadsRef.current = 0;
     transcriptTurnPageRequestGenerationRef.current += 1;
@@ -2585,11 +2589,17 @@ export function ThreadView(props: ThreadViewProps) {
       props.transcriptEntries,
     ],
   );
-  const expandedImageIndex = expandedImage
-    ? threadImageGallery.findIndex((image) =>
-        threadGalleryImageMatches(image, expandedImage)
-      )
-    : -1;
+  const openImageGallery = useCallback((image: AppServerThreadImagePart) => {
+    const index = threadImageGallery.findIndex((candidate) =>
+      threadGalleryImageMatches(candidate, image)
+    );
+    // Keep the open viewer independent of optimistic-message replacement,
+    // hydration gaps, and streamed images. Reopening takes a fresh snapshot.
+    setExpandedGallery({
+      images: index >= 0 ? threadImageGallery : [image],
+      index: index >= 0 ? index : 0,
+    });
+  }, [threadImageGallery]);
 
   // One collector per mounted view: `props.transcriptEntries` gets a fresh
   // array identity on every streamed delta, so the derivation folds each entry
@@ -3428,26 +3438,32 @@ export function ThreadView(props: ThreadViewProps) {
     );
   }
 
-  const imageLightbox = expandedImage ? (
+  const imageLightbox = expandedImage && expandedGallery ? (
     <ImageLightbox
       src={expandedImage.url}
       alt={expandedImage.alt ?? "Expanded image"}
-      position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
-      total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
+      position={expandedGallery.index + 1}
+      total={expandedGallery.images.length}
       onClose={() => {
-        setExpandedImage(undefined);
+        setExpandedGallery(undefined);
       }}
       onNext={
-        expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
+        expandedGallery.index < expandedGallery.images.length - 1
           ? () => {
-              setExpandedImage(threadImageGallery[expandedImageIndex + 1]);
+              setExpandedGallery((gallery) => gallery && ({
+                ...gallery,
+                index: Math.min(gallery.index + 1, gallery.images.length - 1),
+              }));
             }
           : undefined
       }
       onPrevious={
-        expandedImageIndex > 0
+        expandedGallery.index > 0
           ? () => {
-              setExpandedImage(threadImageGallery[expandedImageIndex - 1]);
+              setExpandedGallery((gallery) => gallery && ({
+                ...gallery,
+                index: Math.max(gallery.index - 1, 0),
+              }));
             }
           : undefined
       }
@@ -3609,7 +3625,7 @@ export function ThreadView(props: ThreadViewProps) {
                         message={launchpadSubmittedMessage}
                         parentThreadId=""
                         skills={props.skills}
-                        onOpenImage={setExpandedImage}
+                        onOpenImage={openImageGallery}
                       />
                     </div>
                   </article>
@@ -3955,7 +3971,7 @@ export function ThreadView(props: ThreadViewProps) {
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
               onLoadOlder={loadOlderTranscript}
               onLinkedMessageHandled={props.onLinkedMessageHandled}
-              onOpenImage={setExpandedImage}
+              onOpenImage={openImageGallery}
               dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
               sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
               onAnswerAsyncQuestions={
