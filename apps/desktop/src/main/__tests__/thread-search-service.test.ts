@@ -17,6 +17,36 @@ afterEach(() => {
 });
 
 describe("ThreadSearchService", () => {
+  it("scopes project prefixes before limiting metadata and supports project-only queries", async () => {
+    const service = buildService([
+      threadSummary({ id: "other", projectKey: "/repos/Other", updatedAt: 3000 }),
+      threadSummary({ id: "disk", projectKey: "/repos/DiskHound", updatedAt: 1000 }),
+      threadSummary({ id: "snap", projectKey: "C:\\repos\\PwrSnap", updatedAt: 2000 }),
+    ]);
+    for (const query of ["branch @disk", "branch in:@disk", "@disk"]) {
+      const response = await service.search({ query, limit: 1 });
+      expect(response.results.map((result) => result.threadId)).toEqual(["disk"]);
+      expect(response.query).toBe(query);
+    }
+    expect((await service.search({ query: "@missing" })).results).toEqual([]);
+    expect((await service.search({ query: "@disk @pwrsnap" })).results.map((result) => result.threadId))
+      .toEqual(["snap", "disk"]);
+  });
+
+  it("restricts transcript candidates before their cap and removes mentions from content text", async () => {
+    const service = buildService([
+      ...Array.from({ length: 55 }, (_, index) => threadSummary({
+        id: `other-${index}`, projectKey: "/repos/Other", updatedAt: 5000 + index,
+      })),
+      threadSummary({ id: "disk", projectKey: "/repos/DiskHound", updatedAt: 1000 }),
+    ], "vector models");
+    const response = await service.search({ query: "vector models @disk", limit: 1 });
+    expect(response.results.map((result) => result.threadId)).toEqual(["disk"]);
+    expect(response.results[0].matchReasons).toContainEqual(
+      expect.objectContaining({ kind: "provider_content_match" }),
+    );
+  });
+
   it("hydrates projections from thread summaries and searches them", async () => {
     const service = buildService([
       threadSummary({ id: "thread-1", title: "Branch drift dialog" }),

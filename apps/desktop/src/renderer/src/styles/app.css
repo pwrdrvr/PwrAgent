@@ -7357,6 +7357,20 @@ a.button {
   white-space: nowrap;
 }
 
+.thread-search__help {
+  flex-shrink: 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.thread-search__help p {
+  margin: 8px 0 0;
+}
+
 .thread-search__error {
   margin: 0;
   border: 1px solid color-mix(in srgb, var(--status-error) 50%, var(--border-subtle));

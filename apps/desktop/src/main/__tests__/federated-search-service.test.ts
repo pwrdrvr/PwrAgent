@@ -9,7 +9,7 @@ import {
   FEDERATION_BACKEND_METHODS,
   FederationRemoteBackendClient,
 } from "../federation/federation-backend-bridge";
-import { FederatedSearchService } from "../federation/federated-search-service";
+import { FederatedSearchService, searchFederatedThreadsOnOwner } from "../federation/federated-search-service";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 afterEach(() => {
@@ -32,6 +32,44 @@ function thread(
 }
 
 describe("FederatedSearchService", () => {
+  it("applies project mentions on the owner before the remote result limit", async () => {
+    const listThreads = vi.fn(async () => ({
+      threads: [
+        { ...thread("other", "Build", 3000), projectKey: "/repos/Other" },
+        { ...thread("disk", "Build", 1000), projectKey: "/repos/DiskHound" },
+      ],
+      backend: "codex" as const,
+      fetchedAt: 1000,
+    }));
+    for (const query of ["build @disk", "build in:@disk", "@disk"]) {
+      const response = await searchFederatedThreadsOnOwner({ listThreads }, { query, limit: 1 });
+      expect(response.threads.map((thread) => thread.id)).toEqual(["disk"]);
+      expect(response.totalCount).toBe(1);
+    }
+  });
+
+  it("retains mentions during fan-out and excludes out-of-scope legacy peer hits", async () => {
+    const searchFederatedThreads = vi.fn(async () => ({
+      threads: [
+        { ...thread("disk", "Build", 1000), projectKey: "DiskHound" },
+        { ...thread("other", "Build", 3000), projectKey: "Other" },
+      ], totalCount: 2, truncated: false,
+    }));
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{ instanceId: "peer", label: "Peer", backend: {
+        listThreads: vi.fn(), searchFederatedThreads,
+      } }],
+    });
+    const response = await service.search({ query: "build @disk" });
+    expect(searchFederatedThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "build @disk" }), expect.anything(),
+    );
+    expect(response.results.map((result) => result.thread.id)).toEqual(["disk"]);
+    expect(response.searchedInstances?.[0].resultCount).toBe(1);
+  });
+
   it("returns a healthy peer when local search fails", async () => {
     const service = new FederatedSearchService({
       local: { listThreads: vi.fn(), searchFederatedThreads: vi.fn(async () => { throw new Error("local unavailable"); }) },
