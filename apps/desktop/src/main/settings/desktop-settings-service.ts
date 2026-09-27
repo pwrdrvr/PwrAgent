@@ -1055,7 +1055,7 @@ export class DesktopSettingsService {
         ),
         codexToolDiscovery: this.resolveConfigBoolean(
           config.experimental?.codexToolDiscovery,
-          false,
+          true,
         ),
         codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
           config.experimental?.codexDefaultModeRequestUserInput,
@@ -1922,7 +1922,7 @@ export class DesktopSettingsService {
   }
 
   resolveCodexToolDiscovery(): boolean {
-    return this.readExperimentalConfig().codexToolDiscovery ?? false;
+    return this.readExperimentalConfig().codexToolDiscovery ?? true;
   }
 
   resolveManagedReviewEnabled(): boolean {

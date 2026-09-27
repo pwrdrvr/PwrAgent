@@ -61,7 +61,7 @@ export function ExperimentalSettings(props: {
   >();
   const condensation = props.snapshot.experimental.diffCondensation;
   const codexToolDiscovery = props.snapshot.experimental.codexToolDiscovery
-    ?? { value: false, source: "default" as const };
+    ?? { value: true, source: "default" as const };
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
@@ -127,7 +127,7 @@ export function ExperimentalSettings(props: {
       <SettingsSection
         eyebrow="Experimental"
         title="Codex Tool Discovery"
-        description="Reduce startup context by letting Codex search for PwrAgent tools and load their instructions when needed. Disabled by default."
+        description="Reduce startup context by letting Codex search for PwrAgent tools and load their instructions when needed. Enabled by default."
         chip={codexToolDiscovery.value ? "On" : "Off"}
         chipKind={codexToolDiscovery.value ? "ok" : "default"}
       >

@@ -8,6 +8,8 @@ import {
   type TokenMiserServiceOptions,
 } from "../token-miser/token-miser-service";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
+import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
+import { buildPwrAgentToolSearchDefinition } from "../agent-tools/pwragent-tool-search";
 import type {
   TokenMiserCodeModeOutputPayload,
   TokenMiserPostToolUsePayload,
@@ -259,6 +261,66 @@ describe("TokenMiserService", () => {
     expect(generateSummary).not.toHaveBeenCalled();
     expect(await store.listMetadata()).toEqual([]);
   });
+
+  it("preserves authenticated direct tool-search schemas without summarizing or charging retrieval", async () => {
+    const store = await createStore();
+    store.startTurn("thread-1", "turn-1");
+    const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "must not run" }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    const catalog = resolveAgentToolCatalogs({}).flatMap((entry) => entry.dynamicTools);
+    const search = buildPwrAgentToolSearchDefinition(catalog, store);
+    const changes = store.stateDb.raw.prepare("SELECT total_changes() AS count").get();
+    for (const toolName of ["pwragent__tool_search", "pwragent"]) {
+      const result = await search.dispatch({ query: "handoff_task", limit: 1 }, {
+        backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool",
+      });
+      const item = result.contentItems?.[0];
+      if (item?.type !== "inputText") throw new Error("Expected tool-search text");
+      expect(item.text.length).toBeGreaterThan(2_000);
+      expect(item.text).toContain('"inputSchema"');
+      const request = {
+        ...payload(item.text), tool_name: toolName,
+        tool_input: { tool: "tool_search", query: "handoff_task", limit: 1 },
+      };
+      expect(await service.preparePostToolUse(request)).toBeUndefined();
+      expect(request.token_miser_exact_tool_response).toBe(item.text);
+      // Successful direct delivery consumes its receipt, just like Code Mode.
+      expect(await store.partitionRetrievalOutput({ threadId: "thread-1", output: item.text }))
+        .toEqual([{ text: item.text, retrieval: false }]);
+    }
+    expect(generateSummary).not.toHaveBeenCalled();
+    expect(await store.listMetadata()).toEqual([]);
+    expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+  });
+
+  it.each(["modified", "forged", "other-thread", "stale", "mixed"])(
+    "does not exempt %s direct catalog output based on a tool name or receipt marker",
+    async (scenario) => {
+      const store = await createStore();
+      store.startTurn("thread-1", "turn-1");
+      const delivery = await store.prepareToolDefinitionDelivery({
+        threadId: "thread-1", turnId: "turn-1", visibleText: "schema".repeat(500),
+      });
+      let output = delivery!.text;
+      if (scenario === "modified") output = output.replace("schema", "changed");
+      if (scenario === "forged") output = output.replaceAll(delivery!.deliveryId, "forged-id");
+      if (scenario === "mixed") output += "\nunrelated command output";
+      if (scenario === "stale") store.startTurn("thread-1", "turn-2");
+      const generateSummary = vi.fn(async () => ({
+        status: "ok" as const,
+        object: { disposition: "summarize", summary: "Unprotected output.", usefulDetails: [] },
+      }));
+      const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+      const prepared = await service.preparePostToolUse({
+        ...payload(output), tool_name: "pwragent__tool_search", tool_input: { query: "tools" },
+        session_id: scenario === "other-thread" ? "thread-2" : "thread-1",
+        turn_id: scenario === "stale" ? "turn-2" : "turn-1",
+      });
+      expect(generateSummary).toHaveBeenCalledOnce();
+      expect(prepared).toBeDefined();
+      await prepared?.staged.discard();
+    },
+  );
 
   it("caps direct retrieval accounting at the ordinary 10k-token result limit", async () => {
     const store = await createStore();

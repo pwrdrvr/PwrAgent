@@ -285,6 +285,24 @@ export class TokenMiserService {
     const output = serializeToolResponse(
       payload.token_miser_exact_tool_response,
     );
+    // Direct dynamic-tool results need the same receipt authentication as
+    // Code Mode. Tool names alone cannot prove that schemas are host-issued.
+    // Exempt only a complete delivery; unrelated output must still be gated.
+    const parts = await this.options.store.partitionRetrievalOutput({
+      output,
+      threadId: payload.session_id,
+    });
+    if (
+      parts.some((part) => part.retrieval)
+      && parts.every((part) => part.retrieval || part.text.trim().length === 0)
+    ) {
+      await this.options.store.confirmModelVisibleRetrievals({
+        maxVisibleBytes: TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+        output,
+        threadId: payload.session_id,
+      });
+      return undefined;
+    }
     if (output.length <= this.thresholdCharacters) {
       return undefined;
     }

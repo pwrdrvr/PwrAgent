@@ -4684,14 +4684,14 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults tool discovery off and persists both toggle states without replacing other config", async () => {
+  it("defaults tool discovery on and preserves an explicit opt-out without replacing other config", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, "# keep this comment\n[experimental]\nmanaged_review = true\n");
     const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
-    expect((await service.readSettingsProjection()).experimental.codexToolDiscovery).toEqual({ value: false, source: "default" });
-    expect(service.resolveCodexToolDiscovery()).toBe(false);
-    for (const enabled of [true, false]) {
+    expect((await service.readSettingsProjection()).experimental.codexToolDiscovery).toEqual({ value: true, source: "default" });
+    expect(service.resolveCodexToolDiscovery()).toBe(true);
+    for (const enabled of [false, true]) {
       await service.writeConfigPatchTargeted({ experimental: { codexToolDiscovery: enabled } });
       expect(service.resolveCodexToolDiscovery()).toBe(enabled);
       expect((await service.readSettingsProjection()).experimental.codexToolDiscovery).toEqual({ value: enabled, source: "config" });

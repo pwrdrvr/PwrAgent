@@ -9109,12 +9109,12 @@ export class DesktopBackendRegistry {
       });
     this.resolveCodexToolDiscoveryFn = options?.resolveCodexToolDiscovery ?? (() => {
       try {
-        return settingsService?.resolveCodexToolDiscovery() ?? false;
+        return settingsService?.resolveCodexToolDiscovery() ?? true;
       } catch (error) {
         backendRegistryLog.warn("failed to resolve Codex tool discovery setting", {
           error: error instanceof Error ? error.message : String(error),
         });
-        return false;
+        return true;
       }
     });
     this.resolveDefaultPrAutoDispatchEnabledFn =
