@@ -134,7 +134,8 @@ type DirectoriesListProps = {
   onSelectThread: (
     thread: NavigationThreadSummary,
     event: MouseEvent<HTMLElement>,
-    selectionOrder: string[],
+    selectionOrder: Pick<ThreadRowRef, "directoryKey" | "threadKey">[],
+    row: ThreadRowRef,
   ) => void;
   onSelectDirectory?: (
     directory: NavigationDirectorySummary,
@@ -1159,12 +1160,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
     (
       thread: NavigationThreadSummary,
       event: MouseEvent<HTMLElement>,
-      _row: ThreadRowRef,
+      row: ThreadRowRef,
     ) => {
       // The map follows rendered project order and contains only visible rows.
-      const selectionOrder = [...new Set([...rowContextByDirectoryKey.values()]
-        .flatMap((context) => context.selectionOrder))];
-      props.onSelectThread(thread, event, selectionOrder);
+      const selectionOrder = [...rowContextByDirectoryKey.values()]
+        .flatMap((context) => context.selectionOrder.map((threadKey) => ({
+          directoryKey: context.directory.key, threadKey,
+        })));
+      props.onSelectThread(thread, event, selectionOrder, row);
     },
   );
   const pointerDownThread = useEventCallback(
