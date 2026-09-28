@@ -90,7 +90,7 @@ describe("materializeNavigationThreads", () => {
       expect(threads[0]?.agent).toBeUndefined();
       expect(threads[0]?.agentChange).toEqual(change ? { enabled: true, ...(change.error ? { error: change.error } : {}) } : undefined);
       expect(JSON.stringify(threads[0]?.agentChange) ?? "").not.toContain("Fixture instructions");
-      return buildNavigationSnapshotHash({ backend: "codex", threads });
+      return serializeNavigationSnapshotForHash({ backend: "codex", threads });
     });
     expect(new Set(hashes).size).toBe(3);
   });

@@ -22,7 +22,7 @@ comparison, and an unchanged complete snapshot does not rewrite backend state.
 
 ## Compatibility and query plan
 
-Schema v65 creates a covering expression index over backend scope, known-key
+Schema v66 creates a covering expression index over backend scope, known-key
 JSON and a bounded hash expression. A legacy oversized hash is represented by a
 small, truthy sentinel in the index. It preserves initialization semantics but
 cannot compare equal to a new digest, so the next complete snapshot reports a
@@ -45,11 +45,33 @@ and the payload-read bound hold with a new store on every call. Known identities
 remain a list, so metadata cost scales with that list, not snapshot history.
 Selected detail also still reads the selected thread's own overlay/history.
 
+## Integration with startup maintenance (#2367)
+
+The merged retention migration owns v65. Backend metadata moves to v66, so a
+profile already upgraded by #2367 still installs the index. The v66 transaction
+also creates the retention table if missing: earlier builds of this unmerged
+PR used v65 for the index alone. Both v65 shapes therefore converge without
+losing archive receipts or rewriting backend payloads. Fresh databases and v64
+upgrades install both schemas.
+
+Maintenance deletes from five detail tables, not `threads`, `backends`, or
+`thread_navigation_relationships`. Its worker opens `StateDb` before cleanup.
+A cross-connection regression runs the detail deletions, ordinary expiry, and
+actual compaction, then verifies unchanged selected configuration, backend rows,
+relationships, covering-index reads, and database integrity. External maintenance
+can invalidate the existing metadata cache; the resulting cold read still uses
+the covering index. The existing compaction page-budget fixture grows by one
+index page: 4,120 additional WAL bytes, with unchanged deletion pages and commit
+counts. At the maximum once-daily cadence this fixture adds 0.00412 MB/day;
+real index size scales with the known-key lists. The isolated real-copy index
+measured below occupied 28,672 bytes.
+
 ## Measured evidence
 
 Measurements on 2026-09-27 used a consistent read-only SQLite backup of the
 operator's 324,648,960-byte PwrAgent database, then disposable copies. Baseline
-source was commit `9dddfffbe` (includes #2357). Only aggregate measurements are
+source was commit `9dddfffbe` (includes #2357). These measurements predate
+#2367 and describe the metadata change, not combined startup-maintenance time. Only aggregate measurements are
 published; the database and thread content remain private.
 
 Each latency result uses 5 warmup calls and 20 measured calls, with a fresh store

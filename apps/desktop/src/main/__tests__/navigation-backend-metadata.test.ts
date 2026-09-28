@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { READ_NAVIGATION_BACKEND_METADATA } from "../state/navigation-backend-metadata";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { compactStorage, observeStorageArchive, storageDetailStatements } from "../state/storage-maintenance";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 let tempDir: string | undefined;
@@ -68,13 +69,20 @@ describe("bounded backend navigation metadata", () => {
     expect(code.filter((op) => op.opcode === "Function")).toEqual([]);
   });
 
-  it("backfills v64 without rewriting source rows and follows external legacy writes and rollback", () => {
+  it.each([64, 65])("backfills v%i without rewriting source rows and follows external legacy writes and rollback", (version) => {
     const file = useFile();
     const legacy = JSON.stringify({ knownThreadKeys: ["acp%3Agrok:old"], lastSnapshotHash: "x".repeat(1_000_000) });
     stateDb.raw.prepare("INSERT INTO backends VALUES (?, ?)").run("codex", legacy);
-    stateDb.raw.exec("DROP INDEX idx_backends_navigation_metadata; PRAGMA user_version = 64");
+    stateDb.raw.exec("DROP INDEX idx_backends_navigation_metadata");
+    if (version === 64) stateDb.raw.exec("DROP TABLE thread_storage_retention");
+    else observeStorageArchive(stateDb.raw, "codex", "retained-receipt", true, 123);
+    stateDb.raw.pragma(`user_version = ${version}`);
     stateDb.close();
     stateDb = StateDb.open(file); store = new SqliteOverlayStore(stateDb);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(66);
+    expect(stateDb.raw.prepare("SELECT * FROM thread_storage_retention").all()).toEqual(
+      version === 64 ? [] : [{ backend: "codex", thread_id: "retained-receipt", archived_at: 123 }],
+    );
     expect(store["getBackend"]("codex")).toEqual({ knownThreadKeys: ["acp:grok:old"], lastSnapshotHash: "legacy" });
     expect((stateDb.raw.prepare("SELECT payload FROM backends").get() as { payload: string }).payload === legacy).toBe(true);
     const other = new Database(file);
@@ -90,6 +98,55 @@ describe("bounded backend navigation metadata", () => {
       other.prepare("DELETE FROM backends WHERE scope = ?").run("codex");
       expect(store["getBackend"]("codex")).toBeUndefined();
     } finally { other.close(); }
+  });
+
+  it("converges a pre-merge v65 metadata-index database without the retention table", () => {
+    const file = useFile();
+    store["putBackend"]("codex", { knownThreadKeys: ["codex:selected"], lastSnapshotHash: "initialized" });
+    stateDb.raw.exec("DROP TABLE thread_storage_retention; PRAGMA user_version = 65");
+    const indexBefore = stateDb.raw.prepare("SELECT rootpage FROM sqlite_master WHERE name = 'idx_backends_navigation_metadata'").get();
+    stateDb.close();
+    stateDb = StateDb.open(file); store = new SqliteOverlayStore(stateDb);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(66);
+    expect(stateDb.raw.prepare("SELECT * FROM thread_storage_retention").all()).toEqual([]);
+    expect(stateDb.raw.prepare("SELECT rootpage FROM sqlite_master WHERE name = 'idx_backends_navigation_metadata'").get()).toEqual(indexBefore);
+    expect(store["getBackend"]("codex")).toEqual({ knownThreadKeys: ["codex:selected"], lastSnapshotHash: "initialized" });
+  });
+
+  it("creates both retention and metadata schemas in a fresh database", () => {
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(66);
+    expect(stateDb.raw.prepare("SELECT * FROM thread_storage_retention").all()).toEqual([]);
+    expect(stateDb.raw.prepare(READ_NAVIGATION_BACKEND_METADATA).get("codex")).toBeUndefined();
+  });
+
+  it("preserves navigation metadata and covering reads through external cleanup and compaction", async () => {
+    const file = useFile();
+    store["putBackend"]("codex", { knownThreadKeys: ["codex:selected"], lastSnapshotHash: "initialized" });
+    store["putThread"]("codex:selected", { backend: "codex", threadId: "selected",
+      executionMode: "default", extraLinkedDirectories: [], pinnedRank: "a",
+      subAgents: [{ monitorId: "monitor", monitorThreadId: "child", task: "Worker",
+        status: "running", createdAt: 1, updatedAt: 1 }] });
+    stateDb.raw.prepare("INSERT INTO token_miser_objects VALUES (?,?,?,?)").run("expired-detail", thread.id, 0, "old detail");
+    const detailBefore = await store.projectNavigationThreadDetail({ thread });
+    const relationshipsBefore = stateDb.raw.prepare("SELECT * FROM thread_navigation_relationships").all();
+    const backendBefore = stateDb.raw.prepare("SELECT payload FROM backends").get();
+    const worker = StateDb.open(file);
+    try {
+      observeStorageArchive(worker.raw, "codex", thread.id, true, 100);
+      for (const operation of storageDetailStatements(worker.raw, { backend: "codex", threadId: thread.id })) {
+        worker.raw.transaction(() => operation.statement.run(...operation.parameters)).immediate();
+      }
+      worker.cleanupExpired(Date.now(), 0);
+      compactStorage(worker.raw);
+    } finally { worker.close(); }
+    expect(stateDb.raw.prepare("SELECT count(*) AS count FROM token_miser_objects").get()).toEqual({ count: 0 });
+    expect(stateDb.raw.prepare("SELECT payload FROM backends").get()).toEqual(backendBefore);
+    expect(stateDb.raw.prepare("SELECT * FROM thread_navigation_relationships").all()).toEqual(relationshipsBefore);
+    expect(await store.projectNavigationThreadDetail({ thread })).toEqual(detailBefore);
+    expect(new SqliteOverlayStore(stateDb)["getBackend"]("codex")?.knownThreadKeys).toEqual(["codex:selected"]);
+    const plan = stateDb.raw.prepare("EXPLAIN QUERY PLAN " + READ_NAVIGATION_BACKEND_METADATA).all("codex") as { detail: string }[];
+    expect(plan.some((row) => row.detail.includes("COVERING INDEX idx_backends_navigation_metadata"))).toBe(true);
+    expect(stateDb.raw.pragma("integrity_check", { simple: true })).toBe("ok");
   });
 
   it("projects selected configuration identically without global navigation reads or writes", async () => {
