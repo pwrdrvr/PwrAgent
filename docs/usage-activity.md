@@ -1,7 +1,7 @@
 # Usage Activity
 
 Open **Federation Activity → Usage**, select instances and a local-time window,
-then choose **Read usage**. This is an on-demand view of PwrAgent's pricing
+then choose **Load activity** (or **Refresh**). This is an on-demand view of PwrAgent's pricing
 ledger, not a billing or subscription-quota report.
 
 - The total includes only attributed turns and monitor intervals with both
@@ -28,7 +28,7 @@ ledger, not a billing or subscription-quota report.
   to threads. The available account usage/rate-limit contracts do not establish
   a per-thread subscription quota conversion.
 
-**Inspect → Analyze** makes one explicit model call on the selected row's
+**Select a thread → Analyze thread** makes one explicit model call on the selected row's
 owner, defaulting to GPT-6-Luna. The owner supplies its available Codex model
 choices. Analysis uses one recent protocol page (at most ten turns), then
 selects the newest entries within the operator's 1–100 entry and
@@ -45,3 +45,12 @@ Validation covers ledger reads with zero SQLite commits, timing boundaries,
 cumulative and monitor deduplication, token subsets, missing peers,
 owner-routed analysis, and server-side prompt limits. Browser rendering uses
 contrived data; automated tests do not invoke a real model.
+
+The usage surface follows the Token Miser explorer's hierarchy: a cost and
+cache summary, a completion-time chart, expandable coverage/account detail,
+and a scrollable thread ranking with a side inspector. Chart bars place each
+whole contained interval's cost at its completion timestamp; they are not
+estimates of spend rate within that bucket. Selecting a bar filters the ranking
+while the headline retains the full-window total. Search and cost/token/time
+sorting operate on the loaded snapshot and do not request more data or invoke
+analysis. The Excluded lens preserves access to intervals outside the total.
