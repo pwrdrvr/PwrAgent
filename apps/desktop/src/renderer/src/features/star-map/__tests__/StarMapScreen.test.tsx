@@ -887,8 +887,10 @@ describe("StarMapScreen", () => {
     const input = within(chat).getByRole("textbox", {
       name: "Message Thread remote",
     });
-    fireEvent.change(input, { target: { value: "ship the fix" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "ship the fix" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalled();
@@ -1572,19 +1574,21 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
-  it("swallows a bare Escape — closing the window is the OS chrome's job", () => {
+  it("swallows a bare Escape — closing the window is the OS chrome's job", async () => {
     const outerKeyDown = vi.fn();
-    render(
-      <div onKeyDown={outerKeyDown}>
-        <StarMapScreen
-          desktopApi={buildDesktopApi()}
-          localThreads={[]}
-          sessionKeys={{}}
-          onOpenLocalThread={() => undefined}
-          onFocusLocalInstance={() => undefined}
-        />
-      </div>,
-    );
+    await act(async () => {
+      render(
+        <div onKeyDown={outerKeyDown}>
+          <StarMapScreen
+            desktopApi={buildDesktopApi()}
+            localThreads={[]}
+            sessionKeys={{}}
+            onOpenLocalThread={() => undefined}
+            onFocusLocalInstance={() => undefined}
+          />
+        </div>,
+      );
+    });
     fireEvent.keyDown(screen.getByRole("region", { name: "Star Map" }), {
       key: "Escape",
     });
@@ -1595,16 +1599,18 @@ describe("StarMapScreen", () => {
     expect(screen.getByRole("region", { name: "Star Map" })).toBeTruthy();
   });
 
-  it("focuses the layer on mount so the camera keys work immediately", () => {
-    render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[]}
-        sessionKeys={{}}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
-    );
+  it("focuses the layer on mount so the camera keys work immediately", async () => {
+    await act(async () => {
+      render(
+        <StarMapScreen
+          desktopApi={buildDesktopApi()}
+          localThreads={[]}
+          sessionKeys={{}}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />,
+      );
+    });
     expect(document.activeElement).toBe(
       screen.getByRole("region", { name: "Star Map" }),
     );
@@ -2545,15 +2551,17 @@ describe("StarMapScreen", () => {
   it("does not claim an unfiltered empty map is a filter problem", async () => {
     // A fleet with nothing to show is a different state; blaming the
     // filters there would be a lie.
-    render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[]}
-        sessionKeys={{}}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
-    );
+    await act(async () => {
+      render(
+        <StarMapScreen
+          desktopApi={buildDesktopApi()}
+          localThreads={[]}
+          sessionKeys={{}}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />,
+      );
+    });
     expect(screen.queryByRole("status")).toBeNull();
   });
 

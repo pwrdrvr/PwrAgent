@@ -251,8 +251,10 @@ async function findReadyTextbox(options: { name: string | RegExp }) {
 async function typeAndSend(title: string, text: string) {
   const input = await findReadyTextbox( { name: `Message ${title}` });
   await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
-  fireEvent.change(input, { target: { value: text } });
-  fireEvent.keyDown(input, { key: "Enter" });
+  await act(async () => {
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
   return input as HTMLElement & { value: string };
 }
 

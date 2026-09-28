@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   PWRGIT_MCP_CONNECTION_ID,
@@ -96,7 +96,11 @@ describe("PwrGitConnectionPrompt", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open PwrGit" }));
+    const openButton = await screen.findByRole("button", { name: "Open PwrGit" });
+    await act(async () => {
+      fireEvent.click(openButton);
+      await openPwrGit.mock.results[0]?.value;
+    });
     expect(openPwrGit).toHaveBeenCalledOnce();
   });
 

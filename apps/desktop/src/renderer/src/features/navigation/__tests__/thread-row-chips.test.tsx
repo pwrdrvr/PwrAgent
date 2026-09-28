@@ -591,7 +591,7 @@ describe("ThreadRow chip flow", () => {
       const { container } = renderRow({ thread, onPrefetchPullRequests });
 
       fireEvent.mouseOver(container.querySelector(".pr-chip")!);
-      beginNativeDragInteraction();
+      act(() => beginNativeDragInteraction());
       vi.advanceTimersByTime(750);
 
       expect(onPrefetchPullRequests).not.toHaveBeenCalled();

@@ -8510,7 +8510,9 @@ describe("useThreadNavigation", () => {
     }));
     const api: DesktopApi = { getNavigationSelectedDetail, onAgentEvent: () => () => undefined };
     const { result } = renderHook(() => useThreadNavigation(api));
-    await expect(result.current.readThreadWorktreeAvailability(parent)).resolves.toBe(expected);
+    await act(async () => {
+      await expect(result.current.readThreadWorktreeAvailability(parent)).resolves.toBe(expected);
+    });
     expect(getNavigationSelectedDetail).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: { scope: "remote", instanceId: "owner" }, includeWorkspaceConfiguration: true,
     }));
@@ -12022,6 +12024,7 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     expect(result.current.browseMode).toBe("recents");
+    await waitFor(() => expect(result.current.loaded).toBe(true));
   });
 
   it("persists browse mode changes through the desktop bridge", async () => {
@@ -12045,6 +12048,8 @@ describe("useThreadNavigation", () => {
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
 
     act(() => {
       result.current.setBrowseMode("directories");

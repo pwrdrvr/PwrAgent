@@ -1114,7 +1114,10 @@ describe("TranscriptList", () => {
     });
 
     list.scrollTop = 120;
-    fireEvent.scroll(list);
+    await act(async () => {
+      fireEvent.scroll(list);
+      await secondLoad.mock.results[0]?.value;
+    });
     expect(secondLoad).toHaveBeenCalledTimes(1);
   });
 

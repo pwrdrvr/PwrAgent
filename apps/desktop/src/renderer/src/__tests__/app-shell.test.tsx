@@ -1486,11 +1486,12 @@ describe("App", () => {
     fireEvent.mouseEnter(
       within(relocatedMasthead).getByRole("button", { name: "New thread" }),
     );
-    fireEvent.click(
-      await within(relocatedMasthead).findByRole("menuitem", {
-        name: "Add a Project Directory…",
-      }),
-    );
+    const addProject = await within(relocatedMasthead).findByRole("menuitem", {
+      name: "Add a Project Directory…",
+    });
+    await act(async () => {
+      fireEvent.click(addProject);
+    });
 
     await waitFor(() => {
       expect(pickDirectoryFromDisk).toHaveBeenCalledTimes(1);
