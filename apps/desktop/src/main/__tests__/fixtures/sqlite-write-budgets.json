@@ -531,6 +531,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-activity-unchanged-observations": {
+    "commits": 200,
+    "note": "100 unchanged conflict observations after dispatch plus activity reads: 200 read-only transaction commits, zero write statements/rows/WAL bytes; 0 MB/day additional WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "pr-reference-identity-upgrade": {
     "commits": 1,
     "note": "100 detach references and 100 watches rekeyed in one upgrade transaction; runs once per profile, 0 MB/day recurring writes",

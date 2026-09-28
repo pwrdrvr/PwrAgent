@@ -1,6 +1,6 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
-import { summarizeThreadAgentChange } from "@pwragent/shared";
+import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { setBundledGitLfsAdvisory } from "../bundled-git-lfs-advisory";
@@ -248,6 +248,7 @@ import {
 } from "../state/recent-file-references-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
+  APP_SERVER_GET_PR_ACTIVITY_CHANNEL,
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
@@ -381,6 +382,7 @@ import {
   buildPrRepositoryKey,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
+import { PrActivityJournal, describePrRepairDecision } from "../pr-status/pr-activity";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -1201,6 +1203,8 @@ class PrStatusTokenBucket {
   private tokens = PR_STATUS_TOKEN_BUCKET_CAPACITY;
   private updatedAt = Date.now();
 
+  get availableTokens(): number { return Math.floor(this.tokens); }
+
   tryTake(now = Date.now()): boolean {
     const elapsedMs = Math.max(0, now - this.updatedAt);
     this.tokens = Math.min(
@@ -1324,6 +1328,7 @@ class DesktopAppServerService {
     Map<string, PrLookupSubscriber>
   >();
   private readonly pendingPrOverlayWrites = new Map<string, Promise<void>>();
+  private readonly prActivity = new PrActivityJournal();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
@@ -4399,7 +4404,7 @@ class DesktopAppServerService {
     lookupKey: string;
     lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
-  }): Promise<{ prs: PrSummary[]; fetchedAt: number; incomplete: boolean }> {
+  }): Promise<{ prs: PrSummary[]; statusPrs: PrSummary[]; fetchedAt: number; incomplete: boolean }> {
     // This timestamp is an observation-order token. Capture it before the
     // network request so an older slow response cannot outrank a newer one.
     const fetchedAt = this.nextPrObservationTimestamp();
@@ -4455,7 +4460,7 @@ class DesktopAppServerService {
       });
     }
 
-    return { prs, fetchedAt, incomplete };
+    return { prs, statusPrs, fetchedAt, incomplete };
   }
 
   private getPullRequestLookupSubscriberPreviousPrs(params: {
@@ -4564,8 +4569,16 @@ class DesktopAppServerService {
           && params.previousPrs.every(
             (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
           ),
+        {
+          prKeys: params.previousPrs.map(getPrStatusKey),
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
+        },
       );
       if (claim.skippedReason) {
+        this.prActivity.record({ category: "check", source: `thread lookup (${trigger})`,
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
+          prKeys: params.previousPrs.map(getPrStatusKey),
+          message: `Check deferred: ${claim.skippedReason}${claim.nextAllowedInMs !== undefined ? `; eligible in ${Math.ceil(claim.nextAllowedInMs / 1000)} seconds` : ""}` });
         if (trigger === "user") {
           logDebug("threadPullRequestsRefresh:skipped", {
             ...userPrRefreshLogPayload({
@@ -4608,13 +4621,23 @@ class DesktopAppServerService {
       }));
     }
     const promise = this.fetchPullRequestLookup(params)
-      .then(async ({ prs, fetchedAt, incomplete }) => {
+      .then(async ({ prs, statusPrs, fetchedAt, incomplete }) => {
         const publishResult = await this.persistPullRequestLookupSubscribers({
           lookupKey: params.lookupKey,
           prs,
           fetchedAt,
           incomplete,
         });
+        const canonical = this.canonicalizePrs(statusPrs);
+        if (canonical.length === 0) this.prActivity.record({
+          category: "check", source: `thread lookup (${trigger})`,
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)], prKeys: [],
+          message: incomplete ? "Partial check: no PR status returned" : "Checked: no PR found for this branch",
+        });
+        this.recordPrCheck(canonical, `thread lookup (${trigger})`, incomplete, [
+          buildThreadIdentityKey(params.backend, params.request.threadId),
+        ]);
+        await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
         if (trigger === "user") {
           const completedAt = Date.now();
           logDebug("threadPullRequestsRefresh:background-complete", {
@@ -4640,6 +4663,13 @@ class DesktopAppServerService {
         }
       })
       .catch((error) => {
+        this.prActivity.record({
+          category: "check",
+          source: `thread lookup (${trigger})`,
+          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
+          prKeys: params.previousPrs.map(getPrStatusKey),
+          message: "PR lookup failed; see application log for details",
+        });
         appServerLog.warn("background PR lookup refresh failed", {
           threadId: params.request.threadId,
           branch: params.request.branch.trim(),
@@ -4888,6 +4918,7 @@ class DesktopAppServerService {
     trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
     provider: string,
     terminalOnly: boolean,
+    activityContext?: { prKeys: string[]; threadKeys: string[] },
   ): PrLookupRefreshClaim {
     const now = Date.now();
     const minInterval =
@@ -4917,7 +4948,7 @@ class DesktopAppServerService {
         nextAllowedInMs: minInterval - ageMs,
       };
     }
-    if (trigger === "scheduled" && !this.prStatusTokenBucket.tryTake(now)) {
+    if (trigger === "scheduled" && !this.takePrPollingToken("scheduled thread lookup", activityContext?.prKeys, activityContext?.threadKeys)) {
       return { skippedReason: "scheduled-token-bucket" };
     }
 
@@ -5505,6 +5536,32 @@ class DesktopAppServerService {
     );
   }
 
+  private takePrPollingToken(source: string, prKeys: string[] = [], threadKeys: string[] = []): boolean {
+    const admitted = this.prStatusTokenBucket.tryTake();
+    this.prActivity.record({
+      category: "budget",
+      budget: "polling",
+      source,
+      prKeys,
+      threadKeys,
+      delta: admitted ? -1 : 0,
+      availableTokens: this.prStatusTokenBucket.availableTokens,
+      message: admitted ? "PR request admitted" : "PR request deferred: polling budget empty",
+    });
+    return admitted;
+  }
+
+  getPrActivity(): PrActivitySnapshot {
+    return {
+      ...this.prActivity.snapshot(),
+      monitoring: {
+        backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+        autoFixAllowed: this.prAutoDispatchAllowed,
+        repairBudgetPaused: this.prAutoDispatchBudgetPaused,
+      },
+    };
+  }
+
   async getPrAutoDispatchBudgetStatus(): Promise<PrAutoDispatchBudgetStatus> {
     // The renderer requests this while mounting, before a navigation snapshot
     // necessarily synchronizes the cached config. Reading bucket status applies
@@ -5629,7 +5686,13 @@ class DesktopAppServerService {
         ),
       // Admission pays for one GitHub batch or one GitLab MR read.
       // Additional GitLab REST reads consume their own shared token.
-      tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
+      onPollUnavailable: (targets, failed) => {
+        for (const target of targets) this.prActivity.record({
+          category: "check", source: "background poll", threadKeys: target.threadKeys, prKeys: [target.prKey],
+          message: failed ? "PR check failed; retry on next poll" : "No fresh status returned; provider may be unavailable or cooling down",
+        });
+      },
+      tryTakeToken: (targets = []) => this.takePrPollingToken("background poll", targets.map((t) => t.prKey), targets.flatMap((t) => t.threadKeys)),
       fetchPullRequests: async (refs) =>
         await this.fetchForgePullRequests(refs, false, true),
       fetchPullRequestsAfterReconnect: async (refs) =>
@@ -5892,6 +5955,28 @@ class DesktopAppServerService {
     return [...byKey.values()];
   }
 
+  private recordPrCheck(
+    prs: PrSummary[],
+    source: string,
+    incomplete = false,
+    requestingThreadKeys: string[] = [],
+  ): void {
+    for (const pr of prs) {
+      const prKey = getPrStatusKey(pr);
+      const threadKeys = [...new Set([
+        ...(this.primaryPrThreadsByKey.get(prKey) ?? []),
+        ...requestingThreadKeys,
+      ])];
+      this.prActivity.record({
+        category: "check",
+        source,
+        threadKeys,
+        prKeys: [prKey],
+        message: `${incomplete ? "Partial check" : "Checked"}: merge ${pr.mergeState ?? "unknown"}, checks ${pr.checkState ?? "unknown"}`,
+      });
+    }
+  }
+
   private async handlePrAutoDispatchSnapshots(
     prs: PrSummary[],
     observedAt: number,
@@ -5915,7 +6000,29 @@ class DesktopAppServerService {
             operatorInitiated,
           })
         : [];
+      if (!winner) {
+        this.prActivity.record({
+          category: "repair",
+          source: "Auto-fix",
+          prKeys: [prKey],
+          threadKeys: [...(this.primaryPrThreadsByKey.get(prKey) ?? [])],
+          message: "Not scheduled: no eligible thread owns Auto-fix for this PR",
+        });
+      }
       for (const outcome of outcomes) {
+        const budgetBlocked = outcome.status === "gate-off" && this.prAutoDispatchBudgetPaused;
+        const reason = outcome.status === "gate-off"
+          ? budgetBlocked ? "Repair blocked: profile budget paused"
+            : !this.backgroundPrPollingEnabled ? "Background polling is off" : "Auto-fix is disabled globally"
+          : describePrRepairDecision(outcome.status);
+        this.prActivity.record({
+          category: budgetBlocked ? "budget" : "repair",
+          source: "Auto-fix",
+          prKeys: [prKey],
+          threadKeys: [outcome.threadKey],
+          message: reason,
+          ...(budgetBlocked ? { budget: "repair" as const, delta: 0 } : {}),
+        });
         logPrAutoDispatchOutcome(appServerLog, prKey, outcome);
       }
       if (this.backgroundPrPollingEnabled) {
@@ -6122,7 +6229,9 @@ class DesktopAppServerService {
     });
 
     const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
-    await this.handlePrAutoDispatchSnapshots(merged, fetchedAt);
+    const canonical = this.canonicalizePrs(merged);
+    this.recordPrCheck(canonical, "background poll");
+    await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
     if (changed.length === 0) {
       return [];
     }
@@ -6161,7 +6270,7 @@ class DesktopAppServerService {
     if (refsByPrKey.size === 0) {
       return new Set();
     }
-    if (!this.prStatusTokenBucket.tryTake()) {
+    if (!this.takePrPollingToken("recovery refresh")) {
       throw new Error("PR status refresh budget is temporarily exhausted");
     }
     const refreshed = await this.fetchForgePullRequests(
@@ -7734,7 +7843,7 @@ class DesktopAppServerService {
         // while the app runs and the very next poll must respect it.
         isProviderEnabled: (provider) =>
           getDesktopSettingsService().isForgeEnabled(provider),
-      }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.prStatusTokenBucket.tryTake() }));
+      }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request") }));
     }
     return this.prFetcher;
   }
@@ -7750,6 +7859,7 @@ class DesktopAppServerService {
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.isPrAutoDispatchAvailable(),
         getBudgetConfig: () => this.prAutoDispatchBudgetConfig,
+        onActivity: (event) => this.prActivity.record(event),
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
@@ -8072,6 +8182,8 @@ export function registerAppServerIpcHandlers(): void {
       ),
   });
 
+  ipcMain.removeHandler(APP_SERVER_GET_PR_ACTIVITY_CHANNEL);
+  ipcMain.handle(APP_SERVER_GET_PR_ACTIVITY_CHANNEL, () => appServerService.getPrActivity());
   ipcMain.removeHandler(APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,

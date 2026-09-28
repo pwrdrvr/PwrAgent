@@ -5342,6 +5342,29 @@ describe("app server ipc", () => {
     });
   });
 
+  it.each(["user", "scheduled", "post-turn"] as const)("evaluates Auto-fix immediately after a %s lookup discovers a conflict", async (trigger) => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, APP_SERVER_GET_PR_ACTIVITY_CHANNEL } = await import("../../shared/ipc");
+    const conflict = githubPr({ number: 2359, org: "pwrdrvr", repo: "PwrAgent", state: "passing",
+      headSha: "a".repeat(40), mergeState: "conflicting", url: "https://github.com/pwrdrvr/PwrAgent/pull/2359" });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-lookup" } as never);
+    detectPullRequestsForThread.mockResolvedValueOnce([conflict]);
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    // Wait for settings initialization, without running a polling tick.
+    const inspect = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0].inspect;
+    await vi.waitFor(async () => expect(await inspect?.({ backend: "codex", threadId: "thread-lookup" }))
+      .toMatchObject({ autoFixAllowed: true, backgroundPollingEnabled: true }));
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, {
+      backend: "codex", threadId: "thread-lookup", trigger, branch: "feature", directoryPaths: ["/repo"],
+    });
+    await vi.waitFor(() => expect(scheduleThreadPrAutoDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "thread-lookup", pending: expect.objectContaining({ eventKinds: ["merge-conflict"] }),
+      allowCancelledRearm: false,
+    })));
+    const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({});
+    expect(activity).toMatchObject({ events: expect.arrayContaining([expect.objectContaining({ category: "check", source: `thread lookup (${trigger})` })]) });
+  });
+
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {

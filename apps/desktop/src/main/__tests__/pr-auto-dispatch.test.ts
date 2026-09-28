@@ -113,6 +113,7 @@ function createHarness(options: {
   let refreshedPr: PrSummary | undefined;
   const pendingUpdates: Array<ThreadPrAutoDispatchPending | null> = [];
   const budgetStatuses: PrAutoDispatchBudgetStatus[] = [];
+  const onActivity = vi.fn();
   const submitTurnIfIdle = vi.fn(async (_request: {
     input: AppServerTurnInputItem[];
   }) => busy
@@ -120,6 +121,7 @@ function createHarness(options: {
     : { status: "started" as const, turnId: "turn-auto-1" });
   const coordinator = new PrAutoDispatchCoordinator({
     store: options.targetStore ?? store,
+    onActivity,
     registry: { submitTurnIfIdle },
     getCurrentPr: () => currentPr,
     refreshPendingPrs: async (pending) => {
@@ -143,6 +145,7 @@ function createHarness(options: {
   return {
     budgetConfig,
     budgetStatuses,
+    onActivity,
     coordinator,
     pendingUpdates,
     setBusy: (value: boolean) => {
@@ -733,6 +736,22 @@ describe("PrAutoDispatchCoordinator", () => {
       threadId: "thread-1",
       prKey: buildPullRequestStatusKey(pr()),
     })).toBe(1);
+  });
+
+  it("refunds repeated busy retries even with only one repair token", async () => {
+    const harness = createHarness({ busy: true, budget: { capacity: 1, refillPerMinute: 0 } });
+    await observe(harness.coordinator);
+    for (let retry = 0; retry < 8; retry++) {
+      await runCountdown();
+      expect(await store.getPrAutoDispatchBudgetStatus({ config: harness.budgetConfig, now: clock }))
+        .toMatchObject({ availableTokens: 1, paused: false });
+    }
+    expect(harness.onActivity.mock.calls.filter(([event]) => event.delta === -1)).toHaveLength(8);
+    expect(harness.onActivity.mock.calls.filter(([event]) => event.delta === 1)).toHaveLength(8);
+    harness.setBusy(false);
+    await runCountdown();
+    expect(await store.getThreadPrAutoDispatchAttemptCount({ backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()) })).toBe(1);
+    expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({ message: "Repair started (attempt 1/2)" }));
   });
 
   it("uses the profile budget capacity, refills it over time, and leaves an unchanged blocked fingerprint terminal", async () => {

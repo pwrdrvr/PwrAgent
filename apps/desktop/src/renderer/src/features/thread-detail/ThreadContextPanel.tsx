@@ -31,6 +31,7 @@ import {
   AutomationsIcon,
   EditsIcon,
   InfoIcon,
+  HistoryIcon,
   PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
@@ -45,6 +46,7 @@ import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
+import { PrActivityPanel } from "./context-panels/PrActivityPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
@@ -84,6 +86,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "actions", label: "Actions", Icon: TerminalIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
+  { id: "pr-activity", label: "PR activity", Icon: HistoryIcon },
   { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
   { id: "projects", label: "Linked projects", Icon: ProjectsIcon },
   { id: "providers", label: "AI provider info", Icon: ServerIcon, bottom: true },
@@ -716,6 +719,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
   function renderActivePanel() {
     switch (activeTab) {
+      case "pr-activity":
+        return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
       case "info":
         if (!props.thread) return null;
         return (

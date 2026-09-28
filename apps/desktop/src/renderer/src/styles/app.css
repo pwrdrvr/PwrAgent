@@ -37968,3 +37968,72 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__seen {
   color: var(--accent-bright);
 }
+
+/* PR activity uses the context rail's neutral surfaces and compact controls. */
+.pr-activity__filters {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.pr-activity__filters button {
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.pr-activity__filters button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.pr-activity__filters button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.pr-activity__help,
+.pr-activity__meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pr-activity__budgets {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.pr-activity__budgets dd { margin: 0; }
+
+.pr-activity__events {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-activity__events li {
+  padding: 10px 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pr-activity__events p { margin: 5px 0; }
+
+.pr-activity__meta { display: flex; justify-content: space-between; gap: 8px; }
+
+.pr-activity__identity,
+.pr-activity__token {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pr-activity__status { font-size: 12px; color: var(--text-secondary); }

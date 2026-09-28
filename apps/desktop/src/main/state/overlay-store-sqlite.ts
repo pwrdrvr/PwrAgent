@@ -6156,8 +6156,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const incident = this.readPrAutoDispatchIncident(params);
       if (!incident) return;
       const resolved = new Set(params.resolvedKinds);
-      const activeKinds = parsePrAutoDispatchKinds(incident.active_kinds)
-        .filter((kind) => !resolved.has(kind));
+      const previousKinds = parsePrAutoDispatchKinds(incident.active_kinds);
+      const activeKinds = previousKinds.filter((kind) => !resolved.has(kind));
+      // A fresh check may resolve a different kind than this incident owns.
+      // Repeated lookup/poll observations must not rewrite an unchanged incident.
+      if (activeKinds.length > 0 && activeKinds.length === previousKinds.length) return;
       if (activeKinds.length === 0) {
         this.stateDb.raw
           .prepare(

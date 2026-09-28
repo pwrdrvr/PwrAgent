@@ -6,6 +6,7 @@ import type {
   PrAutoDispatchBudgetConfig,
   PrAutoDispatchBudgetStatus,
   PrSummary,
+  PrActivityEvent,
   ThreadOverlayState,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
@@ -192,6 +193,7 @@ export class PrAutoDispatchCoordinator {
   constructor(
     private readonly options: {
       store: PrAutoDispatchStore;
+      onActivity?: (event: Omit<PrActivityEvent, "id" | "occurredAt">) => void;
       registry: PrAutoDispatchRegistry;
       isBackgroundPollingEnabled?: () => boolean;
       isPrAttached?: (params: {
@@ -436,6 +438,13 @@ export class PrAutoDispatchCoordinator {
     const record = await this.options.store.getThreadPrAutoDispatchPending(identity);
     if (!record || record.pending.fingerprint !== fingerprint) return;
 
+    const activity = (message: string, budget?: { delta: number; availableTokens?: number }): void => {
+      this.options.onActivity?.({
+        category: budget ? "budget" : "repair", source: "Auto-fix",
+        threadKeys: [this.threadKey(identity)], prKeys: [record.pending.prKey], message,
+        ...(budget ? { budget: "repair" as const, ...budget } : {}),
+      });
+    };
     const currentPr = this.options.getCurrentPr?.(record.pending.prKey);
     const currentEvent = currentPr
       ? buildPrAutoDispatchEvent(currentPr)
@@ -455,6 +464,7 @@ export class PrAutoDispatchCoordinator {
         now: this.now(),
         status: "deferred",
       });
+      activity("Waiting for running checks to finish");
       await this.notifyPending(identity, null);
       return;
     }
@@ -469,6 +479,7 @@ export class PrAutoDispatchCoordinator {
         now: this.now(),
         status: "superseded",
       });
+      activity("Cancelled: PR detached, resolved, or head changed");
       await this.notifyPending(identity, null);
       return;
     }
@@ -483,6 +494,7 @@ export class PrAutoDispatchCoordinator {
       ownerId: this.ownerId,
     });
     if (begin.status !== "ready") {
+      activity(`Repair not started: ${begin.status}`);
       if (begin.status === "disabled") {
         await this.options.store.cancelThreadPrAutoDispatch({
           ...identity,
@@ -507,6 +519,11 @@ export class PrAutoDispatchCoordinator {
       fingerprint,
       now: this.now(),
       ownerId: this.ownerId,
+    });
+    activity(reservation.status === "reserved" ? "Reserved one repair token"
+      : `Repair blocked: budget ${reservation.status}`, {
+      delta: reservation.status === "reserved" ? -1 : 0,
+      availableTokens: reservation.budget.availableTokens,
     });
     if (reservation.budget.paused) {
       await this.notifyBudgetStatus(reservation.budget);
@@ -554,9 +571,12 @@ export class PrAutoDispatchCoordinator {
         },
       });
       if (submission.status === "busy") {
-        await this.restoreAfterBusy(identity, fingerprint, now);
+        if (await this.restoreAfterBusy(identity, fingerprint, now)) {
+          activity("Thread busy: refunded repair token; retry in 30 seconds", { delta: 1 });
+        }
         return;
       }
+      activity(`Repair started (attempt ${begin.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT})`);
       const completion = await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
         budgetConfig: this.budgetConfig(),
@@ -579,6 +599,8 @@ export class PrAutoDispatchCoordinator {
         status: "failed",
         now: this.now(),
       });
+      activity(completion ? "Repair submission failed: token refunded" : "Repair submission failed; claim ownership changed",
+        completion ? { delta: 1, availableTokens: completion.budget.availableTokens } : undefined);
       if (completion?.budget.paused) {
         await this.notifyBudgetStatus(completion.budget);
       }
@@ -592,7 +614,7 @@ export class PrAutoDispatchCoordinator {
     identity: { backend: AppServerBackendKind; threadId: string },
     fingerprint: string,
     now: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pending = await this.options.store.restoreThreadPrAutoDispatchAfterBusy({
       ...identity,
       budgetConfig: this.budgetConfig(),
@@ -601,9 +623,10 @@ export class PrAutoDispatchCoordinator {
       scheduledAt: now + PR_AUTO_DISPATCH_DELAY_MS,
       now,
     });
-    if (!pending) return;
+    if (!pending) return false;
     await this.notifyPending(identity, pending);
     this.arm(identity, pending);
+    return true;
   }
 
   private async resumeFromStore(): Promise<void> {

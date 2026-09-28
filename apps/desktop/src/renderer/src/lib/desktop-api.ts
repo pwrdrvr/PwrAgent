@@ -1,3 +1,4 @@
+import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -798,6 +799,7 @@ export type DesktopApi = {
   listSkills?: (
     request?: AppServerListSkillsRequest
   ) => Promise<AppServerListSkillsResponse>;
+  getPrActivity?: () => Promise<PrActivitySnapshot>;
   getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
   analyzeFocusedDiff?: (
