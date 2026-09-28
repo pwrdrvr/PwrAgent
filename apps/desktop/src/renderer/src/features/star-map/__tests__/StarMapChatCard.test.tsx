@@ -1491,7 +1491,9 @@ describe("StarMapChatCard slash commands", () => {
     expect(
       screen.queryByRole("dialog", { name: "Start review for Local work" }),
     ).toBeNull();
-    resolveStart?.();
+    await act(async () => {
+      resolveStart?.();
+    });
   });
 
   it("closes review setup without disabling the card's terminal control", async () => {

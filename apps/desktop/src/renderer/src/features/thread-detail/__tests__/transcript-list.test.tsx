@@ -929,7 +929,7 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("loads one older page when the operator scrolls near the top", () => {
+  it("loads one older page when the operator scrolls near the top", async () => {
     const loadOlder = vi.fn(async () => undefined);
 
     render(
@@ -960,7 +960,9 @@ describe("TranscriptList", () => {
     expect(loadOlder).not.toHaveBeenCalled();
 
     list.scrollTop = 120;
-    fireEvent.scroll(list);
+    await act(async () => {
+      fireEvent.scroll(list);
+    });
     expect(loadOlder).toHaveBeenCalledTimes(1);
   });
 

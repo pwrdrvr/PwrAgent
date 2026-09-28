@@ -438,8 +438,12 @@ describe("useStarMapThreads", () => {
     });
 
     let settled = false;
-    const refresh = result.current.refreshInstance("pwr_a").then(() => {
-      settled = true;
+    let refresh!: Promise<void>;
+    await act(async () => {
+      refresh = result.current.refreshInstance("pwr_a").then(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await Promise.resolve();
     expect(settled).toBe(false);

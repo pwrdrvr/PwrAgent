@@ -77,7 +77,10 @@ describe("PwrGitConnectionPrompt", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Get PwrGit" }));
+    const download = await screen.findByRole("button", { name: "Get PwrGit" });
+    await act(async () => {
+      fireEvent.click(download);
+    });
     expect(openPwrGitDownload).toHaveBeenCalledOnce();
   });
 

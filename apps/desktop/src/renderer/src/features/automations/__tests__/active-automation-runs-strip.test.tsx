@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AutomationDetail,
@@ -59,19 +59,22 @@ afterEach(() => {
 
 describe("ActiveAutomationRunsStrip", () => {
   it("stays out of the way when every run has completed", async () => {
-    const { container } = render(
-      <ActiveAutomationRunsStrip
-        desktopApi={apiWith([
-          automation({
-            id: "a1",
-            name: "Search Bots",
-            lastRunStatus: "completed",
-            lastRunAt: 1_000,
-          }),
-        ])}
-        thread={thread}
-      />,
-    );
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <ActiveAutomationRunsStrip
+          desktopApi={apiWith([
+            automation({
+              id: "a1",
+              name: "Search Bots",
+              lastRunStatus: "completed",
+              lastRunAt: 1_000,
+            }),
+          ])}
+          thread={thread}
+        />,
+      ));
+    });
 
     // A finished run is history — it belongs in the rail and the Automations
     // screen, not stacked above the composer.

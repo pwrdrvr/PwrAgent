@@ -44,7 +44,9 @@ describe("Mermaid transcript rendering", () => {
     expect(screen.getByRole("button", { name: "Expand Mermaid diagram" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show source" }));
     expect(screen.getByLabelText("Diagram source")).toHaveTextContent("A --> B");
-    fireEvent.click(screen.getByRole("button", { name: "Copy source" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy source" }));
+    });
     expect(api.copyText).toHaveBeenCalledWith("flowchart LR\nA --> B\n");
   });
 
