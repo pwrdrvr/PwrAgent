@@ -1,4 +1,5 @@
 import type { MessagingToolUpdateMode } from "./messaging";
+import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
@@ -990,6 +991,8 @@ export type DesktopFederationSettingsSnapshot = {
   compressionEnabled: DesktopSettingsValue<boolean>;
   allowRemoteShells: DesktopSettingsValue<boolean>;
   allowFilePush: DesktopSettingsValue<boolean>;
+  allowFilePull: DesktopSettingsValue<boolean>;
+  allowFilePullOutsideThreadDirectories: DesktopSettingsValue<boolean>;
   filePushDirectory: DesktopSettingsValue<string>;
   publicUrl: DesktopSettingsValue<string>;
   gatewayUrl: DesktopSettingsValue<string>;
@@ -1453,6 +1456,8 @@ export type DesktopSettingsConfigPatch = {
     compressionEnabled?: boolean;
     allowRemoteShells?: boolean;
     allowFilePush?: boolean;
+    allowFilePull?: boolean;
+    allowFilePullOutsideThreadDirectories?: boolean;
     filePushDirectory?: string;
     publicUrl?: string;
     gatewayUrl?: string;
@@ -2110,6 +2115,8 @@ export type OpenPathResponse = {
 
 export type ReadMarkdownFileRequest = {
   path: string;
+  federationTarget?: FederationTarget;
+  thread?: { backend: AppServerBackendKind; threadId: string };
 };
 
 export type ReadMarkdownFileResponse = {
@@ -2126,6 +2133,8 @@ export type MarkdownFileViewerFile = {
 };
 
 export type MarkdownFileViewerContext = {
+  federationTarget?: FederationTarget;
+  thread?: ReadMarkdownFileRequest["thread"];
   key: string;
   title: string;
   threadTitle?: string;

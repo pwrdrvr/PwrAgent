@@ -444,6 +444,105 @@ it("finishes one click across a clamped owner's pages instead of returning the b
   queries.dispose();
 });
 
+it("retains a short continuation's bounded demand across release, growth and filtering", async () => {
+  let serve = owner("initial", 20);
+  const read = vi.fn(async (request: NavigationQueryRequest) => serve(request));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const demand = new Map([["pins", request()]]);
+  const loaded = () => queries.getSnapshot().resources.get("pins")?.state.page?.directories;
+  try {
+    queries.setDemand(demand);
+    await vi.waitFor(() => expect(loaded()).toHaveLength(10));
+    await queries.loadMore("pins");
+    expect(loaded()).toHaveLength(20);
+    queries.setDemand(new Map());
+    const releasedReads = read.mock.calls.length;
+    serve = owner("grown", 1000);
+    await queries.refresh();
+    expect(read).toHaveBeenCalledTimes(releasedReads);
+    queries.setDemand(demand);
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("pins")?.loading).toBe(false));
+    expect(loaded()).toHaveLength(110);
+    expect(queries.getSnapshot().resources.get("pins")?.state.page?.complete).toBe(false);
+
+    // A different filter has independent demand, while returning restores
+    // the operator's earlier expansion. Explicit restart resets that demand.
+    queries.setDemand(new Map([["pins", request("other")]]));
+    await vi.waitFor(() => expect(loaded()).toHaveLength(10));
+    queries.setDemand(demand);
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("pins")?.loading).toBe(false));
+    expect(loaded()).toHaveLength(110);
+    await queries.restart("pins");
+    expect(loaded()).toHaveLength(10);
+    await queries.refresh();
+    expect(loaded()).toHaveLength(10);
+  } finally { queries.dispose(); }
+});
+
+it.each([10, 20, 30])("commits a failed refresh only after restoring its displayed range (failure at %s)", async (failureAt) => {
+  let serve = owner("initial", 20);
+  const read = vi.fn(async (request: NavigationQueryRequest) => serve(request));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const state = () => queries.getSnapshot().resources.get("pins")!.state;
+  try {
+    queries.setDemand(new Map([["pins", request()]]));
+    await vi.waitFor(() => expect(state().page?.directories).toHaveLength(10));
+    await queries.loadMore("pins");
+    const baseline = state().page;
+    expect(baseline?.directories).toHaveLength(20);
+    for (const revision of ["fresh", "newer"]) {
+      serve = async (request) => {
+        if (Number(request.cursor?.split(":")[1] ?? 0) >= failureAt) throw new Error("Extension unavailable");
+        const next = await owner(revision, 100)({ ...request, pageSize: 10 });
+        return { ...next, directories: next.directories?.map((directory) => ({ ...directory,
+          key: `${revision}:${directory.key}`, label: `${revision} label ${directory.key}`,
+        })) };
+      };
+      queries.invalidate();
+      await queries.refresh();
+      expect(state().error).toBe("Extension unavailable");
+      if (failureAt < 20) {
+        // An incomplete restoration must not shrink the displayed range.
+        expect(state().page).toBe(baseline);
+      } else {
+        // Failure while admitting extra rows must not discard fresh
+        // membership/metadata, even when the next refresh fails there too.
+        expect(state().page?.countsRevision).toBe(revision);
+        expect(state().page?.directories).toEqual(directoryRows(0, failureAt).map((directory) => ({ ...directory,
+          key: `${revision}:${directory.key}`, label: `${revision} label ${directory.key}`,
+        })));
+        expect(state().page?.nextCursor).toBe(`${revision}:${failureAt}`);
+      }
+    }
+  } finally { queries.dispose(); }
+});
+
+it.each(["reads", "time"] as const)("bounds newly admitted growth on refresh by %s while restoring existing rows", async (budget) => {
+  let grow = false;
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const serve = owner("initial", 20);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (!grow) return serve(request);
+    // Tiny transport pages must restore the existing 20 even when that
+    // consumes the extension budget; they must not then scan to capacity.
+    if (budget === "time") now += 10_000;
+    return owner("grown", 1000)({ ...request, pageSize: 1 });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["pins", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("pins")?.loading).toBe(false));
+    await queries.loadMore("pins");
+    grow = true;
+    read.mockClear();
+    queries.invalidate();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("pins")?.state.page?.directories).toHaveLength(20);
+    expect(read).toHaveBeenCalledTimes(20);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
 it("halves an oversized page instead of failing the same way on every press", async () => {
   // The owner clamps a page to its own copy of the byte budget; a remote page
   // is then stamped with federation metadata on every row it served, so it can

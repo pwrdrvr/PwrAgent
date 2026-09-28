@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
+import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
@@ -470,6 +471,24 @@ describe("ThreadMarkdown", () => {
     fireEvent.click(link);
 
     expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+    expect(openApplication).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const thread = { backend: "codex" as const, threadId: "owner-thread" };
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const readMarkdownFile = vi.fn(async () => ({ path: "/remote/report.md", ...(error ? { error } : { content: "# Remote report" }) }));
+    render(<ThreadMarkdown
+      desktopApi={scopeDesktopApiToFederationTarget({ readMarkdownFile, openApplication }, federationTarget)}
+      fileViewerContext={{ key: "owner-thread", title: "Files", thread }}
+      text="Read [the report](/remote/report.md)."
+    />);
+    fireEvent.click(screen.getByRole("link", { name: "the report" }));
+    expect(await screen.findByRole("dialog", { name: "Markdown document: the report" })).toBeInTheDocument();
+    if (error) expect(await screen.findByText(error)).toBeInTheDocument();
+    else expect(await screen.findByRole("heading", { name: "Remote report" })).toBeInTheDocument();
+    expect(readMarkdownFile).toHaveBeenCalledWith({ path: "/remote/report.md", thread, federationTarget });
     expect(openApplication).not.toHaveBeenCalled();
   });
 

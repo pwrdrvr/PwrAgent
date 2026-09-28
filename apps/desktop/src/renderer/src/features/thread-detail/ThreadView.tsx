@@ -1846,6 +1846,7 @@ export function ThreadView(props: ThreadViewProps) {
     return {
       key: selectedThreadKey,
       title: `Files - ${selectedThread.title}`,
+      thread: { backend: selectedThread.source, threadId: selectedThread.id },
       threadTitle: selectedThread.title,
       ...(projectPath ? { projectPath } : {}),
     };

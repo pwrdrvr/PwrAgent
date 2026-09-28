@@ -49,6 +49,8 @@ type Resource = {
   invalidated: boolean;
   released: boolean;
   anchor?: NavigationQueryAnchor;
+  /** Explicit continuation demand survives a short final page and later growth. */
+  expandedRows?: number;
 };
 
 /** Semantic demand ignores object insertion order and identity-set ordering. */
@@ -70,7 +72,7 @@ export class NavigationWindowQueries {
   private readonly resources = new Map<string, Resource>();
   // Released transport leases need not discard the view. Keep recently used
   // ranges window-local, sharing the same byte budget as active resources.
-  private readonly retained = new Map<string, { state: NavigationPageState; anchor?: NavigationQueryAnchor; bytes: number }>();
+  private readonly retained = new Map<string, { state: NavigationPageState; anchor?: NavigationQueryAnchor; expandedRows?: number; bytes: number }>();
   private readonly listeners = new Set<() => void>();
   private visible = true;
   private disposed = false;
@@ -135,7 +137,7 @@ export class NavigationWindowQueries {
         if (resource.value.state.page) {
           const key = this.retainedKey(id, resource.requestKey);
           this.retained.delete(key);
-          this.retained.set(key, { state: resource.value.state, anchor: resource.anchor,
+          this.retained.set(key, { state: resource.value.state, anchor: resource.anchor, expandedRows: resource.expandedRows,
             bytes: new TextEncoder().encode(JSON.stringify(resource.value.state.page)).byteLength });
         }
         this.release(resource);
@@ -155,6 +157,7 @@ export class NavigationWindowQueries {
         value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
           loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
+        expandedRows: retained?.expandedRows,
       };
       this.resources.set(id, resource);
       added.push(resource);
@@ -403,7 +406,10 @@ export class NavigationWindowQueries {
         };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
-        const wanted = explicitAnchor || fromStart ? 0 : size(started.page) + (continuation ? LOAD_MORE_ROWS : 0);
+        const restoring = explicitAnchor || fromStart ? 0 : size(started.page);
+        if (explicitAnchor || fromStart) resource.expandedRows = undefined;
+        if (continuation) resource.expandedRows = restoring + LOAD_MORE_ROWS;
+        const wanted = Math.max(restoring, resource.expandedRows ?? 0);
         // A cursor read serves rows this window has already committed to: the
         // block an explicit click asked for, or the range a refresh must
         // restore. Neither is paced by the demand page size that bounds a
@@ -443,12 +449,11 @@ export class NavigationWindowQueries {
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
         assertRetained(next);
         let extensions = 0;
-        // A range rebuild reads until it has restored everything the window
-        // displays; cutting it short would shrink the list under the
-        // operator. A continuation reads until it has delivered its block,
-        // and gives up on reads or on time, whichever comes first.
+        // Restore displayed rows before applying continuation budgets. Spare
+        // capacity from an earlier Load more admits new rows under those same
+        // budgets; a short final page does not revoke the operator's demand.
         while (next.page?.nextCursor && size(next.page) < wanted
-          && (!pageCursor || (extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
+          && (size(next.page) < restoring || (extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
           const nextCursor = next.page.nextCursor;
           const before = size(next.page);
           try {
@@ -459,12 +464,12 @@ export class NavigationWindowQueries {
             assertRetained(extended);
             next = extended;
           } catch (error) {
-            // A rebuild owes the window every row it already displays, so a
-            // failed extension discards the partial range. A continuation
-            // owes it only the requested block: commit the rows this click
-            // did deliver, then report what stopped it. A silent stop would
-            // leave the button looking inert at the retained-page budget.
-            if (!pageCursor) throw error;
+            if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
+            // Discard a rebuild only while it still owes displayed rows.
+            // Once restored, commit refreshed membership and metadata plus
+            // any growth delivered before the failure. Continuations also
+            // retain their progress; both paths still report the error.
+            if (!pageCursor && size(next.page) < restoring) throw error;
             resource.value = { ...resource.value, state: next, restoredFromCache: false };
             throw error;
           }

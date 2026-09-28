@@ -107,6 +107,8 @@ export function FederationSettings(props: FederationSettingsProps) {
     compressionEnabled: federation.compressionEnabled.value,
     allowRemoteShells: federation.allowRemoteShells.value,
     allowFilePush: federation.allowFilePush.value,
+    allowFilePull: federation.allowFilePull.value,
+    allowFilePullOutsideThreadDirectories: federation.allowFilePullOutsideThreadDirectories.value,
     filePushDirectory: federation.filePushDirectory.value,
     instanceNotes: federation.instanceNotes.value,
     listenHost: federation.listenHost.value,
@@ -472,6 +474,8 @@ export function FederationSettings(props: FederationSettingsProps) {
         compressionEnabled,
         allowRemoteShells: configuration.values.allowRemoteShells,
         allowFilePush: configuration.values.allowFilePush,
+        allowFilePull: configuration.values.allowFilePull,
+        allowFilePullOutsideThreadDirectories: configuration.values.allowFilePullOutsideThreadDirectories,
         filePushDirectory: configuration.values.filePushDirectory,
         instanceLabel,
         instanceNotes,
@@ -861,6 +865,30 @@ export function FederationSettings(props: FederationSettingsProps) {
                 disabled={props.saving}
                 placeholder="Downloads (default)"
                 onChange={(event) => configuration.set("filePushDirectory", event.target.value)}
+              />
+            }
+          />
+          <SettingsField
+            label="Allow file pull"
+            sub="Let enrolled peers read files from this machine in remote thread viewers. Off by default; limited to the thread’s directories when enabled."
+            control={
+              <SettingsSwitch
+                label="Allow file pull"
+                checked={configuration.values.allowFilePull}
+                disabled={props.saving}
+                onChange={(value) => configuration.set("allowFilePull", value)}
+              />
+            }
+          />
+          <SettingsField
+            label="Allow file pull outside thread directories"
+            sub="Allow enrolled peers to read arbitrary files accessible to PwrAgent on this machine. Off by default, even when file pull is enabled."
+            control={
+              <SettingsSwitch
+                label="Allow file pull outside thread directories"
+                checked={configuration.values.allowFilePullOutsideThreadDirectories}
+                disabled={props.saving || !configuration.values.allowFilePull}
+                onChange={(value) => configuration.set("allowFilePullOutsideThreadDirectories", value)}
               />
             }
           />
@@ -1880,6 +1908,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
   file_push: "file push protocol",
+  file_pull: "File pull",
   event_subscriptions: "stream explicitly subscribed events",
   turn_input_blobs: "transfer turn attachments",
   // Transport negotiation is informational, not a remote action.

@@ -123,8 +123,17 @@ describe("scopeDesktopApiToFederationTarget", () => {
     expect(scopedApi?.openPwrGitDownload).toBeUndefined();
     expect(scopedApi?.openPath).toBeUndefined();
     expect(scopedApi?.revealPath).toBeUndefined();
-    expect(scopedApi?.readMarkdownFile).toBeUndefined();
-    expect(scopedApi?.openMarkdownFileViewer).toBeUndefined();
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
+    await scopedApi?.readMarkdownFile?.({ path: "/remote/report.md", thread, federationTarget: { scope: "local" } });
+    expect(desktopApi.readMarkdownFile).toHaveBeenCalledWith({ path: "/remote/report.md", thread, federationTarget });
+    await scopedApi?.openMarkdownFileViewer?.({
+      context: { key: "thread-1", title: "Files", thread },
+      file: { path: "/remote/report.md", label: "Report" },
+    });
+    expect(desktopApi.openMarkdownFileViewer).toHaveBeenCalledWith({
+      context: { key: "remote:remote-instance:thread-1", title: "Files", thread, federationTarget },
+      file: { path: "/remote/report.md", label: "Report" },
+    });
     expect(scopedApi?.readMarkdownFileViewerSnapshot).toBeUndefined();
     expect(scopedApi?.onMarkdownFileViewerSnapshotChanged).toBeUndefined();
   });
