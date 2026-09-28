@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createServer, type Socket } from "node:net";
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
@@ -10,6 +12,8 @@ import {
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS } from "../mcp-connections/mcp-connection-timeouts";
 import {
   McpConnectionGatewayService,
 } from "../mcp-connections/mcp-connection-gateway-service";
@@ -36,6 +40,73 @@ function createSettings() {
 }
 
 describe("MCP connection owner broker", () => {
+  it.each(["interrupt", "deadline"])("closes stalled registration on gateway %s", async (reason) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-cancel-"));
+    const socketPath = process.platform === "win32"
+      ? `\\\\.\\pipe\\pwragent-mcp-cancel-${randomUUID()}`
+      : path.join(directory, "broker.sock");
+    const stateDb = openInMemoryStateDb({ profileName: "dev" });
+    const store = new AppRuntimeInstanceStore(stateDb);
+    const discovery = new McpConnectionBrokerDiscovery({ filePath: path.join(directory, "broker.json") });
+    const lease = (instanceId: string, processId: number) => new RuntimeLeaseManager({
+      cwd: directory, instanceId, processId, profileName: "dev", runtimeIdentityIsAlive: () => true, store,
+    });
+    const ownerLease = lease("owner", 101);
+    ownerLease.acquire("mcp_connections");
+    const viewer = new McpConnectionGatewayService({
+      brokerDiscovery: discovery, leaseManager: lease("viewer", 202),
+      registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
+      settings: createSettings(),
+    });
+    const sockets = new Set<Socket>();
+    let receivedRegistration = false;
+    let closedRegistration = false;
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => { sockets.delete(socket); closedRegistration = true; });
+      let input = "";
+      socket.on("data", (chunk) => {
+        input += chunk.toString();
+        if (input.includes("\n")) receivedRegistration = JSON.parse(input).op === "broker/register";
+        // Deliberately accept the request without ever returning a token.
+      });
+    });
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const gateway = new McpGatewayToolService({
+      connections: viewer, selectedConnections: async () => ["fixture"], approve: async () => true,
+    });
+    let search: Promise<unknown> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, resolve);
+      });
+      discovery.publish({ version: 1, ownerInstanceId: "owner", socketPath, brokerToken: "x".repeat(32), publishedAt: Date.now() });
+      let failure: unknown;
+      search = gateway.search({ query: "lookup" }, {
+        backend: "codex", threadId: "thread", turnId: "turn", callId: "call", transport: "codex_dynamic_tool",
+      }).catch((error: unknown) => { failure = error; });
+      await vi.waitFor(() => expect(receivedRegistration).toBe(true));
+      expect(timeout).toHaveBeenCalledWith(MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS);
+      if (reason === "deadline") deadline.abort(new DOMException("Discovery timed out.", "TimeoutError"));
+      else gateway.cancel("codex", "thread", "turn");
+      await vi.waitFor(() => {
+        expect(failure).toMatchObject({ name: reason === "deadline" ? "TimeoutError" : "AbortError" });
+        expect(closedRegistration).toBe(true);
+      });
+    } finally {
+      timeout.mockRestore();
+      for (const socket of sockets) socket.destroy();
+      await search;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await viewer.close();
+      ownerLease.release("mcp_connections");
+      stateDb.close();
+      fs.rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it.each(["datadog", "pwrgit"])("lets a non-owner process receive a %s bridge from the profile owner", async (id) => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-mcp-owner-broker-"),

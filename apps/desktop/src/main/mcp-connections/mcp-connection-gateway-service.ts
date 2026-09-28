@@ -1011,13 +1011,17 @@ export class McpConnectionGatewayService {
   async registerBridge(
     connectionId: string,
     threadId?: string,
+    signal?: AbortSignal,
   ): Promise<McpConnectionBridgeRegistration> {
+    signal?.throwIfAborted();
     const ownership = await this.ensureOwnerBroker();
+    signal?.throwIfAborted();
     if (!ownership.owned) {
       return await this.registerOwnerBridge(
         ownership.holder,
         connectionId,
         threadId,
+        signal,
       );
     }
     // Availability is checked before credentials: a connection withheld by
@@ -1026,6 +1030,7 @@ export class McpConnectionGatewayService {
     // the wrong control.
     const connection = this.requireAvailableConnection(connectionId);
     const configured = await this.coordinatorFor(connection).configured();
+    signal?.throwIfAborted();
     if (
       !configured
       && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
@@ -1044,6 +1049,7 @@ export class McpConnectionGatewayService {
       return this.registrationHandle(existing.token, existing.server, registrationKey);
     }
     await this.startBridgeServer();
+    signal?.throwIfAborted();
     // Another call may have registered this same scope during broker startup.
     const started = registrationKey ? this.threadRegistrations.get(registrationKey) : undefined;
     if (started && this.grants.has(started.token)) {
@@ -1075,7 +1081,7 @@ export class McpConnectionGatewayService {
     signal: AbortSignal;
   }): Promise<McpGatewayTool[] | CallToolResult> {
     params.signal.throwIfAborted();
-    const registration = await this.registerBridge(params.connectionId, params.scopeKey);
+    const registration = await this.registerBridge(params.connectionId, params.scopeKey, params.signal);
     params.signal.throwIfAborted();
     const rpc = new ConnectionRpcClient(
       registration.server.env.PWRAGENT_MCP_CONNECTION_SOCKET,
@@ -1236,8 +1242,10 @@ export class McpConnectionGatewayService {
     record: McpConnectionBrokerRecord,
     operation: string,
     params?: unknown,
+    signal?: AbortSignal,
   ): Promise<T> {
     return new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
       const socket = connect(record.socketPath);
       let buffer = "";
       let settled = false;
@@ -1245,6 +1253,7 @@ export class McpConnectionGatewayService {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
         socket.destroy();
         if (error) reject(error);
         else resolve(value as T);
@@ -1254,6 +1263,8 @@ export class McpConnectionGatewayService {
         MCP_CONNECTION_TOOL_TIMEOUT_MS,
       );
       timeout.unref();
+      const onAbort = (): void => finish(signal?.reason ?? new DOMException("The MCP broker request was cancelled.", "AbortError"));
+      signal?.addEventListener("abort", onAbort, { once: true });
       socket.setEncoding("utf8");
       socket.on("connect", () => {
         socket.write(`${JSON.stringify({
@@ -1292,6 +1303,7 @@ export class McpConnectionGatewayService {
     holder: RuntimeLeaseHolder,
     connectionId: string,
     threadId?: string,
+    signal?: AbortSignal,
   ): Promise<McpConnectionBridgeRegistration> {
     let record: McpConnectionBrokerRecord;
     let result: { token: string };
@@ -1301,6 +1313,7 @@ export class McpConnectionGatewayService {
         record,
         "broker/register",
         { connectionId, threadId },
+        signal,
       );
     } catch (error) {
       this.nonOwnerHolder = undefined;
