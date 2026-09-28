@@ -8014,7 +8014,7 @@ describe("Sidebar menus from the keyboard", () => {
     expect(trigger).toHaveAttribute("aria-haspopup", "menu");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     // The current profile is disabled, so the walk starts after it.
@@ -8033,7 +8033,7 @@ describe("Sidebar menus from the keyboard", () => {
     const trigger = screen.getByRole("button", {
       name: "Open PwrAgent profile menu",
     });
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     const menu = screen.getByRole("menu");
     expect(menu).toHaveFocus();
@@ -8070,14 +8070,14 @@ describe("Sidebar menus from the keyboard", () => {
     });
     // Both triggers stop their click, so neither reaches the other menu's
     // outside-click listener.
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     const actions = openThreadActions();
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(actions).toHaveAttribute("aria-expanded", "true");
 
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     expect(actions).toHaveAttribute("aria-expanded", "false");
@@ -8110,7 +8110,7 @@ describe("Sidebar menus from the keyboard", () => {
     const chip = screen.getByRole("button", {
       name: "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser",
     });
-    chip.focus();
+    act(() => chip.focus());
     fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
     const detach = screen.getByRole("menuitem", { name: "Detach Pull Request" });
     for (let i = 0; i < 20 && document.activeElement !== detach; i++) {

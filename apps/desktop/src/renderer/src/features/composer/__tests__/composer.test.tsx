@@ -1102,7 +1102,7 @@ describe("Composer", () => {
     });
   });
 
-  it("keeps a wrapped thread options menu inside the composer settings row", () => {
+  it("keeps a wrapped thread options menu inside the composer settings row", async () => {
     const rect = (left: number, right: number): DOMRect => ({
       bottom: 800,
       height: 400,
@@ -1160,14 +1160,18 @@ describe("Composer", () => {
       expect(screen.getByRole("menu")).toHaveStyle({
         transform: "translateX(208px)",
       });
-      fireEvent.focus(screen.getByRole("menuitemcheckbox", {
-        name: /Agent thread/,
-      }));
+      await act(async () => {
+        fireEvent.focus(screen.getByRole("menuitemcheckbox", {
+          name: /Agent thread/,
+        }));
+        await Promise.resolve();
+      });
       expect(screen.getByRole("tooltip")).toHaveStyle({
         left: "408px",
         maxWidth: "300px",
       });
     } finally {
+      cleanup();
       bounds.mockRestore();
     }
   });
@@ -5908,7 +5912,9 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("switch"));
     expect(screen.getByRole("switch")).not.toBeChecked();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(startTurn.mock.calls[0]![0].input).toEqual([
@@ -8461,7 +8467,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Steer remotely" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await queuedStart.called;
+    await act(async () => {
+      await queuedStart.called;
+    });
     await flushReactUpdates();
     await screen.findByLabelText("Queued message");
     const steerButton = screen.getByRole("button", { name: "Steer" });
@@ -8469,9 +8477,13 @@ describe("Composer", () => {
     // owning peer returns its stable queue entry id. A click before that
     // acknowledgement is intentionally ignored.
     expect(steerButton).toBeDisabled();
-    await queuedStart.acknowledge();
+    await act(async () => {
+      await queuedStart.acknowledge();
+    });
     expect(steerButton).toBeEnabled();
-    fireEvent.click(steerButton);
+    await act(async () => {
+      fireEvent.click(steerButton);
+    });
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -8547,12 +8559,16 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Already admitted once" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await queuedStart.acknowledge();
+    await act(async () => {
+      await queuedStart.acknowledge();
+    });
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
     expect(steerButton).toBeEnabled();
-    fireEvent.click(steerButton);
+    await act(async () => {
+      fireEvent.click(steerButton);
+    });
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -10400,7 +10416,9 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Revise the plan" } });
-    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    });
 
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
@@ -14491,10 +14509,12 @@ describe("Composer", () => {
     });
     expect(startReview).not.toHaveBeenCalled();
 
-    compactThreadResponse.resolve({
-      backend: "codex",
-      threadId: "thread-1",
-      turnId: "compact-turn-1",
+    await act(async () => {
+      compactThreadResponse.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "compact-turn-1",
+      });
     });
   });
 
@@ -22123,7 +22143,9 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
     const option = screen.getByRole("option", { name: /\$ce:plan/i });
-    option.focus();
+    act(() => {
+      option.focus();
+    });
     fireEvent.keyDown(option, { key: "Escape" });
 
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
