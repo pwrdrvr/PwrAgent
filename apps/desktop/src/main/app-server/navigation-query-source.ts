@@ -87,7 +87,7 @@ async function buildLocalNavigationQueryIndex(params: {
     }),
   );
   const providerRefresh = registry.getStartupProviderRefreshStatus?.();
-  return { directories, threads, inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
+  return { directories, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
     coverage: providerRefresh ? {
       state: providerRefresh.state === "ready" ? "complete" : providerRefresh.state,
       ...(providerRefresh.failedProviders ? { failedProviders: providerRefresh.failedProviders } : {}),

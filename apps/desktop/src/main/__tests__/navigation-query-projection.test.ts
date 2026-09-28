@@ -60,6 +60,22 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it("counts worker-only parents once and includes them in Attention without changing turn status", () => {
+    const source = snapshot([
+      thread("worker-only", { threadStatus: "idle", hasActiveSubAgent: true }),
+      thread("both", { threadStatus: "active", hasActiveSubAgent: true }),
+      thread("finished", { threadStatus: "idle", hasActiveSubAgent: false }),
+    ]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(attention.counts.active).toBe(2);
+    expect(attention.entries.map(({ row }) => row.id).sort()).toEqual(["both", "worker-only"]);
+    expect(attention.entries.find(({ row }) => row.id === "worker-only")?.row).toMatchObject({
+      threadStatus: "idle", hasActiveSubAgent: true,
+    });
+    const directories = projectNavigationQuery({ index: source, request: request({ kind: "directory-index" }) });
+    expect(directories.directories[0]?.counts.active).toBe(2);
+  });
+
   it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {
     const child = thread("child", {
       parentThreadId: "parent", parentThreadBackend: "codex",

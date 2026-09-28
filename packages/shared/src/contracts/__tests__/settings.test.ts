@@ -172,6 +172,8 @@ describe("desktop settings contracts", () => {
         compressionEnabled: { value: true, source: "default" },
         allowRemoteShells: { value: true, source: "default" },
         allowFilePush: { value: false, source: "default" },
+        allowFilePull: { value: false, source: "default" },
+        allowFilePullOutsideThreadDirectories: { value: false, source: "default" },
         filePushDirectory: { value: "", source: "default" },
         publicUrl: { value: "", source: "default" },
         gatewayUrl: { value: "", source: "default" },

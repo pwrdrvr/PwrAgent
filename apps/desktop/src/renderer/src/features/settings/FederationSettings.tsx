@@ -1843,6 +1843,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
   file_push: "file push protocol",
+  file_pull: "File pull",
   event_subscriptions: "stream explicitly subscribed events",
   turn_input_blobs: "transfer turn attachments",
   // Transport negotiation is informational, not a remote action.

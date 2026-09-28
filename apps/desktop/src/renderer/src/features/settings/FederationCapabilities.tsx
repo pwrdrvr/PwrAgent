@@ -80,6 +80,20 @@ export function FederationCapabilities(props: {
             />
           }
         />
+        <ToggleField
+          label="Allow file pull"
+          sub="Let enrolled peers read files from this machine in remote thread viewers. Off by default; limited to the thread’s directories when enabled."
+          checked={federation.allowFilePull.value}
+          disabled={props.saving || pending}
+          onChange={(allowFilePull) => save({ allowFilePull })}
+        />
+        <ToggleField
+          label="Allow file pull outside thread directories"
+          sub="Allow enrolled peers to read arbitrary files accessible to PwrAgent on this machine. Off by default, even when file pull is enabled."
+          checked={federation.allowFilePullOutsideThreadDirectories.value}
+          disabled={props.saving || pending || !federation.allowFilePull.value}
+          onChange={(allowFilePullOutsideThreadDirectories) => save({ allowFilePullOutsideThreadDirectories })}
+        />
         {error ? <p role="alert" className="settings-row__error">{error}</p> : null}
       </div>
     </SettingsSection>

@@ -28,6 +28,7 @@ export const FEDERATION_CAPABILITIES = [
   "gateway_relay",
   "remote_pty",
   "file_push",
+  "file_pull",
   "event_subscriptions",
   "turn_input_blobs",
   "transport_brotli",
@@ -173,6 +174,8 @@ export type FederationCapabilitySet = {
 export type FederationReceiverPermissions = {
   remoteShells: boolean;
   filePush: boolean;
+  filePull?: boolean;
+  filePullOutsideThreadDirectories?: boolean;
 };
 
 export type FederationHostInfo = {

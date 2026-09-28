@@ -9561,6 +9561,22 @@ describe("DesktopBackendRegistry", () => {
     } finally { await registry.close(); }
   });
 
+  it("links registry listing cache hits to the physical scan without retaining row content", async () => {
+    const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      const before = listingDiagnostics.snapshot().recorded;
+      await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
+      await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
+      const snapshot = listingDiagnostics.snapshot();
+      const events = snapshot.events.slice(-(snapshot.recorded - before));
+      const physical = events.find((event) => event.stage === "registry" && event.phase === "start")!;
+      expect(physical).toMatchObject({ caller: "renderer-navigation-query", provider: "codex" });
+      expect(events).toContainEqual(expect.objectContaining({ stage: "registry", phase: "cache-hit", targetId: physical.id }));
+    } finally { await registry.close(); }
+  });
+
   it("propagates an authoritative refresh through the combined provider listing", async () => {
     const codexClient = new MockBackendClient({
       threads: [{ id: "fixture", title: "Before", titleSource: "explicit", linkedDirectories: [], source: "codex" }],
@@ -46229,6 +46245,14 @@ script = "printf setup"
         "codex:parent-thread": "Deploy recoverable M2 Max runner",
       },
     });
+    const navigationParent = {
+      id: "parent-thread", source: "codex" as const, title: "Parent", titleSource: "explicit" as const,
+      threadStatus: "idle" as const, linkedDirectories: [], inbox: { inInbox: false },
+    };
+    expect(registry.withNavigationSubAgentActivity([navigationParent])[0]).toMatchObject({
+      threadStatus: "idle", hasActiveSubAgent: true,
+    });
+
 
     await registry.publishLocalEvent({
       backend: "codex",
@@ -46248,6 +46272,10 @@ script = "printf setup"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 0,
       threadIds: [],
+    });
+
+    expect(registry.withNavigationSubAgentActivity([navigationParent])[0]).toMatchObject({
+      threadStatus: "idle", hasActiveSubAgent: false,
     });
 
     await registry.close();

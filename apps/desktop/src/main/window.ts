@@ -1,3 +1,4 @@
+import { readRendererListingDiagnostics } from "./diagnostics/renderer-listing-diagnostics";
 import {
   app,
   BrowserWindow,
@@ -574,7 +575,13 @@ export function createMainWindow(options?: {
         }
       },
       session: created.session,
-      target: target === "main" ? createMainProcessHotCpuTarget() : webContents,
+      target: target === "main" ? createMainProcessHotCpuTarget() : {
+        debugger: webContents.debugger,
+        getOSProcessId: () => webContents.getOSProcessId(),
+        isDestroyed: () => webContents.isDestroyed(),
+        takeHeapSnapshot: (filePath) => webContents.takeHeapSnapshot(filePath),
+        readDiagnostics: () => readRendererListingDiagnostics(webContents),
+      },
     });
   };
 

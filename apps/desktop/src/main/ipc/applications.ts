@@ -95,6 +95,13 @@ async function revealPathInFolder(
 async function readMarkdownFile(
   request: ReadMarkdownFileRequest,
 ): Promise<ReadMarkdownFileResponse> {
+  if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+    try {
+      return await getDesktopFederationRuntime().pullMarkdownFile(request.federationTarget, request);
+    } catch (error) {
+      return { path: request.path, error: error instanceof Error ? error.message : "Remote Markdown file could not be read." };
+    }
+  }
   const target = request.path?.trim();
   if (!target) {
     return { path: "", error: "No file path was provided." };

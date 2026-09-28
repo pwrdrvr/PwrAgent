@@ -5,6 +5,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "accountingOnly": {
     "notifications": 0,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -12,6 +13,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 0,
     },
     "renderer": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -22,6 +24,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "childDiscovery": {
     "notifications": 4,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 1240,
       "requests": 5,
       "responseBytes": 8169,
@@ -29,7 +32,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 4,
     },
     "renderer": {
-      "requestBytes": 2456,
+      "diagnosticBytes": 1976,
+      "requestBytes": 4432,
       "requests": 8,
       "responseBytes": 3491,
       "responseRows": 1,
@@ -39,6 +43,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "cold": {
     "notifications": 0,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 700,
       "requests": 4,
       "responseBytes": 24304,
@@ -46,7 +51,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 0,
     },
     "renderer": {
-      "requestBytes": 1864,
+      "diagnosticBytes": 1736,
+      "requestBytes": 3600,
       "requests": 8,
       "responseBytes": 6652,
       "responseRows": 8,
@@ -56,6 +62,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "oneWorktree": {
     "notifications": 4,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 248,
       "requests": 1,
       "responseBytes": 388,
@@ -63,7 +70,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 1,
     },
     "renderer": {
-      "requestBytes": 614,
+      "diagnosticBytes": 544,
+      "requestBytes": 1158,
       "requests": 2,
       "responseBytes": 774,
       "responseRows": 0,
@@ -73,6 +81,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "twoActiveParents": {
     "notifications": 54,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 13392,
       "requests": 54,
       "responseBytes": 20952,
@@ -80,7 +89,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 54,
     },
     "renderer": {
-      "requestBytes": 16578,
+      "diagnosticBytes": 13716,
+      "requestBytes": 30294,
       "requests": 54,
       "responseBytes": 20898,
       "responseRows": 0,
@@ -90,6 +100,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "unrelatedSubagents": {
     "notifications": 0,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -97,6 +108,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 0,
     },
     "renderer": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -112,6 +124,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "accountingOnly": {
     "notifications": 0,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -119,6 +132,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 0,
     },
     "renderer": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -129,6 +143,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "childDiscovery": {
     "notifications": 4,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 2280,
       "requests": 8,
       "responseBytes": 50912,
@@ -136,7 +151,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 4,
     },
     "renderer": {
-      "requestBytes": 2456,
+      "diagnosticBytes": 1976,
+      "requestBytes": 4432,
       "requests": 8,
       "responseBytes": 4676,
       "responseRows": 4,
@@ -146,6 +162,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "cold": {
     "notifications": 0,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 848,
       "requests": 4,
       "responseBytes": 47196,
@@ -153,7 +170,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 0,
     },
     "renderer": {
-      "requestBytes": 1864,
+      "diagnosticBytes": 1736,
+      "requestBytes": 3600,
       "requests": 8,
       "responseBytes": 6256,
       "responseRows": 8,
@@ -163,6 +181,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "oneWorktree": {
     "notifications": 4,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 1140,
       "requests": 4,
       "responseBytes": 1552,
@@ -170,7 +189,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 4,
     },
     "renderer": {
-      "requestBytes": 1228,
+      "diagnosticBytes": 1088,
+      "requestBytes": 2316,
       "requests": 4,
       "responseBytes": 1548,
       "responseRows": 0,
@@ -180,6 +200,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "twoActiveParents": {
     "notifications": 216,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 61560,
       "requests": 216,
       "responseBytes": 83808,
@@ -187,7 +208,8 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 216,
     },
     "renderer": {
-      "requestBytes": 66312,
+      "diagnosticBytes": 54864,
+      "requestBytes": 121176,
       "requests": 216,
       "responseBytes": 83592,
       "responseRows": 0,
@@ -197,6 +219,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
   "unrelatedSubagents": {
     "notifications": 0,
     "pins": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,
@@ -204,6 +227,7 @@ exports[`budgets pin and renderer reads with four viewers and two active owner t
       "unchanged": 0,
     },
     "renderer": {
+      "diagnosticBytes": 0,
       "requestBytes": 0,
       "requests": 0,
       "responseBytes": 0,

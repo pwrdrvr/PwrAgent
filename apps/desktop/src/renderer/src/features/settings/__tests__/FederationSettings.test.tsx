@@ -51,10 +51,13 @@ describe("FederationSettings", () => {
     expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePush");
     expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowRemoteShells");
     expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("filePushDirectory");
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePull");
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePullOutsideThreadDirectories");
   });
   it.each([
     ["Allow incoming files", "allowFilePush", true],
     ["Allow remote shells", "allowRemoteShells", false],
+    ["Allow file pull", "allowFilePull", true],
   ] as const)("saves %s immediately without connection drafts", async (label, key, value) => {
     const snapshot = settingsSnapshot();
     const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
@@ -142,6 +145,24 @@ describe("FederationSettings", () => {
     // A successful retry discards the draft, so an unchanged blur does not write again.
     fireEvent.blur(input);
     expect(onWriteConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("gates broader file pull access on the saved file pull permission", async () => {
+    const federation = settingsSnapshot().federation;
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+    const { rerender } = render(<FederationCapabilities federation={federation} saving={false} onWriteConfig={onWriteConfig} />);
+    const outside = screen.getByRole("switch", { name: "Allow file pull outside thread directories" });
+    expect(outside).not.toBeChecked();
+    expect(outside).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch", { name: "Allow file pull" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Allow file pull" })).not.toBeDisabled());
+    expect(outside).toBeDisabled();
+    rerender(<FederationCapabilities federation={{ ...federation, allowFilePull: { value: true, source: "config" } }} saving={false} onWriteConfig={onWriteConfig} />);
+    expect(outside).toBeEnabled();
+    expect(outside).not.toBeChecked();
+    fireEvent.click(outside);
+    await waitFor(() => expect(outside).not.toBeDisabled());
+    expect(onWriteConfig).toHaveBeenLastCalledWith({ federation: { allowFilePullOutsideThreadDirectories: true } });
   });
 
   // The pane shipped on browser-default controls once. Nothing else here
@@ -1575,6 +1596,8 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       compressionEnabled: { value: true, source: "default" },
       allowRemoteShells: { value: true, source: "default" },
       allowFilePush: { value: false, source: "default" },
+      allowFilePull: { value: false, source: "default" },
+      allowFilePullOutsideThreadDirectories: { value: false, source: "default" },
       filePushDirectory: { value: "", source: "default" },
       publicUrl: {
         value: "wss://pwragent.example.com/federation",

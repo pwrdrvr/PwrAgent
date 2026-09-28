@@ -130,6 +130,7 @@ it.each([false, true])("loads project descriptors arriving after mount (Strict M
   await act(async () => {});
   expect(view.result.current.state.resources.size).toBe(1);
   expect(read).toHaveBeenCalledTimes(1);
+  expect(read.mock.calls[0]![0].diagnostic).toMatchObject({ effect: strict ? 2 : 1 });
   expect([...view.result.current.state.resources.values()][0]!.state.page).toBeDefined();
   await act(async () => view.result.current.controller.refresh());
   expect(read).toHaveBeenCalledTimes(2);
