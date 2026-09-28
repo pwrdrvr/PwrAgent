@@ -286,7 +286,9 @@ describe("AcpAgentsSettings", () => {
       name: "PwrAgent build — Grok",
     });
     await waitFor(() => expect(toggle).toBeEnabled());
-    toggle.click();
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
 
     await waitFor(() => {
       expect(onManagedGrokBuildsChange).toHaveBeenCalledWith(false);
@@ -453,7 +455,9 @@ describe("AcpAgentsSettings", () => {
     // The active install shows "Using"; the other offers a "Use" action that
     // pins it by writing its command as the cliPath override.
     expect(screen.getByText("Using")).toBeInTheDocument();
-    screen.getByRole("button", { name: "Use" }).click();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use" }));
+    });
     expect(onCliPathChange).toHaveBeenCalledWith("qwen", "/opt/homebrew/bin/qwen");
     await waitFor(() => {
       expect(desktopApi.listAcpAgents).toHaveBeenCalledWith({
@@ -503,7 +507,7 @@ describe("AcpAgentsSettings", () => {
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: "/Users/me/bin/grok-next" },
     });
-    screen.getByRole("button", { name: "Refresh" }).click();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     expect(
       await screen.findByRole("button", { name: "Discovering…" }),
@@ -514,7 +518,9 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByRole("button", { name: "Use" })).toBeDisabled();
     expect(onCliPathChange).not.toHaveBeenCalled();
 
-    resolveManualRefresh?.({ fetchedAt: 2000, entries: [installed] });
+    await act(async () => {
+      resolveManualRefresh?.({ fetchedAt: 2000, entries: [installed] });
+    });
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     });
@@ -560,7 +566,9 @@ describe("AcpAgentsSettings", () => {
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: overridePath },
     });
-    screen.getByRole("button", { name: "Save" }).click();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
 
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({
@@ -610,7 +618,9 @@ describe("AcpAgentsSettings", () => {
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: invalidPath },
     });
-    screen.getByRole("button", { name: "Save" }).click();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
 
     expect(
       await screen.findByText(

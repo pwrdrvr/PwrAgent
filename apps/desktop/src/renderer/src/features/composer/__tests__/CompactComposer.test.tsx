@@ -90,11 +90,13 @@ describe("CompactComposer", () => {
     );
   });
 
-  it("sends on Enter and clears the draft", () => {
+  it("sends on Enter and clears the draft", async () => {
     const { onSend } = renderComposer();
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });
     fireEvent.change(input, { target: { value: "ship it" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
     expect(onSend).toHaveBeenCalledWith("ship it");
     expect((input as HTMLTextAreaElement).value).toBe("");
   });
@@ -260,7 +262,9 @@ describe("CompactComposer", () => {
     await act(async () => second.resolve(normalizedImage(secondFile)));
     await screen.findByRole("img", { name: "second.png" });
     await waitFor(() => expect(send.disabled).toBe(false));
-    fireEvent.click(send);
+    await act(async () => {
+      fireEvent.click(send);
+    });
 
     expect(onSend).toHaveBeenCalledWith(
       "Send both",
@@ -653,7 +657,9 @@ describe("CompactComposer markdown", () => {
     await waitFor(() => {
       expect(input.textContent).toContain("pnpm test");
     });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
     await waitFor(() => {
       // The backend reads markdown, so the backticks have to survive the
       // trip through the editor.
@@ -701,18 +707,20 @@ describe("CompactComposer markdown", () => {
       return input;
     }
 
-    it("leaves every trigger literal when no sources are supplied", () => {
+    it("leaves every trigger literal when no sources are supplied", async () => {
       // The default has to stay exactly what it was before mentions
       // existed: `CompactComposer` is shared, and a host that knows
       // nothing about `mentionSources` must not start opening pickers.
       const { onSend } = renderComposer();
       const input = openPicker("ask $deploy about @app and #42");
       expect(screen.queryByRole("listbox")).toBeNull();
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith("ask $deploy about @app and #42");
     });
 
-    it("opens the skill picker on $ and serializes the chip as markdown", () => {
+    it("opens the skill picker on $ and serializes the chip as markdown", async () => {
       const { container, onSend } = renderComposer({
         mentionSources: { skills: SKILLS },
       });
@@ -729,11 +737,13 @@ describe("CompactComposer markdown", () => {
         container.querySelector(".composer-tiptap-input__mention")?.textContent,
       ).toBe("$deploy");
 
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith("run [$deploy](/skills/deploy.md)");
     });
 
-    it("opens the directory picker on @ and serializes a tilde link", () => {
+    it("opens the directory picker on @ and serializes a tilde link", async () => {
       const { onSend } = renderComposer({
         mentionSources: {
           directories: [
@@ -748,11 +758,13 @@ describe("CompactComposer markdown", () => {
       });
       const input = openPicker("look in @ap");
       fireEvent.click(screen.getByRole("option"));
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith("look in [@app](/dev/app)");
     });
 
-    it("offers threads on # and serializes the thread url", () => {
+    it("offers threads on # and serializes the thread url", async () => {
       const { onSend } = renderComposer({
         mentionSources: {
           threads: [thread({ id: "t-42", title: "Ship the release" })],
@@ -760,13 +772,15 @@ describe("CompactComposer markdown", () => {
       });
       const input = openPicker("see #Ship");
       fireEvent.click(screen.getByRole("option"));
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith(
         "see [Ship the release](pwragent://thread/t-42?backend=codex)",
       );
     });
 
-    it("selects the current thread's attached PR first even outside search results", () => {
+    it("selects the current thread's attached PR first even outside search results", async () => {
       const { onSend } = renderComposer({
         mentionSources: {
           currentThread: thread({ id: "current", title: "Dugite", prs: [{
@@ -779,13 +793,15 @@ describe("CompactComposer markdown", () => {
       const input = openPicker("about #2");
       expect(screen.getAllByRole("option")[0]?.textContent).toContain("#2");
       fireEvent.keyDown(input, { key: "Enter" });
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith(
         "about [huntharo/dugite#2](https://github.com/huntharo/dugite/pull/2)",
       );
     });
 
-    it("offers a pull request on a numeric # and keeps its url", () => {
+    it("offers a pull request on a numeric # and keeps its url", async () => {
       const { onSend } = renderComposer({
         mentionSources: {
           threads: [
@@ -812,7 +828,9 @@ describe("CompactComposer markdown", () => {
         .getAllByRole("option")
         .find((option) => option.textContent?.startsWith("#118"));
       fireEvent.click(pullRequest!);
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith(
         "about [pwrdrvr/PwrAgnt#118](https://github.com/pwrdrvr/PwrAgnt/pull/118)",
       );
@@ -885,23 +903,27 @@ describe("CompactComposer markdown", () => {
       const card = await screen.findByRole("group", { name: "Where $release comes from" });
       expect(card.textContent).toContain("/src/Harbor/.agents/skills/release/SKILL.md");
 
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith(
         "run [$release](/src/Harbor/.agents/skills/release/SKILL.md)",
       );
     });
 
-    it("keeps a trigger with no matches as literal text", () => {
+    it("keeps a trigger with no matches as literal text", async () => {
       const { onSend } = renderComposer({
         mentionSources: { skills: SKILLS },
       });
       const input = openPicker("run $nothinghere");
       expect(screen.queryByRole("listbox")).toBeNull();
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith("run $nothinghere");
     });
 
-    it("gives arrows and Enter to the picker before the send path", () => {
+    it("gives arrows and Enter to the picker before the send path", async () => {
       const { onSend } = renderComposer({
         mentionSources: { skills: SKILLS },
       });
@@ -913,18 +935,22 @@ describe("CompactComposer markdown", () => {
       // Enter committed the second row instead of sending the draft.
       expect(onSend).not.toHaveBeenCalled();
 
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith("run [$debug](/skills/debug.md)");
     });
 
-    it("hands Enter back to the send path once Escape closes the picker", () => {
+    it("hands Enter back to the send path once Escape closes the picker", async () => {
       const { onSend } = renderComposer({
         mentionSources: { skills: SKILLS },
       });
       const input = openPicker("run $dep");
       fireEvent.keyDown(input, { key: "Escape" });
       expect(screen.queryByRole("listbox")).toBeNull();
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith("run $dep");
     });
 
@@ -1058,7 +1084,9 @@ describe("CompactComposer markdown", () => {
       pasteMarkdown(input, "over @ap");
       fireEvent.click(await screen.findByRole("option"));
 
-      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
       expect(onSend).toHaveBeenCalledWith(
         "run [$deploy](/skills/deploy.md) over [@app](/dev/app)",
       );
