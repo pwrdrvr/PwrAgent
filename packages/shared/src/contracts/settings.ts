@@ -988,6 +988,9 @@ export type DesktopFederationSettingsSnapshot = {
   listenHost: DesktopSettingsValue<string>;
   listenPort: DesktopSettingsValue<number>;
   compressionEnabled: DesktopSettingsValue<boolean>;
+  allowRemoteShells: DesktopSettingsValue<boolean>;
+  allowFilePush: DesktopSettingsValue<boolean>;
+  filePushDirectory: DesktopSettingsValue<string>;
   publicUrl: DesktopSettingsValue<string>;
   gatewayUrl: DesktopSettingsValue<string>;
   /**
@@ -1448,6 +1451,9 @@ export type DesktopSettingsConfigPatch = {
     listenHost?: string;
     listenPort?: number;
     compressionEnabled?: boolean;
+    allowRemoteShells?: boolean;
+    allowFilePush?: boolean;
+    filePushDirectory?: string;
     publicUrl?: string;
     gatewayUrl?: string;
     gatewayEndpoints?: string[];

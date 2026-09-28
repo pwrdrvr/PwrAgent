@@ -143,7 +143,10 @@ export class FederationTerminalBridge {
       closeRequested: false,
       promise: Promise.resolve() as unknown as Promise<IntegratedTerminalCreateResponse>,
     };
-    pending.promise = (async () => {
+    // Register the pending open before any runtime lookup can throw. Without
+    // this boundary, synchronous denial runs finally before the map entry
+    // exists, leaving the rejected promise cached after registration.
+    pending.promise = Promise.resolve().then(async () => {
       try {
         // The viewer sends only the thread identity and dimensions. Shell and
         // cwd are resolved by the owning instance from ITS thread state.
@@ -213,7 +216,7 @@ export class FederationTerminalBridge {
       } finally {
         this.pendingOpens.delete(pendingKey);
       }
-    })();
+    });
     this.pendingOpens.set(pendingKey, pending);
     return await pending.promise;
   }

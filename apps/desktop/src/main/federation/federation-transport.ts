@@ -1,3 +1,4 @@
+import type { FederationReceiverPermissions } from "@pwragent/shared";
 import { federationTrafficCaptureUntil, recordFederationTraffic } from "./federation-traffic-capture";
 import http from "node:http";
 import net from "node:net";
@@ -270,6 +271,8 @@ type FederationSocketAuthMessage = {
   profileName?: string;
   notes?: string;
   host?: FederationHostInfo;
+  /** Absent on older peers; never infer permission from protocol support. */
+  receiverPermissions?: FederationReceiverPermissions;
 };
 
 type FederationSocketChallengeMessage = {
@@ -1025,6 +1028,7 @@ export class FederationGatewayWebSocketServer {
           profileName: message.profileName,
           notes: message.notes,
           host: message.host,
+          receiverPermissions: message.receiverPermissions,
         },
       });
     }
@@ -1042,6 +1046,7 @@ export class FederationGatewayWebSocketServer {
       profileName: message.profileName,
       notes: message.notes,
       host: message.host,
+      receiverPermissions: message.receiverPermissions,
     });
   }
 }
@@ -1079,6 +1084,8 @@ export async function connectFederationClient(params: {
   profileName?: string;
   notes?: string;
   host?: FederationHostInfo;
+  /** Absent on older peers; never infer permission from protocol support. */
+  receiverPermissions?: FederationReceiverPermissions;
   headers?: Record<string, string>;
   clientCertificate?: string;
   clientPrivateKey?: string;
@@ -1307,6 +1314,7 @@ async function establishFederationClient(
     profileName: params.profileName,
     notes: params.notes,
     host: params.host,
+    receiverPermissions: params.receiverPermissions,
   };
   sendFrame(socket, authMessage, transport);
 
