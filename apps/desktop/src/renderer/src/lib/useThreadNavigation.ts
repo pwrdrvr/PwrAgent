@@ -873,6 +873,7 @@ function threadSummariesEqual(
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
+    left.hasActiveSubAgent === right.hasActiveSubAgent &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.primaryGitRepository === right.primaryGitRepository &&

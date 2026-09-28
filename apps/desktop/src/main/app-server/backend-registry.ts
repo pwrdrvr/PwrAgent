@@ -16252,7 +16252,24 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
-  getInProgressThreadSnapshotForQuit(): {
+  /** Navigation and shutdown share runtime worker ownership, never durable history. */
+  withNavigationSubAgentActivity(
+    threads: NavigationThreadSummary[],
+  ): NavigationThreadSummary[] {
+    const activeOwners = new Set(this.getInProgressThreadSnapshot().subAgentThreadKeys);
+    return threads.map((thread) => {
+      if (thread.federation) return thread;
+      const hasActiveSubAgent = activeOwners.has(buildThreadIdentityKey(thread.source, thread.id));
+      if (thread.hasActiveSubAgent === hasActiveSubAgent) return thread;
+      return { ...thread, hasActiveSubAgent };
+    });
+  }
+
+  getInProgressThreadSnapshotForQuit() {
+    return this.getInProgressThreadSnapshot();
+  }
+
+  private getInProgressThreadSnapshot(): {
     count: number;
     threadIds: string[];
     subAgentThreadKeys?: string[];

@@ -302,7 +302,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.initialLoadDurationMs).toBe(725);
   });
 
-  it("exposes selected thread busy state from the same thinking state as row indicators", () => {
+  it("keeps transcript thinking scoped to the parent while navigation can show worker activity", () => {
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
       readThread: vi.fn(async ({ backend, threadId }) => ({
@@ -324,7 +324,7 @@ describe("useThreadSessionState", () => {
     const { result } = renderHook(() =>
       useThreadSessionState({
         desktopApi,
-        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        thread: { ...buildThread({ id: "thread-1", updatedAt: 1_000 }), hasActiveSubAgent: true },
       })
     );
 
