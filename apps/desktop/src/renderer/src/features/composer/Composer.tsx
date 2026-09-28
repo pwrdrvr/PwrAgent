@@ -6426,6 +6426,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const preparationFocusedElement = options?.restoreComposerFocus
       ? document.activeElement
       : undefined;
+    let pointerInteractionDuringPreparation = false;
+    const recordPointerInteraction = (): void => {
+      pointerInteractionDuringPreparation = true;
+    };
+    if (options?.restoreComposerFocus) {
+      document.addEventListener("pointerdown", recordPointerInteraction, true);
+    }
     sendPreparationRef.current = preparation;
     setPreparingSend(true);
     updateSending(true);
@@ -6458,9 +6465,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         setPreparingSend(false);
         if (options?.restoreComposerFocus) {
           requestAnimationFrame(() => {
+            document.removeEventListener(
+              "pointerdown",
+              recordPointerInteraction,
+              true,
+            );
             const activeElement = document.activeElement;
             if (
-              activeComposerScopeKeyRef.current === preparationScopeKey
+              !pointerInteractionDuringPreparation
+              && activeComposerScopeKeyRef.current === preparationScopeKey
               && (
                 !activeElement
                 || activeElement === document.body
@@ -6471,6 +6484,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             }
           });
         }
+      } else if (options?.restoreComposerFocus) {
+        document.removeEventListener(
+          "pointerdown",
+          recordPointerInteraction,
+          true,
+        );
       }
     }
   };
