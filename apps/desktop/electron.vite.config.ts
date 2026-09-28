@@ -167,6 +167,7 @@ export default defineConfig(({ command }) => {
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
+            "storage-maintenance-worker": resolve(__dirname, "src/main/state/storage-maintenance-worker.ts"),
             "mcp-connection-bridge": resolve(
               __dirname,
               "src/main/mcp-connections/mcp-connection-bridge-entry.ts"
@@ -198,6 +199,10 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
+          input: {
+            index: resolve(__dirname, "src/preload/index.ts"),
+            "storage-maintenance": resolve(__dirname, "src/preload/storage-maintenance.ts"),
+          },
           output: {
             format: "cjs"
           }
@@ -225,6 +230,10 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
+          input: {
+            index: resolve(__dirname, "src/renderer/index.html"),
+            "storage-maintenance": resolve(__dirname, "src/renderer/storage-maintenance.html"),
+          },
           output: {
             manualChunks(id) {
               if (id.includes("node_modules")) {

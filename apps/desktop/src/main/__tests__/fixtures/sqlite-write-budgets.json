@@ -601,6 +601,41 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "storage-maintenance-archive-lifecycle": {
+    "commits": 3,
+    "note": "Archive receipt, duplicate observation and restore; duplicate writes no pages",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 3
+  },
+  "storage-maintenance-daily-bookkeeping": {
+    "commits": 2,
+    "note": "Daily admission and completion; no timer heartbeat",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "storage-maintenance-detail-slice": {
+    "commits": 1,
+    "note": "128 synthetic 1 KiB objects plus retention fence, one bounded transaction; WAL measured after explicit truncation",
+    "observedWalBytes": 119512,
+    "rowsChanged": 129,
+    "statements": 2
+  },
+  "storage-maintenance-explicit-preference": {
+    "commits": 2,
+    "note": "Explicit on/off choices persist; duplicate choice does not write",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "storage-maintenance-initial-expiry": {
+    "commits": 1,
+    "note": "One deferred ordinary expiry transaction and capped reclamation per startup, including profiles that skip maintenance",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 16
+  },
   "streamed-command-output": {
     "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",

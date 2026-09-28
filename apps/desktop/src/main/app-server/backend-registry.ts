@@ -11355,6 +11355,7 @@ export class DesktopBackendRegistry {
         callerReason: params.callerReason,
         enrichDirectories: params.enrichDirectories,
         filter: params.filter,
+        forceRefresh: params.forceRefresh,
         limit: params.limit,
         maxPages: params.maxPages,
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,

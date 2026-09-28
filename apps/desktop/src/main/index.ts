@@ -7,6 +7,9 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } fro
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
+import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
+import { observeStorageArchive } from "./state/storage-maintenance";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
@@ -284,6 +287,7 @@ let integratedTerminalShutdownPromise: Promise<void> | undefined;
 let rendererWindowShutdownPromise: Promise<void> | undefined;
 let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
+let startupWindowCreated = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows: StartupCpuProfiler | undefined;
 
@@ -423,6 +427,16 @@ function logBootDecision(decision: ProfileBootDecision): void {
   }
 }
 
+function startStartupSettingsDiscovery(permit: ProviderDiscoveryPermit): void {
+  void getDesktopSettingsService()
+    .refreshStartupDiscovery(permit)
+    .catch((error) => {
+      mainLog.warn("startup settings discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
 function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
@@ -437,13 +451,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     return;
   }
   const startedAt = Date.now();
-  void getDesktopSettingsService()
-    .refreshStartupDiscovery(permit)
-    .catch((error) => {
-      mainLog.warn("startup settings discovery failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  startStartupSettingsDiscovery(permit);
   // The durable thread snapshot painted below is allowed to appear
   // immediately. A cold profile has no executable selection yet, though, so
   // this live provider refresh waits only until Codex has a usable selection.
@@ -1391,6 +1399,35 @@ export function bootstrapApp(): void {
     });
     reportAutoVacuumConversion(initializeAppState(bootMode).autoVacuum);
     getDesktopConfigStore();
+    if (bootMode === "active-profile") {
+      const registry = getDesktopBackendRegistry();
+      registry.onEvent(async (event) => {
+        const method = event.notification.method;
+        if (method === "thread/archived" || method === "thread/unarchived") {
+          await interruptStartupStorageMaintenance();
+          observeStorageArchive(getAppStateDb().raw, event.backend, event.notification.params.threadId, method === "thread/archived");
+        }
+      });
+      await runStartupStorageMaintenance({
+        state: getAppStateDb(),
+        existingDatabase: hadExistingAppStateDatabase(),
+        onboardingCompleted: getDesktopConfigStore().read("onboarding").completed === true,
+        discover: async () => {
+          // Discovery is normally started after the main window appears. This
+          // earlier consumer must start it and await only Codex readiness.
+          startStartupSettingsDiscovery(issueProviderDiscoveryPermit("startup"));
+          await getDesktopSettingsService().resolveCodexCommand();
+          const [archived, active] = await Promise.all([
+            registry.listThreads({ callerReason: "archive-cleanup", archived: true, forceRefresh: true, enrichDirectories: false, skipArchivedMetadataRefresh: true }),
+            registry.listThreads({ callerReason: "archive-cleanup", archived: false, forceRefresh: true, enrichDirectories: false }),
+          ]);
+          return {
+            archived: archived.map((thread) => ({ backend: thread.source, threadId: thread.id, archivedAt: thread.archivedAt })),
+            active: active.map((thread) => ({ backend: thread.source, threadId: thread.id })),
+          };
+        },
+      });
+    }
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent
@@ -1715,6 +1752,7 @@ export function bootstrapApp(): void {
       startupCpuProfiler,
     });
     quitAppOnMainWindowClose(mainWindow);
+    startupWindowCreated = true;
     recordStartupProfileEvent({ type: "main-window-create:end" });
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
     prewarmInitialThreadList(issueProviderDiscoveryPermit("startup"));
@@ -1745,6 +1783,8 @@ export function bootstrapApp(): void {
   });
 
   app.on("window-all-closed", () => {
+    // Closing/cancelling the preliminary storage window continues startup.
+    if (!startupWindowCreated && !quitInProgress) return;
     if (isUpdateInstallInProgress()) {
       // The auto updater's quitAndInstall() closes every window as the first
       // step of staging the Squirrel.Mac relaunch, then calls app.quit()
