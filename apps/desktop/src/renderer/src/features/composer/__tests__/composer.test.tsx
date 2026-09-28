@@ -6113,7 +6113,7 @@ describe("Composer", () => {
           title: "Secondary change", url, state: "passing", linkedDirectoryPaths: ["/repo/secondary"] }],
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/primary" } });
     const target = screen.getByRole("button", { name: /Attached PR/ });
     if (input === "keyboard") {
@@ -6128,7 +6128,7 @@ describe("Composer", () => {
     })));
   });
 
-  it("keeps a PR across worktrees of its repository and names repositories only when they differ", () => {
+  it("keeps a PR across worktrees of its repository and names repositories only when they differ", async () => {
     const pr = (org: string, repo: string, number: number, path: string) => ({
       provider: "github.com" as const, org, repo, number, title: `Change ${number}`,
       url: `https://github.com/${org}/${repo}/pull/${number}`, state: "passing" as const,
@@ -6149,7 +6149,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/tool" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
@@ -6210,18 +6210,20 @@ describe("Composer", () => {
     }],
   });
 
-  const openReviewComposer = (): void => {
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+  const openReviewComposer = async (): Promise<void> => {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    });
   };
 
-  it("omits the attached PR target when the project has none", () => {
+  it("omits the attached PR target when the project has none", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ withPullRequest: false })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).queryByRole("button", { name: /Attached PR/ }))
       .not.toBeInTheDocument();
@@ -6229,7 +6231,7 @@ describe("Composer", () => {
       .toHaveAttribute("aria-pressed", "true");
   });
 
-  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", (workspacePath) => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", async (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
@@ -6239,7 +6241,7 @@ describe("Composer", () => {
           recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Attached PR/ }))
       .toHaveAttribute("aria-pressed", "true");
@@ -6248,7 +6250,7 @@ describe("Composer", () => {
     expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
   });
 
-  it("keeps local review when directory status belongs to another checkout", () => {
+  it("keeps local review when directory status belongs to another checkout", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]} thread={reviewTargetThread({})}
@@ -6256,7 +6258,7 @@ describe("Composer", () => {
         gitStatus: { currentBranch: "main", behind: 0, branches: ["main"], syncState: "in-sync" },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
@@ -6272,7 +6274,7 @@ describe("Composer", () => {
           branches: ["main", "feat/stack-1"], syncState: "in-sync" },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
     expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/fixture/project/pull/7");
@@ -6283,13 +6285,13 @@ describe("Composer", () => {
     await flushReactUpdates();
   });
 
-  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", (workspacePath) => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", async (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1, workspacePath })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Base branch/ }))
       .toHaveAttribute("aria-pressed", "true");
@@ -6307,7 +6309,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={reviewTargetThread({ withPullRequest: false })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     let group = screen.getByRole("group", { name: "Review target" });
     fireEvent.keyDown(
       within(group).getByRole("button", { name: /Current changes/ }),
@@ -6323,7 +6325,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={reviewTargetThread({ dirtyFiles: 1 })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     group = screen.getByRole("group", { name: "Review target" });
     fireEvent.keyDown(
       within(group).getByRole("button", { name: /Current changes/ }),
@@ -6720,6 +6722,7 @@ describe("Composer", () => {
     await clickButton("Send");
     fireEvent.change(textarea, { target: { value: "/review" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -7213,6 +7216,7 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     fireEvent.keyDown(screen.getByLabelText("New thread"), { key: "Enter" });
+    await flushReactUpdates();
 
     // The launchpad materialize path takes only a review target, so offering
     // the row here would accept a reviewer and then drop it.
@@ -7248,6 +7252,7 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await flushReactUpdates();
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
@@ -14117,6 +14122,7 @@ describe("Composer", () => {
       "composer__autocomplete"
     );
     fireEvent.click(screen.getByRole("option", { name: /\/review/i }));
+    await flushReactUpdates();
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -14570,6 +14576,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -14596,6 +14603,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
 
