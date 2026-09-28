@@ -37968,3 +37968,19 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__seen {
   color: var(--accent-bright);
 }
+
+.usage-activity input, .usage-activity td button {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.usage-activity small { display: block; color: var(--text-muted); font-weight: normal; }
+.usage-activity th { max-width: 320px; overflow-wrap: anywhere; }
+.usage-activity__analysis { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.usage-activity button:focus-visible, .usage-activity input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}

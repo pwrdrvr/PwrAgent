@@ -1,3 +1,6 @@
+import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
+import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
@@ -1771,6 +1774,10 @@ const desktopApi = Object.freeze({
       APP_SERVER_READ_THREAD_CHANNEL,
       request,
     ),
+  readUsageActivity: async (request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
+    await ipcRenderer.invoke(USAGE_ACTIVITY_READ_CHANNEL, request),
+  analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
+    await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
   inspectTokenMiserOutput: async (
     request: InspectTokenMiserOutputRequest,
   ): Promise<InspectTokenMiserOutputResponse> =>

@@ -46,6 +46,25 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
+  it("reads usage activity without writes and retains completed pending turn timing", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true, startedAt: start,
+    }) });
+    await store.completeThreadUsageTurn({ backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 4000 });
+    const result = await measureSqliteWrites(async () => await store.readUsageActivity({ from: start, to: start + 5000 }));
+    expect(result.writes.commits).toBe(0);
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 5000 });
+    expect(snapshot.truncated).toBe(false);
+    expect(snapshot.rows).toHaveLength(1);
+    expect(snapshot.rows[0].line).toMatchObject({ status: "pending", startedAt: start, completedAt: start + 4000, turnUsageAttributed: true });
+    // A start-time cutoff must still return an overlapping row for the coverage classifier.
+    expect((await store.readUsageActivity({ from: start + 2000, to: start + 5000 })).rows).toHaveLength(1);
+    await expect(store.readUsageActivity({ from: start, to: start + 32 * 86400000 })).rejects.toThrow("31 days");
+  });
+
   it("uses one commit to record a completed turn after its usage row was flushed", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     useFileStateDb();

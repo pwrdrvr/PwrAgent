@@ -1,3 +1,4 @@
+import { validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRow } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
@@ -2206,6 +2207,38 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           AND completed_at IS NULL`,
     ).run(params.completedAt, Date.now(), params.backend, params.threadId, params.turnId);
     return result.changes > 0;
+  }
+
+  async readUsageActivity(request: ReadUsageActivityRequest): Promise<{ rows: UsageActivityRow[]; truncated: boolean }> {
+    validateUsageActivityWindow(request);
+    // Read PwrAgent's ledger once, without parent-thread joins that duplicate
+    // helper costs. Candidate timestamps are not used to apportion turn cost.
+    const rows = this.stateDb.raw.prepare(`
+      SELECT l.*, t.started_at AS activity_started_at,
+             COALESCE(t.completed_at, l.completed_at) AS activity_completed_at,
+             (SELECT d.title FROM thread_search_documents d
+               WHERE d.backend = l.backend AND d.thread_id = l.thread_id
+               ORDER BY d.indexed_at DESC LIMIT 1) AS activity_title
+        FROM thread_usage_lines l
+        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
+       WHERE l.status != 'superseded'
+         AND COALESCE(t.started_at, l.created_at) < ?
+         AND (COALESCE(t.completed_at, l.completed_at, l.updated_at) >= ?)
+       ORDER BY l.updated_at DESC, l.usage_line_id
+       LIMIT 5001
+    `).all(request.to, request.from) as Array<ThreadUsageLineRow & {
+      activity_started_at: number | null; activity_completed_at: number | null; activity_title: string | null;
+    }>;
+    return {
+      truncated: rows.length > 5000,
+      rows: rows.slice(0, 5000).map((row) => ({
+        line: { ...threadUsageLineFromRow(row),
+          startedAt: row.activity_started_at ?? row.created_at,
+          completedAt: row.activity_completed_at ?? undefined },
+        title: row.activity_title || row.thread_id,
+        updatedAt: row.updated_at,
+      })),
+    };
   }
 
   async readThreadPricing(params: {

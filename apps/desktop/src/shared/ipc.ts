@@ -787,3 +787,7 @@ export const NAVIGATION_REMOVE_DIRECTORY_CHANNEL = "navigation:remove-directory"
 export const NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL = "navigation:mark-directory-seen";
 
 export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-attention-view";
+
+export const USAGE_ACTIVITY_READ_CHANNEL = "usage-activity:readUsageActivity";
+
+export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";

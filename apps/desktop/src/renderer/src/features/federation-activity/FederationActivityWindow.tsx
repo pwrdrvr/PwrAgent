@@ -1,3 +1,4 @@
+import { UsageActivity } from "./UsageActivity";
 import { FederationTrafficCapture } from "./FederationTrafficCapture";
 import { useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
@@ -280,6 +281,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
 }
 
 export function FederationActivityWindow() {
+  const [view, setView] = useState<"traffic" | "usage">("traffic");
   const desktopApi = useDesktopApi();
   useEffect(() => { document.title = "Federation Activity"; }, []);
   return <div className="messaging-activity-window"><section aria-label="Federation activity" className="activity-screen">
@@ -290,6 +292,12 @@ export function FederationActivityWindow() {
         <span className="activity-titlebar__current">Activity</span></div>
       <div className="activity-titlebar__spacer" />
     </header>
-    <div className="activity-content federation-activity-content"><FederationActivityScreen desktopApi={desktopApi} /></div>
+    <div className="activity-content federation-activity-content">
+      <div className="federation-activity__toolbar" role="group" aria-label="Activity view">
+        <button type="button" aria-pressed={view === "traffic"} onClick={() => setView("traffic")}>Federation traffic</button>
+        <button type="button" aria-pressed={view === "usage"} onClick={() => setView("usage")}>Usage</button>
+      </div>
+      {view === "traffic" ? <FederationActivityScreen desktopApi={desktopApi} /> : <UsageActivity desktopApi={desktopApi} />}
+    </div>
   </section></div>;
 }

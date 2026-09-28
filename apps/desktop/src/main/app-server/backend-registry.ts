@@ -1,3 +1,5 @@
+import { analyzeUsageActivity } from "./usage-activity-analysis";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { MonitorJobSuggestionDetector, MONITOR_JOB_SUGGESTION } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { priceLocalModelUsage } from "@pwragent/shared";
@@ -8115,6 +8117,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
+    | "readUsageActivity"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
     | "recordThreadCompaction"
@@ -14675,6 +14678,19 @@ export class DesktopBackendRegistry {
             replayWithReviewMetadata,
           ),
     };
+  }
+
+  async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
+    if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
+    return { ...await this.overlayStore.readUsageActivity(request), readAt: Date.now(),
+      rateLimits: this.codexBackendSummary?.rateLimits ?? [] };
+  }
+
+  async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
+    this.assertNotBootstrap("analyzeUsageActivity");
+    if (!this.codexClient.generateStructuredObject) throw new Error("Codex analysis unavailable on this instance.");
+    return await analyzeUsageActivity(request, (read) => this.readThread(read),
+      (params) => this.codexClient.generateStructuredObject!(params));
   }
 
   async inspectTokenMiserOutput(

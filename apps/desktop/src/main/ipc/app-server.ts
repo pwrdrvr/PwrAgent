@@ -1,3 +1,6 @@
+import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
+import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
@@ -1705,6 +1708,22 @@ class DesktopAppServerService {
     // Transcript bodies are lossless. Character cuts can split Markdown tables,
     // code fences, and cross-thread message arguments in the middle.
     return shapeReadThreadFileDiffsForRenderer(materialized);
+  }
+
+  async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).readUsageActivity(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().readUsageActivity(request);
+  }
+
+  async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).analyzeUsageActivity(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().analyzeUsageActivity(request);
   }
 
   async inspectTokenMiserOutput(
@@ -8137,6 +8156,12 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(USAGE_ACTIVITY_READ_CHANNEL);
+  ipcMain.handle(USAGE_ACTIVITY_READ_CHANNEL, async (_event, request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
+    await appServerService.readUsageActivity(request));
+  ipcMain.removeHandler(USAGE_ACTIVITY_ANALYZE_CHANNEL);
+  ipcMain.handle(USAGE_ACTIVITY_ANALYZE_CHANNEL, async (_event, request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
+    await appServerService.analyzeUsageActivity(request));
   ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
   ipcMain.handle(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
     async (_event, request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> =>
