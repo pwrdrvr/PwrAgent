@@ -5616,6 +5616,56 @@ describe("Composer", () => {
     });
   });
 
+  it("restores reply focus after an Enter submit finishes its pre-send check", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        onBeforeStartTurn={() => check.promise}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Checked send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    textarea.focus();
+    fireEvent.change(textarea, { target: { value: "Start a checked turn" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(textarea).toHaveAttribute("contenteditable", "false");
+    // Chromium drops focus when the active contenteditable becomes read-only.
+    // jsdom does not model that browser behavior, so reproduce the blur here.
+    textarea.blur();
+
+    await act(async () => {
+      check.resolve(true);
+      await check.promise;
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText("Reply")).toHaveFocus();
+    });
+  });
+
   it("restores the reply draft when starting a turn fails after clearing", async () => {
     const startTurn = vi.fn(async () => {
       throw new Error("Start failed");
