@@ -1132,6 +1132,8 @@ export class DesktopSettingsService {
         ),
         allowRemoteShells: this.resolveConfigBoolean(config.federation?.allowRemoteShells, true),
         allowFilePush: this.resolveConfigBoolean(config.federation?.allowFilePush, false),
+        allowFilePull: this.resolveConfigBoolean(config.federation?.allowFilePull, false),
+        allowFilePullOutsideThreadDirectories: this.resolveConfigBoolean(config.federation?.allowFilePullOutsideThreadDirectories, false),
         filePushDirectory: this.resolveConfigString(config.federation?.filePushDirectory),
         publicUrl: this.resolveConfigString(config.federation?.publicUrl),
         gatewayUrl: this.resolveConfigString(config.federation?.gatewayUrl),

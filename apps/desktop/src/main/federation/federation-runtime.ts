@@ -1,3 +1,4 @@
+import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD } from "./federation-file-pull";
 import { app } from "electron";
 import {
   FederationFilePushReceiver,
@@ -130,6 +131,8 @@ import {
   mergeCelestialIconAssignments,
   pickCelestialIcon,
   resolveThreadTerminalCwd,
+  type ReadMarkdownFileRequest,
+  type ReadMarkdownFileResponse,
   type AppServerListSkillsRequest,
   type AppServerReadThreadRequest,
   type AppServerBackendKind,
@@ -512,6 +515,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
   "file_push",
+  "file_pull",
   "event_subscriptions",
   "turn_input_blobs",
   // Signed transport negotiation; not a user-authorized remote action.
@@ -2152,7 +2156,19 @@ export class DesktopFederationRuntime {
     return {
       remoteShells: config.allowRemoteShells !== false,
       filePush: config.allowFilePush === true,
+      filePull: config.allowFilePull === true,
+      filePullOutsideThreadDirectories: config.allowFilePullOutsideThreadDirectories === true,
     };
+  }
+
+  async pullMarkdownFile(target: FederationRemoteTarget, request: ReadMarkdownFileRequest) {
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    if (!peer?.capabilities.includes("file_pull")) throw new Error("The owning machine does not support file pull. Update PwrAgent on that machine.");
+    if (peer.receiverPermissions?.filePull !== true) throw new Error("File pull is disabled on the owning machine. Enable Allow file pull in its Federation settings.");
+    return await this.rpcFor(target).request<ReadMarkdownFileResponse>({
+      method: FILE_PULL_MARKDOWN_METHOD,
+      params: { path: request.path, thread: request.thread },
+    });
   }
 
   async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string) {
@@ -2879,6 +2895,7 @@ export class DesktopFederationRuntime {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
+        [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
       },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
@@ -2907,6 +2924,17 @@ export class DesktopFederationRuntime {
       directory: () => getDesktopSettingsService().readFederationConfig().filePushDirectory?.trim() || app.getPath("downloads"),
     });
     registerFilePushHandlers(router, this.filePushReceiver);
+    const filePullReader = new FederationFilePullReader({
+      permissions: () => this.receiverPermissions(),
+      resolveThread: async (backend, threadId) => {
+        const threads = await getDesktopBackendRegistry().listThreads({
+          backend,
+          callerReason: "federation-file-pull",
+        });
+        return threads.find((thread) => thread.id === threadId);
+      },
+    });
+    router.registerHandler(FILE_PULL_MARKDOWN_METHOD, (envelope) => filePullReader.readMarkdown(envelope.params));
     this.ptyService = new FederationPtyService({
       allowOpen: () => this.receiverPermissions().remoteShells,
       spawnPty: async (params) => await spawnTerminalPty(params),

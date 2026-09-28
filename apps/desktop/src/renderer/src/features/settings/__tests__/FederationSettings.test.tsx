@@ -40,6 +40,14 @@ describe("FederationSettings", () => {
         onWriteConfig={onWriteConfig}
       />,
     );
+    const pull = screen.getByRole("switch", { name: "Allow file pull" });
+    const outside = screen.getByRole("switch", { name: "Allow file pull outside thread directories" });
+    expect(pull).not.toBeChecked();
+    expect(outside).not.toBeChecked();
+    expect(outside).toBeDisabled();
+    fireEvent.click(pull);
+    expect(outside).toBeEnabled();
+    expect(outside).not.toBeChecked();
     const toggle = screen.getByRole("switch", { name: "Protocol compression" });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
@@ -50,7 +58,7 @@ describe("FederationSettings", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Incoming files folder" }), { target: { value: "/tmp/incoming" } });
     fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false, allowRemoteShells: false, allowFilePush: true, filePushDirectory: "/tmp/incoming" }) }),
+      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false, allowRemoteShells: false, allowFilePush: true, allowFilePull: true, allowFilePullOutsideThreadDirectories: false, filePushDirectory: "/tmp/incoming" }) }),
     ));
   });
   // The pane shipped on browser-default controls once. Nothing else here
@@ -1484,6 +1492,8 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       compressionEnabled: { value: true, source: "default" },
       allowRemoteShells: { value: true, source: "default" },
       allowFilePush: { value: false, source: "default" },
+      allowFilePull: { value: false, source: "default" },
+      allowFilePullOutsideThreadDirectories: { value: false, source: "default" },
       filePushDirectory: { value: "", source: "default" },
       publicUrl: {
         value: "wss://pwragent.example.com/federation",

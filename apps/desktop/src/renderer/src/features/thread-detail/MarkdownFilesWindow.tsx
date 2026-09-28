@@ -1,4 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { isRemoteFederationTarget } from "@pwragent/shared";
+import { scopeDesktopApiToFederationTarget } from "../../lib/federation-desktop-api";
 import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerFile,
@@ -18,6 +20,11 @@ export function MarkdownFilesWindow() {
   const desktopApi = useDesktopApi();
   const contextKey = useMemo(() => markdownFilesContextKeyFromHash(), []);
   const [snapshot, setSnapshot] = useState<MarkdownFileViewerSnapshot | undefined>();
+  const viewerApi = useMemo(() => scopeDesktopApiToFederationTarget(
+    desktopApi,
+    snapshot?.context.federationTarget && isRemoteFederationTarget(snapshot.context.federationTarget)
+      ? snapshot.context.federationTarget : undefined,
+  ), [desktopApi, snapshot?.context.federationTarget]);
   const selectedFile = snapshot?.files.find(
     (file) => file.path === snapshot.selectedPath,
   ) ?? snapshot?.files[0];
@@ -75,14 +82,14 @@ export function MarkdownFilesWindow() {
   }, [contextKey, desktopApi]);
 
   useEffect(() => {
-    const reader = desktopApi?.readMarkdownFile;
+    const reader = viewerApi?.readMarkdownFile;
     if (!reader || !selectedPath) {
       return;
     }
 
     let cancelled = false;
     setLoadState({ status: "loading" });
-    void reader({ path: selectedPath })
+    void reader({ path: selectedPath, thread: snapshot?.context.thread })
       .then((response) => {
         if (cancelled) return;
         if (response.error || response.content === undefined) {
@@ -105,7 +112,7 @@ export function MarkdownFilesWindow() {
     return () => {
       cancelled = true;
     };
-  }, [desktopApi, selectedPath]);
+  }, [viewerApi, selectedPath, snapshot?.context.thread]);
 
   const selectFile = useCallback(
     (file: MarkdownFileViewerFile) => {
@@ -121,10 +128,10 @@ export function MarkdownFilesWindow() {
   );
 
   const openSelectedFileInEditor = useCallback(() => {
-    if (!desktopApi?.openApplication || !snapshot?.editorApplication || !selectedFile) {
+    if (!viewerApi?.openApplication || !snapshot?.editorApplication || !selectedFile) {
       return;
     }
-    void desktopApi
+    void viewerApi
       .openApplication({
         applicationId: snapshot.editorApplication.id,
         kind: "editor",
@@ -135,7 +142,7 @@ export function MarkdownFilesWindow() {
       .catch((error: unknown) => {
         console.error("Failed to open markdown file in editor", error);
       });
-  }, [desktopApi, selectedFile, snapshot?.editorApplication]);
+  }, [viewerApi, selectedFile, snapshot?.editorApplication]);
 
   return (
     <div className="document-window markdown-files-window">
@@ -254,7 +261,7 @@ export function MarkdownFilesWindow() {
                 <ThreadMarkdown
                   applications={markdownApplications}
                   className="markdown-files-window__markdown"
-                  desktopApi={desktopApi}
+                  desktopApi={viewerApi}
                   fileViewerContext={snapshot?.context}
                   text={loadState.content}
                   variant="summary"
