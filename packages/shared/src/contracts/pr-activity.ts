@@ -12,6 +12,12 @@ export type PrActivityEvent = {
   prKeys: string[];
   /** Absent for routine events, which render neutral. */
   tone?: PrActivityTone;
+  /**
+   * How many identical observations this row stands for, when the journal
+   * coalesced repeats; `occurredAt` is then the latest and this the first.
+   */
+  repeats?: number;
+  firstOccurredAt?: number;
   budget?: "polling" | "repair";
   delta?: number;
   availableTokens?: number;

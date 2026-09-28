@@ -115,3 +115,14 @@ it("names other threads and opens them from the timeline", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Other fixture" }));
   expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "two" }));
 });
+
+it("shows a coalesced observation once with its repeat count", async () => {
+  const history: PrActivitySnapshot = { ...snapshot, events: [
+    { ...snapshot.events[1]!, id: 9, source: "thread lookup (user)", message: "No conflicts, checks passing",
+      tone: "ok", repeats: 3, firstOccurredAt: 1000, occurredAt: 3000 },
+  ] };
+  render(<PrActivityPanel desktopApi={{ getPrActivity: async () => history }} thread={thread} />);
+  const row = (await screen.findByText("No conflicts, checks passing")).closest("li")!;
+  expect(within(row).getByText(/^×3 since/)).toBeInTheDocument();
+  expect(within(row).getByText("On-demand check")).toBeInTheDocument();
+});

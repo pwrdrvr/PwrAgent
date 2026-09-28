@@ -1,25 +1,78 @@
 import type { PrActivityEvent, PrActivitySnapshot, PrActivityTone } from "@pwragent/shared";
 
+type RecordedEvent = Omit<PrActivityEvent, "id" | "occurredAt">;
+
 /** No per-check persistence: diagnostic recording makes zero SQLite commits. */
 export class PrActivityJournal {
   private readonly startedAt = Date.now();
   private sequence = 0;
+  private dropped = 0;
   private readonly events: PrActivityEvent[] = [];
+  /** The newest check or repair event per PR/thread stream, for coalescing. */
+  private readonly latestByStream = new Map<string, PrActivityEvent>();
 
   constructor(private readonly capacity = 2_000) {}
 
-  record(event: Omit<PrActivityEvent, "id" | "occurredAt">): void {
-    this.events.push({ ...event, id: ++this.sequence, occurredAt: Date.now() });
-    if (this.events.length > this.capacity) this.events.shift();
+  /**
+   * A healthy PR is observed by the poller, the selected-thread tick, and
+   * hover prefetches, and each observation also yields a repair decision. An
+   * observation that repeats the stream's latest event therefore moves that
+   * event to the top with a count instead of appending, so steady state costs
+   * one row per PR and category and never evicts the history that matters.
+   * A different result in between starts a new row, so order is preserved.
+   * Budget events are never coalesced; each one moves a balance.
+   */
+  record(event: RecordedEvent): void {
+    const occurredAt = Date.now();
+    const stream = streamKey(event);
+    const previous = stream ? this.latestByStream.get(stream) : undefined;
+    if (previous && sameOutcome(previous, event)) {
+      this.events.splice(this.events.indexOf(previous), 1);
+      const merged: PrActivityEvent = {
+        ...previous,
+        source: event.source,
+        id: ++this.sequence,
+        occurredAt,
+        firstOccurredAt: previous.firstOccurredAt ?? previous.occurredAt,
+        repeats: (previous.repeats ?? 1) + 1,
+      };
+      this.events.push(merged);
+      this.latestByStream.set(stream!, merged);
+      return;
+    }
+    const recorded: PrActivityEvent = { ...event, id: ++this.sequence, occurredAt };
+    this.events.push(recorded);
+    if (stream) this.latestByStream.set(stream, recorded);
+    if (this.events.length > this.capacity) {
+      const evicted = this.events.shift()!;
+      this.dropped += 1;
+      const evictedStream = streamKey(evicted);
+      if (evictedStream && this.latestByStream.get(evictedStream) === evicted) {
+        this.latestByStream.delete(evictedStream);
+      }
+    }
   }
 
   snapshot(): PrActivitySnapshot {
     return {
       startedAt: this.startedAt,
-      droppedEvents: this.sequence - this.events.length,
+      droppedEvents: this.dropped,
       events: this.events.slice().reverse(),
     };
   }
+}
+
+function streamKey(event: RecordedEvent): string | undefined {
+  if (event.category === "budget") return undefined;
+  return [
+    event.category,
+    [...event.prKeys].sort().join(","),
+    [...event.threadKeys].sort().join(","),
+  ].join("|");
+}
+
+function sameOutcome(left: RecordedEvent, right: RecordedEvent): boolean {
+  return left.message === right.message && left.tone === right.tone;
 }
 
 export function describePrRepairDecision(status: string): string {

@@ -19,6 +19,7 @@ import type {
   FederationRemoteTarget,
   FederationCapability,
   FederationPeerSummary,
+  PrActivitySnapshot,
   PrSummary,
   RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
@@ -7329,6 +7330,75 @@ describe("app server ipc", () => {
       );
 
       vi.setSystemTime(2_000_000 + 10_000);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the renderer's 60s selected-thread tick through despite timer jitter", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2_000_000);
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, APP_SERVER_GET_PR_ACTIVITY_CHANNEL } = await import("../../shared/ipc");
+      const request = {
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "scheduled",
+        branch: "fix/open",
+        directoryPaths: ["/repo"],
+      } satisfies RefreshThreadPullRequestsRequest;
+      const requestKey = buildThreadPrRequestKey({
+        backend: "codex",
+        threadId: "thread-1",
+        branch: "fix/open",
+        directoryPaths: ["/repo"],
+      });
+      const prs: PrSummary[] = [
+        githubPr({
+          number: 434,
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          state: "passing",
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/434",
+        }),
+      ];
+      getThreadOverlayState.mockResolvedValue({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs,
+        prsFetchedAt: 2_000_000 - 120_000,
+        prsRefreshKey: requestKey,
+      });
+      detectPullRequestsForThread.mockResolvedValue(prs);
+      registerAppServerIpcHandlers();
+
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(mockAppServerLog.debug).toHaveBeenCalledWith(
+          "threadPullRequestsRefresh:background-complete",
+          expect.objectContaining({ threadId: "thread-1", trigger: "scheduled" }),
+        );
+      });
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+
+      // Well inside the 60s cooldown: still a flood, still refused.
+      vi.setSystemTime(2_000_000 + 54_000);
+      const cooldownResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      expect(cooldownResponse).toMatchObject({ refreshStarted: false });
+      await Promise.resolve();
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+      // The refusal is a dedupe, not activity worth a row.
+      const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({}) as PrActivitySnapshot;
+      expect(activity.events.some((event) => event.message.startsWith("Check postponed"))).toBe(false);
+
+      // The next tick landing a few seconds short of 60s is the same tick.
+      vi.setSystemTime(2_000_000 + 56_000);
       await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
       await vi.waitFor(() => {
         expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);

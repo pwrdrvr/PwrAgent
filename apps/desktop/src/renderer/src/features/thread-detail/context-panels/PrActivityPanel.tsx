@@ -294,6 +294,16 @@ function ActivityRow(props: {
             </span>
           ))}
           {props.quiet ? null : <span>{formatSource(event.source)}</span>}
+          {event.repeats && event.repeats > 1 ? (
+            <span
+              className="pr-activity__repeats"
+              title={`Seen ${event.repeats} times; unchanged since ${
+                new Date(event.firstOccurredAt ?? event.occurredAt).toLocaleString()
+              }`}
+            >
+              ×{event.repeats} since {formatEventTime(event.firstOccurredAt ?? event.occurredAt)}
+            </span>
+          ) : null}
           {event.budget ? <BudgetDelta event={event} /> : null}
         </p>
         {props.showThreads && event.threadKeys.length > 0 ? (
@@ -385,8 +395,12 @@ function formatPrKey(key: string, withRepository: boolean): string {
   return `${segments.slice(-2).join("/")}${number}`;
 }
 
+/**
+ * `user` lookups come from sidebar hover prefetches and from the agent's PR
+ * status tool, so the label names neither.
+ */
 const SOURCE_LABELS: Record<string, string> = {
-  "thread lookup (user)": "Refresh",
+  "thread lookup (user)": "On-demand check",
   "thread lookup (scheduled)": "Scheduled check",
   "thread lookup (post-turn)": "After turn",
   "background poll": "Background check",

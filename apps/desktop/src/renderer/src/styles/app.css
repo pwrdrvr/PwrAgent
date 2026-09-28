@@ -38315,6 +38315,11 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   color: var(--text-primary);
 }
 
+.pr-activity__repeats {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .pr-activity__thread-link {
   min-width: 0;
   max-width: 100%;

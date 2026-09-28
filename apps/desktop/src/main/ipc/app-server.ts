@@ -425,6 +425,14 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
+/**
+ * The renderer's selected-thread tick is also 60s, but it runs on its own
+ * timer and its age is measured here from a later stamp (the IPC hop, and the
+ * lookup's observation token). With no slack, jitter of a few milliseconds
+ * postponed every other tick and halved the cadence. The cooldown exists to
+ * stop floods, which this slack still does.
+ */
+const SCHEDULED_THREAD_PR_REFRESH_SLACK_MS = 5_000;
 const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
 const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
@@ -4590,10 +4598,9 @@ class DesktopAppServerService {
         },
       );
       if (claim.skippedReason) {
-        this.prActivity.record({ category: "check", source: `thread lookup (${trigger})`,
-          threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
-          prKeys: params.previousPrs.map(getPrStatusKey), tone: "warning",
-          message: `Check postponed: ${claim.skippedReason}${claim.nextAllowedInMs !== undefined ? `; eligible in ${Math.ceil(claim.nextAllowedInMs / 1000)} seconds` : ""}` });
+        // Not recorded as activity. A cooldown skip means the data is seconds
+        // old, and an empty request budget was already recorded by
+        // `takePrPollingToken`, so a row here was noise or a duplicate.
         if (trigger === "user") {
           logDebug("threadPullRequestsRefresh:skipped", {
             ...userPrRefreshLogPayload({
@@ -4955,7 +4962,8 @@ class DesktopAppServerService {
       entry?.fetchedAt ?? 0,
     );
     const ageMs = now - lastRequestedAt;
-    const due = ageMs >= minInterval;
+    const slack = trigger === "scheduled" ? SCHEDULED_THREAD_PR_REFRESH_SLACK_MS : 0;
+    const due = ageMs >= minInterval - slack;
     if (!due) {
       return {
         skippedReason: "cooldown",
