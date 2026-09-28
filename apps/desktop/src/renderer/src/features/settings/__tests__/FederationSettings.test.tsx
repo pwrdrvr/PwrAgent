@@ -119,6 +119,31 @@ describe("FederationSettings", () => {
     expect(onWriteConfig).toHaveBeenCalledTimes(2);
   });
 
+  it.each([false, new Error("Write failed")])("preserves a failed folder draft for retry (%s)", async (result) => {
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true)
+      .mockImplementationOnce(async () => {
+        if (result instanceof Error) throw result;
+        return result;
+      });
+    render(<FederationCapabilities federation={settingsSnapshot().federation} saving={false} onWriteConfig={onWriteConfig} />);
+    const input = screen.getByRole("textbox", { name: "Incoming files folder" });
+    fireEvent.change(input, { target: { value: "/tmp/incoming" } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole("alert")).toHaveTextContent(result instanceof Error ? "Write failed" : "could not be saved");
+    expect(input).not.toBeDisabled();
+    expect(input).toHaveValue("/tmp/incoming");
+
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(onWriteConfig).toHaveBeenCalledTimes(2);
+    expect(onWriteConfig).toHaveBeenNthCalledWith(2, { federation: { filePushDirectory: "/tmp/incoming" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // A successful retry discards the draft, so an unchanged blur does not write again.
+    fireEvent.blur(input);
+    expect(onWriteConfig).toHaveBeenCalledTimes(2);
+  });
+
   // The pane shipped on browser-default controls once. Nothing else here
   // reads a class, so without this the next bare <input> passes every test
   // and only shows up by eye.

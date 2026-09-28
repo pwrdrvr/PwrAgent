@@ -14,17 +14,20 @@ export function FederationCapabilities(props: {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
 
-  const save = async (patch: NonNullable<DesktopSettingsConfigPatch["federation"]>) => {
-    if (writing.current) return;
+  const save = async (patch: NonNullable<DesktopSettingsConfigPatch["federation"]>): Promise<boolean> => {
+    if (writing.current) return false;
     writing.current = true;
     setPending(true);
     setError(undefined);
     try {
       if (!await props.onWriteConfig({ federation: patch })) {
         setError("Capability change could not be saved. Try again.");
+        return false;
       }
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return false;
     } finally {
       writing.current = false;
       setPending(false);
@@ -66,7 +69,9 @@ export function FederationCapabilities(props: {
               onChange={(event) => directory.set("value", event.target.value)}
               onBlur={() => {
                 if (directory.dirty) {
-                  void save({ filePushDirectory: directory.values.value }).finally(() => directory.discard());
+                  void save({ filePushDirectory: directory.values.value }).then((saved) => {
+                    if (saved) directory.discard();
+                  });
                 }
               }}
               onKeyDown={(event) => {
