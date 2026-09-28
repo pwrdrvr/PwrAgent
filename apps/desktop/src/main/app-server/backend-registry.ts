@@ -1,5 +1,5 @@
 import { analyzeUsageActivity } from "./usage-activity-analysis";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { MonitorJobSuggestionDetector, MONITOR_JOB_SUGGESTION } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
@@ -8282,6 +8282,8 @@ export class DesktopBackendRegistry {
     rateLimits: BackendRateLimitSummary[];
   };
   private codexRateLimitsNotificationVersion = 0;
+  /** When Codex last reported account limits; readings carry this, not "now". */
+  private codexRateLimitsObservedAt?: number;
   private codexQuotaRefresh?: Promise<void>;
   private codexQuotaRefreshAt?: number;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
@@ -10664,6 +10666,7 @@ export class DesktopBackendRegistry {
     this.codexBackendGeneration += 1;
     this.codexBackendSummary = undefined;
     this.pendingCodexRateLimits = undefined;
+    this.codexRateLimitsObservedAt = undefined;
     this.codexQuotaRefresh = undefined;
     this.codexQuotaRefreshAt = undefined;
     this.pendingCodexRateLimitBroadcast = undefined;
@@ -14692,7 +14695,33 @@ export class DesktopBackendRegistry {
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
     return { ...await this.overlayStore.readUsageActivity(request), readAt: Date.now(),
-      rateLimits: this.codexBackendSummary?.rateLimits ?? [] };
+      rateLimits: this.codexBackendSummary?.rateLimits ?? [],
+      limitObservation: this.codexLimitObservation() };
+  }
+
+  /**
+   * The Codex account limits this instance holds, keyed by an opaque account
+   * hash so owners on different accounts never blend and no email is relayed.
+   */
+  private codexLimitObservation(): UsageLimitObservation | undefined {
+    const summary = this.codexBackendSummary;
+    const observedAt = this.codexRateLimitsObservedAt;
+    if (!summary?.rateLimits?.length || observedAt === undefined) return undefined;
+    const account = summary.account;
+    const identity = account?.email ?? account?.label;
+    return {
+      observedAt,
+      accountKey: identity
+        ? createHash("sha256").update(`${account?.type ?? ""}\u0000${identity}`).digest("hex").slice(0, 16)
+        : undefined,
+      planType: account?.planType,
+      limits: summary.rateLimits.map((limit) => ({
+        name: limit.name, limitId: limit.limitId, windowKey: limit.windowKey,
+        usedPercent: limit.usedPercent, used: limit.used, limit: limit.limit,
+        resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+        hasCredits: limit.hasCredits, unlimited: limit.unlimited,
+      })),
+    };
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
@@ -26366,6 +26395,9 @@ export class DesktopBackendRegistry {
     if (rateLimits.length === 0) {
       return false;
     }
+    // A sparse update is still a fresh observation of the account, even when
+    // its values match what we already hold.
+    this.codexRateLimitsObservedAt = Date.now();
     const notificationVersion = ++this.codexRateLimitsNotificationVersion;
     const backendGeneration = this.codexBackendGeneration;
     const currentSummary = this.codexBackendSummary;
@@ -26457,6 +26489,7 @@ export class DesktopBackendRegistry {
     ) {
       return false;
     }
+    this.codexRateLimitsObservedAt = Date.now();
     const currentSummary = this.codexBackendSummary;
     if (!currentSummary) {
       this.pendingCodexRateLimits = {
@@ -26692,6 +26725,9 @@ export class DesktopBackendRegistry {
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
     this.codexBackendSummary = summary;
+    if (rateLimits === discoveredRateLimits && discoveredRateLimits?.length) {
+      this.codexRateLimitsObservedAt = Date.now();
+    }
     if (this.pendingCodexRateLimits?.backendGeneration === backendGeneration) {
       this.pendingCodexRateLimits = undefined;
     }
@@ -40473,6 +40509,7 @@ export class DesktopBackendRegistry {
           threadId: notification.params.threadId,
           turnId,
           completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+          limitObservation: event.backend === "codex" ? this.codexLimitObservation() : undefined,
         });
         if (completed) {
           await this.emitThreadPricingUpdated({

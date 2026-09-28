@@ -9,6 +9,25 @@ export type ReadUsageActivityRequest = {
   federationTarget?: FederationTarget;
 };
 
+/** One account limit as its owner last received it from the provider. */
+export type UsageLimitReading = Pick<BackendRateLimitSummary,
+  "name" | "limitId" | "windowKey" | "usedPercent" | "used" | "limit" | "resetAt" | "windowMinutes"
+  | "hasCredits" | "unlimited">;
+
+/**
+ * An owner's account-limit snapshot. Recorded on a turn's ledger row when the
+ * turn completes, so a window's readings form an observed history. Limits are
+ * account-wide: a reading is never a thread's share of the limit.
+ */
+export type UsageLimitObservation = {
+  /** When the owner last received these limits, not when the turn ended. */
+  observedAt: number;
+  /** Opaque per-account key, so owners on different accounts never blend. */
+  accountKey?: string;
+  planType?: string;
+  limits: UsageLimitReading[];
+};
+
 export type UsageActivityRow = {
   line: ThreadUsageLineRecord;
   title: string;
@@ -20,13 +39,25 @@ export type ReadUsageActivityResponse = {
   truncated: boolean;
   readAt: number;
   rateLimits: BackendRateLimitSummary[];
+  /** The owner's current account limits; absent from older peers. */
+  limitObservation?: UsageLimitObservation;
+  /**
+   * Distinct readings stamped on the window's completed turns, oldest first.
+   * A reading can predate its turn's completion; readings are never per-thread.
+   */
+  limitHistory?: UsageLimitObservation[];
 };
 
 export type AnalyzeUsageActivityRequest = {
   backend: AppServerBackendKind;
   threadId: string;
+  /**
+   * Analyze this turn's entries. The owner pages back a bounded number of
+   * protocol pages to find it, then falls back to the recent page.
+   */
+  turnId?: string;
   model: string;
-  /** One recent protocol page; the server also enforces these bounds. */
+  /** Entry and character bounds; the server also enforces these. */
   entryLimit: number;
   characterLimit: number;
   federationTarget?: FederationTarget;
@@ -39,7 +70,50 @@ export type AnalyzeUsageActivityResponse = {
   characters: number;
   hasEarlierHistory: boolean;
   truncated: boolean;
+  /** "turn" when the requested turn was found; absent from older peers. */
+  scope?: "turn" | "recent";
+  pagesRead?: number;
 };
+
+const LIMIT_WINDOW_KEYS = new Set(["primary", "secondary", "individual", "credits"]);
+const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/** Parse a stored or relayed reading; anything malformed reads as absent. */
+export function parseUsageLimitObservation(value: unknown): UsageLimitObservation | undefined {
+  let record: unknown = value;
+  if (typeof value === "string") {
+    try { record = JSON.parse(value); } catch { return undefined; }
+  }
+  if (!record || typeof record !== "object") return undefined;
+  const source = record as Record<string, unknown>;
+  const observedAt = finite(source.observedAt);
+  if (observedAt === undefined || !Array.isArray(source.limits)) return undefined;
+  const limits: UsageLimitReading[] = [];
+  for (const item of source.limits.slice(0, 16)) {
+    if (!item || typeof item !== "object") continue;
+    const limit = item as Record<string, unknown>;
+    if (typeof limit.name !== "string" || !limit.name) continue;
+    limits.push({
+      name: limit.name.slice(0, 120),
+      limitId: typeof limit.limitId === "string" ? limit.limitId.slice(0, 120) : undefined,
+      windowKey: typeof limit.windowKey === "string" && LIMIT_WINDOW_KEYS.has(limit.windowKey)
+        ? limit.windowKey as UsageLimitReading["windowKey"] : undefined,
+      usedPercent: finite(limit.usedPercent),
+      used: finite(limit.used),
+      limit: finite(limit.limit),
+      resetAt: finite(limit.resetAt),
+      windowMinutes: finite(limit.windowMinutes),
+      hasCredits: typeof limit.hasCredits === "boolean" ? limit.hasCredits : undefined,
+      unlimited: typeof limit.unlimited === "boolean" ? limit.unlimited : undefined,
+    });
+  }
+  return {
+    observedAt,
+    accountKey: typeof source.accountKey === "string" ? source.accountKey.slice(0, 64) : undefined,
+    planType: typeof source.planType === "string" ? source.planType.slice(0, 64) : undefined,
+    limits,
+  };
+}
 
 export function validateUsageActivityWindow(request: ReadUsageActivityRequest): void {
   if (!Number.isFinite(request.from) || !Number.isFinite(request.to)

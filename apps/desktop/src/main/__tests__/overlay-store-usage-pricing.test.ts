@@ -124,6 +124,40 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     await expect(store.readUsageActivity({ from: start, to: start + 32 * 86400000 })).rejects.toThrow("31 days");
   });
 
+  it("records the owner's account limits in the same completion commit and relays each reading once", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    const reading = { observedAt: start + 3_500, accountKey: "acct", planType: "plus", limits: [
+      { name: "5h limit", windowKey: "primary" as const, usedPercent: 41, resetAt: start + 3_600_000, windowMinutes: 300 },
+      { name: "Weekly limit", windowKey: "secondary" as const, usedPercent: 9, resetAt: start + 7 * 86_400_000, windowMinutes: 10_080 },
+    ] };
+    for (const turnId of ["turn-1", "turn-2"]) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true, startedAt: start, turnId,
+        usageLineId: `line-${turnId}`,
+      }) });
+    }
+    const { result, writes } = await measureSqliteWrites(() => store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 4_000, limitObservation: reading,
+    }));
+    expect(result).toBe(true);
+    expectSqliteWriteBudget({
+      scenario: "completed-turn-usage-limit-reading",
+      writes,
+      note: "One completion carrying the owner's account-limit reading: the reading rides the completion UPDATE, so still one commit per completed turn",
+    });
+    // A second turn completing on the same reading relays it only once.
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-2", completedAt: start + 4_500, limitObservation: reading,
+    });
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 5_000 });
+    expect(snapshot.limitHistory).toEqual([reading]);
+    // A corrupt stored reading is dropped, not thrown.
+    stateDb.raw.prepare("UPDATE thread_usage_turns SET rate_limit_snapshot = ? WHERE turn_id = ?").run("{not json", "turn-2");
+    expect((await store.readUsageActivity({ from: start, to: start + 5_000 })).limitHistory).toEqual([reading]);
+  });
+
   it("uses one commit to record a completed turn after its usage row was flushed", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     useFileStateDb();

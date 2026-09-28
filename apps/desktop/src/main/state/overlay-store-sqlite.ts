@@ -1,4 +1,4 @@
-import { buildLegacyEncodedThreadIdentityKey, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRow } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRow, type UsageLimitObservation } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
@@ -2182,6 +2182,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     turnId: string;
     completedAt: number;
+    /** The owner's account limits at completion; rides the same UPDATE. */
+    limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
     const turn = this.stateDb.raw.prepare(
       `SELECT turn.completed_at FROM thread_usage_turns AS turn
@@ -2202,20 +2204,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }
     const result = this.stateDb.raw.prepare(
       `UPDATE thread_usage_turns
-          SET completed_at = ?, updated_at = ?
+          SET completed_at = ?, updated_at = ?,
+              rate_limit_snapshot = COALESCE(?, rate_limit_snapshot)
         WHERE backend = ? AND thread_id = ? AND turn_id = ?
           AND completed_at IS NULL`,
-    ).run(params.completedAt, Date.now(), params.backend, params.threadId, params.turnId);
+    ).run(
+      params.completedAt,
+      Date.now(),
+      params.limitObservation ? JSON.stringify(params.limitObservation) : null,
+      params.backend,
+      params.threadId,
+      params.turnId,
+    );
     return result.changes > 0;
   }
 
-  async readUsageActivity(request: ReadUsageActivityRequest): Promise<{ rows: UsageActivityRow[]; truncated: boolean }> {
+  async readUsageActivity(request: ReadUsageActivityRequest): Promise<{
+    rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
+  }> {
     validateUsageActivityWindow(request);
     // Read PwrAgent's ledger once, without parent-thread joins that duplicate
     // helper costs. Candidate timestamps are not used to apportion turn cost.
     const rows = this.stateDb.raw.prepare(`
       SELECT l.*, t.started_at AS activity_started_at,
-             COALESCE(t.completed_at, l.completed_at) AS activity_completed_at
+             COALESCE(t.completed_at, l.completed_at) AS activity_completed_at,
+             t.rate_limit_snapshot AS activity_rate_limit_snapshot
         FROM thread_usage_lines l
         LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
        WHERE l.status != 'superseded'
@@ -2226,6 +2239,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        LIMIT 5001
     `).all(request.to, request.from) as Array<ThreadUsageLineRow & {
       activity_started_at: number | null; activity_completed_at: number | null;
+      activity_rate_limit_snapshot: string | null;
     }>;
     const visibleRows = rows.slice(0, 5000);
     const identityFor = (row: ThreadUsageLineRow) => buildLegacyEncodedThreadIdentityKey(
@@ -2240,7 +2254,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        WHERE identity_key IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify(identities)) as Array<{ identity_key: string; title: string }> : [];
     const titles = new Map(titleRows.map((row) => [row.identity_key, row.title]));
+    // Many ledger lines share one turn, and turns completing together often
+    // share one reading, so relay each distinct reading once.
+    const readings = new Map<string, UsageLimitObservation>();
+    for (const row of visibleRows) {
+      const stored = row.activity_rate_limit_snapshot;
+      if (!stored || readings.has(stored)) continue;
+      const reading = parseUsageLimitObservation(stored);
+      if (reading) readings.set(stored, reading);
+    }
     return {
+      limitHistory: [...readings.values()].sort((a, b) => a.observedAt - b.observedAt),
       truncated: rows.length > 5000,
       rows: visibleRows.map((row) => ({
         line: { ...threadUsageLineFromRow(row),

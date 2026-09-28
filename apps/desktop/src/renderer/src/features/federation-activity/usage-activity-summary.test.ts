@@ -45,4 +45,19 @@ describe("usage activity aggregation", () => {
     expect(result.groups[0].cost).toBe(300);
     expect(result.groups[0].rows[0].line.scope).toBe("turn");
   });
+
+  it("rolls helper threads up into the parent present in the window and keeps their signals apart", () => {
+    const parent = usageFixture({ threadId: "parent", usageLineId: "p", turnId: "p1", observedColdReplayCount: 7, peakContextTokens: 940, modelContextWindow: 1000 });
+    const helper = usageFixture({ threadId: "helper", parentThreadId: "parent", usageLineId: "h", turnId: "h1", totalCostMicros: 200, observedColdReplayCount: 50, fastMode: true });
+    const grandchild = usageFixture({ threadId: "grandchild", parentThreadId: "helper", usageLineId: "g", turnId: "g1", totalCostMicros: 100 });
+    const orphan = usageFixture({ threadId: "orphan", parentThreadId: "elsewhere", usageLineId: "o", turnId: "o1" });
+    const result = summarizeUsageActivity([{ ...helper, title: "Helper" }, { ...parent, title: "Parent" }, grandchild, orphan], 100, 300);
+    expect(result.groups.map((group) => [group.title, group.cost, group.helperThreads, group.helperCost])).toEqual([
+      ["Parent", 600, 2, 300],
+      ["Fixture thread", 300, 0, 0],
+    ]);
+    expect(result.groups[0]).toMatchObject({ coldReplays: 7, peakContextShare: 0.94, fastMode: true });
+    expect(result.groups[0].rows[0].line.threadId).toBe("parent");
+    expect(result.groups[1].coldReplays).toBeUndefined();
+  });
 });

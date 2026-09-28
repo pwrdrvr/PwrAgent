@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import Database from "better-sqlite3";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { READ_NAVIGATION_BACKEND_METADATA } from "../state/navigation-backend-metadata";
@@ -79,7 +79,7 @@ describe("bounded backend navigation metadata", () => {
     stateDb.raw.pragma(`user_version = ${version}`);
     stateDb.close();
     stateDb = StateDb.open(file); store = new SqliteOverlayStore(stateDb);
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(66);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     expect(stateDb.raw.prepare("SELECT * FROM thread_storage_retention").all()).toEqual(
       version === 64 ? [] : [{ backend: "codex", thread_id: "retained-receipt", archived_at: 123 }],
     );
@@ -107,14 +107,14 @@ describe("bounded backend navigation metadata", () => {
     const indexBefore = stateDb.raw.prepare("SELECT rootpage FROM sqlite_master WHERE name = 'idx_backends_navigation_metadata'").get();
     stateDb.close();
     stateDb = StateDb.open(file); store = new SqliteOverlayStore(stateDb);
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(66);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     expect(stateDb.raw.prepare("SELECT * FROM thread_storage_retention").all()).toEqual([]);
     expect(stateDb.raw.prepare("SELECT rootpage FROM sqlite_master WHERE name = 'idx_backends_navigation_metadata'").get()).toEqual(indexBefore);
     expect(store["getBackend"]("codex")).toEqual({ knownThreadKeys: ["codex:selected"], lastSnapshotHash: "initialized" });
   });
 
   it("creates both retention and metadata schemas in a fresh database", () => {
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(66);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     expect(stateDb.raw.prepare("SELECT * FROM thread_storage_retention").all()).toEqual([]);
     expect(stateDb.raw.prepare(READ_NAVIGATION_BACKEND_METADATA).get("codex")).toBeUndefined();
   });

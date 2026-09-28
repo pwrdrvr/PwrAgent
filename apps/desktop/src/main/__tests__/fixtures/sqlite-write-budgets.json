@@ -76,6 +76,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "completed-turn-usage-limit-reading": {
+    "commits": 1,
+    "note": "One completion carrying the owner's account-limit reading: the reading rides the completion UPDATE, so still one commit per completed turn",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "composer-draft-typing": {
     "commits": 70,
     "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence — the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",
