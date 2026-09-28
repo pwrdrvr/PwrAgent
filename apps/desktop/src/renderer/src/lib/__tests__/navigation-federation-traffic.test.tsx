@@ -1,3 +1,4 @@
+import { navigationRequestByteBudget } from "../../../../shared/__tests__/navigation-traffic-budget";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationIdentity, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
@@ -6,6 +7,7 @@ import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { useThreadNavigation } from "../useThreadNavigation";
 
 // Measures uncompressed query request/response JSON at the desktop API boundary.
+// Diagnostic counters are charged at maximum wire width; diagnosticBytes exposes that overhead.
 // Excludes transport envelopes, TLS, selected configuration, and history pages.
 // Cold includes the paced 10-row first page, the 100-row blocks an explicit
 // "Load more" asks for, and existing owner-batch rebuilds.
@@ -21,7 +23,7 @@ it.each([1, 10, 101])("budgets federation navigation traffic for %s visible moun
     prs: [884, 874, 1722].map((number) => ({ number, provider: "github", org: "fixture", repo: "project",
       title: `PR ${number}`, url: `https://github.com/fixture/project/pull/${number}`, state: "merged" })),
   }));
-  let samples: { requestBytes: number; responseBytes: number; ids: string[] }[] = [];
+  let samples: { diagnosticBytes: number; requestBytes: number; responseBytes: number; ids: string[] }[] = [];
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
     const query = request.query;
     const selected = query.kind === "directory-index" ? [] : query.kind === "exact"
@@ -35,7 +37,7 @@ it.each([1, 10, 101])("budgets federation navigation traffic for %s visible moun
       entries: selected.slice(offset, end).map((row) => ({ row, placement: { kind: "root" }, orderKey: row.id })),
     };
     if (request.federationTarget?.scope === "remote") samples.push({
-      requestBytes: new TextEncoder().encode(JSON.stringify(request)).byteLength,
+      ...navigationRequestByteBudget(request),
       responseBytes: new TextEncoder().encode(JSON.stringify(response)).byteLength,
       ids: response.entries.map(({ row }) => row.id),
     });
@@ -55,6 +57,7 @@ it.each([1, 10, 101])("budgets federation navigation traffic for %s visible moun
   };
   const measure = () => ({
     requests: samples.length,
+    diagnosticBytes: samples.reduce((total, sample) => total + sample.diagnosticBytes, 0),
     requestBytes: samples.reduce((total, sample) => total + sample.requestBytes, 0),
     responseBytes: samples.reduce((total, sample) => total + sample.responseBytes, 0),
     rows: samples.flatMap((sample) => sample.ids).length,

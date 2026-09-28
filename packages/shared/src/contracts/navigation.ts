@@ -1825,6 +1825,18 @@ export type NavigationQueryRequest = {
   consumer: NavigationQueryConsumerClass;
   /** Bounded diagnostic attribution; never part of query identity. */
   readReason?: "demand" | "refresh" | "continuation" | "rebaseline" | "pins";
+  /** Opaque counters and fixed vocabulary only; ignored by semantic query identity. */
+  diagnostic?: {
+    /** Random renderer-lifetime token; never a machine or thread identifier. */
+    origin?: string;
+    view: number;
+    effect: number;
+    logical: number;
+    attempt: number;
+    cause: "demand" | "refresh" | "continuation" | "rebaseline" | "pins" | "turn" | "thread" | "metadata" | "federation" | "messaging-bindings" | "timer" | "visibility" | "event";
+    invalidations: number;
+    trigger?: string;
+  };
   backend?: AppServerBackendScope;
   federationTarget?: FederationTarget;
   query: NavigationQuery;

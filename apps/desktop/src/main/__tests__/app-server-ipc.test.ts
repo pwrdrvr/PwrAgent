@@ -2452,6 +2452,31 @@ describe("app server ipc", () => {
     ).resolves.toBe(snapshot);
   });
 
+  it("carries renderer causes across IPC into the physical owner and index reads", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [] });
+    registerAppServerIpcHandlers();
+    const before = listingDiagnostics.snapshot().recorded;
+    await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90299, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
+      diagnostic: { view: 44, effect: 2, logical: 6, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 },
+    });
+    const snapshot = listingDiagnostics.snapshot();
+    const events = snapshot.events.slice(-(snapshot.recorded - before));
+    const ipc = events.find((event) => event.stage === "ipc" && event.phase === "start")!;
+    expect(ipc).toMatchObject({ sender: 90299, view: 44, effect: 2, logical: 6, reason: "turn", trigger: "turn/completed" });
+    const navigation = events.find((event) => event.stage === "navigation" && event.phase === "start")!;
+    expect(navigation.parentId).toBe(ipc.id);
+    const owner = events.find((event) => event.stage === "owner-page" && event.phase === "start")!;
+    expect(owner.parentId).toBe(navigation.id);
+    const execution = events.find((event) => event.stage === "owner-read" && event.phase === "start")!;
+    expect(execution.parentId).toBe(owner.id);
+    expect(events.some((event) => event.stage === "index" && (event.parentId === execution.id || event.id === execution.id))).toBe(true);
+  });
+
   it("reconciles compact saved pins through the owner cache before projecting viewer Attention", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");

@@ -1,3 +1,5 @@
+import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
+import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
@@ -7995,7 +7997,7 @@ function invalidateNavigationEvent(event: AgentEvent): void {
   if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
   const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
   const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
-  navigationQueryPool.invalidateQueryOwner(event.federationTarget);
+  navigationQueryPool.invalidateQueryOwner(event.federationTarget, navigationDiagnosticCause(event), navigationDiagnosticTrigger(event));
   navigationQueryPool.invalidateExactOwner(event.federationTarget,
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }
@@ -8305,8 +8307,9 @@ export function registerAppServerIpcHandlers(): void {
       request: NavigationQueryRequest,
       consumerId?: string,
     ): Promise<NavigationQueryPage | NavigationReadFailure> => {
-      return withNavigationConsumer(event, consumerId, (token) =>
-        appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(event.sender.id, request), token));
+      return listingDiagnostics.trace("ipc", { ...listingRequestFields(request), sender: event.sender.id }, () =>
+        withNavigationConsumer(event, consumerId, (token) =>
+          appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(event.sender.id, request), token)));
     },
   );
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);

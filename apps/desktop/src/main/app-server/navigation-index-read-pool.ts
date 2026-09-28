@@ -1,3 +1,4 @@
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
@@ -62,10 +63,14 @@ export class NavigationIndexReadPool {
   read(key: string, load: (signal: AbortSignal) => Promise<NavigationQueryIndex>, signal?: AbortSignal): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
     const retained = this.retained.get(key);
-    if (retained && retained.expires > Date.now()) return Promise.resolve(retained.index);
+    if (retained && retained.expires > Date.now()) {
+      listingDiagnostics.link("index", "cache-hit", retained.owner.promise);
+      return Promise.resolve(retained.index);
+    }
     if (retained) this.evict(key);
     if (this.readers >= 256) return Promise.reject(new Error("Navigation index consumer admission is full."));
     let pending = this.joinable.get(key);
+    if (pending) listingDiagnostics.link("index", "coalesced", pending.promise);
     if (!pending) {
       if (this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
       const controller = new AbortController();
@@ -73,13 +78,13 @@ export class NavigationIndexReadPool {
       const owned = pending;
       this.physical.add(owned);
       this.joinable.set(key, owned);
-      owned.promise = Promise.resolve().then(() => {
+      owned.promise = listingDiagnostics.trace("index", {}, () => Promise.resolve().then(() => {
         controller.signal.throwIfAborted();
         return load(controller.signal);
       }).then((index) => { this.retain(key, index, owned); return index; }).finally(() => {
         this.physical.delete(owned);
         if (this.joinable.get(key) === owned) this.joinable.delete(key);
-      });
+      }));
     }
     const owned = pending;
     owned.readers += 1;
@@ -98,7 +103,10 @@ export class NavigationIndexReadPool {
         }
         return true;
       };
-      const abort = (): void => { if (release()) reject(signal?.reason ?? new Error("Navigation index read cancelled.")); };
+      const abort = (): void => { if (release()) {
+        listingDiagnostics.link("index", "cancel", owned.promise);
+        reject(signal?.reason ?? new Error("Navigation index read cancelled."));
+      } };
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) { abort(); return; }
       owned.promise.then((index) => { if (release()) resolve(index); }, (error) => { if (release()) reject(error); });

@@ -7,6 +7,7 @@
 // sendCommand() posts CDP methods to it, and Profiler.stop returns a
 // .cpuprofile-shaped object for the main thread.
 
+import { listingDiagnostics } from "./listing-diagnostics";
 import { Session } from "node:inspector";
 import { directoryEnrichmentDiagnostics } from "./directory-enrichment-diagnostics";
 import type { HotCpuTarget } from "./hot-cpu-profiler";
@@ -48,7 +49,7 @@ export function createMainProcessHotCpuTarget(): HotCpuTarget {
       off: () => {},
     },
     getOSProcessId: () => process.pid,
-    readDiagnostics: () => ({ directoryEnrichment: directoryEnrichmentDiagnostics.snapshot() }),
+    readDiagnostics: () => ({ directoryEnrichment: directoryEnrichmentDiagnostics.snapshot(), listings: listingDiagnostics.snapshot() }),
     readHeapUsage: () => {
       const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
       return { heapUsed, heapTotal, external, arrayBuffers };

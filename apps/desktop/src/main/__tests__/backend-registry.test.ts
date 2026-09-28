@@ -9561,6 +9561,22 @@ describe("DesktopBackendRegistry", () => {
     } finally { await registry.close(); }
   });
 
+  it("links registry listing cache hits to the physical scan without retaining row content", async () => {
+    const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      const before = listingDiagnostics.snapshot().recorded;
+      await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
+      await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
+      const snapshot = listingDiagnostics.snapshot();
+      const events = snapshot.events.slice(-(snapshot.recorded - before));
+      const physical = events.find((event) => event.stage === "registry" && event.phase === "start")!;
+      expect(physical).toMatchObject({ caller: "renderer-navigation-query", provider: "codex" });
+      expect(events).toContainEqual(expect.objectContaining({ stage: "registry", phase: "cache-hit", targetId: physical.id }));
+    } finally { await registry.close(); }
+  });
+
   it("propagates an authoritative refresh through the combined provider listing", async () => {
     const codexClient = new MockBackendClient({
       threads: [{ id: "fixture", title: "Before", titleSource: "explicit", linkedDirectories: [], source: "codex" }],

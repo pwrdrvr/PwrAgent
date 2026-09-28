@@ -1,3 +1,4 @@
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { MonitorJobSuggestionDetector, MONITOR_JOB_SUGGESTION } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { priceLocalModelUsage } from "@pwragent/shared";
@@ -10884,6 +10885,10 @@ export class DesktopBackendRegistry {
     const now = Date.now();
     const cached = this.findReusableThreadListCache(normalizedParams, cacheKey, now);
     if (cached) {
+      listingDiagnostics.link("registry", cached.pending ? "coalesced" : "cache-hit", cached.value, {
+        caller: normalizedParams.callerReason,
+        provider: normalizedParams.backend === "codex" ? "codex" : normalizedParams.backend ? "acp" : "all",
+      });
       logDebug("threadListCache:hit", {
         archived: normalizedParams.archived === true,
         backend: normalizedParams.backend ?? "all",
@@ -10921,12 +10926,15 @@ export class DesktopBackendRegistry {
     const pendingState: ThreadListCacheState = {};
     const displayMetadataObservationSequence =
       this.reserveThreadInfoObservation();
-    const promise = this.readThreadList(
-      normalizedParams,
-      displayMetadataObservationSequence,
-    )
+    const execution = listingDiagnostics.trace("registry", {
+      caller: normalizedParams.callerReason,
+      provider: normalizedParams.backend === "codex" ? "codex" : normalizedParams.backend ? "acp" : "all",
+      archived: normalizedParams.archived === true,
+    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence));
+    const promise = execution
       .then((threads) => {
         if (this.threadListCache.get(cacheKey) === pendingState) {
+          listingDiagnostics.remember(threads, execution);
           this.threadListCache.set(cacheKey, {
             expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
             threads,
@@ -10969,6 +10977,7 @@ export class DesktopBackendRegistry {
         });
         throw error;
       });
+    listingDiagnostics.remember(promise, execution);
     pendingState.promise = promise;
     this.threadListCache.set(cacheKey, pendingState);
     return await promise;

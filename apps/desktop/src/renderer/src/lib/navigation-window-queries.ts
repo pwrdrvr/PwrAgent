@@ -1,3 +1,5 @@
+import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
+import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -35,6 +37,10 @@ export type NavigationWindowQueriesState = {
   admissionError?: string;
 };
 type Resource = {
+  diagnosticLogical?: number;
+  diagnosticTrigger?: string;
+  diagnosticCause?: NavigationDiagnosticCause;
+  diagnosticInvalidations?: number;
   requestKey: string;
   token: string;
   value: NavigationWindowResource;
@@ -48,7 +54,7 @@ type Resource = {
 /** Semantic demand ignores object insertion order and identity-set ordering. */
 export function navigationDemandKey(request: NavigationQueryRequest): string {
   return JSON.stringify(request, (key, value: unknown) => {
-    if (key === "readReason" || key === "deadlineAt") return undefined;
+    if (key === "readReason" || key === "deadlineAt" || key === "diagnostic") return undefined;
     if (Array.isArray(value) && ["identities", "roots", "keys"].includes(key)) {
       return [...value].sort((a, b) => JSON.stringify(a, Object.keys(a ?? {}).sort()).localeCompare(JSON.stringify(b, Object.keys(b ?? {}).sort())));
     }
@@ -72,7 +78,11 @@ export class NavigationWindowQueries {
   private readonly readWaiters = new Set<() => void>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
-  constructor(private readonly api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery">) {}
+  private nextLogical = 0;
+  constructor(private readonly api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery">,
+    private readonly diagnostic = { view: createNavigationDiagnosticView(), effect: 1 }) {
+    navigationListingDiagnostics.record({ ...diagnostic, phase: "effect" });
+  }
 
   getSnapshot = (): NavigationWindowQueriesState => this.snapshot;
   subscribe = (listener: () => void): (() => void) => {
@@ -87,6 +97,7 @@ export class NavigationWindowQueries {
   }
 
   private release(resource: Resource): void {
+    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "cancel", logical: resource.diagnosticLogical, count: resource.pending ? 1 : 0 });
     resource.released = true;
     // Every lifetime has its own token: a delayed release cannot cancel its successor.
     void this.api.releaseNavigationQuery?.(resource.token).catch(() => undefined);
@@ -151,6 +162,7 @@ export class NavigationWindowQueries {
     }
     if (changed) this.trimRetained([...this.resources.values()].reduce((bytes, resource) => bytes
       + (resource.value.state.page ? new TextEncoder().encode(JSON.stringify(resource.value.state.page)).byteLength : 0), 0));
+    if (changed) navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
     if (changed || admissionError !== this.snapshot.admissionError) {
       this.snapshot = { ...this.snapshot, admissionError };
       this.publish();
@@ -170,17 +182,20 @@ export class NavigationWindowQueries {
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
           released: false, pending: undefined, refreshAfterPending: false, invalidated: false };
         this.resources.set(resource.value.id, next);
+        next.diagnosticCause = "visibility";
         void this.read(next, false);
       }
     }
     this.publish();
   }
 
-  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause, trigger?: string): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
     return Promise.all(resources.filter((resource) => (!invalidatedOnly || resource.invalidated)
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
+      if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
+      resource.diagnosticTrigger ??= trigger;
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -200,6 +215,9 @@ export class NavigationWindowQueries {
       // old section must stop using it as an anchor before the next read,
       // including when another event has already invalidated that section.
       if (event && this.movePinAnchor(resource, event)) changed = true;
+      resource.diagnosticTrigger = navigationDiagnosticTrigger(event);
+      resource.diagnosticCause = navigationDiagnosticCause(event);
+      resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + 1;
       // Fence each physical read once. Further events before its replacement
       // carry no new presentation state and must not rerender every row.
       if (resource.invalidated) continue;
@@ -212,7 +230,10 @@ export class NavigationWindowQueries {
       resource.value = { ...resource.value, state: { ...resource.value.state,
         pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
-    if (changed) this.publish();
+    if (changed) {
+      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "invalidate", cause: navigationDiagnosticCause(event) });
+      this.publish();
+    }
   }
 
   private movePinAnchor(resource: Resource, event: AgentEvent): boolean {
@@ -320,6 +341,7 @@ export class NavigationWindowQueries {
   private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor, fromStart = false, reason: NavigationQueryRequest["readReason"] = "refresh"): Promise<void> {
     if (!this.isCurrent(resource)) return Promise.resolve();
     if (resource.pending) {
+      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "coalesced", logical: resource.diagnosticLogical });
       if (anchor) resource.refreshAfterPending = true;
       return resource.pending;
     }
@@ -330,6 +352,13 @@ export class NavigationWindowQueries {
     if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
+    const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
+      cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
+      invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger };
+    resource.diagnosticLogical = diagnostic.logical;
+    resource.diagnosticTrigger = undefined;
+    resource.diagnosticCause = undefined;
+    resource.diagnosticInvalidations = 0;
     const started = beginNavigationPageRead(resource.value.state);
     resource.invalidated = false;
     resource.value = { ...resource.value, state: started, loading: true };
@@ -360,12 +389,15 @@ export class NavigationWindowQueries {
           // operator a button that fails identically on every press.
           let rows = request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
           for (;;) {
-            const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows,
+            diagnostic.attempt += 1;
+            navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispatch", logical: diagnostic.logical, attempt: diagnostic.attempt, cause: diagnostic.cause });
+            const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
               readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
             }, resource.token);
             if (new TextEncoder().encode(JSON.stringify(page)).byteLength <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
             // One row over the budget is the owner's own error to raise.
             if (rows <= 1) throw new Error("Navigation page exceeds the bounded response size.");
+            navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "page-budget" });
             rows = Math.floor(rows / 2);
           }
         };
@@ -394,6 +426,7 @@ export class NavigationWindowQueries {
           });
         } catch (error) {
           if (!cursor || !isNavigationCursorExpired(error)) throw error;
+          navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "cursor-expired" });
           // Cursor cache eviction is ordinary pressure, not a broken folder.
           // Rebuild only the already displayed range plus the block this
           // click asked for; `wanted` already counts that block.
@@ -463,6 +496,7 @@ export class NavigationWindowQueries {
 
   dispose(): void {
     if (this.disposed) return;
+    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispose" });
     this.disposed = true;
     for (const resource of this.resources.values()) this.release(resource);
     this.resources.clear();

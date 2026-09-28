@@ -1,3 +1,5 @@
+import type { NavigationDiagnosticCause } from "../../shared/navigation-diagnostic-cause";
+import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import type { FederationTarget, NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse,
   NavigationLaunchpadConfigResponse, NavigationQueueProjection, ListScheduledThreadActionsResponse } from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
@@ -63,7 +65,9 @@ export class NavigationQueryPool {
     request: NavigationQueryRequest;
     load: Load<NavigationQueryPage>;
   }): Promise<NavigationQueryPage> {
-    return this.readOperation({
+    return listingDiagnostics.trace("navigation", { ...listingRequestFields(params.request),
+      ...(params.scopeKey?.startsWith("federation:") ? { source: "owner" as const } : {}),
+    }, () => this.readOperation({
       ...params,
       kind: "query",
       ownerKey: ownerKey(params.request.federationTarget),
@@ -71,7 +75,7 @@ export class NavigationQueryPool {
       operationKey: JSON.stringify([params.request.cursor ?? null, params.request.anchor ?? null,
         params.request.completeBaselineRevision ?? null, params.request.retainedRange ?? null, params.request.pageSize ?? 100]),
       deadlineAt: params.request.deadlineAt,
-    });
+    }));
   }
 
   readExact<K extends keyof ExactResources>(params: {
@@ -123,7 +127,10 @@ export class NavigationQueryPool {
     for (const [otherKey, other] of this.queries) {
       if (otherKey === key || !other.consumers.delete(params.consumerId)) continue;
       if (other.consumers.size === 0) {
-        for (const read of other.reads.values()) read.controller.abort(navigationReadCancelled());
+        for (const read of other.reads.values()) {
+          if (other.kind === "query" && !read.controller.signal.aborted) listingDiagnostics.link("owner-page", "cancel", read.promise);
+          read.controller.abort(navigationReadCancelled());
+        }
       }
     }
     let query = this.queries.get(key);
@@ -163,6 +170,7 @@ export class NavigationQueryPool {
     const pending = query.reads.get(operationKey);
     // Keys are constructed by the typed public entry points and partition result kinds.
     if (pending && !pending.controller.signal.aborted) {
+      if (params.kind === "query") listingDiagnostics.link("navigation", "coalesced", pending.promise);
       this.pendingReads += 1;
       // An early waiter deadline does not detach its Promise continuation.
       // Keep that backing charged until the shared logical read settles.
@@ -173,23 +181,27 @@ export class NavigationQueryPool {
     const controller = new AbortController();
     const retainedQuery = query;
     this.pendingReads += 1;
-    const promise = this.fetch({
+    const fetch = () => this.fetch({
       controller,
       deadlineAt,
       load: params.load,
       operationKey,
       query: retainedQuery,
-    }).finally(() => {
+    });
+    const execution = params.kind === "query" ? listingDiagnostics.trace("owner-page", {}, fetch) : fetch();
+    const promise = execution.finally(() => {
       this.pendingReads -= 1;
       if (retainedQuery.reads.get(operationKey)?.promise === promise) retainedQuery.reads.delete(operationKey);
       this.evictUnused();
       this.wake();
     });
+    if (params.kind === "query") listingDiagnostics.remember(promise, execution);
     query.reads.set(operationKey, { controller, promise });
     return promise;
   }
 
-  invalidateQueryOwner(target?: FederationTarget): void {
+  invalidateQueryOwner(target?: FederationTarget, reason?: NavigationDiagnosticCause, trigger?: string): void {
+    listingDiagnostics.record("navigation", "invalidate", { reason, trigger, source: target?.scope === "remote" ? "remote" : "local" });
     const owner = ownerKey(target);
     for (const query of this.queries.values()) {
       if (query.kind !== "query" || query.ownerKey !== owner) continue;
@@ -225,7 +237,10 @@ export class NavigationQueryPool {
     for (const query of this.queries.values()) {
       query.consumers.delete(consumerId);
       if (query.consumers.size === 0) {
-        for (const read of query.reads.values()) read.controller.abort(navigationReadCancelled());
+        for (const read of query.reads.values()) {
+          if (query.kind === "query" && !read.controller.signal.aborted) listingDiagnostics.link("owner-page", "cancel", read.promise);
+          read.controller.abort(navigationReadCancelled());
+        }
       }
     }
     this.evictUnused();
@@ -252,18 +267,23 @@ export class NavigationQueryPool {
     signal.throwIfAborted();
     this.activeReads += 1;
     params.query.active = true;
-    const timer = setTimeout(() => params.controller.abort(navigationReadCancelled()),
+    const timer = setTimeout(() => {
+      if (params.query.kind === "query") listingDiagnostics.record("owner-page", "cancel");
+      params.controller.abort(navigationReadCancelled());
+    },
       Math.max(0, params.deadlineAt - Date.now()));
     const completion = (async () => {
       let page: T;
       for (;;) {
         const sequence = params.query.invalidationSequence;
-        page = await params.load({ signal, deadlineAt: params.deadlineAt });
+        const load = () => params.load({ signal, deadlineAt: params.deadlineAt });
+        page = await (params.query.kind === "query" ? listingDiagnostics.trace("owner-read", {}, load) : load());
         signal.throwIfAborted();
         if (Date.now() >= params.deadlineAt) {
           throw new NavigationQueryError("navigation_busy", "Navigation read deadline expired.");
         }
         if (sequence === params.query.invalidationSequence) break;
+        if (params.query.kind === "query") listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
       }
       const bytes = Buffer.byteLength(JSON.stringify(page), "utf8");
       if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {

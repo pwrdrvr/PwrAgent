@@ -1,3 +1,4 @@
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
@@ -60,6 +61,7 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
     directoryEnrichmentDiagnostics.record({
       directory: "/fixture/cpu-capture", enricherId: 0, caller: "thread-list", reason: "cold",
     }, { requests: 1, gitStarted: 3 });
+    listingDiagnostics.record("navigation", "invalidate", { reason: "turn", trigger: "turn/completed" });
     await profiler.start();
     const event = await capture;
     await profiler.stop("test-complete");
@@ -75,6 +77,7 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
       );
     } else {
       const diagnostics = JSON.parse(await fs.readFile(path.join(created.session.directoryPath, diagnosticsFilename), "utf8"));
+      expect(diagnostics.listings.events).toContainEqual(expect.objectContaining({ reason: "turn", trigger: "turn/completed" }));
       expect(diagnostics.directoryEnrichment.schemaVersion).toBe(1);
       expect(diagnostics.directoryEnrichment.buckets.flatMap((bucket: { rows: unknown[] }) => bucket.rows))
         .toContainEqual(expect.objectContaining({ directory: "/fixture/cpu-capture", requests: 1, gitStarted: 3 }));
