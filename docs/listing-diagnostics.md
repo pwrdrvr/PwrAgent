@@ -80,6 +80,12 @@ or unresponsive renderer yields `rendererListings: null` and preserves the
 main history and CPU artifact. This optional read can delay the save by up to
 that deadline; it never runs on event append.
 
+Federation traffic tests include the diagnostic metadata in their request-byte
+budgets and expose its contribution as `diagnosticBytes`. They charge diagnostic
+counters at maximum safe-integer width, so process lifetime and digit transitions
+cannot change a snapshot. Cause/trigger strings and every other field remain in
+the measurement; adding metadata still raises the checked-in budget.
+
 Checked-in regression budgets:
 
 | Scenario | Recorded events / executions |
