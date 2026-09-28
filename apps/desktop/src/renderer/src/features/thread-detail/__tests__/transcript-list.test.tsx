@@ -1002,7 +1002,7 @@ describe("TranscriptList", () => {
     expect(loadOlder).toHaveBeenCalledTimes(1);
   });
 
-  it("does not carry an in-flight older-page lock into another thread", () => {
+  it("does not carry an in-flight older-page lock into another thread", async () => {
     let resolveFirstLoad: (() => void) | undefined;
     const firstLoad = vi.fn(
       () =>
@@ -1053,7 +1053,9 @@ describe("TranscriptList", () => {
     fireEvent.scroll(secondList);
 
     expect(secondLoad).toHaveBeenCalledTimes(1);
-    resolveFirstLoad?.();
+    await act(async () => {
+      resolveFirstLoad?.();
+    });
   });
 
   it("releases an in-flight older-page lock when loading is superseded", async () => {
