@@ -340,6 +340,7 @@ describe("DesktopMessagingBackendBridge", () => {
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       listThreads: vi.fn(async () => listedThreads),
       hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+      withNavigationSubAgentActivity: vi.fn((threads: NavigationSnapshot["threads"]) => threads),
       getNavigationInputRequestThreadKeys: vi.fn(() => new Set()),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);

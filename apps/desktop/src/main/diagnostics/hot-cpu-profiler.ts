@@ -30,7 +30,7 @@ type HotCpuDebugger = {
 export type HotCpuTarget = {
   debugger: HotCpuDebugger;
   getOSProcessId: () => number;
-  readDiagnostics?: () => Record<string, unknown>;
+  readDiagnostics?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   isDestroyed?: () => boolean;
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
   readHeapUsage?: () => {
@@ -625,7 +625,7 @@ export class HotCpuProfiler {
     try {
       await fs.writeFile(
         diagnosticsPath,
-        `${JSON.stringify(this.target.readDiagnostics())}\n`,
+        `${JSON.stringify(await this.target.readDiagnostics())}\n`,
         "utf8",
       );
       await this.session.registerArtifact(artifactFilename(diagnosticsPath));

@@ -1,3 +1,5 @@
+import { createNavigationDiagnosticView } from "../../lib/navigation-listing-diagnostics";
+import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../../shared/navigation-diagnostic-cause";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { NavigationDirectoryRow, NavigationQueryRequest, NavigationStarMapFilterSelection } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -25,6 +27,8 @@ export function useStarMapProjectPages(params: {
   const active = params.active ?? true;
   const viewId = useId();
   const owners = useRef(new Set<string>());
+  const diagnosticRef = useRef<{ view: number; effect: number } | undefined>(undefined);
+  diagnosticRef.current ??= { view: createNavigationDiagnosticView(), effect: 0 };
   const controllerRef = useRef<NavigationWindowQueries | undefined>(undefined);
   const [state, setState] = useState<NavigationWindowQueriesState>({ resources: new Map() });
   // Public operations always address the currently mounted controller. A
@@ -36,6 +40,8 @@ export function useStarMapProjectPages(params: {
     setVisibleAnchor: (...args: Parameters<NavigationWindowQueries["setVisibleAnchor"]>) => controllerRef.current?.setVisibleAnchor(...args),
   }), []);
   useEffect(() => {
+    const diagnostic = diagnosticRef.current!;
+    diagnostic.effect += 1;
     const result = new NavigationWindowQueries({
       releaseNavigationQuery: api?.releaseNavigationQuery,
       getNavigationQueryPage: async (request, consumer) => {
@@ -48,7 +54,7 @@ export function useStarMapProjectPages(params: {
         }
         return page;
       },
-    });
+    }, { ...diagnostic });
     result.setVisible(false);
     controllerRef.current = result;
     const unsubscribe = result.subscribe(() => setState(result.getSnapshot()));
@@ -83,7 +89,7 @@ export function useStarMapProjectPages(params: {
     const controller = controllerRef.current;
     if (!active || !controller) return;
     let pending: ReturnType<typeof setTimeout> | undefined;
-    const dirty = new Set<string>();
+    const dirty = new Map<string, { cause: NavigationDiagnosticCause; trigger?: string }>();
     const unsubscribe = api?.onAgentEvent?.((event) => {
       if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
       const owner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : params.localInstanceId;
@@ -101,16 +107,16 @@ export function useStarMapProjectPages(params: {
           const query = resource.state.request.query;
           return query.kind === "star-map" && query.projectKey === details.directoryKey;
         }) : matched.length ? matched : candidates;
-      for (const resource of scoped) dirty.add(resource.id);
+      for (const resource of scoped) dirty.set(resource.id, { cause: navigationDiagnosticCause(event), trigger: navigationDiagnosticTrigger(event) });
       if (!dirty.size || pending) return;
       pending = setTimeout(() => {
         pending = undefined;
         const ids = [...dirty];
         dirty.clear();
-        for (const id of ids) void controller.refresh(id);
+        for (const [id, diagnostic] of ids) void controller.refresh(id, undefined, false, diagnostic.cause, diagnostic.trigger);
       }, 250);
     });
-    const timer = setInterval(() => { void controller.refresh(); }, 60_000);
+    const timer = setInterval(() => { void controller.refresh(undefined, undefined, false, "timer"); }, 60_000);
     return () => {
       unsubscribe?.();
       clearInterval(timer);

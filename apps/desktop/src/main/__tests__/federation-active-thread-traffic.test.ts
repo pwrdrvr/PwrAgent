@@ -1,3 +1,4 @@
+import { navigationRequestByteBudget } from "../../shared/__tests__/navigation-traffic-budget";
 import { expect, it } from "vitest";
 import type { AgentEvent, FederationProtocolEnvelope, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
@@ -12,6 +13,7 @@ import type { FederationBackendOperations } from "../federation/federation-backe
 
 // RPC JSON, separated by initiating consumer. No compression, encryption,
 // gateway relay copies or blob operations are included in these measurements.
+// Diagnostic counters are charged at maximum wire width; diagnosticBytes exposes that overhead.
 it.each(["separate", "shared"])("budgets pin and renderer reads with four viewers and two active owner threads (%s mounts)", async (layout) => {
   const capabilities = ["thread_navigation", "event_subscriptions", "navigation_group_invalidations"] as const;
   const owner = new DesktopFederationRuntime() as unknown as {
@@ -28,7 +30,7 @@ it.each(["separate", "shared"])("budgets pin and renderer reads with four viewer
   const store = new NavigationQueryStore();
   const caches: RemoteThreadSummaryCache[] = [];
   const windows: NavigationWindowQueries[] = [];
-  const sample = () => ({ requests: 0, requestBytes: 0, responseBytes: 0, responseRows: 0, unchanged: 0 });
+  const sample = () => ({ requests: 0, requestBytes: 0, diagnosticBytes: 0, responseBytes: 0, responseRows: 0, unchanged: 0 });
   let traffic = { notifications: 0, pins: sample(), renderer: sample() };
   const measurements: Record<string, typeof traffic> = {};
   const capture = (name: string) => { measurements[name] = traffic; traffic = { notifications: 0, pins: sample(), renderer: sample() }; };
@@ -47,7 +49,9 @@ it.each(["separate", "shared"])("budgets pin and renderer reads with four viewer
       const read = async (kind: "pins" | "renderer", request: NavigationQueryRequest) => {
         const page = await store.readPage({ request, scopeKey: viewer, loadIndex: async () => ({ threads: rows, directories: [] }) });
         traffic[kind].requests++;
-        traffic[kind].requestBytes += Buffer.byteLength(JSON.stringify(request));
+        const budget = navigationRequestByteBudget(request);
+        traffic[kind].requestBytes += budget.requestBytes;
+        traffic[kind].diagnosticBytes += budget.diagnosticBytes;
         traffic[kind].responseBytes += Buffer.byteLength(JSON.stringify(page));
         traffic[kind].responseRows += page.entries.length;
         traffic[kind].unchanged += Number(page.unchanged === true);

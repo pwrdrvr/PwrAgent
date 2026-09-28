@@ -143,7 +143,7 @@ function availableParentIdentity(
 }
 
 function isActive(thread: NavigationThreadSummary): boolean {
-  return thread.threadStatus === "active";
+  return thread.threadStatus === "active" || thread.hasActiveSubAgent === true;
 }
 
 function countsForThreads(threads: readonly NavigationThreadSummary[]): NavigationCounts {
@@ -213,6 +213,7 @@ function projectNavigationRow(params: {
     ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
     ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
     ...(thread.threadStatus ? { threadStatus: thread.threadStatus } : {}),
+    ...(thread.hasActiveSubAgent ? { hasActiveSubAgent: true } : {}),
     inbox: thread.inbox,
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
     linkedDirectories: linkedDirectories.items ?? [],

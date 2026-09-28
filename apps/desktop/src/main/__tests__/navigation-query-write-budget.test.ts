@@ -14,6 +14,7 @@ vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: ()
   listThreads: async () => mocks.threads,
   canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
   hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
+  withNavigationSubAgentActivity: (threads: []) => threads,
   getNavigationInputRequestThreadKeys: () => new Set(["codex:thread-999"]),
 }) }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));

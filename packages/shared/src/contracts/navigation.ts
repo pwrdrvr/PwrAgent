@@ -136,6 +136,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
      */
     celestialIcon?: CelestialIconId;
   };
+  /** Live worker owned by this thread; independent of the parent turn status. */
+  hasActiveSubAgent?: boolean;
   inbox: ThreadInboxState;
   /**
    * Normalized host/owner/repository identity resolved from the thread's
@@ -1658,6 +1660,8 @@ export type NavigationRow = {
   updatedAt?: number;
   archivedAt?: number;
   threadStatus?: AppServerThreadStatus;
+  /** Owner-projected runtime activity, without loading worker history. */
+  hasActiveSubAgent?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
   linkedDirectories: LinkedDirectorySummary[];
@@ -1825,6 +1829,18 @@ export type NavigationQueryRequest = {
   consumer: NavigationQueryConsumerClass;
   /** Bounded diagnostic attribution; never part of query identity. */
   readReason?: "demand" | "refresh" | "continuation" | "rebaseline" | "pins";
+  /** Opaque counters and fixed vocabulary only; ignored by semantic query identity. */
+  diagnostic?: {
+    /** Random renderer-lifetime token; never a machine or thread identifier. */
+    origin?: string;
+    view: number;
+    effect: number;
+    logical: number;
+    attempt: number;
+    cause: "demand" | "refresh" | "continuation" | "rebaseline" | "pins" | "turn" | "thread" | "metadata" | "federation" | "messaging-bindings" | "timer" | "visibility" | "event";
+    invalidations: number;
+    trigger?: string;
+  };
   backend?: AppServerBackendScope;
   federationTarget?: FederationTarget;
   query: NavigationQuery;

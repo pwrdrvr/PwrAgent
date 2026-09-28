@@ -1,7 +1,7 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { federatedThreadIdentityKey } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
-import { isThreadActive } from "../ThreadRowStatus";
+import { getThreadRowStatus, isThreadActive, isThreadNeedingAttention } from "../ThreadRowStatus";
 
 const remoteTarget = {
   scope: "remote" as const,
@@ -41,4 +41,12 @@ describe("isThreadActive", () => {
       [federatedThreadIdentityKey(thread.federation!.ref)]: true,
     })).toBe(true);
   });
+});
+
+it("shows idle parents with live workers in navigation and clears them when workers finish", () => {
+  const thread = { ...buildRemoteThread(), hasActiveSubAgent: true };
+  expect(isThreadActive(thread)).toBe(true);
+  expect(getThreadRowStatus(thread)).toBe("thinking");
+  expect(isThreadNeedingAttention(thread)).toBe(true);
+  expect(isThreadActive({ ...thread, hasActiveSubAgent: false })).toBe(false);
 });

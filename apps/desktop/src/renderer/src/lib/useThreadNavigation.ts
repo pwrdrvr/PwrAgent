@@ -1,3 +1,4 @@
+import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
 import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navigation-archive-group";
@@ -165,6 +166,7 @@ type NavigationState = {
 };
 
 type NavigationRefreshOptions = {
+  diagnosticCause?: NavigationDiagnosticCause;
   invalidatedOnly?: boolean;
   owners?: FederationTarget[];
   forceRefresh?: boolean;
@@ -873,6 +875,7 @@ function threadSummariesEqual(
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
+    left.hasActiveSubAgent === right.hasActiveSubAgent &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.primaryGitRepository === right.primaryGitRepository &&
@@ -3095,6 +3098,7 @@ export function useThreadNavigation(
         preferredSelectionKey?: string;
         owners?: FederationTarget[];
         invalidatedOnly?: boolean;
+        diagnosticCause?: NavigationDiagnosticCause;
       }
     | undefined
   >(undefined);
@@ -3316,7 +3320,7 @@ export function useThreadNavigation(
   ): Promise<void> => {
     if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
     if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
-    await boundedNavigation.refresh(options?.owners, options?.invalidatedOnly === true);
+    await boundedNavigation.refresh(options?.owners, options?.invalidatedOnly === true, options?.diagnosticCause);
   }, [boundedNavigation.refresh]);
 
   const refresh = useCallback(
@@ -3327,6 +3331,7 @@ export function useThreadNavigation(
       options?: NavigationRefreshOptions
     ): Promise<void> => {
       const initialRequest = {
+        diagnosticCause: options?.diagnosticCause,
         forceRefresh: options?.forceRefresh === true,
         forcePreferredSelection,
         preferredOptimisticThread,
@@ -3354,6 +3359,7 @@ export function useThreadNavigation(
             nextRequest.preferredOptimisticThread,
             nextRequest.forcePreferredSelection,
             {
+              diagnosticCause: nextRequest.diagnosticCause,
               forceRefresh: nextRequest.forceRefresh,
               owners: nextRequest.owners,
               invalidatedOnly: nextRequest.invalidatedOnly,
@@ -3393,6 +3399,7 @@ export function useThreadNavigation(
     ): void => {
       const owners = options?.owners ?? [readRendererFederationTarget() ?? { scope: "local" }];
       queuedRefreshRef.current = {
+        diagnosticCause: options?.diagnosticCause ?? queuedRefreshRef.current?.diagnosticCause,
         invalidatedOnly: options?.invalidatedOnly === true && (!queuedRefreshRef.current || queuedRefreshRef.current.invalidatedOnly === true),
         owners: queuedRefreshRef.current ? mergeNavigationRefreshOwners(queuedRefreshRef.current.owners, owners) : owners,
         forceRefresh:
@@ -3419,6 +3426,7 @@ export function useThreadNavigation(
           nextRequest.preferredOptimisticThread,
           nextRequest.forcePreferredSelection,
           {
+            diagnosticCause: nextRequest.diagnosticCause,
             forceRefresh: nextRequest.forceRefresh,
             owners: nextRequest.owners,
             invalidatedOnly: nextRequest.invalidatedOnly,
@@ -3527,7 +3535,7 @@ export function useThreadNavigation(
       }
 
       scheduleRefresh(undefined, undefined, false, {
-        forceRefresh: true,
+        forceRefresh: true, diagnosticCause: "timer",
       });
     }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
 
