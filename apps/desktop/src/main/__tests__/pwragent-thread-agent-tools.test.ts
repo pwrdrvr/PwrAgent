@@ -96,6 +96,10 @@ describe("PwrAgent thread agent tools", () => {
         }),
       }),
     });
+    const readThread = tools.find((tool) => tool.name === "read_thread");
+    expect(readThread?.description).toContain("read.status");
+    expect(readThread?.description).toContain("read.lastAssistantMessage");
+    expect(readThread?.description).toContain("JSON text");
     expect(tools.find((tool) => tool.name === "get_thread_status"))
       .toMatchObject({
         inputSchema: expect.objectContaining({
