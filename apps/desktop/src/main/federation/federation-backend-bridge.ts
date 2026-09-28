@@ -147,6 +147,10 @@ import type {
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
+  SetThreadTokenMiserRequest,
+  SetThreadTokenMiserResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
   SetThreadParentRequest,
@@ -180,6 +184,7 @@ import {
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
+import { hasFederationErrorCode } from "./federation-rpc";
 import type {
   FederationRpcEndpoint,
   FederationRpcRequestOptions,
@@ -456,6 +461,8 @@ export const FEDERATION_BACKEND_METHODS = {
   queueThreadExecutionMode: "backend.queueThreadExecutionMode",
   cancelThreadExecutionModeQueue: "backend.cancelThreadExecutionModeQueue",
   setAcpSessionRuntimeOption: "backend.setAcpSessionRuntimeOption",
+  setThreadAgent: "backend.setThreadAgent",
+  setThreadTokenMiser: "backend.setThreadTokenMiser",
   setThreadModelSettings: "backend.setThreadModelSettings",
   checkThreadBranchDrift: "backend.checkThreadBranchDrift",
   updateThreadExpectedBranch: "backend.updateThreadExpectedBranch",
@@ -577,6 +584,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.queueThreadExecutionMode]: "turn_control",
   [FEDERATION_BACKEND_METHODS.cancelThreadExecutionModeQueue]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setThreadAgent]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setThreadTokenMiser]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadModelSettings]: "turn_control",
   [FEDERATION_BACKEND_METHODS.checkThreadBranchDrift]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch]: "turn_control",
@@ -805,6 +814,12 @@ export type FederationBackendOperations = {
   setAcpSessionRuntimeOption(
     request: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse>;
+  setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse>;
+  setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse>;
   setThreadModelSettings(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;
@@ -1526,6 +1541,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setAcpSessionRuntimeOption(
         envelope.params as SetAcpSessionRuntimeOptionRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadAgent,
+    async (envelope) =>
+      await params.backend.setThreadAgent(
+        envelope.params as SetThreadAgentRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadTokenMiser,
+    async (envelope) =>
+      await params.backend.setThreadTokenMiser(
+        envelope.params as SetThreadTokenMiserRequest,
       ),
   );
   params.router.registerHandler(
@@ -2402,6 +2431,38 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption,
       params: request,
     });
+  }
+
+  async setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> {
+    try {
+      return await this.rpc.request<SetThreadAgentResponse>({
+        method: FEDERATION_BACKEND_METHODS.setThreadAgent,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to change Agent status over Federation.");
+      }
+      throw error;
+    }
+  }
+
+  async setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> {
+    try {
+      return await this.rpc.request<SetThreadTokenMiserResponse>({
+        method: FEDERATION_BACKEND_METHODS.setThreadTokenMiser,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to change Token Miser over Federation.");
+      }
+      throw error;
+    }
   }
 
   async setThreadModelSettings(

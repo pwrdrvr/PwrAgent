@@ -23,7 +23,7 @@ import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
 import {
-  CODEX_AGENT_THREAD_CREATION_NOTE,
+  CODEX_AGENT_THREAD_CHANGE_NOTE,
   DEFAULT_DESKTOP_AGENT_THREAD,
 } from "../../../lib/agent-thread";
 
@@ -4477,7 +4477,37 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
   });
 
-  it("explains that existing Codex threads cannot be converted into Agents", () => {
+  it("keeps an ordinary Codex thread unchanged when promotion fails", async () => {
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    const setThreadAgent = vi.fn(async () => { throw new Error("Fixture runtime refresh failed."); });
+    renderPanel({ desktopApi: { setThreadAgent }, pinned: true, onRefreshNavigation });
+    fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Fixture runtime refresh failed");
+    expect(screen.getByRole("button", { name: "Mark as Agent" })).toBeEnabled();
+    expect(onRefreshNavigation).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("shows a queued Agent change and cancels with the applied designation (Agent: %s)", async (enabled) => {
+    const setThreadAgent = vi.fn();
+    const agent = enabled ? { ...DEFAULT_DESKTOP_AGENT_THREAD, name: "Custom fixture manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1 } : undefined;
+    renderPanel({ pinned: true, desktopApi: { setThreadAgent }, thread: {
+      ...baseThread, agent, agentChange: { enabled: !enabled },
+    } });
+    expect(screen.getByRole("status")).toHaveTextContent("queued until the current turn finishes");
+    expect(screen.queryByRole("button", { name: "Mark as Agent" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: baseThread.source, threadId: baseThread.id, agent: agent ?? null }));
+  });
+
+  it("shows a failed queued change while retaining promotion controls", () => {
+    renderPanel({ pinned: true, desktopApi: { setThreadAgent: vi.fn() }, thread: {
+      ...baseThread, agentChange: { enabled: true, error: "Fixture refresh failed" },
+    } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Agent change failed: Fixture refresh failed");
+    expect(screen.getByRole("button", { name: "Mark as Agent" })).toBeEnabled();
+  });
+
+  it("offers promotion for existing Codex threads", () => {
     const setThreadAgent = vi.fn();
 
     renderPanel({
@@ -4485,15 +4515,16 @@ describe("ThreadContextPanel", () => {
       pinned: true,
     });
 
-    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(CODEX_AGENT_THREAD_CHANGE_NOTE)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Mark as Agent" }),
-    ).not.toBeInTheDocument();
+    ).toBeEnabled();
   });
 
-  it("keeps existing Codex Agent metadata read-only", () => {
+  it("offers demotion for existing Codex Agents", () => {
     renderPanel({
       pinned: true,
+      desktopApi: { setThreadAgent: vi.fn() },
       thread: {
         ...baseThread,
         agent: {
@@ -4505,13 +4536,30 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+    expect(screen.getByText(CODEX_AGENT_THREAD_CHANGE_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
   });
 
-  it("marks an ordinary non-Codex thread as an Agent from the context panel", async () => {
+  it.each(["row", "window"] as const)("routes Agent designation to the %s owner", async (surface) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const remoteWindow = window as typeof window & { __pwragentFederationTarget?: typeof target };
+    if (surface === "window") remoteWindow.__pwragentFederationTarget = target;
+    const setThreadAgent = vi.fn();
+    try {
+      renderPanel({ pinned: true, desktopApi: { setThreadAgent }, thread: {
+        ...baseThread,
+        ...(surface === "row" ? { federation: { instanceLabel: "Owner", ref: { backend: baseThread.source, threadId: baseThread.id, target } } } : {}),
+      } });
+      fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
+      await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: baseThread.source, threadId: baseThread.id, agent: DEFAULT_DESKTOP_AGENT_THREAD, federationTarget: target }));
+    } finally {
+      delete remoteWindow.__pwragentFederationTarget;
+    }
+  });
+
+  it.each(["codex", "acp:gemini"] as const)("marks an ordinary %s thread as an Agent from the context panel", async (backend) => {
     const setThreadAgent = vi.fn(async () => ({
-      backend: "acp:gemini" as const,
+      backend,
       threadId: "thread-1",
       agent: {
         name: DEFAULT_DESKTOP_AGENT_THREAD.name,
@@ -4528,7 +4576,7 @@ describe("ThreadContextPanel", () => {
       onRefreshNavigation,
       thread: {
         ...baseThread,
-        source: "acp:gemini",
+        source: backend,
       },
     });
 
@@ -4536,16 +4584,16 @@ describe("ThreadContextPanel", () => {
 
     await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
     expect(setThreadAgent).toHaveBeenCalledWith({
-      backend: "acp:gemini",
+      backend,
       threadId: "thread-1",
       agent: DEFAULT_DESKTOP_AGENT_THREAD,
     });
     expect(onRefreshNavigation).toHaveBeenCalledOnce();
   });
 
-  it("clears Agent metadata from the context panel", async () => {
+  it.each(["codex", "acp:gemini"] as const)("clears %s Agent metadata from the context panel", async (backend) => {
     const setThreadAgent = vi.fn(async () => ({
-      backend: "acp:gemini" as const,
+      backend,
       threadId: "thread-1",
     }));
 
@@ -4554,7 +4602,7 @@ describe("ThreadContextPanel", () => {
       pinned: true,
       thread: {
         ...baseThread,
-        source: "acp:gemini",
+        source: backend,
         agent: {
           name: "Inbox Agent",
           instructionLineCount: 0,
@@ -4568,7 +4616,7 @@ describe("ThreadContextPanel", () => {
 
     await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
     expect(setThreadAgent).toHaveBeenCalledWith({
-      backend: "acp:gemini",
+      backend,
       threadId: "thread-1",
       agent: null,
     });

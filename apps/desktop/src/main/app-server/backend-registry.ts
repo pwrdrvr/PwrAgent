@@ -234,6 +234,8 @@ import {
   type PwrAgentMcpConnectionResponse,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
+  type SetThreadTokenMiserRequest,
+  type SetThreadTokenMiserResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
   type SetThreadPrAutoDispatchRequest,
@@ -881,6 +883,10 @@ type BackendClient = {
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
+  refreshThreadTools?(params: {
+    threadId: string;
+    dynamicTools: CodexDynamicToolSpec[];
+  }): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
@@ -8704,6 +8710,8 @@ export class DesktopBackendRegistry {
   private starMapHandler?: PwrAgentStarMapHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
+  private readonly changingCodexAgentThreadIds = new Set<string>();
+  private readonly inFlightCodexAttachments = new Map<string, number>();
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
       const pdfResponse = await handlePwrAgentPdfToolRequest({
@@ -8713,19 +8721,65 @@ export class DesktopBackendRegistry {
       if (pdfResponse) {
         return pdfResponse;
       }
-      if (!this.messagingAgentToolService) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message: "PwrAgent messaging context tools are not available.",
-          },
-        };
+      if (request.context.backend === "codex" && request.operation === "attach_thread_here") {
+        const threadId = request.context.threadId;
+        if (this.changingCodexAgentThreadIds.has(threadId)) {
+          return {
+            ok: false,
+            error: {
+              code: "forbidden",
+              message: "Agent thread status is changing. Retry after the change completes.",
+            },
+          };
+        }
+        this.inFlightCodexAttachments.set(
+          threadId,
+          (this.inFlightCodexAttachments.get(threadId) ?? 0) + 1,
+        );
+        try {
+          const overlay = await this.overlayStore.getThreadOverlayState(request.context);
+          // Handoff threads retain their existing attachment authority. Neither
+          // a discovered tool definition nor an old binding grants authority.
+          if (!overlay?.agent && !overlay?.handoffOrigin) {
+            return {
+              ok: false,
+              error: {
+                code: "forbidden",
+                message: "Mark this thread as an Agent before managing messaging attachments.",
+              },
+            };
+          }
+          return await this.dispatchMessagingRequest(request);
+        } finally {
+          const remaining = this.inFlightCodexAttachments.get(threadId)! - 1;
+          if (remaining) {
+            this.inFlightCodexAttachments.set(threadId, remaining);
+          } else {
+            this.inFlightCodexAttachments.delete(threadId);
+            for (const resolve of this.codexAttachmentDrainWaiters.get(threadId) ?? []) resolve();
+            this.codexAttachmentDrainWaiters.delete(threadId);
+            this.scheduleQueuedAgentChange(threadId);
+          }
+        }
       }
-      return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(
-        request,
-      );
+      return await this.dispatchMessagingRequest(request);
     };
+
+  private async dispatchMessagingRequest(
+    request: Parameters<PwrAgentMessagingHandler>[0],
+  ): Promise<Awaited<ReturnType<PwrAgentMessagingHandler>>> {
+    if (!this.messagingAgentToolService) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message: "PwrAgent messaging context tools are not available.",
+        },
+      };
+    }
+    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(request);
+  }
+
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
   private federatedThreadInspectionHandler:
@@ -11010,6 +11064,202 @@ export class DesktopBackendRegistry {
    */
   getThreadInfo(identity: ThreadInfoIdentity): ThreadInfo | undefined {
     return this.threadInfoStore.get(identity);
+  }
+
+  private readonly codexAgentChangeOperations = new Map<string, Promise<void>>();
+  private readonly codexAttachmentDrainWaiters = new Map<string, Set<() => void>>();
+
+  private async serializeCodexAgentChange<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.codexAgentChangeOperations.get(threadId);
+    const result = (previous ?? Promise.resolve()).then(operation);
+    const settled = result.then(() => undefined, () => undefined);
+    this.codexAgentChangeOperations.set(threadId, settled);
+    try {
+      return await result;
+    } finally {
+      if (this.codexAgentChangeOperations.get(threadId) === settled) {
+        this.codexAgentChangeOperations.delete(threadId);
+      }
+    }
+  }
+
+  private async notifyThreadAgentChange(backend: AppServerBackendKind, threadId: string): Promise<void> {
+    this.invalidateThreadListCache(backend);
+    await this.publishLocalEvent({
+      backend,
+      notification: { method: "thread/agent/updated", params: { threadId } },
+    });
+  }
+
+  async setThreadAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    agent: { name: string; instructions?: string } | null;
+  }): Promise<ThreadOverlayState> {
+    this.assertNotBootstrap("setThreadAgent");
+    if (params.backend !== "codex") {
+      return await this.applyThreadAgentChange(params);
+    }
+    const result = await this.serializeCodexAgentChange(params.threadId, async () => {
+      const current = await this.overlayStore.getThreadOverlayState(params);
+      const sameAgent = (agent: typeof params.agent | undefined) =>
+        (agent?.name ?? null) === (params.agent?.name ?? null)
+        && (agent?.instructions ?? "") === (params.agent?.instructions ?? "");
+      if (current?.queuedAgentChange && Boolean(current.agent) === Boolean(params.agent)) {
+        // Selecting the applied designation cancels a pending change.
+        const overlay = await this.overlayStore.setQueuedThreadAgentChange({ ...params, change: undefined });
+        await this.notifyThreadAgentChange(params.backend, params.threadId);
+        return overlay;
+      }
+      if (current && !current.queuedAgentChange && sameAgent(current.agent)) return current;
+      if (this.threadHasActiveTurn(params.threadId) || this.inFlightCodexAttachments.has(params.threadId)) {
+        // Negotiate now, without resuming an active thread. Unsupported runtimes
+        // must not accept a request which they can never apply.
+        await this.withCodexThreadClient(params.threadId, async (client) => {
+          await this.requireCodexAgentRefreshTools(client, current);
+        });
+        if (current?.queuedAgentChange && !current.queuedAgentChange.error
+          && sameAgent(current.queuedAgentChange.agent)) return current;
+        const overlay = await this.overlayStore.setQueuedThreadAgentChange({
+          ...params, change: { agent: params.agent, requestedAt: Date.now() },
+        });
+        await this.notifyThreadAgentChange(params.backend, params.threadId);
+        return overlay;
+      }
+      return await this.applyThreadAgentChange(params);
+    });
+    // A terminal event can arrive while negotiation or persistence is awaited.
+    // The serialized boundary check handles that race without waiting on itself.
+    if (result.queuedAgentChange) this.scheduleQueuedAgentChange(params.threadId);
+    return result;
+  }
+
+  private async requireCodexAgentRefreshTools(client: BackendClient, overlay: ThreadOverlayState | undefined) {
+    const tools = await this.buildSupportedCodexDynamicToolsRefresh({
+      client,
+      tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+    });
+    if (tools === undefined || !client.refreshThreadTools) {
+      throw new Error("This Codex runtime cannot refresh tools on an existing thread. Update to a supported PwrAgent managed Codex runtime, or create a new Agent thread.");
+    }
+    return tools;
+  }
+
+  private async applyThreadAgentChange(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    agent: { name: string; instructions?: string } | null;
+  }, ownsStartReservation = false): Promise<ThreadOverlayState> {
+    const codex = params.backend === "codex";
+    if (codex) {
+      this.reservedCodexStartThreadIds.add(params.threadId);
+      this.changingCodexAgentThreadIds.add(params.threadId);
+    }
+    try {
+      if (codex) {
+        await this.flushQueuedExecutionModeIfPresent(params.threadId);
+        await this.withCodexThreadClient(params.threadId, async (client) => {
+          const overlay = await this.overlayStore.getThreadOverlayState(params);
+          const dynamicTools = await this.requireCodexAgentRefreshTools(client, overlay);
+          await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
+        });
+      }
+      // Clearing the request and changing authority share one overlay commit.
+      const overlay = await this.overlayStore.setThreadAgent(params);
+      await this.notifyThreadAgentChange(params.backend, params.threadId);
+      return overlay;
+    } finally {
+      if (codex) {
+        this.changingCodexAgentThreadIds.delete(params.threadId);
+        if (!ownsStartReservation) {
+          this.reservedCodexStartThreadIds.delete(params.threadId);
+          if (!this.threadHasActiveTurn(params.threadId)
+            && this.threadTurnQueue.getQueuedEntries(params).length > 0) {
+            void this.threadTurnQueue.releaseThread({
+              backend: params.backend, threadId: params.threadId,
+              status: "agent_designation_settled",
+            });
+          }
+        }
+      }
+    }
+  }
+
+  private scheduleQueuedAgentChange(threadId: string): void {
+    void this.flushQueuedAgentChange(threadId).catch((error) => {
+      backendRegistryLog.error("failed to settle queued Agent change", { threadId, error: String(error) });
+    });
+  }
+
+  private async flushQueuedAgentChange(threadId: string, ownsStartReservation = false): Promise<void> {
+    await this.serializeCodexAgentChange(threadId, async () => {
+      if (this.threadHasActiveTurn(threadId, "codex", ownsStartReservation)) return;
+      const params = { backend: "codex" as const, threadId };
+      const overlay = await this.overlayStore.getThreadOverlayState(params);
+      const change = overlay?.queuedAgentChange;
+      // A failed request stays visible, but retries require an operator action.
+      if (!change || change.error
+        || this.threadHasActiveTurn(threadId, "codex", ownsStartReservation)) return;
+      if (this.inFlightCodexAttachments.has(threadId)) {
+        if (!ownsStartReservation) return;
+        await new Promise<void>((resolve) => {
+          const waiters = this.codexAttachmentDrainWaiters.get(threadId) ?? new Set();
+          waiters.add(resolve);
+          this.codexAttachmentDrainWaiters.set(threadId, waiters);
+        });
+      }
+      try {
+        await this.applyThreadAgentChange({ ...params, agent: change.agent }, ownsStartReservation);
+      } catch (error) {
+        await this.overlayStore.setQueuedThreadAgentChange({
+          ...params, change: { ...change, error: error instanceof Error ? error.message : String(error) },
+        });
+        await this.notifyThreadAgentChange(params.backend, threadId);
+      }
+    });
+  }
+
+  readBackendComposerSettings(
+    backend: AppServerBackendKind,
+  ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "codexFastAllowed"> {
+    return {
+      modelDefaults: this.resolveProviderModelDefaultsFn()[backend],
+      ...(backend === "codex" ? {
+        tokenMiser: {
+          enabled: this.resolveTokenMiserEnabledFn(),
+          defaultEnabled: this.resolveTokenMiserDefaultEnabledFn(),
+        },
+        codexFastAllowed: this.resolveCodexFastAllowedFn(),
+      } : {}),
+    };
+  }
+
+  async setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> {
+    this.assertNotBootstrap("setThreadTokenMiser");
+    const backend = request.backend ?? "codex";
+    const overlay = await this.overlayStore.setThreadTokenMiser({
+      backend,
+      threadId: request.threadId,
+      enabled: request.enabled,
+    });
+    this.invalidateThreadListCache(backend);
+    // The same overlay notification refreshes local windows and remote viewers.
+    await this.publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: { threadId: request.threadId },
+      },
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      ...(overlay.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
+    };
   }
 
   async getThreadAgentMetadata(params: {
@@ -16811,6 +17061,7 @@ export class DesktopBackendRegistry {
     let pdfMcpAvailable = false;
     try {
       if (params.backend === "codex") {
+        await this.flushQueuedAgentChange(params.threadId, true);
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }
       overlay = await this.overlayStore.getThreadOverlayState({
@@ -17603,6 +17854,7 @@ export class DesktopBackendRegistry {
     let tokenMiserEnabled = false;
     try {
       if (params.backend === "codex") {
+        await this.flushQueuedAgentChange(params.threadId, true);
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }
       overlay = managedMode || params.backend === "codex"
@@ -20320,12 +20572,13 @@ export class DesktopBackendRegistry {
   private threadHasActiveTurn(
     threadId: string,
     backend: AppServerBackendKind = "codex",
+    ignoreCodexStartReservation = false,
   ): boolean {
     if (this.findReviewForParentTurn({ backend, parentThreadId: threadId })) {
       return true;
     }
     if (backend === "codex") {
-      if (this.reservedCodexStartThreadIds.has(threadId)) {
+      if (!ignoreCodexStartReservation && this.reservedCodexStartThreadIds.has(threadId)) {
         return true;
       }
       if (this.backendActiveCodexThreadIds.has(threadId)) {
@@ -28465,6 +28718,7 @@ export class DesktopBackendRegistry {
       threadId: record.parentThreadId,
       turnId: record.turnId,
     });
+    if (record.parentBackend === "codex") this.scheduleQueuedAgentChange(record.parentThreadId);
     void this.flushQueuedExecutionModeIfPresent(record.parentThreadId);
     void this.threadTurnQueue.releaseThread({
       backend: record.parentBackend,
@@ -35507,7 +35761,9 @@ export class DesktopBackendRegistry {
           ? "current_conversation"
           : "auto";
     const explicitRequest = params.mode !== undefined;
-    const response = await this.messagingHandler({
+    // An ordinary thread may still attach the child it just created through
+    // handoff_task. This internal path is not the unrestricted attachment tool.
+    const response = await this.dispatchMessagingRequest({
       operation: "attach_thread_here",
       context: {
         backend: params.sourceBackend,
@@ -40231,6 +40487,7 @@ export class DesktopBackendRegistry {
         // flush before launching the next Codex request.
         // Failures are logged + retried inside
         // flushQueuedExecutionModeIfPresent.
+        this.scheduleQueuedAgentChange(notification.params.threadId);
         void this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
         );
@@ -40395,6 +40652,7 @@ export class DesktopBackendRegistry {
         // on the protocol shape; we cover both for resilience). Idempotent
         // when no queue is set.
         if (!hasActiveCodexReviewTurn) {
+          this.scheduleQueuedAgentChange(event.notification.params.threadId);
           await this.flushQueuedExecutionModeIfPresent(
             event.notification.params.threadId,
           );

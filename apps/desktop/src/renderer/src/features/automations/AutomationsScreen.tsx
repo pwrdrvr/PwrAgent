@@ -1,3 +1,4 @@
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
@@ -18,10 +19,6 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import {
-  CODEX_AGENT_THREAD_CREATION_NOTE,
-  canChangeExistingThreadAgentDesignation,
-} from "../../lib/agent-thread";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -92,13 +89,11 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
   };
 
   const promoteThreadToAgent = async (thread: NavigationThreadSummary) => {
-    if (!canChangeExistingThreadAgentDesignation(thread)) {
-      throw new Error(CODEX_AGENT_THREAD_CREATION_NOTE);
-    }
     if (!props.desktopApi?.setThreadAgent) {
       throw new Error("Desktop bridge is missing setThreadAgent().");
     }
     const response = await props.desktopApi.setThreadAgent({
+      federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
       agent: { name: thread.title },
       backend: thread.source,
       threadId: thread.id,

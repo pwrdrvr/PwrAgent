@@ -87,6 +87,62 @@ describe("sqlite write metrics", () => {
     expect(store.claimMonitorJobSuggestion({ ...target, turnId: "turn-2" })).toBe(true);
   });
 
+  it("persists Agent promotion and demotion only at the operator boundary", async () => {
+    const identity = { backend: "codex" as const, threadId: "fixture-promoted" };
+    const client = Object.assign(createStubBackendClient(), {
+      readServerCapabilities: async () => ({ codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } }),
+      refreshThreadTools: vi.fn(async () => undefined),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.setThreadAgent({ ...identity, agent: { name: "Fixture manager" } });
+        const reopened = new SqliteOverlayStore(stateDb);
+        expect((await reopened.getThreadOverlayState(identity))?.agent?.name).toBe("Fixture manager");
+        await registry.setThreadAgent({ ...identity, agent: null });
+        expect((await reopened.getThreadOverlayState(identity))?.agent).toBeUndefined();
+      });
+      expectSqliteWriteBudget({ scenario: "agent-designation-toggle", note: "one promotion plus one demotion; no per-turn, per-tool or idle writes", writes });
+    } finally { await registry.close(); }
+  });
+
+  it.each([false, true])("budgets durable queued Agent changes without idle or retry writes (failure: %s)", async (fail) => {
+    const identity = { backend: "codex" as const, threadId: "fixture-queued-agent" };
+    const agent = { name: "Fixture manager" };
+    const refreshThreadTools = vi.fn(async () => { if (fail) throw new Error("Fixture failure"); });
+    const client = Object.assign(createStubBackendClient(), {
+      readServerCapabilities: async () => ({ codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } }),
+      refreshThreadTools,
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store });
+    const internals = registry as unknown as {
+      threadHasActiveTurn: () => boolean;
+      flushQueuedAgentChange: (threadId: string) => Promise<void>;
+    };
+    const active = vi.spyOn(internals, "threadHasActiveTurn").mockReturnValue(true);
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.setThreadAgent({ ...identity, agent });
+        for (let i = 0; i < 100; i++) await registry.setThreadAgent({ ...identity, agent });
+        const reopened = new SqliteOverlayStore(stateDb);
+        expect((await reopened.getThreadOverlayState(identity))?.queuedAgentChange?.agent).toEqual(agent);
+        expect((await reopened.getThreadOverlayState(identity))?.agent).toBeUndefined();
+        active.mockReturnValue(false);
+        for (let i = 0; i < 100; i++) await internals.flushQueuedAgentChange(identity.threadId);
+        const result = await reopened.getThreadOverlayState(identity);
+        if (fail) expect(result?.agent).toBeUndefined();
+        else expect(result?.agent).toMatchObject(agent);
+        expect(result?.queuedAgentChange?.error).toEqual(fail ? "Fixture failure" : undefined);
+        expect(refreshThreadTools).toHaveBeenCalledOnce();
+      });
+      expectSqliteWriteBudget({
+        scenario: fail ? "agent-designation-queue-failure" : "agent-designation-queue-apply",
+        note: "one queue commit plus one apply/error commit; 100 duplicate requests and 100 idle boundaries add no writes",
+        writes,
+      });
+    } finally { active.mockRestore(); await registry.close(); }
+  });
+
   it("persists an operator Auto selection and audit entry without per-review writes", async () => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "auto-thread", executionMode: "default" });
     const { writes } = await measureSqliteWrites(async () => {

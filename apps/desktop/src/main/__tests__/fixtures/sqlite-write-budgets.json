@@ -13,6 +13,27 @@
     "rowsChanged": 4,
     "statements": 4
   },
+  "agent-designation-queue-apply": {
+    "commits": 2,
+    "note": "one queue commit plus one apply/error commit; 100 duplicate requests and 100 idle boundaries add no writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "agent-designation-queue-failure": {
+    "commits": 2,
+    "note": "one queue commit plus one apply/error commit; 100 duplicate requests and 100 idle boundaries add no writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "agent-designation-toggle": {
+    "commits": 2,
+    "note": "one promotion plus one demotion; no per-turn, per-tool or idle writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "auto-access-selection": {
     "commits": 2,
     "note": "one operator mode selection and permission audit; no per-review persistence",

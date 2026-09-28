@@ -4922,6 +4922,28 @@ describe("MessagingController", () => {
     });
   });
 
+  it("resolves a promoted Codex Agent on an ordinary binding without rewriting the binding", async () => {
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({ navigation });
+    const channel = buildCommandEvent("/agent").channel;
+    await harness.store.upsertBinding({
+      id: "fixture-promotion-binding", authorizedActorIds: ["user-1"], backend: "codex",
+      channel, createdAt: 1000, targetKind: "thread", threadId: "thread-1", updatedAt: 1000,
+    });
+    const request = {
+      operation: "get_current_messaging_surface" as const,
+      context: { backend: "codex" as const, threadId: "thread-1" }, args: {},
+    };
+    expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: false });
+    navigation.threads[0]!.agent = { name: "Fixture manager", instructionLineCount: 0, instructionsTooLong: false, updatedAt: 1000 };
+    expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({
+      ok: true, data: { location: { binding: { id: "fixture-promotion-binding", targetKind: "thread" } } },
+    });
+    delete navigation.threads[0]!.agent;
+    expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: false });
+    expect(await harness.store.findActiveBindingForChannel(channel)).toMatchObject({ id: "fixture-promotion-binding", targetKind: "thread" });
+  });
+
   it("reports the current messaging surface for an active Agent-thread turn", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

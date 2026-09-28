@@ -258,6 +258,7 @@ export function materializeNavigationThreads(params: {
     return {
       ...thread,
       agent: overlay?.agent,
+      agentChange: summarizeThreadAgentChange(overlay?.queuedAgentChange),
       gitBranch,
       observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
@@ -377,6 +378,7 @@ export function buildNavigationSnapshotHash(params: {
       id: thread.id,
       title: thread.title,
       titleSource: thread.titleSource,
+      agentChange: thread.agentChange,
       agent: thread.agent
         ? {
             name: thread.agent.name,
@@ -776,4 +778,10 @@ export function buildNavigationSnapshotHash(params: {
       executionMode: "default",
     },
   });
+}
+
+export function summarizeThreadAgentChange(
+  change: ThreadOverlayState["queuedAgentChange"],
+): NavigationThreadSummary["agentChange"] {
+  return change ? { enabled: change.agent !== null, ...(change.error ? { error: change.error } : {}) } : undefined;
 }
