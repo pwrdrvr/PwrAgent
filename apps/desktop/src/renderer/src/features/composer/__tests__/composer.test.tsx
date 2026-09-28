@@ -6262,7 +6262,7 @@ describe("Composer", () => {
     expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
   });
 
-  it("offers and submits a scoped upstream PR when origin is a fork", () => {
+  it("offers and submits a scoped upstream PR when origin is a fork", async () => {
     const startReview = vi.fn();
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
@@ -6280,6 +6280,7 @@ describe("Composer", () => {
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/7" },
     }));
+    await flushReactUpdates();
   });
 
   it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", (workspacePath) => {
@@ -6300,7 +6301,7 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
-  it("walks only the targets it offers and waits for a PR before submitting", () => {
+  it("walks only the targets it offers and waits for a PR before submitting", async () => {
     const withoutPrs = render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
@@ -6338,6 +6339,7 @@ describe("Composer", () => {
         url: "https://github.com/fixture/project/pull/7",
       },
     }));
+    await flushReactUpdates();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -21968,7 +21970,10 @@ describe("Composer", () => {
       cancelable: true,
     });
 
-    const defaultWasPrevented = !textarea.dispatchEvent(event);
+    let defaultWasPrevented = false;
+    act(() => {
+      defaultWasPrevented = !textarea.dispatchEvent(event);
+    });
 
     expect(defaultWasPrevented).toBe(true);
     expect(startTurn).not.toHaveBeenCalled();
@@ -22009,7 +22014,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
     const option = screen.getByRole("option", { name: /\$ce:plan/i });
-    option.focus();
+    act(() => option.focus());
     fireEvent.keyDown(option, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();

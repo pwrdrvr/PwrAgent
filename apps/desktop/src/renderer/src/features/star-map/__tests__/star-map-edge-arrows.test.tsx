@@ -149,16 +149,18 @@ async function renderMap(
     "pwragent.starMap.viewPreferences",
     JSON.stringify({ layout }),
   );
-  render(
-    <StarMapScreen
-      desktopApi={buildDesktopApi()}
-      localThreads={threads}
-      sessionKeys={{}}
-      localInstanceLabel="fallback"
-      onOpenLocalThread={() => undefined}
-      onFocusLocalInstance={() => undefined}
-    />,
-  );
+  await act(async () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={threads}
+        sessionKeys={{}}
+        localInstanceLabel="fallback"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+  });
 }
 
 describe("star map edge arrows", () => {

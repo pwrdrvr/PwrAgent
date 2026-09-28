@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode, useState } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -670,7 +671,9 @@ describe("AcpAgentsSettings", () => {
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: overridePath },
     });
-    screen.getByRole("button", { name: "Save" }).click();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
 
     expect(
       await screen.findByText(
@@ -681,7 +684,9 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("saved override")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
-    screen.getByRole("button", { name: "Refresh" }).click();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    });
     expect(
       await screen.findByText("Active for new threads · v2.0.0."),
     ).toBeInTheDocument();

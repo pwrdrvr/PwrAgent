@@ -72,6 +72,20 @@ function buildDesktopApi(): DesktopApi {
   };
 }
 
+async function renderLocalMapSettled(localThreads: NavigationThreadSummary[]) {
+  await act(async () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={localThreads}
+        sessionKeys={{}}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+  });
+}
+
 function queryPage(
   request: NavigationQueryRequest,
   threads: readonly NavigationThreadSummary[],
@@ -1519,15 +1533,7 @@ describe("StarMapScreen", () => {
   });
 
   it("cycles a filter chip neutral -> only -> exclude", async () => {
-    render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[unreadThread("t2")]}
-        sessionKeys={{}}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
-    );
+    await renderLocalMapSettled([unreadThread("t2")]);
 
     const card = () =>
       screen.queryByRole("button", { name: /Open thread: Thread t2/ });
@@ -1560,15 +1566,7 @@ describe("StarMapScreen", () => {
   it("shows every card when no filter is selected", async () => {
     // The old model's "all chips off" state showed an empty map; neutral
     // has no such dead end.
-    render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[unreadThread("t3")]}
-        sessionKeys={{}}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
-    );
+    await renderLocalMapSettled([unreadThread("t3")]);
     expect(
       screen.getByRole("button", { name: /Open thread: Thread t3/ }),
     ).toBeTruthy();
@@ -1600,32 +1598,14 @@ describe("StarMapScreen", () => {
   });
 
   it("focuses the layer on mount so the camera keys work immediately", async () => {
-    await act(async () => {
-      render(
-        <StarMapScreen
-          desktopApi={buildDesktopApi()}
-          localThreads={[]}
-          sessionKeys={{}}
-          onOpenLocalThread={() => undefined}
-          onFocusLocalInstance={() => undefined}
-        />,
-      );
-    });
+    await renderLocalMapSettled([]);
     expect(document.activeElement).toBe(
       screen.getByRole("region", { name: "Star Map" }),
     );
   });
 
-  it("carries no in-map close affordance — the map lives in its own window", () => {
-    render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[]}
-        sessionKeys={{}}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
-    );
+  it("carries no in-map close affordance — the map lives in its own window", async () => {
+    await renderLocalMapSettled([]);
     expect(
       screen.queryByRole("button", { name: "Close Star Map" }),
     ).toBeNull();
@@ -2519,15 +2499,7 @@ describe("StarMapScreen", () => {
   });
 
   it("offers a way back from any selection", async () => {
-    render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[unreadThread("t10")]}
-        sessionKeys={{}}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
-    );
+    await renderLocalMapSettled([unreadThread("t10")]);
 
     const filterRow = screen.getByRole("group", { name: "Thread filters" });
     // Nothing to clear yet, so the affordance stays out of the strip.
@@ -2551,17 +2523,7 @@ describe("StarMapScreen", () => {
   it("does not claim an unfiltered empty map is a filter problem", async () => {
     // A fleet with nothing to show is a different state; blaming the
     // filters there would be a lie.
-    await act(async () => {
-      render(
-        <StarMapScreen
-          desktopApi={buildDesktopApi()}
-          localThreads={[]}
-          sessionKeys={{}}
-          onOpenLocalThread={() => undefined}
-          onFocusLocalInstance={() => undefined}
-        />,
-      );
-    });
+    await renderLocalMapSettled([]);
     expect(screen.queryByRole("status")).toBeNull();
   });
 
