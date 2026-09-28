@@ -841,6 +841,7 @@ const addThreadPullRequestReference = vi.fn(async (request: {
   extraLinkedDirectories: [],
   prs: [request.pr],
 }));
+const getCachedThreadSummary = vi.fn((_params: { backend?: string; threadId: string }): AppServerThreadSummary | undefined => undefined);
 const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
@@ -1114,7 +1115,7 @@ vi.mock("../app-server/backend-registry", () => {
     handoffThreadWorkspace,
     renameThread,
     listThreads,
-    getCachedThreadSummary: () => undefined,
+    getCachedThreadSummary,
     readThread,
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,
@@ -1241,6 +1242,7 @@ describe("app server ipc", () => {
   });
 
   beforeEach(() => {
+    getCachedThreadSummary.mockReset();
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
@@ -2167,6 +2169,36 @@ describe("app server ipc", () => {
       PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
       expect.objectContaining({ paused: true, pausedAt: 2_000 }),
     );
+  });
+
+  it("resolves activity titles without depending on retained navigation rows or refreshing thread lists", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const { PrActivityJournal } = await import("../pr-status/pr-activity");
+    const journal = new PrActivityJournal();
+    const service = appServerService as unknown as { prActivity: typeof journal };
+    const previous = service.prActivity;
+    service.prActivity = journal;
+    const summary: NavigationThreadSummary = {
+      id: "off-page-parent", source: "codex", title: "Collapsed project parent", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, hasActiveSubAgent: true,
+    };
+    getCachedThreadSummary.mockImplementation(({ threadId }) => threadId === summary.id ? summary : undefined);
+    for (let i = 0; i < 2; i++) journal.record({ category: "budget", source: "background poll",
+      message: "PR check allowed", budget: "polling", delta: -1,
+      threadKeys: ["codex:off-page-parent", "codex:unknown"], prKeys: [],
+    });
+    listThreads.mockClear();
+    try {
+      expect(appServerService.getPrActivity().threadTitles).toEqual({ "codex:off-page-parent": summary.title });
+      expect(getCachedThreadSummary).toHaveBeenCalledTimes(2);
+      expect(getCachedThreadSummary).toHaveBeenCalledWith({ backend: "codex", threadId: summary.id });
+      summary.title = "Renamed parent";
+      summary.hasActiveSubAgent = false;
+      expect(appServerService.getPrActivity().threadTitles).toEqual({ "codex:off-page-parent": "Renamed parent" });
+      expect(listThreads).not.toHaveBeenCalled();
+    } finally {
+      service.prActivity = previous;
+    }
   });
 
   it("keeps paused lookup observations read-only, including empty and full-budget lookups", async () => {
