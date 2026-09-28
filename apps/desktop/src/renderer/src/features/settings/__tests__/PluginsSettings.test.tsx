@@ -486,11 +486,13 @@ describe("PluginsSettings", () => {
 
     // The pane used to consume these only while a sign-in was in flight, so a
     // server that died on launch stayed indistinguishable from a quiet one.
-    emit?.({
-      notification: {
-        method: "mcpServer/startupStatus/updated",
-        params: { name: "flaky", status: "failed", error: "connect ECONNREFUSED" },
-      },
+    act(() => {
+      emit?.({
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: { name: "flaky", status: "failed", error: "connect ECONNREFUSED" },
+        },
+      });
     });
 
     await waitFor(() => {
@@ -516,33 +518,38 @@ describe("PluginsSettings", () => {
 
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    const signIn = await screen.findByRole("button", { name: "Sign in" });
+    await act(async () => {
+      fireEvent.click(signIn);
+    });
     await waitFor(() => {
       expect(desktopApi.startCodexMcpServerLogin).toHaveBeenCalled();
     });
 
-    emit?.({
-      notification: {
-        method: "mcpServer/oauthLogin/completed",
-        params: { serverName: "datadog", success: true },
-      },
-    });
+    act(() => {
+      emit?.({
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: { serverName: "datadog", success: true },
+        },
+      });
 
-    // A reload reports `starting` before it reports `ready`. Treating that as
-    // a terminal answer disarmed the waiter without resolving it, so the
-    // promise the pane awaits never settled and every control on the row
-    // stayed disabled for the life of the window.
-    emit?.({
-      notification: {
-        method: "mcpServer/startupStatus/updated",
-        params: { name: "datadog", status: "starting" },
-      },
-    });
-    emit?.({
-      notification: {
-        method: "mcpServer/startupStatus/updated",
-        params: { name: "datadog", status: "ready" },
-      },
+      // A reload reports `starting` before it reports `ready`. Treating that as
+      // a terminal answer disarmed the waiter without resolving it, so the
+      // promise the pane awaits never settled and every control on the row
+      // stayed disabled for the life of the window.
+      emit?.({
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: { name: "datadog", status: "starting" },
+        },
+      });
+      emit?.({
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: { name: "datadog", status: "ready" },
+        },
+      });
     });
 
     await waitFor(() => {

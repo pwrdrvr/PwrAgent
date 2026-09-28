@@ -151,8 +151,11 @@ describe("useDesktopSettings", () => {
     const { result } = renderHook(() => useDesktopSettings(desktopApi));
     await waitFor(() => expect(result.current.snapshot).toBe(initialSnapshot));
 
-    const write = result.current.writeConfig({
-      models: { codex: { path: "/written/codex" } },
+    let write!: Promise<boolean>;
+    act(() => {
+      write = result.current.writeConfig({
+        models: { codex: { path: "/written/codex" } },
+      });
     });
     await waitFor(() => expect(writeSettingsConfig).toHaveBeenCalledOnce());
     act(() => {
