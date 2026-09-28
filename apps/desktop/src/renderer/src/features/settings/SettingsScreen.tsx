@@ -142,6 +142,7 @@ const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
  */
 const FEDERATION_NAV_SECTIONS: ReadonlyArray<{ sub: string; label: string }> = [
   { sub: "configuration", label: "Configuration" },
+  { sub: "capabilities", label: "Capabilities" },
   { sub: "encryption", label: "Encryption" },
   { sub: "invites", label: "Invites" },
   { sub: "connection", label: "Connection" },
