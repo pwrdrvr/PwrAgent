@@ -1,3 +1,4 @@
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
@@ -7320,8 +7321,10 @@ async function requestWithFallbacks(params: {
   payloads: unknown[];
   timeoutMs: number;
   deadlineAt?: number;
+  listingPage?: number;
 }): Promise<unknown> {
   let lastError: unknown;
+  let attempt = 0;
 
   for (const method of params.methods) {
     for (const payload of params.payloads) {
@@ -7330,12 +7333,12 @@ async function requestWithFallbacks(params: {
         : Math.min(params.timeoutMs, params.deadlineAt - Date.now());
       if (timeoutMs <= 0) throw new Error("Thread search deadline expired.");
       try {
-        return await params.client.request(
-          method,
-          payload,
-          timeoutMs,
-          params.diagnostics,
-        );
+        attempt += 1;
+        const request = () => params.client.request(method, payload, timeoutMs, params.diagnostics);
+        return await (method === "thread/list"
+          ? listingDiagnostics.trace("provider-rpc", { caller: params.diagnostics?.callerReason, page: params.listingPage, attempt,
+            ...(attempt > 1 ? { reason: "provider-fallback" } : {}) }, request)
+          : request());
       } catch (error) {
         lastError = error;
         if (!isMethodUnavailableError(error, method)) {
@@ -7390,6 +7393,7 @@ async function requestThreadListPages(params: {
       ),
       timeoutMs: params.requestTimeoutMs,
       deadlineAt: params.deadlineAt,
+      listingPage: pageCount + 1,
     });
     const page = extractThreadListPage(result, params.textCache);
     pages.push(...page.threads);
@@ -8379,8 +8383,12 @@ export class CodexAppServerClient {
       params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
     ]);
     const existing = this.pendingThreadListings.get(key);
-    if (existing) return await existing;
-    const pending = this.loadThreadListing(params, diagnostics);
+    if (existing) {
+      listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
+      return await existing;
+    }
+    const pending = listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
+      () => this.loadThreadListing(params, diagnostics));
     this.pendingThreadListings.set(key, pending);
     try {
       return await pending;

@@ -1,3 +1,4 @@
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentEvent,
@@ -320,12 +321,14 @@ export class NavigationQueryStore {
           "Navigation generation does not belong to this requester and query.",
         );
       }
+      listingDiagnostics.record("owner-page", "cursor-hit");
       generation = retained;
       offset = cursor.offset;
     } else {
       let eventVersion = this.attentionEventVersion;
       let index = await params.loadIndex();
       if (eventVersion !== this.attentionEventVersion) {
+        listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
         eventVersion = this.attentionEventVersion;
         index = await params.loadIndex();
         if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
