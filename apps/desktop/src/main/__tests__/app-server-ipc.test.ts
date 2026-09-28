@@ -7348,6 +7348,7 @@ describe("app server ipc", () => {
         backend: "codex",
         threadId: "thread-1",
         trigger: "scheduled",
+        includeStatusFreshness: true,
         branch: "fix/open",
         directoryPaths: ["/repo"],
       } satisfies RefreshThreadPullRequestsRequest;
@@ -7379,11 +7380,22 @@ describe("app server ipc", () => {
       registerAppServerIpcHandlers();
 
       await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
-      await vi.waitFor(() => {
-        expect(mockAppServerLog.debug).toHaveBeenCalledWith(
-          "threadPullRequestsRefresh:background-complete",
-          expect.objectContaining({ threadId: "thread-1", trigger: "scheduled" }),
-        );
+      // Scheduled lookups intentionally do not emit the user-only debug log.
+      // Wait for the completed check observation before advancing the clock.
+      await vi.waitFor(async () => {
+        const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({}) as PrActivitySnapshot;
+        expect(activity.events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            category: "check",
+            source: "thread lookup (scheduled)",
+            threadKeys: ["codex:thread-1"],
+          }),
+        ]));
+        // A result can be recorded before the in-flight lookup is released.
+        // At this same clock time, false proves the request reached cooldown
+        // rather than coalescing with the still-pending first lookup.
+        expect(await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request))
+          .toMatchObject({ refreshStarted: false });
       });
       expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
 
