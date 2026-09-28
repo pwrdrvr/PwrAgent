@@ -1,3 +1,5 @@
+import { createNavigationDiagnosticView } from "./navigation-listing-diagnostics";
+import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { classifyDirectory } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
@@ -20,6 +22,8 @@ export function useBoundedNavigationWindow(params: Demand & {
 }) {
   const { desktopApi, enabled, visible } = params;
   const [state, setState] = useState<NavigationWindowQueriesState>(EMPTY);
+  const diagnosticRef = useRef<{ view: number; effect: number } | undefined>(undefined);
+  diagnosticRef.current ??= { view: createNavigationDiagnosticView(), effect: 0 };
   const controllerRef = useRef<NavigationWindowQueries | undefined>(undefined);
   const selectedRangeCheckedRef = useRef(new Map<string, string>());
   const paramsRef = useRef(params);
@@ -93,7 +97,9 @@ export function useBoundedNavigationWindow(params: Demand & {
   demandRef.current = demand;
 
   useEffect(() => {
-    const controller = new NavigationWindowQueries(paramsRef.current.desktopApi ?? {});
+    const diagnostic = diagnosticRef.current!;
+    diagnostic.effect += 1;
+    const controller = new NavigationWindowQueries(paramsRef.current.desktopApi ?? {}, { ...diagnostic });
     controllerRef.current = controller;
     selectedRangeCheckedRef.current.clear();
     const unsubscribe = controller.subscribe(() => setState(controller.getSnapshot()));
@@ -192,7 +198,7 @@ export function useBoundedNavigationWindow(params: Demand & {
   }, [desktopApi?.onAgentEvent, desktopApi?.onMessagingBindingsChanged]);
 
   const invalidate = useCallback((owners?: readonly FederationTarget[], event?: AgentEvent) => controllerRef.current?.invalidate(undefined, owners, event), []);
-  const refresh = useCallback((owners?: readonly FederationTarget[], invalidatedOnly = false) => controllerRef.current?.refresh(undefined, owners, invalidatedOnly) ?? Promise.resolve(), []);
+  const refresh = useCallback((owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause) => controllerRef.current?.refresh(undefined, owners, invalidatedOnly, cause) ?? Promise.resolve(), []);
   const loadMore = useCallback((id: string) => controllerRef.current?.loadMore(id) ?? Promise.resolve(), []);
   const rebaseline = useCallback((id: string, anchor: NavigationQueryAnchor) => controllerRef.current?.rebaseline(id, anchor) ?? Promise.resolve(), []);
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);

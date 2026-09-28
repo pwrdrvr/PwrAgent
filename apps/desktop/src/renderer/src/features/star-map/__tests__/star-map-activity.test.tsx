@@ -82,6 +82,7 @@ it("attributes zero inactive map reads, coalesces restoration, and scopes projec
   const projectReads = read.mock.calls.map(([request]) => request).filter((request) => request.query.kind === "star-map");
   expect(projectReads).toHaveLength(1);
   expect(projectReads[0]!.query).toMatchObject({ projectKey: "directory:/a" });
+  expect(projectReads[0]!.diagnostic).toMatchObject({ cause: "thread", trigger: "thread/status/changed" });
   expect(read).toHaveBeenCalledTimes(3); // One project, plus that owner's rows/geometry.
   view.unmount();
   expect(api.releaseNavigationAttentionView).toHaveBeenCalled();
