@@ -717,7 +717,7 @@ MIT
 - @peculiar/asn1-x509-attr@2.9.4 | https://github.com/PeculiarVentures/asn1-schema
 - @peculiar/utils@2.0.3 | https://github.com/PeculiarVentures/pvtsutils
 - @peculiar/x509@2.0.0 | https://github.com/PeculiarVentures/x509
-- @pwrdrvr/agent-acp@0.15.0 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-acp@0.16.1 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-client@0.8.2 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.2.0 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-transport@0.1.7 | https://github.com/pwrdrvr/agent-kit
@@ -3770,11 +3770,11 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-@pwrdrvr/agent-acp@0.15.0 (MIT)
+@pwrdrvr/agent-acp@0.16.1 (MIT)
 -------------------------------
 
 Applies to:
-- @pwrdrvr/agent-acp@0.15.0 (MIT)
+- @pwrdrvr/agent-acp@0.16.1 (MIT)
 - @pwrdrvr/agent-client@0.8.2 (MIT)
 - @pwrdrvr/agent-core@0.2.0 (MIT)
 - @pwrdrvr/agent-transport@0.1.7 (MIT)
@@ -3782,7 +3782,7 @@ Applies to:
 - @pwrdrvr/codex-app-server-protocol@0.153.4 (MIT)
 - @pwrdrvr/codex-discovery@0.4.0 (MIT)
 
-Representative file: @pwrdrvr/agent-acp@0.15.0/LICENSE
+Representative file: @pwrdrvr/agent-acp@0.16.1/LICENSE
 
 MIT License
 
