@@ -1403,6 +1403,11 @@ describe("App", () => {
 
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
     const threadViewImported = createDeferred<void>();
+    const backendSummaries = createDeferred<{
+      fetchedAt: number;
+      backends: BackendSummary[];
+    }>();
+    const navigationSnapshot = createDeferred<NavigationSnapshot>();
     const pickDirectoryFromDisk = vi.fn(async () => ({
       canceled: false as const,
       path: "/Users/me/repos/PwrAgent",
@@ -1436,22 +1441,8 @@ describe("App", () => {
       configurable: true,
       value: ownerApi({
         platform: "darwin",
-        listBackends: async () => ({
-          fetchedAt: Date.now(),
-          backends: [],
-        }),
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: [],
-          threads: [],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
+        listBackends: () => backendSummaries.promise,
+        getNavigationSnapshot: () => navigationSnapshot.promise,
         recordStartupProfileEvent: (name: string) => {
           if (name === "thread-view-import:end") threadViewImported.resolve(undefined);
         },
@@ -1462,6 +1453,32 @@ describe("App", () => {
     });
 
     const { container } = render(<App />);
+    await act(async () => {
+      backendSummaries.resolve({ fetchedAt: Date.now(), backends: [] });
+    });
+    await act(async () => {
+      navigationSnapshot.resolve({
+        backend: "all",
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "default",
+        },
+      });
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            window.setTimeout(resolve, 0);
+          });
+        });
+      });
+    });
     // The placeholder header also has a masthead, but is replaced when the
     // lazy thread view arrives. Interacting before that commit can click a
     // detached menu on a loaded worker. Wait for the real header's owner.

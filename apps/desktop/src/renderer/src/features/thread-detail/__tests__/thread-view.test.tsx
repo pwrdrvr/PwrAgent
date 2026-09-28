@@ -380,8 +380,10 @@ describe("ThreadView", () => {
       />,
     );
     const openFrom = (button: HTMLElement) => {
-      button.focus();
-      act(() => button.click());
+      act(() => {
+        button.focus();
+        button.click();
+      });
     };
 
     const rewind = screen.getByRole("button", { name: "Rewind Grok conversation" });

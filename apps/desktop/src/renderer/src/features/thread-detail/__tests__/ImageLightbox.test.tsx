@@ -412,7 +412,7 @@ describe("shared lightbox gestures", () => {
     const { viewport, image } = measureImage();
     resize();
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    viewport.focus();
+    act(() => viewport.focus());
     fireEvent.keyDown(viewport, { key: "ArrowRight" });
     fireEvent.keyDown(viewport, { key: "ArrowDown" });
     expect(image.style.transform).toBe("translate(-40px, -40px)");
@@ -425,7 +425,7 @@ describe("shared lightbox gestures", () => {
     expect(onPrevious).not.toHaveBeenCalled();
     fireEvent.keyDown(viewport, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
-    screen.getByRole("button", { name: "Fit to window" }).focus();
+    act(() => screen.getByRole("button", { name: "Fit to window" }).focus());
     fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
     expect(onNext).toHaveBeenCalledOnce();
   });

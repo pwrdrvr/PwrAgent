@@ -294,6 +294,9 @@ describe("AutomationEditor", () => {
         onSubmit={async () => undefined}
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     expect(screen.getByRole("heading", { name: "Filters" })).toBeInTheDocument();
@@ -507,6 +510,9 @@ describe("AutomationEditor", () => {
         onSubmit={onSubmit}
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Slack alerts" },
