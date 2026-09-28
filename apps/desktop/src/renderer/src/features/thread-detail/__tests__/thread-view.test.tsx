@@ -900,7 +900,7 @@ describe("ThreadView", () => {
     });
   });
 
-  it("windows enormous replay pages before rendering transcript history", () => {
+  it("windows enormous replay pages before rendering transcript history", async () => {
     const loadOlder = vi.fn(async () => undefined);
     const entries = Array.from({ length: 95 }, (_, index) => ({
       type: "message" as const,
@@ -956,7 +956,9 @@ describe("ThreadView", () => {
 
     const transcriptList = screen.getByRole("list");
     transcriptList.scrollTop = 120;
-    fireEvent.scroll(transcriptList);
+    await act(async () => {
+      fireEvent.scroll(transcriptList);
+    });
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(90);
     expect(loadOlder).not.toHaveBeenCalled();

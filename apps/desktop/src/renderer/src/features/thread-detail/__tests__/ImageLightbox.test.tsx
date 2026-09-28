@@ -118,14 +118,16 @@ describe("ImageLightbox", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("does not close when a toolbar control is used", () => {
+  it("does not close when a toolbar control is used", async () => {
     const onClose = vi.fn();
     render(
       <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
     );
 
     pressAndClick(screen.getByRole("button", { name: "Zoom in" }));
-    pressAndClick(screen.getByRole("button", { name: "Copy image" }));
+    await act(async () => {
+      pressAndClick(screen.getByRole("button", { name: "Copy image" }));
+    });
     expect(onClose).not.toHaveBeenCalled();
   });
 

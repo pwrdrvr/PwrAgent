@@ -302,7 +302,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.initialLoadDurationMs).toBe(725);
   });
 
-  it("exposes selected thread busy state from the same thinking state as row indicators", () => {
+  it("exposes selected thread busy state from the same thinking state as row indicators", async () => {
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
       readThread: vi.fn(async ({ backend, threadId }) => ({
@@ -327,6 +327,7 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     expect(result.current.threadBusy).toBe(false);
 
@@ -5478,12 +5479,13 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     await waitFor(() => {
       expect(result.current.response?.replay.entries).toEqual([]);
     });
 
-    act(() => {
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -5740,6 +5742,7 @@ describe("useThreadSessionState", () => {
       "Ephemeral segment 51.",
     );
     expect(result.current.messages).toEqual([]);
+    await flushReactUpdates();
   });
 
   it("isolates transient messages by thread and turn", async () => {
@@ -6781,6 +6784,7 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     await waitFor(() => {
       expect(result.current.response?.replay.entries).toEqual([]);
@@ -6895,6 +6899,7 @@ describe("useThreadSessionState", () => {
       "activity:Searched src",
       "message:Third commentary.",
     ]);
+    await flushReactUpdates();
   });
 
   it("starts a new live activity bucket after assistant messages completed into the response", async () => {
@@ -10667,10 +10672,11 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       result.current.setActiveTurnId("turn-1");
       result.current.setPendingStatusText("Thinking");
     });
@@ -10717,6 +10723,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.pendingStatusText).toBeUndefined();
     expect(result.current.activeTurnId).toBeUndefined();
+    await flushReactUpdates();
   });
 
   it.each(["navigation", "in-flight read"])("does not revive a completed turn from stale %s activity", async (source) => {
@@ -11005,10 +11012,11 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       for (const listener of agentEventListeners) {
         listener({
           backend: "codex",
@@ -11047,6 +11055,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.pendingStatusText).toBeUndefined();
     expect(result.current.contextWindow).toBeUndefined();
+    await flushReactUpdates();
   });
 
   it("ignores live transcript activity for unrelated threads", async () => {
@@ -12066,10 +12075,11 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       for (const listener of agentEventListeners) {
         listener({
           backend: "codex",
@@ -12138,6 +12148,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingUserInput).toBeUndefined();
     expect(result.current.pendingStatusText).toBeUndefined();
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    await flushReactUpdates();
   });
 
   it("surfaces MCP elicitations as pending MCP interactions instead of approval", async () => {
@@ -15145,8 +15156,9 @@ describe("useThreadSessionState", () => {
       desktopApi,
       thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
     }));
+    await flushReactUpdates();
     await waitForThreadHydration(result);
-    act(() => {
+    await act(async () => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turnId: "turn-1",
         turn: { id: "turn-1", status: "inProgress" },
@@ -15232,10 +15244,11 @@ describe("useThreadSessionState", () => {
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
+    await flushReactUpdates();
 
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       for (const listener of agentEventListeners) {
         listener({
           backend: "codex",
@@ -15320,6 +15333,7 @@ describe("useThreadSessionState", () => {
       }),
     ]);
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    await flushReactUpdates();
   });
 
   it("does not keep list thinking from completed usage with stale turn metadata", async () => {

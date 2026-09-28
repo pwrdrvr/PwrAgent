@@ -1113,6 +1113,7 @@ describe("App", () => {
     );
     render(<App />);
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
+    await flushReactUpdates();
 
     act(() => {
       for (const event of backendToastEvents(eventTarget)) {
