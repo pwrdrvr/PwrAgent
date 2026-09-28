@@ -39340,14 +39340,19 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("forwards remembered source images as staged paths to send_message_to_thread", async () => {
+  it.each([
+    { tool: "send_message_to_thread", remote: false },
+    { tool: "send_message_to_thread", remote: true },
+    { tool: "steer_thread", remote: false },
+    { tool: "steer_thread", remote: true },
+  ] as const)("does not replay source images through $tool (remote=$remote)", async ({ tool, remote }) => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-source-image-"));
     const previousHome = process.env.PWRAGENT_HOME;
     const previousProfile = process.env.PWRAGENT_PROFILE;
     process.env.PWRAGENT_HOME = tempRoot;
     process.env.PWRAGENT_PROFILE = "test";
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
       threads: [{
         id: "source-thread",
         title: "Source",
@@ -39367,7 +39372,25 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    const federatedMessage = vi.fn(async (request) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "remote-turn",
+      instanceId: "remote-instance",
+      instanceLabel: "Remote",
+    }));
+    const federatedControl = vi.fn(async (request) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "remote-turn",
+      disposition: "steered" as const,
+      instanceId: "remote-instance",
+      instanceLabel: "Remote",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedMessage);
+    registry.setFederatedThreadControlHandler(federatedControl);
     try {
+      await discoverCodexBackendForTest(registry);
       const source = await registry.startTurn({
         backend: "codex",
         threadId: "source-thread",
@@ -39403,30 +39426,55 @@ script = "printf setup"
       })]);
       expect(JSON.stringify(remembered)).not.toContain("base64");
 
-      await callRegistryMcpTool({
+      if (tool === "steer_thread" && !remote) {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "target-thread",
+              turnId: "target-turn",
+              turn: { id: "target-turn" },
+            },
+          },
+        });
+      }
+      const response = await callRegistryMcpTool({
         registry,
         backend: "codex",
         threadId: "source-thread",
         turnId: source.turnId,
-        tool: "send_message_to_thread",
+        tool,
         args: {
           backend: "codex",
           threadId: "target-thread",
-          prompt: "Use the source screenshot.",
+          prompt: "The screenshot review is complete.",
+          ...(remote ? { instanceId: "remote-instance" } : {}),
+          ...(tool === "steer_thread" ? { requestId: "steer-with-source-image" } : {}),
         },
       });
 
-      expect(codexClient.lastStartTurnParams).toMatchObject({
-        threadId: "target-thread",
-        input: [
-          { type: "text", text: "Use the source screenshot." },
-          expect.objectContaining({
-            type: "localImage",
-            name: "screen.png",
-            path: expect.stringContaining("image-inputs"),
-          }),
-        ],
-      });
+      expect(response, JSON.stringify(response)).not.toHaveProperty("isError", true);
+      const expectedInput = [{ type: "text", text: "The screenshot review is complete." }];
+      if (remote) {
+        const handler = tool === "steer_thread" ? federatedControl : federatedMessage;
+        expect(handler).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          threadId: "target-thread",
+          input: expectedInput,
+        }));
+      } else {
+        const delivered = tool === "steer_thread"
+          ? codexClient.lastSteerTurnParams
+          : codexClient.lastStartTurnParams;
+        expect(delivered).toMatchObject({ threadId: "target-thread" });
+        expect(delivered?.input).toEqual(expectedInput);
+      }
+      // The source still owns its image; sending an update must not consume it.
+      expect(registry.getTurnInputAttachments({
+        backend: "codex",
+        threadId: "source-thread",
+        turnId: source.turnId,
+      })).toEqual(remembered);
     } finally {
       await registry.close();
       if (previousHome === undefined) delete process.env.PWRAGENT_HOME;
