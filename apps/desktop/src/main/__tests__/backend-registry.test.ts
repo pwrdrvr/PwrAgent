@@ -4643,7 +4643,10 @@ describe("DesktopBackendRegistry", () => {
       expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
       await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "turn-discovery", turn: { id: "turn-discovery" } } } });
       // A persisted bootstrap remains usable after switching the experiment off.
-      const result = await codexClient.emitRequest(call) as { success: boolean; contentItems: Array<{ text: string }> };
+      const result = await codexClient.emitRequest({
+        ...call,
+        params: { ...call.params, callId: "search-2", requestId: "search-2" },
+      }) as { success: boolean; contentItems: Array<{ text: string }> };
       expect(result.success).toBe(true);
       expect(JSON.parse(result.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
     } finally {
@@ -45060,14 +45063,16 @@ script = "printf setup"
           },
         });
       }
+      let callSequence = 0;
       const call = async (args: Record<string, unknown>) => {
+        const callId = `call-${++callSequence}`;
         const response = (await codexClient.emitRequest({
           method: "item/tool/call",
           params: {
             threadId: "agent-thread",
             turnId: "turn-agent-thread",
-            callId: "call-1",
-            requestId: "call-1",
+            callId,
+            requestId: callId,
             namespace: "pwragent",
             tool: "mutate_thread",
             arguments: { backend: "codex", threadId: "target-thread", ...args },
@@ -45382,19 +45387,22 @@ script = "printf setup"
           },
         },
       });
-      const call = async (args: Record<string, unknown>) =>
-        await codexClient.emitRequest({
+      let callSequence = 0;
+      const call = async (args: Record<string, unknown>) => {
+        const callId = `call-${++callSequence}`;
+        return await codexClient.emitRequest({
           method: "item/tool/call",
           params: {
             threadId: "agent-thread",
             turnId: "turn-1",
-            callId: "call-1",
-            requestId: "call-1",
+            callId,
+            requestId: callId,
             namespace: "pwragent",
             tool: "mutate_thread",
             arguments: { backend: "codex", threadId: "remote-thread", ...args },
           },
         } as AppServerPendingRequestNotification);
+      };
 
       await call({ archive: true });
       await call({ projectPath: "/Users/studio/repos/app" });
