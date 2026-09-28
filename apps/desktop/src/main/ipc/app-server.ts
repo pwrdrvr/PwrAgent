@@ -389,6 +389,7 @@ import {
   prCheckTone,
   prRepairDecisionTone,
 } from "../pr-status/pr-activity";
+import { PrLookupsInFlight } from "../pr-status/pr-lookups-in-flight";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -1168,6 +1169,21 @@ type PrStatusRegistryEntry = {
   lastUserRefreshRequestedAt?: number;
 };
 
+type PullRequestLookupParams = {
+  backend: AppServerBackendKind;
+  request: RefreshThreadPullRequestsRequest;
+  lookupKey: string;
+  lookupDirectoryPaths: string[];
+  previousPrs: PrSummary[];
+};
+
+type PullRequestLookupResult = {
+  prs: PrSummary[];
+  statusPrs: PrSummary[];
+  fetchedAt: number;
+  incomplete: boolean;
+};
+
 type PrLookupRegistryEntry = {
   prs: PrSummary[];
   fetchedAt: number;
@@ -1352,6 +1368,7 @@ class DesktopAppServerService {
   >();
   private readonly pendingPrOverlayWrites = new Map<string, Promise<void>>();
   private readonly prActivity = new PrActivityJournal();
+  private readonly prLookupsInFlight = new PrLookupsInFlight();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
@@ -4421,16 +4438,29 @@ class DesktopAppServerService {
     };
   }
 
-  private async fetchPullRequestLookup(params: {
-    backend: AppServerBackendKind;
-    request: RefreshThreadPullRequestsRequest;
-    lookupKey: string;
-    lookupDirectoryPaths: string[];
-    previousPrs: PrSummary[];
-  }): Promise<{ prs: PrSummary[]; statusPrs: PrSummary[]; fetchedAt: number; incomplete: boolean }> {
+  private async fetchPullRequestLookup(
+    params: PullRequestLookupParams,
+  ): Promise<PullRequestLookupResult> {
     // This timestamp is an observation-order token. Capture it before the
     // network request so an older slow response cannot outrank a newer one.
     const fetchedAt = this.nextPrObservationTimestamp();
+    // The lookup re-reads every PR it already knows, so the poller must not
+    // fetch them again while it runs. See `PrLookupsInFlight`.
+    const release = this.prLookupsInFlight.begin(
+      params.previousPrs.map(getPrStatusKey),
+      fetchedAt,
+    );
+    try {
+      return await this.runPullRequestLookup(params, fetchedAt);
+    } finally {
+      release();
+    }
+  }
+
+  private async runPullRequestLookup(
+    params: PullRequestLookupParams,
+    fetchedAt: number,
+  ): Promise<PullRequestLookupResult> {
     let incomplete = false;
     const onProviderFailure = () => { incomplete = true; };
     const trigger = params.request.trigger ?? "scheduled";
@@ -5965,7 +5995,8 @@ class DesktopAppServerService {
         pullRequestMatchesRepositoryKey(candidate, attachment.primaryRepoKey)
       )) {
         const prKey = getPrStatusKey(pr);
-        const latest = this.prStatusRegistry.get(prKey)?.pr ?? pr;
+        const status = this.prStatusRegistry.get(prKey);
+        const latest = status?.pr ?? pr;
         if (isTerminalPullRequest(latest)) continue;
         this.prPollBackendByKey.set(prKey, attachment.backend);
         const existing = byKey.get(prKey);
@@ -5975,16 +6006,29 @@ class DesktopAppServerService {
           }
           continue;
         }
-        byKey.set(prKey, { prKey, pr: latest, threadKeys: [threadKey] });
+        // A lookup that fetched this PR, or is fetching it, counts as a poll.
+        // Without it, selecting a thread fetched each of its PRs twice: once
+        // for the renderer's lookup and once for the poller's focused tier.
+        const fetchedAt = Math.max(
+          status?.fetchedAt ?? 0,
+          this.prLookupsInFlight.startedAt(prKey) ?? 0,
+        );
+        byKey.set(prKey, {
+          prKey,
+          pr: latest,
+          threadKeys: [threadKey],
+          ...(fetchedAt > 0 ? { fetchedAt } : {}),
+        });
       }
     }
     for (const candidate of this.transcriptPrSubscriptions.targets()) {
       const target = this.hydrateTranscriptPrTarget(candidate);
       const existing = byKey.get(target.prKey);
+      const fetchedAt = Math.max(existing?.fetchedAt ?? 0, target.fetchedAt ?? 0);
       byKey.set(target.prKey, existing ? {
         ...existing,
         subscriptionTier: target.subscriptionTier,
-        fetchedAt: target.fetchedAt,
+        ...(fetchedAt > 0 ? { fetchedAt } : {}),
       } : target);
     }
     return [...byKey.values()];
