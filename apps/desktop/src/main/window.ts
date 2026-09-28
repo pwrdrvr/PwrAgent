@@ -269,7 +269,11 @@ function buildNativeContextMenuTemplate(
     template.push({
       label: "Copy Link",
       click: () => {
-        clipboard.writeText(params.linkURL);
+        clipboard.writeText(params.linkURL).catch((error: unknown) => {
+          mainLog.warn("copy link failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       },
     });
   }

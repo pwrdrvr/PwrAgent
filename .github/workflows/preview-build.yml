@@ -22,7 +22,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache-electron: "true"
 
       - name: Compute preview version

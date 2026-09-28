@@ -12,6 +12,9 @@ minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.30.0'
   # Security fix; published inside the normal seven-day maturity window.
   - 'qs@6.16.0'
+  # Electron 44.4.5 (23 Sep 2026) carries upstream Chromium, V8, ANGLE, Dawn,
+  # and PDFium security backports; 41.x stopped receiving them on 25 Aug 2026.
+  - 'electron@44.4.5'
   - '@pwrdrvr/agent-core'
   - '@pwrdrvr/agent-transport'
   - '@pwrdrvr/codex-discovery'

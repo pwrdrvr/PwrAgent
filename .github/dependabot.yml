@@ -21,7 +21,7 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 7
     # @types/node tracks the Node runtime, which is pinned to Electron
-    # 41.10.3's bundled Node (.nvmrc + CI node-version: 24.18.0). Block
+    # 44.4.5's bundled Node (.nvmrc + CI node-version: 24.21.0). Block
     # major bumps so v25+ types don't sneak ahead of the runtime via a
     # grouped dev-dep PR.
     ignore:

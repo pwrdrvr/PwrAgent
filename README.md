@@ -19,7 +19,7 @@
   <a href="https://pwrdrvr.com/about"><img src="docs/assets/buttons/link-about.png" alt="About PwrDrvr" width="180"></a>
 </p>
 
-<sub>macOS 12 or newer · Windows 10 or newer · Debian/Ubuntu · MIT · Developer ID-signed and Apple-notarized
+<sub>macOS 13 or newer · Windows 10 or newer · Debian/Ubuntu · MIT · Developer ID-signed and Apple-notarized
 No cloud, no account, no telemetry. The agent and your credentials stay on your machine.</sub>
 
 <br>

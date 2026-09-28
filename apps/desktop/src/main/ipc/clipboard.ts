@@ -1,4 +1,4 @@
-import { clipboard, ipcMain } from "electron";
+import { clipboard, ClipboardItem, ipcMain } from "electron";
 import {
   CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
   CLIPBOARD_WRITE_TEXT_CHANNEL,
@@ -26,18 +26,24 @@ function shouldKeepE2eClipboardWriteInMemory(
   return !isCi;
 }
 
-function writeText(text: string): void {
+async function writeText(text: string): Promise<void> {
   if (shouldKeepE2eClipboardWriteInMemory({ text })) {
     return;
   }
-  clipboard.writeText(text);
+  await clipboard.writeText(text);
 }
 
-function writeRichText(payload: E2eClipboardSnapshot & { html: string }): void {
+async function writeRichText(
+  payload: E2eClipboardSnapshot & { html: string },
+): Promise<void> {
   if (shouldKeepE2eClipboardWriteInMemory(payload)) {
     return;
   }
-  clipboard.write({ text: payload.text, html: payload.html });
+  // One item carrying both flavors: Electron commits the entries of a single
+  // write() atomically, so a paste target never sees HTML without its text.
+  await clipboard.write([
+    new ClipboardItem({ "text/plain": payload.text, "text/html": payload.html }),
+  ]);
 }
 
 export function registerClipboardIpcHandlers(): void {
@@ -49,7 +55,7 @@ export function registerClipboardIpcHandlers(): void {
       if (typeof text !== "string") {
         throw new Error("clipboard:write-text requires a string payload");
       }
-      writeText(text);
+      await writeText(text);
     },
   );
   ipcMain.handle(
@@ -64,7 +70,7 @@ export function registerClipboardIpcHandlers(): void {
           "clipboard:write-rich-text requires { text, html } string payload",
         );
       }
-      writeRichText({ text: richText.text, html: richText.html });
+      await writeRichText({ text: richText.text, html: richText.html });
     },
   );
 }
