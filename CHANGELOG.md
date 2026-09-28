@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.2 - 2026-09-28
+
+- Federation - Push files between instances with receiver-controlled file and remote-shell permissions; remote links open in the local viewer.
+- Agent Workflows - Turn existing Codex threads into Agents and get monitor-job suggestions during repeated polling.
+- Projects and Search - Jump to projects from Cmd+K, scope thread search to projects, archive selected projects, and move threads into existing worktrees.
+- Usage and Cost - Codex discovers PwrAgent tools on demand instead of loading the full catalog at turn start, reducing initial input tokens while preserving access to those tools.
+- Token Miser - Optionally summarize selected output with source references, with corrected cost and savings accounting.
+- Updates - A newer release discovered in Settings now downloads in the background and presents the existing restart flow.
+- Storage Maintenance - Large profiles can opt into startup cleanup with visible progress and cancellation.
+- Pull Requests - Show live status and repository-qualified provenance in composer and transcript PR references.
+- Performance and Reliability - Load selected threads more efficiently in large profiles, prevent duplicate tool calls from creating duplicate handoffs, and stop cross-thread updates from replaying attached images.
+
 ## v1.1.1 - 2026-09-26
 
 - Federation - Restored Cloudflare gateway discovery in installed macOS builds, added a persistent gateway on/off control, and now warns connected peers before shutdown.
