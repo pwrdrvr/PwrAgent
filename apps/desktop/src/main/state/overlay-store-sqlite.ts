@@ -5665,6 +5665,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return begin.immediate();
   }
 
+  /** Observe refill and the durable pause flag without advancing the budget row. */
+  async peekPrAutoDispatchBudgetStatus(params: {
+    config: PrAutoDispatchBudgetConfig;
+    now: number;
+  }): Promise<PrAutoDispatchBudgetStatus> {
+    return this.toPrAutoDispatchBudgetStatus({
+      budget: this.readPrAutoDispatchBudget(params),
+      config: params.config,
+    });
+  }
+
   async getPrAutoDispatchBudgetStatus(params: {
     config: PrAutoDispatchBudgetConfig;
     now: number;
@@ -8892,6 +8903,7 @@ export type OverlayStoreLike = Pick<
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
   | "getPrAutoDispatchBudgetStatus"
+  | "peekPrAutoDispatchBudgetStatus"
   | "resumePrAutoDispatchBudget"
   | "reserveThreadPrAutoDispatchBudget"
   | "rejectThreadPrAutoDispatchForBudget"

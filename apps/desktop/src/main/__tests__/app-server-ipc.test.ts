@@ -1058,6 +1058,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
     getPrAutoDispatchBudgetStatus,
+    peekPrAutoDispatchBudgetStatus: (...args: Parameters<typeof getPrAutoDispatchBudgetStatus>) => getPrAutoDispatchBudgetStatus(...args),
     resumePrAutoDispatchBudget,
     scheduleThreadPrAutoDispatch,
     beginThreadPrAutoDispatch,
@@ -1113,6 +1114,7 @@ vi.mock("../app-server/backend-registry", () => {
     handoffThreadWorkspace,
     renameThread,
     listThreads,
+    getCachedThreadSummary: () => undefined,
     readThread,
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,
@@ -2165,6 +2167,64 @@ describe("app server ipc", () => {
       PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
       expect.objectContaining({ paused: true, pausedAt: 2_000 }),
     );
+  });
+
+  it("keeps paused lookup observations read-only, including empty and full-budget lookups", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../ipc/app-server");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("paused-pr-lookups-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      prAutoDispatchBudgetPaused: boolean;
+      prAutoDispatchBudgetConfig: { capacity: number; refillPerMinute: number; pauseWhenEmpty: boolean };
+      handlePrAutoDispatchSnapshots: (prs: PrSummary[], now: number) => Promise<void>;
+    };
+    const previousPaused = service.prAutoDispatchBudgetPaused;
+    const previousConfig = service.prAutoDispatchBudgetConfig;
+    const config = { capacity: 30, refillPerMinute: 1, pauseWhenEmpty: true };
+    service.prAutoDispatchBudgetPaused = true;
+    service.prAutoDispatchBudgetConfig = config;
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const peek = vi.spyOn(store, "peekPrAutoDispatchBudgetStatus");
+    const now = Date.now();
+    const pr: PrSummary = { provider: "github.com", org: "fixture", repo: "repo", number: 1,
+      url: "https://github.com/fixture/repo/pull/1", state: "passing", lifecycleState: "open" };
+    try {
+      // Setup is outside the measured operation. The full bucket remains
+      // explicitly paused until another instance/operator resumes it.
+      db.raw.prepare("INSERT INTO pr_auto_dispatch_budget(scope, tokens, updated_at, paused_at) VALUES ('profile', ?, ?, ?)")
+        .run(config.capacity, now, now);
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let i = 0; i < 100; i++) {
+          await service.handlePrAutoDispatchSnapshots(i % 2 === 0 ? [] : [pr], now + i * 60_000);
+        }
+      });
+      expect(peek).toHaveBeenCalledTimes(100);
+      expect(service.prAutoDispatchBudgetPaused).toBe(true);
+      expect(writes.commits).toBe(0);
+      expect(writes.statements).toBe(0);
+      expect(writes.walBytes).toBe(0);
+      expectSqliteWriteBudget({ scenario: "pr-activity-paused-lookup-observations", writes,
+        note: "100 service-level paused lookup observations (50 empty, 50 with a PR), full bucket: zero commits/writes/WAL; 0 MB/day at one lookup/minute",
+      });
+      await store.resumePrAutoDispatchBudget({ config, now });
+      await service.handlePrAutoDispatchSnapshots([], now);
+      expect(service.prAutoDispatchBudgetPaused).toBe(false);
+    } finally {
+      overlay.mockRestore();
+      service.prAutoDispatchBudgetPaused = previousPaused;
+      service.prAutoDispatchBudgetConfig = previousConfig;
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps thread preferences intact while a durable budget safety stop pauses Auto-fix PR", async () => {

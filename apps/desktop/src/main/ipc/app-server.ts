@@ -5665,7 +5665,7 @@ class DesktopAppServerService {
   private async refreshPrAutoDispatchBudgetSafetyStop(): Promise<void> {
     if (!this.prAutoDispatchBudgetPaused) return;
     try {
-      const status = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+      const status = await this.getOverlayStore().peekPrAutoDispatchBudgetStatus({
         config: this.prAutoDispatchBudgetConfig,
         now: Date.now(),
       });

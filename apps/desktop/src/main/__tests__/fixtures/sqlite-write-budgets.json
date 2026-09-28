@@ -531,6 +531,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-activity-paused-lookup-observations": {
+    "commits": 0,
+    "note": "100 service-level paused lookup observations (50 empty, 50 with a PR), full bucket: zero commits/writes/WAL; 0 MB/day at one lookup/minute",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "pr-activity-unchanged-observations": {
     "commits": 200,
     "note": "100 unchanged conflict observations after dispatch plus activity reads: 200 read-only transaction commits, zero write statements/rows/WAL bytes; 0 MB/day additional WAL",
