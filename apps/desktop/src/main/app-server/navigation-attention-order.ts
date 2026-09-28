@@ -68,18 +68,19 @@ export function reconcileNavigationAttentionOrder(params: {
   for (const thread of params.threads) {
     const key = navigationAttentionIdentity(thread);
     const previous = params.previous?.members.get(key);
-    if (thread.codexNativeSubAgent || (thread.threadStatus !== "active" && !thread.inbox.inInbox
+    if (thread.codexNativeSubAgent || (thread.threadStatus !== "active" && !thread.hasActiveSubAgent && !thread.inbox.inInbox
       && (!previous?.awaitingBaseline || !previous.active))) members.delete(key);
   }
   let nextRank = params.previous?.nextRank ?? 1;
   const eligible = params.threads
     .filter((thread) => !thread.codexNativeSubAgent
-      && (thread.threadStatus === "active" || thread.inbox.inInbox))
+      && (thread.threadStatus === "active" || thread.hasActiveSubAgent || thread.inbox.inInbox))
     .sort((left, right) => (left.updatedAt ?? 0) - (right.updatedAt ?? 0)
       || navigationAttentionIdentity(right).localeCompare(navigationAttentionIdentity(left)));
   for (const thread of eligible) {
     const key = navigationAttentionIdentity(thread);
     const previous = params.previous?.members.get(key);
+    // Worker activity keeps membership, but ordering still follows parent turns.
     const observedActive = thread.threadStatus === "active";
     const active = previous?.awaitingBaseline ? previous.active : observedActive;
     const updatedAt = thread.updatedAt ?? 0;

@@ -46245,6 +46245,14 @@ script = "printf setup"
         "codex:parent-thread": "Deploy recoverable M2 Max runner",
       },
     });
+    const navigationParent = {
+      id: "parent-thread", source: "codex" as const, title: "Parent", titleSource: "explicit" as const,
+      threadStatus: "idle" as const, linkedDirectories: [], inbox: { inInbox: false },
+    };
+    expect(registry.withNavigationSubAgentActivity([navigationParent])[0]).toMatchObject({
+      threadStatus: "idle", hasActiveSubAgent: true,
+    });
+
 
     await registry.publishLocalEvent({
       backend: "codex",
@@ -46264,6 +46272,10 @@ script = "printf setup"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 0,
       threadIds: [],
+    });
+
+    expect(registry.withNavigationSubAgentActivity([navigationParent])[0]).toMatchObject({
+      threadStatus: "idle", hasActiveSubAgent: false,
     });
 
     await registry.close();

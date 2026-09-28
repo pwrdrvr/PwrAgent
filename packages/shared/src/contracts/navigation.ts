@@ -136,6 +136,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
      */
     celestialIcon?: CelestialIconId;
   };
+  /** Live worker owned by this thread; independent of the parent turn status. */
+  hasActiveSubAgent?: boolean;
   inbox: ThreadInboxState;
   /**
    * Normalized host/owner/repository identity resolved from the thread's
@@ -1658,6 +1660,8 @@ export type NavigationRow = {
   updatedAt?: number;
   archivedAt?: number;
   threadStatus?: AppServerThreadStatus;
+  /** Owner-projected runtime activity, without loading worker history. */
+  hasActiveSubAgent?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
   linkedDirectories: LinkedDirectorySummary[];

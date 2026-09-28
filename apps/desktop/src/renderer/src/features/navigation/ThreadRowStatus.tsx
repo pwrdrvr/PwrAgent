@@ -7,8 +7,8 @@ import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 export type ThreadRowStatusKind = "thinking" | "unread";
 
 /**
- * A thread is live when the backend reports an active turn or the renderer has
- * just initiated one and is waiting for that status to round-trip. Keep this
+ * Navigation is live for a parent turn or an owned worker. Renderer thinking
+ * also covers a parent turn waiting for its backend status round-trip. Keep this
  * predicate shared with aggregate activity counts so their numbers match the
  * animated thread-row marker exactly.
  */
@@ -19,6 +19,7 @@ export function isThreadActive(
   const threadKey = threadSummaryIdentityKey(thread);
   return (
     thread.threadStatus === "active"
+    || thread.hasActiveSubAgent === true
     || thinkingThreadKeys?.[threadKey] === true
   );
 }

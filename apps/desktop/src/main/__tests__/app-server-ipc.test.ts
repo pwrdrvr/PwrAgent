@@ -1120,6 +1120,7 @@ vi.mock("../app-server/backend-registry", () => {
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
     canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+    withNavigationSubAgentActivity: (threads: unknown[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
     refreshThreadGitWorkingStates,
     refreshThreadDirectoryRelationship: vi.fn(async () => undefined),

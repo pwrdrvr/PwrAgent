@@ -27,6 +27,7 @@ function createSource() {
     },
     canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
     hydrateThreadGitWorkingStates: async (threads: []) => threads,
+    withNavigationSubAgentActivity: (threads: []) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
   } as unknown as DesktopBackendRegistry;
   return {

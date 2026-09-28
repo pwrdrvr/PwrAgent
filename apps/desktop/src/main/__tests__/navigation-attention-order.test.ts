@@ -91,3 +91,18 @@ it("an explicit seen member can leave during partial coverage without pruning ot
     complete: false, promoteOnTurnEnd: true });
   expect([...updated.members.keys()]).toEqual([navigationAttentionIdentity(second)]);
 });
+
+
+it("retains worker-only membership after the parent completion baseline and removes it when work finishes", () => {
+  const row = { ...thread("worker-parent", 1), inbox: { inInbox: false }, hasActiveSubAgent: true };
+  const key = navigationAttentionIdentity(row);
+  let order = reconcileNavigationAttentionOrder({ threads: [row], promoteOnTurnEnd: true });
+  order = observeNavigationAttentionTurn({ previous: order, key, active: false, turnId: "parent-turn", promoteOnTurnEnd: true });
+  const idle = { ...row, threadStatus: "idle" as const };
+  const baseline = reconcileNavigationAttentionOrder({ previous: order, threads: [idle], promoteOnTurnEnd: true });
+  expect(baseline.members.get(key)?.rank).toBe(order.members.get(key)?.rank);
+  expect(baseline.members.get(key)?.awaitingBaseline).toBeUndefined();
+  const finished = reconcileNavigationAttentionOrder({ previous: baseline,
+    threads: [{ ...idle, hasActiveSubAgent: false }], promoteOnTurnEnd: true });
+  expect(finished.members.has(key)).toBe(false);
+});
