@@ -6575,7 +6575,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("reconciles the Discord permission server after authorized guilds change", () => {
+  it("reconciles the Discord permission server after authorized guilds change", async () => {
     const applicationId = "1480556454498009351";
     const firstGuildId = "1480556454498009353";
     const replacementGuildId = "1480556454498009354";
@@ -6641,9 +6641,11 @@ describe("SettingsScreen", () => {
       }),
     ).toHaveValue(replacementGuildId);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Request suggested permissions" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Request suggested permissions" }),
+      );
+    });
     expect(openDiscordThreadPermissionRequest).toHaveBeenCalledWith({
       guildId: replacementGuildId,
     });

@@ -102,9 +102,10 @@ describe("star map edge arrow render cost", () => {
       JSON.stringify({ layout: "orbit" }),
     );
     const threads = Array.from({ length: 6 }, (_, index) => thread(`t${index}`));
+    const desktopApi = buildDesktopApi();
     const { rerender } = render(
       <StarMapScreen
-        desktopApi={buildDesktopApi()}
+        desktopApi={desktopApi}
         localThreads={threads}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
@@ -131,7 +132,7 @@ describe("star map edge arrow render cost", () => {
       const churned = threads.map((entry) => ({ ...entry }));
       rerender(
         <StarMapScreen
-          desktopApi={buildDesktopApi()}
+          desktopApi={desktopApi}
           localThreads={churned}
           sessionKeys={{}}
           localInstanceLabel="Mac-Mini-M4"

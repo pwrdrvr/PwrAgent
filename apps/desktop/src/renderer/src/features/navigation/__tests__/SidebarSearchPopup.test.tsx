@@ -864,7 +864,7 @@ describe("SidebarSearchPopup, focus", () => {
 describe("project destinations", () => {
   const project = { key: "directory:/repos/PwrAgnt", kind: "directory" as const, label: "PwrAgnt", path: "/repos/PwrAgnt" };
 
-  it("ranks a case-insensitive exact project before prefix projects and thread metadata, and Enter opens it", () => {
+  it("ranks a case-insensitive exact project before prefix projects and thread metadata, and Enter opens it", async () => {
     const onJumpToProject = vi.fn();
     const onJumpToThread = vi.fn();
     const onClose = vi.fn();
@@ -875,6 +875,7 @@ describe("project destinations", () => {
     />);
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "  pwragnt  " } });
+    await settleRemoteSearch();
     expect(screen.getAllByRole("option")[0]).toHaveTextContent("PwrAgnt/repos/PwrAgntProject");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onJumpToProject).toHaveBeenCalledWith(project);

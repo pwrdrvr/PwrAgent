@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { ThreadMarkdown } from "../ThreadMarkdown";
@@ -1545,17 +1545,21 @@ describe("ThreadMarkdown document viewer, keyboard", () => {
   it("leaves focus where it is when the transcript re-renders", async () => {
     const { dialog, view } = await openViewer();
     const close = within(dialog).getByRole("button", { name: "Close" });
-    close.focus();
+    act(() => {
+      close.focus();
+    });
     // A streaming transcript re-renders the message, which hands the viewer a
     // fresh onClose. The viewer's focus effect depended on it, so every
     // re-render sent focus back to the first control.
-    view.rerender(
-      <ThreadMarkdown
-        desktopApi={{ readMarkdownFile }}
-        fileViewerContext={fileViewerContext()}
-        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md)."}
-      />,
-    );
+    await act(async () => {
+      view.rerender(
+        <ThreadMarkdown
+          desktopApi={{ readMarkdownFile }}
+          fileViewerContext={fileViewerContext()}
+          text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md)."}
+        />,
+      );
+    });
     expect(document.activeElement).toBe(close);
   });
 });
