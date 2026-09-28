@@ -7985,6 +7985,11 @@ type AcceptedThreadControlRequest = {
   signature: string;
 };
 
+type AcceptedDynamicToolCall = {
+  promise: Promise<unknown>;
+  signature: string;
+};
+
 type AcceptedActiveTurnControlRequest = {
   promise: Promise<ControlActiveTurnResponse>;
   signature: string;
@@ -8350,6 +8355,14 @@ export class DesktopBackendRegistry {
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly pendingThreadHandoffs = new Map<string, PendingThreadHandoffSummary>();
+  private readonly acceptedHandoffTaskRequests = new Map<
+    string,
+    AcceptedThreadControlRequest
+  >();
+  private readonly acceptedDynamicToolCalls = new Map<
+    string,
+    AcceptedDynamicToolCall
+  >();
   private readonly pendingThreadWorkspaceMoves = new Map<
     string,
     PendingThreadWorkspaceMoveSummary
@@ -23287,6 +23300,8 @@ export class DesktopBackendRegistry {
       this.waitForLiveThreadUsageEmitWork();
     this.acceptedSteerRequests.clear();
     this.acceptedThreadControlRequests.clear();
+    this.acceptedHandoffTaskRequests.clear();
+    this.acceptedDynamicToolCalls.clear();
     this.acceptedActiveTurnControlRequests.clear();
     // A background working-state round outlives the snapshot that scheduled
     // it. `closed` stops a new one, and draining the live ones here keeps the
@@ -32584,6 +32599,57 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    const callId = request.method === "item/tool/call"
+      && typeof request.params.callId === "string"
+        ? request.params.callId.trim()
+        : "";
+    if (!callId) {
+      return await this.performServerRequest(backend, request);
+    }
+    const key = [backend, request.params.threadId, request.params.turnId, callId]
+      .join("\u0000");
+    const signature = createHash("sha256")
+      .update(JSON.stringify({
+        namespace: request.params.namespace,
+        tool: request.params.tool,
+        arguments: request.params.arguments,
+      }))
+      .digest("hex");
+    const accepted = this.acceptedDynamicToolCalls.get(key);
+    if (accepted) {
+      if (accepted.signature !== signature) {
+        backendRegistryLog.warn("rejecting reused dynamic tool call id", {
+          backend,
+          callId,
+          requestId: request.params.requestId,
+          threadId: request.params.threadId,
+          turnId: request.params.turnId,
+        });
+        return toDynamicToolResponse({
+          ok: false,
+          code: "invalid_arguments",
+          message: `Dynamic tool call id ${callId} was reused with different arguments.`,
+        });
+      }
+      backendRegistryLog.warn("replaying duplicate dynamic tool call result", {
+        backend,
+        callId,
+        requestId: request.params.requestId,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      });
+      return await accepted.promise;
+    }
+
+    const promise = this.performServerRequest(backend, request);
+    this.acceptedDynamicToolCalls.set(key, { promise, signature });
+    return await promise;
+  }
+
+  private async performServerRequest(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+  ): Promise<unknown> {
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
       const session = this.acpBackend.getSession(backend, request.params.threadId);
       const runtimeCapabilities =
@@ -35123,6 +35189,42 @@ export class DesktopBackendRegistry {
   }
 
   private async handoffTaskToThread(
+    request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const callId = request.context.callId?.trim();
+    if (!callId) {
+      return await this.performHandoffTaskToThread(request);
+    }
+    const handoffId = [
+      "handoff",
+      request.context.backend,
+      request.context.threadId,
+      request.context.turnId,
+      callId,
+    ].join(":");
+    const signature = createHash("sha256")
+      .update(JSON.stringify(request.args))
+      .digest("hex");
+    const accepted = this.acceptedHandoffTaskRequests.get(handoffId);
+    if (accepted) {
+      if (accepted.signature !== signature) {
+        return threadOrchestrationFailure(
+          "invalid_arguments",
+          `Handoff call id ${callId} was reused with different arguments.`,
+        );
+      }
+      return await accepted.promise;
+    }
+
+    // Admit the call before the first await in the handoff path. The backend
+    // can deliver the same dynamic tool call twice while workspace setup is
+    // still running; both deliveries must await one child creation.
+    const promise = this.performHandoffTaskToThread(request);
+    this.acceptedHandoffTaskRequests.set(handoffId, { promise, signature });
+    return await promise;
+  }
+
+  private async performHandoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const sourceBackend = request.context.backend;
@@ -40270,6 +40372,29 @@ export class DesktopBackendRegistry {
       // its pending batch so completion does not require a second commit.
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
       if (completedTurnId) {
+        const dynamicCallPrefix = [
+          event.backend,
+          event.notification.params.threadId,
+          completedTurnId,
+          "",
+        ].join("\u0000");
+        for (const key of this.acceptedDynamicToolCalls.keys()) {
+          if (key.startsWith(dynamicCallPrefix)) {
+            this.acceptedDynamicToolCalls.delete(key);
+          }
+        }
+        const handoffPrefix = [
+          "handoff",
+          event.backend,
+          event.notification.params.threadId,
+          completedTurnId,
+          "",
+        ].join(":");
+        for (const key of this.acceptedHandoffTaskRequests.keys()) {
+          if (key.startsWith(handoffPrefix)) {
+            this.acceptedHandoffTaskRequests.delete(key);
+          }
+        }
         const usageKey = [
           event.backend,
           event.notification.params.threadId,

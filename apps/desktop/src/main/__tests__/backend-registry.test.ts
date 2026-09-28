@@ -4643,7 +4643,10 @@ describe("DesktopBackendRegistry", () => {
       expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
       await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "turn-discovery", turn: { id: "turn-discovery" } } } });
       // A persisted bootstrap remains usable after switching the experiment off.
-      const result = await codexClient.emitRequest(call) as { success: boolean; contentItems: Array<{ text: string }> };
+      const result = await codexClient.emitRequest({
+        ...call,
+        params: { ...call.params, callId: "search-2", requestId: "search-2" },
+      }) as { success: boolean; contentItems: Array<{ text: string }> };
       expect(result.success).toBe(true);
       expect(JSON.parse(result.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
     } finally {
@@ -35107,7 +35110,7 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
-  it("exposes in-progress handoffs before the child thread exists", async () => {
+  it("exposes in-progress handoffs and creates one child for a repeated call id", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-pending-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "worktree");
@@ -35233,7 +35236,7 @@ script = "printf setup"
       },
     });
 
-    const handoffPromise = codexClient.emitRequest({
+    const handoffCall = {
       method: "item/tool/call",
       params: {
         threadId: "ordinary-thread",
@@ -35250,7 +35253,12 @@ script = "printf setup"
           branchName: "origin/master",
         },
       },
-    } as AppServerPendingRequestNotification);
+    } as AppServerPendingRequestNotification;
+    const handoffPromise = codexClient.emitRequest(handoffCall);
+    const repeatedHandoffPromise = codexClient.emitRequest({
+      ...handoffCall,
+      params: { ...handoffCall.params, requestId: "handoff-call-replayed" },
+    });
 
     try {
       await setupStarted.promise;
@@ -35316,7 +35324,9 @@ script = "printf setup"
     }
 
     const handoffResponse = await handoffPromise;
+    const repeatedHandoffResponse = await repeatedHandoffPromise;
     expect(handoffResponse).toMatchObject({ success: true });
+    expect(repeatedHandoffResponse).toEqual(handoffResponse);
     const handoffPayload = JSON.parse(
       (handoffResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );
@@ -35332,6 +35342,40 @@ script = "printf setup"
     expect(handoffPayload.threadLink).toBe(
       `[${handoffPayload.title}](pwragent://thread/thread-1?backend=codex)`,
     );
+    expect(commandRunner).toHaveBeenCalledTimes(1);
+    await expect(codexClient.emitRequest(handoffCall)).resolves.toEqual(handoffResponse);
+
+    const changedArgumentsResponse = await codexClient.emitRequest({
+      ...handoffCall,
+      params: {
+        ...handoffCall.params,
+        arguments: { task: "A different task." },
+      },
+    });
+    expect(changedArgumentsResponse).toMatchObject({ success: false });
+    const changedArgumentsPayload = JSON.parse(
+      (changedArgumentsResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(changedArgumentsPayload).toMatchObject({ code: "invalid_arguments" });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    });
+    const staleResponse = await codexClient.emitRequest(handoffCall);
+    expect(staleResponse).toMatchObject({ success: false });
+    const stalePayload = JSON.parse(
+      (staleResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(stalePayload).toMatchObject({ code: "forbidden" });
+    expect(commandRunner).toHaveBeenCalledTimes(1);
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
@@ -45019,14 +45063,16 @@ script = "printf setup"
           },
         });
       }
+      let callSequence = 0;
       const call = async (args: Record<string, unknown>) => {
+        const callId = `call-${++callSequence}`;
         const response = (await codexClient.emitRequest({
           method: "item/tool/call",
           params: {
             threadId: "agent-thread",
             turnId: "turn-agent-thread",
-            callId: "call-1",
-            requestId: "call-1",
+            callId,
+            requestId: callId,
             namespace: "pwragent",
             tool: "mutate_thread",
             arguments: { backend: "codex", threadId: "target-thread", ...args },
@@ -45341,19 +45387,22 @@ script = "printf setup"
           },
         },
       });
-      const call = async (args: Record<string, unknown>) =>
-        await codexClient.emitRequest({
+      let callSequence = 0;
+      const call = async (args: Record<string, unknown>) => {
+        const callId = `call-${++callSequence}`;
+        return await codexClient.emitRequest({
           method: "item/tool/call",
           params: {
             threadId: "agent-thread",
             turnId: "turn-1",
-            callId: "call-1",
-            requestId: "call-1",
+            callId,
+            requestId: callId,
             namespace: "pwragent",
             tool: "mutate_thread",
             arguments: { backend: "codex", threadId: "remote-thread", ...args },
           },
         } as AppServerPendingRequestNotification);
+      };
 
       await call({ archive: true });
       await call({ projectPath: "/Users/studio/repos/app" });
