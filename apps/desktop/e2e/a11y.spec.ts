@@ -369,11 +369,11 @@ for (const theme of AUDIT_THEMES) {
         await test.step("thread search", async () => {
           // Before Search opens, the accessible name unambiguously belongs
           // to the masthead button. The same name then moves to the
-          // autofocused textbox when the search view mounts.
+          // autofocused combobox when the search view mounts.
           await app.window
             .getByRole("button", { name: "Search threads" })
             .click();
-          const searchInput = app.window.getByRole("textbox", {
+          const searchInput = app.window.getByRole("combobox", {
             name: "Search threads",
           });
           await expect(searchInput).toBeVisible();

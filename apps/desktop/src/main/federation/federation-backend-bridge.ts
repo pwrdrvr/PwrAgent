@@ -147,6 +147,10 @@ import type {
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
+  SetThreadTokenMiserRequest,
+  SetThreadTokenMiserResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
   SetThreadParentRequest,
@@ -180,6 +184,7 @@ import {
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
+import { hasFederationErrorCode } from "./federation-rpc";
 import type {
   FederationRpcEndpoint,
   FederationRpcRequestOptions,
@@ -391,6 +396,7 @@ function authenticateScheduledTurnOrigin<
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
+  archiveNavigationDirectory: "backend.archiveNavigationDirectory",
   markNavigationDirectorySeen: "backend.markNavigationDirectorySeen",
   releaseNavigationAttentionView: "backend.releaseNavigationAttentionView",
   getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
@@ -455,6 +461,8 @@ export const FEDERATION_BACKEND_METHODS = {
   queueThreadExecutionMode: "backend.queueThreadExecutionMode",
   cancelThreadExecutionModeQueue: "backend.cancelThreadExecutionModeQueue",
   setAcpSessionRuntimeOption: "backend.setAcpSessionRuntimeOption",
+  setThreadAgent: "backend.setThreadAgent",
+  setThreadTokenMiser: "backend.setThreadTokenMiser",
   setThreadModelSettings: "backend.setThreadModelSettings",
   checkThreadBranchDrift: "backend.checkThreadBranchDrift",
   updateThreadExpectedBranch: "backend.updateThreadExpectedBranch",
@@ -509,6 +517,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.removeNavigationDirectory]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.archiveNavigationDirectory]: "turn_control",
   [FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
@@ -575,6 +584,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.queueThreadExecutionMode]: "turn_control",
   [FEDERATION_BACKEND_METHODS.cancelThreadExecutionModeQueue]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setThreadAgent]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setThreadTokenMiser]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadModelSettings]: "turn_control",
   [FEDERATION_BACKEND_METHODS.checkThreadBranchDrift]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch]: "turn_control",
@@ -803,6 +814,12 @@ export type FederationBackendOperations = {
   setAcpSessionRuntimeOption(
     request: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse>;
+  setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse>;
+  setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse>;
   setThreadModelSettings(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;
@@ -919,7 +936,15 @@ export function registerFederationBackendHandlers(params: {
   }
   if (params.backend.removeNavigationDirectory) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.removeNavigationDirectory,
-      async (envelope) => params.backend.removeNavigationDirectory!(envelope.params as RemoveNavigationDirectoryRequest));
+      async (envelope) => {
+        const request = envelope.params as RemoveNavigationDirectoryRequest;
+        if (request.archiveThreads) throw new Error("Archiving projects requires thread control.");
+        return params.backend.removeNavigationDirectory!(request);
+      });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.archiveNavigationDirectory,
+      async (envelope) => params.backend.removeNavigationDirectory!({
+        ...envelope.params as RemoveNavigationDirectoryRequest, archiveThreads: true, federationTarget: undefined,
+      }));
   }
   if (params.backend.getNavigationLaunchpadConfig) {
     params.router.registerHandler(
@@ -1519,6 +1544,20 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadAgent,
+    async (envelope) =>
+      await params.backend.setThreadAgent(
+        envelope.params as SetThreadAgentRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadTokenMiser,
+    async (envelope) =>
+      await params.backend.setThreadTokenMiser(
+        envelope.params as SetThreadTokenMiserRequest,
+      ),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadModelSettings,
     async (envelope) =>
       await params.backend.setThreadModelSettings(
@@ -1803,7 +1842,8 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse> {
     return this.rpc.request<RemoveNavigationDirectoryResponse>({
-      method: FEDERATION_BACKEND_METHODS.removeNavigationDirectory, params: request, ...rpcOptions,
+      method: request.archiveThreads ? FEDERATION_BACKEND_METHODS.archiveNavigationDirectory
+        : FEDERATION_BACKEND_METHODS.removeNavigationDirectory, params: request, ...rpcOptions,
     });
   }
 
@@ -2391,6 +2431,38 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption,
       params: request,
     });
+  }
+
+  async setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> {
+    try {
+      return await this.rpc.request<SetThreadAgentResponse>({
+        method: FEDERATION_BACKEND_METHODS.setThreadAgent,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to change Agent status over Federation.");
+      }
+      throw error;
+    }
+  }
+
+  async setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> {
+    try {
+      return await this.rpc.request<SetThreadTokenMiserResponse>({
+        method: FEDERATION_BACKEND_METHODS.setThreadTokenMiser,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to change Token Miser over Federation.");
+      }
+      throw error;
+    }
   }
 
   async setThreadModelSettings(

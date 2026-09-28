@@ -533,6 +533,16 @@ describe("TranscriptList", () => {
     }));
   });
 
+  it("attributes monitor suggestions to PwrAgent System rather than the operator", () => {
+    render(<TranscriptList
+      entries={[{ type: "message", id: "suggestion", role: "user", text: "Consider a monitor job.",
+        origin: { kind: "pwragent", systemReason: "monitor-job-suggestion" } }]}
+      loading={false} loadingMore={false} onLoadOlder={async () => undefined}
+    />);
+    expect(screen.getByText("PwrAgent System - Monitor Job Suggestion")).toBeInTheDocument();
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+  });
+
   it("renders PR automation prompts as compact expandable PwrAgent cards", () => {
     const rawPrompt = [
       "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",

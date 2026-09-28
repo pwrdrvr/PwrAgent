@@ -9,7 +9,7 @@ import {
   FEDERATION_BACKEND_METHODS,
   FederationRemoteBackendClient,
 } from "../federation/federation-backend-bridge";
-import { FederatedSearchService } from "../federation/federated-search-service";
+import { FederatedSearchService, searchFederatedThreadsOnOwner } from "../federation/federated-search-service";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 afterEach(() => {
@@ -32,6 +32,64 @@ function thread(
 }
 
 describe("FederatedSearchService", () => {
+  it("matches quoted literal mentions and phrases on the owner without requiring quotes", async () => {
+    const listThreads = vi.fn(async () => ({
+      threads: [
+        { ...thread("literal", "Fix @disk handling", 3000), projectKey: "Other" },
+        { ...thread("quoted", 'Fix "@disk" handling', 2000), projectKey: "Other" },
+        { ...thread("project", "Unrelated", 1000), projectKey: "DiskHound" },
+        { ...thread("phrase", "An ad hoc task", 1000), projectKey: "Other" },
+        { ...thread("separate", "An ad with hoc later", 1000), projectKey: "Other" },
+      ], backend: "codex" as const, fetchedAt: 1000,
+    }));
+    for (const query of ['"@disk"', '"@disk" @other']) {
+      const result = await searchFederatedThreadsOnOwner({ listThreads }, { query, limit: 20 });
+      expect(result.threads.map((thread) => thread.id)).toEqual(["literal", "quoted"]);
+    }
+    const phrase = await searchFederatedThreadsOnOwner({ listThreads }, { query: '"ad hoc"', limit: 20 });
+    expect(phrase.threads.map((thread) => thread.id)).toEqual(["phrase"]);
+    const project = await searchFederatedThreadsOnOwner({ listThreads }, { query: "@disk", limit: 20 });
+    expect(project.threads.map((thread) => thread.id)).toEqual(["project"]);
+  });
+
+  it("applies project mentions on the owner before the remote result limit", async () => {
+    const listThreads = vi.fn(async () => ({
+      threads: [
+        { ...thread("other", "Build", 3000), projectKey: "/repos/Other" },
+        { ...thread("disk", "Build", 1000), projectKey: "/repos/DiskHound" },
+      ],
+      backend: "codex" as const,
+      fetchedAt: 1000,
+    }));
+    for (const query of ["build @disk", "build in:@disk", "@disk"]) {
+      const response = await searchFederatedThreadsOnOwner({ listThreads }, { query, limit: 1 });
+      expect(response.threads.map((thread) => thread.id)).toEqual(["disk"]);
+      expect(response.totalCount).toBe(1);
+    }
+  });
+
+  it("retains mentions during fan-out and excludes out-of-scope legacy peer hits", async () => {
+    const searchFederatedThreads = vi.fn(async () => ({
+      threads: [
+        { ...thread("disk", "Build", 1000), projectKey: "DiskHound" },
+        { ...thread("other", "Build", 3000), projectKey: "Other" },
+      ], totalCount: 2, truncated: false,
+    }));
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{ instanceId: "peer", label: "Peer", backend: {
+        listThreads: vi.fn(), searchFederatedThreads,
+      } }],
+    });
+    const response = await service.search({ query: "build @disk" });
+    expect(searchFederatedThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "build @disk" }), expect.anything(),
+    );
+    expect(response.results.map((result) => result.thread.id)).toEqual(["disk"]);
+    expect(response.searchedInstances?.[0].resultCount).toBe(1);
+  });
+
   it("returns a healthy peer when local search fails", async () => {
     const service = new FederatedSearchService({
       local: { listThreads: vi.fn(), searchFederatedThreads: vi.fn(async () => { throw new Error("local unavailable"); }) },

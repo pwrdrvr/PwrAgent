@@ -13145,6 +13145,44 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("refreshes an existing thread catalog without inference or instruction overrides", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const dynamicTools: DynamicToolSpec[] = [{
+      type: "function", name: "fixture_manager", description: "Contrived manager tool", inputSchema: { type: "object" }, deferLoading: false,
+    }];
+    try {
+      await client.refreshThreadTools({ threadId: "fixture-existing", dynamicTools });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests).toContainEqual(expect.objectContaining({ method: "thread/read", params: { threadId: "fixture-existing", includeTurns: false } }));
+      const resume = requests.find((request) => request.method === "thread/resume");
+      expect(resume.params).toMatchObject({ threadId: "fixture-existing", dynamicTools });
+      expect(resume.params).not.toHaveProperty("baseInstructions");
+      expect(resume.params).not.toHaveProperty("developerInstructions");
+      expect(requests.some((request) => request.method === "turn/start")).toBe(false);
+    } finally { await client.close(); }
+  });
+
+  it("rejects catalog refresh while the runtime reports an active turn", async () => {
+    MockTransport.readThreadResultByThreadId.set("fixture-active", { thread: { id: "fixture-active", status: { type: "active" } } });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.refreshThreadTools({ threadId: "fixture-active", dynamicTools: [] })).rejects.toThrow("current turn");
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
+    } finally { await client.close(); }
+  });
+
+  it("does not conceal a failed catalog refresh", async () => {
+    MockTransport.threadResumeError = { message: "fixture refresh failed" };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.refreshThreadTools({ threadId: "fixture-failed", dynamicTools: [] })).rejects.toThrow("fixture refresh failed");
+    } finally { await client.close(); }
+  });
+
   it("refreshes dynamic tools before a pending first native review", async () => {
     MockTransport.threadStartResult = {
       thread: {

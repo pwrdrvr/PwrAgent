@@ -67,6 +67,7 @@ import type {
   NavigationSnapshot,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
+  PwrAgentMessagingResponse,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
   PrSummary,
@@ -1145,7 +1146,18 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         agent: settings.agent ?? undefined,
+        queuedAgentChange: undefined,
       } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setQueuedThreadAgentChange: async (settings: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      change: ThreadOverlayState["queuedAgentChange"];
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const next = { ...(overlays.get(key) ?? { backend: settings.backend, threadId: settings.threadId, extraLinkedDirectories: [] }), queuedAgentChange: settings.change };
       overlays.set(key, next);
       return next;
     },
@@ -2096,6 +2108,8 @@ class MockBackendClient {
       },
     };
   }
+
+  refreshThreadTools = vi.fn(async (_params: { threadId: string; dynamicTools: unknown }): Promise<void> => {});
 
   async injectThreadItems(params: { threadId: string; items: unknown[] }): Promise<void> {
     this.injectedThreadItems.push(params);
@@ -4372,6 +4386,228 @@ describe("DesktopBackendRegistry", () => {
       reason: "codex_structured_generation_unavailable",
     });
     expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  it("publishes owner Token Miser settings and persists overrides through the registry", async () => {
+    const overlayStore = createOverlayStoreMock();
+    let enabled = true;
+    let defaultEnabled = false;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }), overlayStore,
+    });
+    const internals = registry as unknown as {
+      resolveTokenMiserEnabledFn: () => boolean;
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => enabled;
+    internals.resolveTokenMiserDefaultEnabledFn = () => defaultEnabled;
+    const publish = vi.spyOn(registry, "publishLocalEvent");
+    try {
+      expect(registry.readBackendComposerSettings("codex").tokenMiser).toEqual({ enabled: true, defaultEnabled: false });
+      enabled = false;
+      defaultEnabled = true;
+      expect(registry.readBackendComposerSettings("codex").tokenMiser).toEqual({ enabled: false, defaultEnabled: true });
+      const identity = { backend: "codex" as const, threadId: "fixture" };
+      for (const override of [true, false, null]) {
+        await expect(registry.setThreadTokenMiser({ ...identity, enabled: override })).resolves.toEqual({ ...identity, ...(override === null ? {} : { tokenMiserEnabled: override }) });
+        expect((await overlayStore.getThreadOverlayState(identity))?.tokenMiserEnabled).toBe(override ?? undefined);
+        expect(publish).toHaveBeenLastCalledWith({ backend: "codex", notification: { method: "thread/agent/updated", params: { threadId: "fixture" } } });
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
+  describe("existing Codex Agent designation", () => {
+    const agent = { name: "Fixture manager", instructions: "Manage requested messaging attachments." };
+    const capabilities = { codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } };
+    const identity = { backend: "codex" as const, threadId: "existing-agent" };
+
+    it.each([false, true])("refreshes, persists and authorizes promotion independently of discovery (%s)", async (discovery) => {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore, resolveCodexToolDiscovery: () => discovery });
+      const dispatch = vi.fn(async () => ({ ok: true, data: {} }) as PwrAgentMessagingResponse);
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: dispatch, checkDynamicToolPermission: () => ({ allowed: true }) });
+      const call = {
+        method: "item/tool/call",
+        params: { threadId: identity.threadId, turnId: "turn-attach", callId: "attach-1", requestId: "attach-1", namespace: "pwragent", tool: "attach_thread_here", arguments: { backend: "codex", threadId: "fixture-target" } },
+      } as AppServerPendingRequestNotification;
+      const start = async () => registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-attach", turn: { id: "turn-attach" } } } });
+      try {
+        await start();
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+        expect(dispatch).not.toHaveBeenCalled();
+        await registry.setThreadAgent({ ...identity, agent });
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        await vi.waitFor(async () => expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent));
+        const tools = pwragentDynamicTools(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools);
+        expect(tools.some((tool) => tool.name === "attach_thread_here")).toBe(true);
+        expect(tools.some((tool) => tool.name === "tool_search")).toBe(discovery);
+        await registry.startThread({ backend: "codex", cwd: process.cwd(), agent });
+        expect(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools).toEqual(codexClient.lastStartThreadParams?.dynamicTools);
+        await start();
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: true });
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(await registry.setThreadAgent({ ...identity, agent: null })).toMatchObject({ agent, queuedAgentChange: { agent: null } });
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        await vi.waitFor(async () => expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined());
+        await start();
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+        expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        await registry.close();
+      }
+      // A new registry reads the durable designation; no process-local grant.
+      const reloaded = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
+      try {
+        expect(await reloaded.getThreadAgentMetadata(identity)).toBeUndefined();
+      } finally {
+        await reloaded.close();
+      }
+    });
+
+    it("queues promotion without granting authority, deduplicates, and allows cancellation", async () => {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const save = vi.spyOn(overlayStore, "setQueuedThreadAgentChange");
+      try {
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+        expect(await registry.setThreadAgent({ ...identity, agent })).toMatchObject({ queuedAgentChange: { agent } });
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        await registry.setThreadAgent({ ...identity, agent });
+        expect(save).toHaveBeenCalledOnce();
+        await registry.setThreadAgent({ ...identity, agent: null });
+        expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange).toBeUndefined();
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-active");
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        expect(save).toHaveBeenCalledTimes(2);
+      } finally { await registry.close(); }
+    });
+
+    it("restores a queued promotion and applies it before the next turn", async () => {
+      const overlayStore = createOverlayStoreMock();
+      const original = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], serverCapabilities: capabilities }), overlayStore });
+      await original.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+      await original.setThreadAgent({ ...identity, agent });
+      await original.close();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const reloaded = new DesktopBackendRegistry({ codexClient, overlayStore });
+      try {
+        await reloaded.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] });
+        expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+        expect(await reloaded.getThreadAgentMetadata(identity)).toEqual(agent);
+        expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange).toBeUndefined();
+        expect(codexClient.startTurnCalls).toHaveLength(1);
+      } finally { await reloaded.close(); }
+    });
+
+    it("keeps failed queued changes visible without automatic retries and accepts an explicit retry", async () => {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      try {
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+        await registry.setThreadAgent({ ...identity, agent });
+        codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("fixture refresh failed"));
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-active");
+        await vi.waitFor(async () => expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange?.error).toBe("fixture refresh failed"));
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await registry.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] });
+        expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+        await emitCompletedTurn(registry, "codex", identity.threadId);
+        await registry.setThreadAgent({ ...identity, agent });
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange).toBeUndefined();
+      } finally { await registry.close(); }
+    });
+
+    it("rejects unsupported runtimes without saving", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: {} });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("Update to a supported");
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+        await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("Update to a supported");
+      } finally { await registry.close(); }
+    });
+
+    it("keeps the previous designation on failed refresh and releases the reservation", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("refresh refused"));
+        await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("refresh refused");
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await registry.setThreadAgent({ ...identity, agent });
+        codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("refresh refused"));
+        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("refresh refused");
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        await registry.setThreadAgent({ ...identity, agent: null });
+      } finally { await registry.close(); }
+    });
+
+    it("blocks concurrent starts until the runtime transition completes", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      let release!: () => void;
+      codexClient.refreshThreadTools.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        const promotion = registry.setThreadAgent({ ...identity, agent });
+        await vi.waitFor(() => expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce());
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await expect(registry.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] })).rejects.toThrow("already active");
+        expect(await registry.submitTurn({ ...identity, input: [{ type: "text", text: "Queued fixture" }] })).toMatchObject({ status: "queued" });
+        release();
+        await promotion;
+        await vi.waitFor(() => expect(codexClient.startTurnCalls).toHaveLength(1));
+        expect(codexClient.lastStartTurnParams?.input).toEqual([{ type: "text", text: "Queued fixture" }]);
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+      } finally { release?.(); await registry.close(); }
+    });
+
+    it("does not demote while an attachment dispatched by the previous turn is still in flight", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      let release!: () => void;
+      const dispatch = vi.fn(async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { ok: true, data: {} } as PwrAgentMessagingResponse;
+      });
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: dispatch, checkDynamicToolPermission: () => ({ allowed: true }) });
+      try {
+        await registry.setThreadAgent({ ...identity, agent });
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-attach", turn: { id: "turn-attach" } } } });
+        const attachment = codexClient.emitRequest({ method: "item/tool/call", params: {
+          threadId: identity.threadId, turnId: "turn-attach", requestId: "fixture-attach", callId: "fixture-attach", namespace: "pwragent", tool: "attach_thread_here", arguments: { backend: "codex", threadId: "fixture-target" },
+        } } as AppServerPendingRequestNotification);
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        expect(await registry.setThreadAgent({ ...identity, agent: null })).toMatchObject({ agent, queuedAgentChange: { agent: null } });
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        release();
+        await attachment;
+        await vi.waitFor(async () => expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined());
+      } finally { release?.(); await registry.close(); }
+    });
+
+    it("preserves non-Codex designation without a Codex runtime", async () => {
+      const codexClient = new MockBackendClient({ threads: [] });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        await registry.setThreadAgent({ backend: "acp:gemini", threadId: "fixture", agent });
+        expect(await registry.getThreadAgentMetadata({ backend: "acp:gemini", threadId: "fixture" })).toEqual(agent);
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      } finally { await registry.close(); }
+    });
   });
 
   it("refreshes tool discovery in both directions and authorizes only live searches", async () => {
@@ -9311,6 +9547,29 @@ describe("DesktopBackendRegistry", () => {
     ]);
 
     await registry.close();
+  });
+
+  it.each([true, false])("propagates retention evidence failures for archived=%s", async (archived) => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    vi.spyOn(codexClient, "listThreads").mockRejectedValue(new Error("Provider unavailable"));
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.listThreads({ archived, forceRefresh: true, callerReason: "archive-cleanup" })).rejects.toThrow("Provider unavailable");
+    } finally { await registry.close(); }
+  });
+
+  it("propagates an authoritative refresh through the combined provider listing", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [{ id: "fixture", title: "Before", titleSource: "explicit", linkedDirectories: [], source: "codex" }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await registry.listThreads({ backend: "codex" });
+      codexClient.setThreads([{ id: "fixture", title: "After", titleSource: "explicit", linkedDirectories: [], source: "codex" }]);
+      await expect(registry.listThreads({ forceRefresh: true })).resolves.toEqual([
+        expect.objectContaining({ title: "After" }),
+      ]);
+    } finally { await registry.close(); }
   });
 
   it("trusts a different explicit provider name over an unacknowledged observation", async () => {
@@ -24614,6 +24873,75 @@ command = "pnpm dev"
     expect(codexClient.lastRenameThreadParams).toBeUndefined();
 
     await registry.close();
+  });
+
+  it.each([
+    { name: "default on", global: undefined, override: undefined, active: true, claimed: true, expected: 1 },
+    { name: "global off", global: false, override: undefined, active: true, claimed: true, expected: 0 },
+    { name: "thread off", global: true, override: false, active: true, claimed: true, expected: 0 },
+    { name: "thread on", global: false, override: true, active: true, claimed: true, expected: 1 },
+    { name: "stale turn", global: true, override: undefined, active: false, claimed: true, expected: 0 },
+    { name: "already claimed", global: true, override: undefined, active: true, claimed: false, expected: 0 },
+    { name: "failed steer is not retried", global: true, override: undefined, active: true, claimed: true, expected: 1, fail: true },
+    { name: "monitor child", global: true, override: undefined, active: true, claimed: true, expected: 0, monitor: true },
+  ])("delivers a monitor job suggestion only to the eligible active turn: $name", async (scenario) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+      ...(scenario.fail ? { steerTurnError: new Error("stale active turn") } : {}),
+    });
+    const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
+    const claim = vi.fn(() => scenario.claimed);
+    const getThreadOverlayState = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", extraLinkedDirectories: [],
+      executionMode: "full-access" as const,
+      monitorJobSuggestionsEnabled: scenario.override,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: { ...overlayStore, getThreadOverlayState, claimMonitorJobSuggestion: claim },
+      resolveToolOutputAlertPolicy: () => ({
+        outputCapHitsEnabled: false, repeatedLargeOutputsEnabled: false,
+        repeatedLargeOutputMinimumCalls: 5, repeatedLargeOutputMinimumPercent: 50,
+        repeatedQueuedChecksEnabled: false,
+        monitorJobSuggestionsEnabled: scenario.global,
+      }),
+    });
+    try {
+      const turn = await registry.startTurn({
+        backend: "codex", threadId: "thread-1",
+        input: [{ type: "text", text: "Wait for CI" }],
+      });
+      const steer = vi.spyOn(registry, "steerTurn");
+      if (scenario.monitor) {
+        (registry as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
+          .completedTaskMonitorsByThread.set("codex:thread-1", {});
+      }
+      if (!scenario.active) vi.spyOn(registry, "getActiveTurnForThread").mockReturnValue(undefined);
+      const record = (registry as unknown as {
+        recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
+      }).recordToolInvocationAccounting.bind(registry);
+      const now = vi.spyOn(Date, "now");
+      for (let index = 0; index < 5; index++) {
+        now.mockReturnValue(1_000_000 + index * 120_000);
+        await record({ backend: "codex", notification: { method: "item/completed", params: {
+          threadId: "thread-1", turnId: turn.turnId,
+          item: { id: `poll-${index}`, type: "commandExecution", command: "gh run view 123 --repo owner/repo --json status", status: "completed", aggregatedOutput: "queued" },
+        } } } as AgentEvent);
+      }
+      now.mockRestore();
+      await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(scenario.expected));
+      if (scenario.expected) {
+        expect(claim).toHaveBeenCalledTimes(1);
+        expect(steer).toHaveBeenCalledWith(expect.objectContaining({
+          threadId: "thread-1", expectedTurnId: turn.turnId,
+          input: [{ type: "text", text: expect.stringContaining("create_monitor_delegation") }],
+        }), { kind: "pwragent", systemReason: "monitor-job-suggestion" });
+        await vi.waitFor(() => expect(codexClient.steerTurnCallCount).toBe(1));
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await registry.close();
+    }
   });
 
   it("steers Codex turns through the single client and surfaces its error", async () => {

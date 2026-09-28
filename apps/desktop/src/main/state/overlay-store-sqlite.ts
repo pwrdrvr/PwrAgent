@@ -4001,7 +4001,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = {
       ...current,
       agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
+      queuedAgentChange: undefined,
     };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setQueuedThreadAgentChange(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    change: ThreadOverlayState["queuedAgentChange"];
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend, threadId: params.threadId,
+      executionMode: "default" as const, extraLinkedDirectories: [],
+    };
+    const nextState = { ...current, queuedAgentChange: params.change };
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -4022,6 +4038,47 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = params.enabled === null
       ? rest
       : { ...current, tokenMiserEnabled: params.enabled };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  claimMonitorJobSuggestion(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+  }): boolean {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    if (this.getThread(threadKey)?.monitorJobSuggestionTurnId === params.turnId) return false;
+    // Recheck under the write lock so reconnecting instances cannot both claim.
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (current.monitorJobSuggestionTurnId === params.turnId) return false;
+      this.putThread(threadKey, { ...current, monitorJobSuggestionTurnId: params.turnId });
+      return true;
+    }).immediate();
+  }
+
+  async setThreadMonitorJobSuggestions(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const { monitorJobSuggestionsEnabled: _cleared, ...rest } = current;
+    const nextState: ThreadOverlayState = params.enabled === null
+      ? rest
+      : { ...current, monitorJobSuggestionsEnabled: params.enabled };
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -8767,7 +8824,10 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setQueuedThreadAgentChange"
   | "setThreadTokenMiser"
+  | "setThreadMonitorJobSuggestions"
+  | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
   | "reorderThreadPins"

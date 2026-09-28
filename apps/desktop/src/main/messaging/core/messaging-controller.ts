@@ -21667,6 +21667,10 @@ function isMessagingToolOriginBinding(
   binding: MessagingBindingRecord,
   navigation: MessagingNavigationContext | undefined,
 ): boolean {
+  if (binding.backend === "codex" && navigation
+    && findThreadForBinding(navigation, binding)?.agent) {
+    return true;
+  }
   if (binding.targetKind === "agent_thread") {
     return true;
   }

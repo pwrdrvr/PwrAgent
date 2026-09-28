@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PwrAgent storage</title>
+    <script>
+      const selectedTheme = window.storageMaintenance?.theme ?? "system";
+      document.documentElement.dataset.theme = selectedTheme === "system"
+        ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : selectedTheme;
+    </script>
+  </head>
+  <body><div id="root"></div><script type="module" src="/src/features/storage-maintenance/StorageMaintenance.tsx"></script></body>
+</html>

@@ -203,10 +203,11 @@ describe("ThreadSearchStore", () => {
 });
 
 describe("buildThreadSearchFtsQuery", () => {
-  it("quotes tokens and strips unsupported FTS syntax", () => {
+  it("preserves quoted phrases and strips unsupported FTS syntax", () => {
     expect(buildThreadSearchFtsQuery('branch OR "drift"')).toBe(
-      '"branch"* "OR"* "drift"*',
+      '"branch"* "OR"* "drift"',
     );
+    expect(buildThreadSearchFtsQuery('"ad hoc" build')).toBe('"ad hoc" "build"*');
     expect(buildThreadSearchFtsQuery("!!!")).toBeNull();
   });
 });

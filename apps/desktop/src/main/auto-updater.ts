@@ -58,6 +58,9 @@ let heldDownloadedUpdate:
   | { selection: UpdateSelectionKey; version: string }
   | undefined;
 const pendingDownloadChannelsByVersion = new Map<string, UpdateSelectionKey>();
+// A passive Settings read must not undo Cancel, even after another check
+// changes the visible status. Explicit checks and track changes can retry.
+const canceledReleaseVersions = new Set<string>();
 
 /**
  * The download the operator can still stop.
@@ -80,6 +83,7 @@ type ActiveUpdateDownload = {
   cancel: () => void;
   /** Set by `cancelAppUpdateDownload`, read wherever the download can stop. */
   canceled: boolean;
+  settled?: Promise<void>;
 };
 
 let activeDownload: ActiveUpdateDownload | undefined;
@@ -634,7 +638,21 @@ function recordPendingDownloadChannel(
   pendingDownloadChannelsByVersion.set(version, updateSelection);
 }
 
-type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu";
+type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu" | "selection" | "discovery";
+
+// A track change must outlive an old track's check/download, not merely join
+// it. Coalesce rapid changes and keep electron-updater on one feed at a time.
+let selectionCheckGeneration = 0;
+async function checkChangedUpdateSelection(): Promise<void> {
+  const generation = ++selectionCheckGeneration;
+  while (updateCheckInFlight || activeDownload?.settled) {
+    await (updateCheckInFlight ?? activeDownload?.settled);
+    if (generation !== selectionCheckGeneration) return;
+  }
+  if (generation === selectionCheckGeneration) {
+    await checkForAppUpdatesNow("selection");
+  }
+}
 
 /**
  * Run a check and, when the operator asked for it by name, narrate it.
@@ -712,7 +730,7 @@ async function runAppUpdateCheck(
       }
     | undefined;
 
-  updateCheckInFlight = (async () => {
+  updateCheckInFlight = (async (): Promise<AppUpdateCheckResult> => {
     try {
       const {
         channel: updateChannel,
@@ -736,7 +754,8 @@ async function runAppUpdateCheck(
       const release = await readAppUpdateReleaseForChannel(
         updateChannel,
         updateTrain,
-        trigger === "manual" || trigger === "menu" ? 0 : undefined,
+        trigger === "manual" || trigger === "menu" || trigger === "selection"
+          ? 0 : undefined,
       );
       const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
       if (!release?.tag_name) {
@@ -863,11 +882,11 @@ async function runAppUpdateCheck(
         updateTrain: failureContext?.train,
       });
       return result;
-    } finally {
-      updateCheckChannelInFlight = undefined;
-      updateCheckInFlight = undefined;
     }
-  })();
+  })().finally(() => {
+    updateCheckChannelInFlight = undefined;
+    updateCheckInFlight = undefined;
+  });
 
   return updateCheckInFlight;
 }
@@ -903,7 +922,7 @@ function adoptUpdateDownload(
   // A cancel that arrived while the token did not yet exist: honor it now
   // rather than letting the download it asked to stop run to completion.
   applyPendingUpdateCancel(download);
-  void result.downloadPromise.then(
+  download.settled = result.downloadPromise.then(
     () => {
       releaseActiveDownload(download);
     },
@@ -947,6 +966,7 @@ export function cancelAppUpdateDownload(): AppUpdateCancelResult {
     return { canceled: false };
   }
   download.canceled = true;
+  canceledReleaseVersions.add(download.version);
   log.info("canceling update download", { version: download.version });
   // The flag is set first and unconditionally: `cancel` may still be the
   // empty slot an offered-but-not-yet-started download carries, and it may
@@ -1408,6 +1428,23 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
   try {
     const releases = await readGitHubReleases();
     const selected = selectAppUpdateReleases(releases);
+    // Settings already fetched the feed. Use the ordinary background path
+    // with that cache, leaving the finished-download notification in charge.
+    const selection = currentUpdateSelection();
+    const release = releaseForSelection(selected, selection.channel, selection.train);
+    const version = release?.tag_name?.replace(/^v/i, "");
+    if (
+      initialized
+      && productionUpdatesEnabled()
+      && !linuxManualPackageUpdatesEnabled()
+      && !updateCheckInFlight
+      && !activeDownload
+      && version
+      && !canceledReleaseVersions.has(version)
+      && compareSemver(version, autoUpdater.currentVersion?.version ?? "unknown") > 0
+    ) {
+      void checkForAppUpdatesNow("discovery");
+    }
     return {
       fetchedAt: releaseCache?.fetchedAt ?? Date.now(),
       stable: {
@@ -1479,8 +1516,14 @@ export function initAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = true;
   configureAutoUpdaterChannel();
   try {
+    let previousSelection = currentUpdateSelectionKey();
     getDesktopConfigStore().subscribe(["updates"], () => {
-      reconcileDownloadedUpdateEligibility();
+      const selection = currentUpdateSelectionKey();
+      reconcileDownloadedUpdateEligibility(selection);
+      if (selection !== previousSelection) {
+        previousSelection = selection;
+        void checkChangedUpdateSelection();
+      }
     });
   } catch (err) {
     log.warn("failed to subscribe to update-selection setting changes", {
@@ -1539,6 +1582,7 @@ export function initAutoUpdater(): void {
   // keeps Settings from promising a download that is no longer running.
   autoUpdater.on("update-cancelled", (info) => {
     const version = info?.version ?? activeDownload?.version ?? "unknown";
+    canceledReleaseVersions.add(version);
     log.info("update-cancelled", { version });
     if (info?.version) {
       pendingDownloadChannelsByVersion.delete(info.version);

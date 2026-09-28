@@ -14,6 +14,7 @@ import { buildThreadSearchFtsQuery } from "./thread-search-fts-query";
 
 export type ThreadSearchProjectionSearchRequest = {
   query?: string;
+  identityKeys?: string[];
   backend?: AppServerBackendKind;
   includeArchived?: boolean;
   filters?: ThreadSearchFilters;
@@ -203,6 +204,10 @@ export class ThreadSearchStore {
     const backendClause = request.backend ? " AND d.backend = @backend" : "";
     const archivedClause = request.includeArchived ? "" : " AND d.archived_at IS NULL";
     const filterWhere = buildFilterWhereClause(request.filters);
+    if (request.identityKeys) {
+      filterWhere.sql += " AND d.identity_key IN (SELECT value FROM json_each(@identityKeys))";
+      filterWhere.params.identityKeys = JSON.stringify(request.identityKeys.map(encodeLegacyThreadIdentityKey));
+    }
 
     if (!ftsQuery) {
       return this.db

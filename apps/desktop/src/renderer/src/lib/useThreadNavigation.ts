@@ -1207,24 +1207,35 @@ function updateThreadAgentInLoadedRows(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     agent?: ThreadAgentMetadata;
+    agentChange?: NavigationThreadSummary["agentChange"];
   },
 ): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
+  const threadKey = params.federationTarget
+    && isRemoteFederationTarget(params.federationTarget)
+    ? federatedThreadIdentityKey({
+        backend: params.backend,
+        target: params.federationTarget,
+        threadId: params.threadId,
+      })
+    : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
-    if (threadAgentsEqual(thread.agent, params.agent)) {
+    if (threadAgentsEqual(thread.agent, params.agent)
+      && JSON.stringify(thread.agentChange) === JSON.stringify(params.agentChange)) {
       return thread;
     }
     changed = true;
-    return { ...thread, agent: params.agent };
+    return { ...thread, agent: params.agent, agentChange: params.agentChange };
   });
 
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
@@ -1955,6 +1966,7 @@ function applyThreadModelSettingsUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     model?: string;
     reasoningEffort?: string;
@@ -1968,7 +1980,9 @@ function applyThreadModelSettingsUpdate(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
       return thread;
     }
 
@@ -2054,6 +2068,7 @@ function applyThreadAcpRuntimeUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     acpRuntime?: NavigationThreadSummary["acpRuntime"];
   }
@@ -2064,7 +2079,9 @@ function applyThreadAcpRuntimeUpdate(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
       return thread;
     }
 
@@ -2094,6 +2111,7 @@ function applyThreadCodexEnvironmentUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   }
@@ -2104,7 +2122,9 @@ function applyThreadCodexEnvironmentUpdate(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
       return thread;
     }
 
@@ -2127,6 +2147,7 @@ function applyThreadExecutionModeUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     executionMode: ThreadExecutionMode;
   }
@@ -2137,7 +2158,9 @@ function applyThreadExecutionModeUpdate(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
       return thread;
     }
 
@@ -2164,6 +2187,7 @@ function applyThreadExecutionModeQueued(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     queuedExecutionMode: ThreadExecutionMode;
     queuedAt: number;
@@ -2175,7 +2199,9 @@ function applyThreadExecutionModeQueued(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
       return thread;
     }
     if (
@@ -2204,6 +2230,7 @@ function applyThreadExecutionModeQueueCleared(
   snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }
 ): NavigationLoadedRows | undefined {
@@ -2213,7 +2240,9 @@ function applyThreadExecutionModeQueueCleared(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
       return thread;
     }
     if (
@@ -2777,6 +2806,7 @@ export function useThreadNavigation(
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
   removeDirectory: (directoryKey: string) => Promise<void>;
   markDirectoriesSeen: (directoryKeys: string[]) => Promise<void>;
+  archiveDirectories: (directoryKeys: string[]) => Promise<void>;
   /** Select an existing launchpad without creating or resetting its draft. */
   selectDirectoryLaunchpad: (directoryKey: string) => void;
   selectedDirectory?: NavigationDirectorySummary;
@@ -3581,6 +3611,13 @@ export function useThreadNavigation(
         && (method === "navigation/invalidated"
           || method === "federation/eventStream/changed"
           || method === "pullRequest/status/updated"
+          || method === "thread/agent/updated"
+          || method === "thread/modelSettings/updated"
+          || method === "thread/acpRuntime/updated"
+          || method === "thread/codexEnvironment/updated"
+          || method === "thread/executionMode/updated"
+          || method === "thread/executionMode/queued"
+          || method === "thread/executionMode/queueCleared"
           || method === "thread/name/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
@@ -3965,12 +4002,13 @@ export function useThreadNavigation(
           ...current,
           rows: applyThreadExecutionModeUpdate(current.rows, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             executionMode,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId
+          current && agentEventMatchesThread(event, current, threadId)
             ? { ...current, executionMode }
             : current
         );
@@ -3992,13 +4030,14 @@ export function useThreadNavigation(
           ...current,
           rows: applyThreadExecutionModeQueued(current.rows, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             queuedExecutionMode,
             queuedAt,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId
+          current && agentEventMatchesThread(event, current, threadId)
             ? {
                 ...current,
                 queuedExecutionMode,
@@ -4021,11 +4060,12 @@ export function useThreadNavigation(
           ...current,
           rows: applyThreadExecutionModeQueueCleared(current.rows, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId
+          current && agentEventMatchesThread(event, current, threadId)
             ? {
                 ...current,
                 queuedExecutionMode: undefined,
@@ -4049,12 +4089,13 @@ export function useThreadNavigation(
           ...current,
           rows: applyThreadCodexEnvironmentUpdate(current.rows, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             codexEnvironmentRuntime,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId
+          current && agentEventMatchesThread(event, current, threadId)
             ? { ...current, codexEnvironmentRuntime }
             : current
         );
@@ -4083,12 +4124,13 @@ export function useThreadNavigation(
           ...current,
           rows: applyThreadModelSettingsUpdate(current.rows, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId: params.threadId,
             ...modelSettingsPatch,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === params.threadId
+          current && agentEventMatchesThread(event, current, params.threadId)
             ? { ...current, ...modelSettingsPatch }
             : current
         );
@@ -4148,12 +4190,13 @@ export function useThreadNavigation(
           ...current,
           rows: applyThreadAcpRuntimeUpdate(current.rows, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             acpRuntime,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId
+          current && agentEventMatchesThread(event, current, threadId)
             ? {
                 ...current,
                 acpRuntime: {
@@ -6434,6 +6477,37 @@ export function useThreadNavigation(
     }
   }, [desktopApi, refresh]);
 
+  const archiveDirectories = useCallback(async (directoryKeys: string[]): Promise<void> => {
+    setArchiveThreadError(undefined);
+    setArchiveThreadNotice(undefined);
+    const failures: string[] = [];
+    for (const directoryKey of new Set(directoryKeys)) {
+      try {
+        if (!desktopApi?.removeNavigationDirectory) throw new Error("Upgrade this instance to archive projects through owner navigation.");
+        const response = await desktopApi.removeNavigationDirectory({
+          directoryKey, archiveThreads: true, federationTarget: readRendererFederationTarget(),
+        });
+        const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
+        if (notice) setArchiveThreadNotice(notice);
+        if (!directoryKey.startsWith("directory:")) continue;
+        removedDirectoryKeysRef.current.add(directoryKey);
+        setLocalLaunchpads((current) => {
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
+        setSelectedItemKey((current) =>
+          current === buildLaunchpadSelectionKey(directoryKey) ? undefined : current,
+        );
+      } catch (error) {
+        failures.push(`${directoryKey.replace(/^directory:/, "")}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    boundedNavigation.invalidate();
+    await refresh();
+    if (failures.length) setArchiveThreadError(failures.join("\n"));
+  }, [desktopApi, boundedNavigation, refresh]);
+
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
     async (directoryKey: string): Promise<void> => {
@@ -7596,9 +7670,11 @@ export function useThreadNavigation(
         return;
       }
 
+      const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
       try {
         const result = await setThreadAgentRequest({
           backend: thread.source,
+          federationTarget,
           threadId: thread.id,
           agent,
         });
@@ -7606,8 +7682,10 @@ export function useThreadNavigation(
           ...current,
           rows: updateThreadAgentInLoadedRows(current.rows, {
             backend: result.backend,
+            federationTarget,
             threadId: result.threadId,
             agent: result.agent,
+            agentChange: result.agentChange,
           }),
         }));
       } catch {
@@ -7863,7 +7941,7 @@ export function useThreadNavigation(
 
       setSetThreadModelSettingsError(undefined);
       setOptimisticThread((current) =>
-        current && current.id === thread.id && current.source === thread.source
+        current && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? { ...current, ...nextSettings }
           : current
       );
@@ -7871,6 +7949,7 @@ export function useThreadNavigation(
         ...current,
         rows: applyThreadModelSettingsUpdate(current.rows, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
           threadId: thread.id,
           ...nextSettings,
         }),
@@ -8020,7 +8099,7 @@ export function useThreadNavigation(
         updatedAt: Date.now(),
       };
       setOptimisticThread((current) =>
-        current && current.id === thread.id && current.source === thread.source
+        current && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? { ...current, acpRuntime: nextAcpRuntime }
           : current
       );
@@ -8028,6 +8107,7 @@ export function useThreadNavigation(
         ...current,
         rows: applyThreadAcpRuntimeUpdate(current.rows, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
           threadId: thread.id,
           acpRuntime: nextAcpRuntime,
         }),
@@ -8100,6 +8180,7 @@ export function useThreadNavigation(
     resetDirectoryLaunchpad,
     removeDirectory,
     markDirectoriesSeen,
+    archiveDirectories,
     selectDirectoryLaunchpad,
     selectPendingLaunchpad,
     selectedDirectory,

@@ -160,6 +160,24 @@ export function PricingSettings(props: {
 
       <SettingsSection
         eyebrow="Usage"
+        title="Monitor jobs"
+        description="Help the agent delegate repeated status checks."
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={toolOutputAlerts.monitorJobSuggestionsEnabled?.value ?? true}
+            disabled={props.saving}
+            label="Monitor job suggestions"
+            sub="Suggest a monitor job at most once per Codex turn when repeated polling is detected. Threads can override this default in their options menu."
+            source={toolOutputAlerts.monitorJobSuggestionsEnabled
+              ? sourceBadge(toolOutputAlerts.monitorJobSuggestionsEnabled) : "Default"}
+            onChange={(next) => props.onToolOutputAlertsChange({ monitorJobSuggestionsEnabled: next })}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Usage"
         title="Alerts"
         description="Choose which costly or lossy tool-use patterns should interrupt you."
         chip={alertsEnabled ? "On" : "Off"}

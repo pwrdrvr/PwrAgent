@@ -3,6 +3,17 @@ import type { DesktopApi } from "../desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../federation-desktop-api";
 
 describe("scopeDesktopApiToFederationTarget", () => {
+  it("scopes Agent and Token Miser mutations to the selected owner", async () => {
+    const setThreadAgent = vi.fn();
+    const setThreadTokenMiser = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const api = scopeDesktopApiToFederationTarget({ setThreadAgent, setThreadTokenMiser }, target)!;
+    await api.setThreadAgent!({ threadId: "collision", agent: null });
+    await api.setThreadTokenMiser!({ threadId: "collision", enabled: null, federationTarget: { scope: "local" } });
+    expect(setThreadAgent).toHaveBeenCalledExactlyOnceWith({ threadId: "collision", agent: null, federationTarget: target });
+    expect(setThreadTokenMiser).toHaveBeenCalledExactlyOnceWith({ threadId: "collision", enabled: null, federationTarget: target });
+  });
+
   it("routes remote filesystem operations to the owning peer and removes local path helpers", async () => {
     const openApplication = vi.fn(async () => ({ opened: true }));
     const refreshDirectoryGitStatuses = vi.fn(async () => ({

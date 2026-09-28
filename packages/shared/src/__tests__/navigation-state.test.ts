@@ -55,9 +55,46 @@ describe("buildNavigationSnapshotHash", () => {
 
     expect(changed).not.toBe(baseline);
   });
+
+  it("changes when the monitor job suggestion override changes", () => {
+    const thread = navigationThread({ monitorJobSuggestionsEnabled: false });
+    const baseline = buildNavigationSnapshotHash({
+      backend: "codex",
+      threads: [thread],
+    });
+    const changed = buildNavigationSnapshotHash({
+      backend: "codex",
+      threads: [{ ...thread, monitorJobSuggestionsEnabled: true }],
+    });
+
+    expect(changed).not.toBe(baseline);
+  });
 });
 
 describe("materializeNavigationThreads", () => {
+  it("refreshes navigation for queued, failed, and cancelled promotion without granting authority", () => {
+    const thread = appServerThread();
+    const overlay: ThreadOverlayState = {
+      backend: "codex", threadId: thread.id, executionMode: "default", extraLinkedDirectories: [],
+    };
+    const changes: Array<ThreadOverlayState["queuedAgentChange"]> = [
+      { agent: { name: "Fixture manager", instructions: "Fixture instructions" }, requestedAt: 1 },
+      { agent: { name: "Fixture manager" }, requestedAt: 1, error: "Fixture refresh failed" },
+      undefined,
+    ];
+    const hashes = changes.map((change) => {
+      const threads = materializeNavigationThreads({
+        firstSnapshot: false, overlayByThreadKey: { [`codex:${thread.id}`]: { ...overlay, queuedAgentChange: change } },
+        previousKnownThreadKeys: [], threads: [thread],
+      });
+      expect(threads[0]?.agent).toBeUndefined();
+      expect(threads[0]?.agentChange).toEqual(change ? { enabled: true, ...(change.error ? { error: change.error } : {}) } : undefined);
+      expect(JSON.stringify(threads[0]?.agentChange) ?? "").not.toContain("Fixture instructions");
+      return buildNavigationSnapshotHash({ backend: "codex", threads });
+    });
+    expect(new Set(hashes).size).toBe(3);
+  });
+
   it("projects the persisted Token Miser override onto navigation", () => {
     const thread = appServerThread();
     const overlay: ThreadOverlayState = {
@@ -76,6 +113,26 @@ describe("materializeNavigationThreads", () => {
     });
 
     expect(materialized?.tokenMiserEnabled).toBe(true);
+  });
+
+  it("projects the persisted monitor job suggestion override onto navigation", () => {
+    const thread = appServerThread();
+    const overlay: ThreadOverlayState = {
+      backend: "codex",
+      threadId: thread.id,
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      monitorJobSuggestionsEnabled: true,
+    };
+
+    const [materialized] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: { [`codex:${thread.id}`]: overlay },
+      previousKnownThreadKeys: [],
+      threads: [thread],
+    });
+
+    expect(materialized?.monitorJobSuggestionsEnabled).toBe(true);
   });
 });
 

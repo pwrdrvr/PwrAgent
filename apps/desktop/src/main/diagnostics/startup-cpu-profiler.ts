@@ -101,6 +101,8 @@ export class StartupCpuProfiler {
   private disposeEventRecorder?: () => void;
   private rendererHeapSnapshotTarget?: StartupHeapSnapshotTarget;
   private stopped = false;
+  private stopPromise?: Promise<void>;
+  private startPromise?: Promise<void>;
 
   constructor(options?: {
     config?: StartupCpuProfileConfig;
@@ -139,7 +141,13 @@ export class StartupCpuProfiler {
     this.writeMainHeapSnapshot = options?.writeMainHeapSnapshot ?? writeHeapSnapshot;
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    this.startPromise ??= this.startInner();
+    return this.startPromise;
+  }
+
+  private async startInner(): Promise<void> {
     if (!this.config.enabled || this.session) {
       return;
     }
@@ -178,6 +186,7 @@ export class StartupCpuProfiler {
     });
     await this.mainProfiler.start();
 
+    if (this.stopped) return;
     this.hardTimeoutTimer = setTimeout(() => {
       void this.stop("hard-timeout");
     }, this.config.hardTimeoutMs);
@@ -240,13 +249,20 @@ export class StartupCpuProfiler {
     });
   }
 
-  async stop(reason = "stopped"): Promise<void> {
-    if (!this.config.enabled || this.stopped || !this.session) {
-      return;
-    }
-
+  stop(reason = "stopped"): Promise<void> {
     this.stopped = true;
     this.clearTimers();
+    this.stopPromise ??= this.stopInner(reason);
+    return this.stopPromise;
+  }
+
+  private async stopInner(reason: string): Promise<void> {
+    // Renderer stop cancels unfinished startup by detaching its debugger.
+    // Joining it here could defeat the hard timeout on an unresponsive renderer.
+    await Promise.allSettled([this.startPromise]);
+    if (!this.config.enabled || !this.session) {
+      return;
+    }
 
     const stopResults = await Promise.allSettled([
       this.mainProfiler?.stop(reason) ?? Promise.resolve(false),

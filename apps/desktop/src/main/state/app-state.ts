@@ -9,6 +9,7 @@ import {
   type ProfileRuntimeHeartbeat,
   updateLastUsed,
 } from "../profile";
+import fs from "node:fs";
 import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
 import { AutomationStore } from "../automations/automation-store.js";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store.js";
@@ -17,6 +18,8 @@ import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
 import { type AutoVacuumConversion, StateDb } from "./state-db.js";
 
 let stateDb: StateDb | null = null;
+let existingDatabase = false;
+export function hadExistingAppStateDatabase(): boolean { return existingDatabase; }
 let messagingStore: SqliteMessagingStore | null = null;
 let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
@@ -24,12 +27,7 @@ let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
 let automationStore: AutomationStore | null = null;
 let scheduledThreadActionStore: ScheduledThreadActionStore | null = null;
 let activeMode: AppStateMode | null = null;
-// Result of the one-time `auto_vacuum` conversion `startGc` performs, kept
-// so the early-return path reports the same value the first init did. It is
-// logged by the caller rather than here: a failed conversion leaves the
-// profile at `auto_vacuum=NONE`, where the hourly `incremental_vacuum`
-// reclaims nothing and every later launch retries a full VACUUM, and that
-// has to be visible somewhere.
+// Legacy return shape retained for callers; startup no longer vacuums on main.
 let autoVacuumConversion: AutoVacuumConversion | null = null;
 // The boot decision is set once at startup and stays put for the
 // process lifetime. Stored here (vs. recomputed lazily) because the
@@ -103,15 +101,16 @@ export function initializeAppState(
     ensureBootstrapProfileDir();
     const dbPath = resolveBootstrapProfilePath("state/state.db");
     stateDb = StateDb.open(dbPath, { profileName: "__bootstrap__" });
-    autoVacuumConversion = stateDb.startGc();
+    stateDb.startDeferredGc();
     // Intentionally no profile heartbeat / last_used. The bootstrap
     // profile is transient and must not appear in any user-facing
     // profile listing.
   } else {
     const { profileName } = ensureProfileExists();
     const dbPath = resolveActiveProfilePath("state/state.db");
+    existingDatabase = fs.existsSync(dbPath);
     stateDb = StateDb.open(dbPath, { profileName });
-    autoVacuumConversion = stateDb.startGc();
+    stateDb.startDeferredGc();
 
     updateLastUsed(profileName);
     const processIdentity = getProcessRuntimeIdentity();
@@ -188,6 +187,7 @@ export function disposeAppState(): void {
   if (stateDb) {
     stateDb.close();
     stateDb = null;
+    existingDatabase = false;
     messagingStore = null;
     overlayStore = null;
     runtimeInstanceStore = null;
@@ -206,6 +206,7 @@ export function resetAppStateForTests(): void {
   // removing its temp profile dir (EBUSY on unlink of state.db).
   stateDb?.close();
   stateDb = null;
+  existingDatabase = false;
   messagingStore = null;
   overlayStore = null;
   runtimeInstanceStore = null;
