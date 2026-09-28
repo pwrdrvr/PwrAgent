@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AutomationDetail,
@@ -528,11 +528,12 @@ describe("row runtime and actions", () => {
       />,
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Show run history for Check email",
-      }),
-    );
+    const history = await screen.findByRole("button", {
+      name: "Show run history for Check email",
+    });
+    await act(async () => {
+      fireEvent.click(history);
+    });
 
     // An ARIA table may only own rows and rowgroups. The group exists for
     // sticky containment, so the panels it expands into need a row of their

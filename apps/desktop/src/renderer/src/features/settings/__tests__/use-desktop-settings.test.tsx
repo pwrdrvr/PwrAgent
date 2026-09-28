@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -21,11 +21,11 @@ describe("useDesktopSettings", () => {
       readSettings,
     };
     renderHook(() => useDesktopSettings(desktopApi));
-    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(readSettings).toHaveBeenCalledTimes(1));
 
     act(() => runtimeChanged?.());
 
-    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(readSettings).toHaveBeenCalledTimes(2));
   });
 
   it("observes normalized config changes published by another process", async () => {
@@ -50,7 +50,7 @@ describe("useDesktopSettings", () => {
       readSettings,
     };
     const { result } = renderHook(() => useDesktopSettings(desktopApi));
-    await vi.waitFor(() => expect(result.current.snapshot).toBe(firstSnapshot));
+    await waitFor(() => expect(result.current.snapshot).toBe(firstSnapshot));
 
     act(() => runtimeChanged?.({
       version: 2,
@@ -58,7 +58,7 @@ describe("useDesktopSettings", () => {
       changedDomains: ["providers"],
     }));
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(2);
       expect(result.current.snapshot).toBe(externalSnapshot);
     });
@@ -87,7 +87,7 @@ describe("useDesktopSettings", () => {
       readSettings,
     };
     const { result } = renderHook(() => useDesktopSettings(desktopApi));
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(readSettings).toHaveBeenCalledOnce();
       expect(runtimeChanged).toBeDefined();
     });
@@ -97,7 +97,7 @@ describe("useDesktopSettings", () => {
       configRevision: "newer",
       changedDomains: ["providers"],
     }));
-    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(readSettings).toHaveBeenCalledTimes(2));
     await act(async () => {
       resolveReads[1]?.({ snapshot: {
         fetchedAt: 2,
@@ -149,12 +149,15 @@ describe("useDesktopSettings", () => {
       writeSettingsConfig,
     };
     const { result } = renderHook(() => useDesktopSettings(desktopApi));
-    await vi.waitFor(() => expect(result.current.snapshot).toBe(initialSnapshot));
+    await waitFor(() => expect(result.current.snapshot).toBe(initialSnapshot));
 
-    const write = result.current.writeConfig({
-      models: { codex: { path: "/written/codex" } },
+    let write!: Promise<boolean>;
+    act(() => {
+      write = result.current.writeConfig({
+        models: { codex: { path: "/written/codex" } },
+      });
     });
-    await vi.waitFor(() => expect(writeSettingsConfig).toHaveBeenCalledOnce());
+    await waitFor(() => expect(writeSettingsConfig).toHaveBeenCalledOnce());
     act(() => {
       runtimeChanged?.({
         version: 2,
@@ -183,7 +186,7 @@ describe("useDesktopSettings", () => {
       await write;
     });
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(2);
       expect(result.current.snapshot).toBe(externalSnapshot);
     });

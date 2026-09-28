@@ -1,3 +1,5 @@
+import { act, fireEvent } from "@testing-library/react";
+
 /**
  * jsdom implements `getClientRects` on Element but not on Range, and
  * ProseMirror asks a Range for its rects whenever it scrolls a selection
@@ -22,24 +24,14 @@ if (typeof Range.prototype.getClientRects !== "function") {
   };
 }
 
-const originalConsoleError = console.error.bind(console);
-
-console.error = (...args: unknown[]) => {
-  // The renderer suite asserts the visible states around these async paths.
-  // React's CI-only act warning flood makes GitHub logs unreadable without
-  // adding signal for these tests, so keep other errors intact and filter only
-  // that exact warning text.
-  if (isReactActWarning(args)) {
-    return;
-  }
-
-  originalConsoleError(...args);
+// Tiptap's controlled input updates React state when fireEvent.change assigns
+// target.value, before Testing Library wraps the DOM event in act. Wrap the
+// entire helper so the assignment and the event share the same act scope.
+const change = fireEvent.change;
+fireEvent.change = (...args: Parameters<typeof change>) => {
+  let dispatched = false;
+  act(() => {
+    dispatched = change(...args);
+  });
+  return dispatched;
 };
-
-function isReactActWarning(args: unknown[]): boolean {
-  const [first] = args;
-  return (
-    typeof first === "string" &&
-    first.includes("inside a test was not wrapped in act(...)")
-  );
-}

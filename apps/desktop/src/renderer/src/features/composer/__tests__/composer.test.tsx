@@ -1102,7 +1102,7 @@ describe("Composer", () => {
     });
   });
 
-  it("keeps a wrapped thread options menu inside the composer settings row", () => {
+  it("keeps a wrapped thread options menu inside the composer settings row", async () => {
     const rect = (left: number, right: number): DOMRect => ({
       bottom: 800,
       height: 400,
@@ -1160,14 +1160,18 @@ describe("Composer", () => {
       expect(screen.getByRole("menu")).toHaveStyle({
         transform: "translateX(208px)",
       });
-      fireEvent.focus(screen.getByRole("menuitemcheckbox", {
-        name: /Agent thread/,
-      }));
+      await act(async () => {
+        fireEvent.focus(screen.getByRole("menuitemcheckbox", {
+          name: /Agent thread/,
+        }));
+        await Promise.resolve();
+      });
       expect(screen.getByRole("tooltip")).toHaveStyle({
         left: "408px",
         maxWidth: "300px",
       });
     } finally {
+      cleanup();
       bounds.mockRestore();
     }
   });
@@ -5908,7 +5912,9 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("switch"));
     expect(screen.getByRole("switch")).not.toBeChecked();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(startTurn.mock.calls[0]![0].input).toEqual([
@@ -6113,7 +6119,7 @@ describe("Composer", () => {
           title: "Secondary change", url, state: "passing", linkedDirectoryPaths: ["/repo/secondary"] }],
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/primary" } });
     const target = screen.getByRole("button", { name: /Attached PR/ });
     if (input === "keyboard") {
@@ -6128,7 +6134,7 @@ describe("Composer", () => {
     })));
   });
 
-  it("keeps a PR across worktrees of its repository and names repositories only when they differ", () => {
+  it("keeps a PR across worktrees of its repository and names repositories only when they differ", async () => {
     const pr = (org: string, repo: string, number: number, path: string) => ({
       provider: "github.com" as const, org, repo, number, title: `Change ${number}`,
       url: `https://github.com/${org}/${repo}/pull/${number}`, state: "passing" as const,
@@ -6149,7 +6155,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/tool" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
@@ -6210,18 +6216,20 @@ describe("Composer", () => {
     }],
   });
 
-  const openReviewComposer = (): void => {
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+  const openReviewComposer = async (): Promise<void> => {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    });
   };
 
-  it("omits the attached PR target when the project has none", () => {
+  it("omits the attached PR target when the project has none", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ withPullRequest: false })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).queryByRole("button", { name: /Attached PR/ }))
       .not.toBeInTheDocument();
@@ -6229,7 +6237,7 @@ describe("Composer", () => {
       .toHaveAttribute("aria-pressed", "true");
   });
 
-  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", (workspacePath) => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", async (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
@@ -6239,7 +6247,7 @@ describe("Composer", () => {
           recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Attached PR/ }))
       .toHaveAttribute("aria-pressed", "true");
@@ -6248,7 +6256,7 @@ describe("Composer", () => {
     expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
   });
 
-  it("keeps local review when directory status belongs to another checkout", () => {
+  it("keeps local review when directory status belongs to another checkout", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]} thread={reviewTargetThread({})}
@@ -6256,13 +6264,13 @@ describe("Composer", () => {
         gitStatus: { currentBranch: "main", behind: 0, branches: ["main"], syncState: "in-sync" },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
   });
 
-  it("offers and submits a scoped upstream PR when origin is a fork", () => {
+  it("offers and submits a scoped upstream PR when origin is a fork", async () => {
     const startReview = vi.fn();
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
@@ -6272,7 +6280,7 @@ describe("Composer", () => {
           branches: ["main", "feat/stack-1"], syncState: "in-sync" },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
     expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/fixture/project/pull/7");
@@ -6280,15 +6288,16 @@ describe("Composer", () => {
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/7" },
     }));
+    await flushReactUpdates();
   });
 
-  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", (workspacePath) => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", async (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1, workspacePath })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Base branch/ }))
       .toHaveAttribute("aria-pressed", "true");
@@ -6300,13 +6309,13 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
-  it("walks only the targets it offers and waits for a PR before submitting", () => {
+  it("walks only the targets it offers and waits for a PR before submitting", async () => {
     const withoutPrs = render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ withPullRequest: false })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     let group = screen.getByRole("group", { name: "Review target" });
     fireEvent.keyDown(
       within(group).getByRole("button", { name: /Current changes/ }),
@@ -6322,7 +6331,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={reviewTargetThread({ dirtyFiles: 1 })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     group = screen.getByRole("group", { name: "Review target" });
     fireEvent.keyDown(
       within(group).getByRole("button", { name: /Current changes/ }),
@@ -6338,6 +6347,7 @@ describe("Composer", () => {
         url: "https://github.com/fixture/project/pull/7",
       },
     }));
+    await flushReactUpdates();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -6718,6 +6728,7 @@ describe("Composer", () => {
     await clickButton("Send");
     fireEvent.change(textarea, { target: { value: "/review" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -7211,6 +7222,7 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     fireEvent.keyDown(screen.getByLabelText("New thread"), { key: "Enter" });
+    await flushReactUpdates();
 
     // The launchpad materialize path takes only a review target, so offering
     // the row here would accept a reviewer and then drop it.
@@ -7246,6 +7258,7 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await flushReactUpdates();
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
@@ -8454,7 +8467,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Steer remotely" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await queuedStart.called;
+    await act(async () => {
+      await queuedStart.called;
+    });
     await flushReactUpdates();
     await screen.findByLabelText("Queued message");
     const steerButton = screen.getByRole("button", { name: "Steer" });
@@ -8462,9 +8477,13 @@ describe("Composer", () => {
     // owning peer returns its stable queue entry id. A click before that
     // acknowledgement is intentionally ignored.
     expect(steerButton).toBeDisabled();
-    await queuedStart.acknowledge();
+    await act(async () => {
+      await queuedStart.acknowledge();
+    });
     expect(steerButton).toBeEnabled();
-    fireEvent.click(steerButton);
+    await act(async () => {
+      fireEvent.click(steerButton);
+    });
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -8540,12 +8559,16 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Already admitted once" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await queuedStart.acknowledge();
+    await act(async () => {
+      await queuedStart.acknowledge();
+    });
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
     expect(steerButton).toBeEnabled();
-    fireEvent.click(steerButton);
+    await act(async () => {
+      fireEvent.click(steerButton);
+    });
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -10393,7 +10416,9 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Revise the plan" } });
-    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    });
 
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
@@ -14115,6 +14140,7 @@ describe("Composer", () => {
       "composer__autocomplete"
     );
     fireEvent.click(screen.getByRole("option", { name: /\/review/i }));
+    await flushReactUpdates();
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -14483,10 +14509,12 @@ describe("Composer", () => {
     });
     expect(startReview).not.toHaveBeenCalled();
 
-    compactThreadResponse.resolve({
-      backend: "codex",
-      threadId: "thread-1",
-      turnId: "compact-turn-1",
+    await act(async () => {
+      compactThreadResponse.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "compact-turn-1",
+      });
     });
   });
 
@@ -14568,6 +14596,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -14594,6 +14623,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
 
@@ -21968,7 +21998,10 @@ describe("Composer", () => {
       cancelable: true,
     });
 
-    const defaultWasPrevented = !textarea.dispatchEvent(event);
+    let defaultWasPrevented = false;
+    act(() => {
+      defaultWasPrevented = !textarea.dispatchEvent(event);
+    });
 
     expect(defaultWasPrevented).toBe(true);
     expect(startTurn).not.toHaveBeenCalled();
@@ -22009,7 +22042,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
     const option = screen.getByRole("option", { name: /\$ce:plan/i });
-    option.focus();
+    act(() => option.focus());
     fireEvent.keyDown(option, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
@@ -22110,7 +22143,9 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
     const option = screen.getByRole("option", { name: /\$ce:plan/i });
-    option.focus();
+    act(() => {
+      option.focus();
+    });
     fireEvent.keyDown(option, { key: "Escape" });
 
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();

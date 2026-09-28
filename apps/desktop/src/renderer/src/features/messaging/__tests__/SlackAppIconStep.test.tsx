@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { SlackAppIconStep } from "../SlackAppIconStep";
@@ -44,7 +44,9 @@ describe("SlackAppIconStep", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Basic Information" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open Basic Information" }));
+    });
 
     await vi.waitFor(() => {
       expect(openSlackAppSettings).toHaveBeenCalledTimes(1);

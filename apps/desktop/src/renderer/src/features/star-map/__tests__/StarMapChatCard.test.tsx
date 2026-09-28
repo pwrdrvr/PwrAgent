@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { StrictMode, type ReactElement } from "react";
 import { buildThreadComposerScopeKey } from "../../composer/useComposerDraftStore";
 import {
   act,
@@ -237,6 +237,18 @@ function renderCard(params: CardParams) {
   return view;
 }
 
+async function renderSettled(ui: ReactElement) {
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(ui);
+  });
+  return view;
+}
+
+async function renderCardSettled(params: CardParams) {
+  return await renderSettled(card(params));
+}
+
 /**
  * The composer is a Tiptap editor, not a textarea. It exposes a `value`
  * setter on its contenteditable node exactly so a controlled-input idiom
@@ -251,8 +263,10 @@ async function findReadyTextbox(options: { name: string | RegExp }) {
 async function typeAndSend(title: string, text: string) {
   const input = await findReadyTextbox( { name: `Message ${title}` });
   await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
-  fireEvent.change(input, { target: { value: text } });
-  fireEvent.keyDown(input, { key: "Enter" });
+  await act(async () => {
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
   return input as HTMLElement & { value: string };
 }
 
@@ -287,11 +301,11 @@ function transferImage(
 const IGNORE_COMPOSER = ".composer-tiptap-input, .composer-tiptap-input *";
 
 describe("StarMapChatCard gesture persistence", () => {
-  it("raises in memory and commits once when dragging a non-top card", () => {
+  it("raises in memory and commits once when dragging a non-top card", async () => {
     const onRaise = vi.fn(() => true);
     const onRectChange = vi.fn();
     const onRectCommit = vi.fn();
-    const { container } = render(
+    const { container } = await renderSettled(
       <StarMapChatCard
         cardKey="card-1"
         desktopApi={buildApi()}
@@ -342,10 +356,10 @@ describe("StarMapChatCard gesture persistence", () => {
    * was a card that followed the mouse with no button held — grab it,
    * let go, move away, and it kept jumping after the cursor.
    */
-  it("ends a drag whose pointerup never arrived", () => {
+  it("ends a drag whose pointerup never arrived", async () => {
     const onRectChange = vi.fn();
     const onRectCommit = vi.fn();
-    const { container } = render(
+    const { container } = await renderSettled(
       <StarMapChatCard
         cardKey="card-1"
         desktopApi={buildApi()}
@@ -401,10 +415,10 @@ describe("StarMapChatCard gesture persistence", () => {
     expect(onRectCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("ends a drag when the pointer capture is taken away", () => {
+  it("ends a drag when the pointer capture is taken away", async () => {
     const onRectChange = vi.fn();
     const onRectCommit = vi.fn();
-    const { container } = render(
+    const { container } = await renderSettled(
       <StarMapChatCard
         cardKey="card-1"
         desktopApi={buildApi()}
@@ -584,9 +598,9 @@ describe("StarMapChatCard transcript loading", () => {
 });
 
 describe("StarMapChatCard sub-agents", () => {
-  it("surfaces a running monitor above the compact composer", () => {
+  it("surfaces a running monitor above the compact composer", async () => {
     const desktopApi = buildApi();
-    renderCard({
+    await renderCardSettled({
       desktopApi,
       thread: localThread({
         subAgents: [
@@ -1477,7 +1491,9 @@ describe("StarMapChatCard slash commands", () => {
     expect(
       screen.queryByRole("dialog", { name: "Start review for Local work" }),
     ).toBeNull();
-    resolveStart?.();
+    await act(async () => {
+      resolveStart?.();
+    });
   });
 
   it("closes review setup without disabling the card's terminal control", async () => {
@@ -1976,13 +1992,13 @@ describe("StarMapChatCard send failures", () => {
 });
 
 describe("satellite toggles", () => {
-  function renderToggleCard(props?: {
+  async function renderToggleCard(props?: {
     contextOpen?: boolean;
     terminalOpen?: boolean;
     onToggleContext?: (cardKey: string) => void;
     onToggleTerminal?: (cardKey: string) => void;
   }) {
-    return render(
+    return await renderSettled(
       <StarMapChatCard
         cardKey="card-1"
         desktopApi={buildApi()}
@@ -2003,17 +2019,17 @@ describe("satellite toggles", () => {
     );
   }
 
-  it("asks the controller for the context satellite, and reflects it", () => {
+  it("asks the controller for the context satellite, and reflects it", async () => {
     const onToggleContext = vi.fn();
-    renderToggleCard({ onToggleContext });
+    await renderToggleCard({ onToggleContext });
     const toggle = screen.getByRole("button", { name: /Show thread context/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
     expect(onToggleContext).toHaveBeenCalledWith("card-1");
   });
 
-  it("names the open state once the satellite is up", () => {
-    renderToggleCard({ contextOpen: true, terminalOpen: true });
+  it("names the open state once the satellite is up", async () => {
+    await renderToggleCard({ contextOpen: true, terminalOpen: true });
     expect(
       screen
         .getByRole("button", { name: /Hide thread context/ })
@@ -2026,18 +2042,18 @@ describe("satellite toggles", () => {
     ).toBe("true");
   });
 
-  it("asks the controller for the terminal satellite", () => {
+  it("asks the controller for the terminal satellite", async () => {
     const onToggleTerminal = vi.fn();
-    renderToggleCard({ onToggleTerminal });
+    await renderToggleCard({ onToggleTerminal });
     fireEvent.click(screen.getByRole("button", { name: /Open terminal/ }));
     expect(onToggleTerminal).toHaveBeenCalledWith("card-1");
   });
 
-  it("keeps the satellites OUT of the card: no rail pane inside", () => {
+  it("keeps the satellites OUT of the card: no rail pane inside", async () => {
     // The first cut rendered ThreadContextPanel inside the card, which
     // popped over the transcript instead of docking beside it. Satellites
     // are the screen's to render; the card only carries the toggles.
-    const { container } = renderToggleCard({ contextOpen: true });
+    const { container } = await renderToggleCard({ contextOpen: true });
     expect(container.querySelector(".context-rail")).toBeNull();
   });
 });
@@ -2991,7 +3007,7 @@ describe("StarMapChatCard settings menu", () => {
 });
 
 describe("StarMapChatCard title bar", () => {
-  it("carries the instance as its celestial mark, not as bar text", () => {
+  it("carries the instance as its celestial mark, not as bar text", async () => {
     // The bar has one scarce resource: horizontal room the thread title
     // needs. A full hostname plus directory ("Harold-MBP-M2-Max / work")
     // spent more of it than the title did, so the machine reads as the
@@ -3000,7 +3016,7 @@ describe("StarMapChatCard title bar", () => {
     // name must be gone from the bar's text, and still reachable by
     // name — dropping it entirely would trade a cramped title for an
     // unidentifiable card.
-    renderCard({
+    await renderCardSettled({
       desktopApi: buildApi(),
       instanceIcon: "moon",
       instanceLabel: "Studio Mac",
@@ -3035,12 +3051,12 @@ describe("StarMapChatCard title bar", () => {
     }
   });
 
-  it("gathers the card's controls into one group, close kept apart", () => {
+  it("gathers the card's controls into one group, close kept apart", async () => {
     // Three lone glyphs drifting across the bar read as unrelated; the
     // group is what makes them one row of controls. Close stays outside
     // it — a destructive control should not sit flush against the ones
     // the hand reaches for repeatedly.
-    renderCard({
+    await renderCardSettled({
       desktopApi: buildApi(),
       instanceIcon: "moon",
       instanceLabel: "Studio Mac",
@@ -3067,13 +3083,13 @@ describe("StarMapChatCard title bar tooltips", () => {
     return document.querySelector('[role="tooltip"]')?.textContent ?? undefined;
   }
 
-  it("gives every bar control a hover tooltip, not just some of them", () => {
+  it("gives every bar control a hover tooltip, not just some of them", async () => {
     // The bar lost its words: the instance is an icon, Open is ↗, and the
     // toggles were always glyphs. A tooltip on only one of them reads as
     // the others being broken — which is exactly how it shipped and how
     // it got caught. This asserts the SET, so the next glyph added here
     // cannot land without one.
-    renderCard({
+    await renderCardSettled({
       desktopApi: buildApi(),
       instanceIcon: "moon",
       instanceLabel: "Studio Mac",
@@ -3112,12 +3128,12 @@ describe("StarMapChatCard title bar tooltips", () => {
     view.unmount();
   });
 
-  it("leaves a tooltip another control owns alone when a toggle fires", () => {
+  it("leaves a tooltip another control owns alone when a toggle fires", async () => {
     // A toggle re-labels its own tooltip after the click. `update` writes
     // to whatever tooltip is on screen, so without an owner check a
     // keyboard activation — pointer still resting on the title, focus
     // moved by Tab — rewrote the TITLE's tooltip in place.
-    renderCard({
+    await renderCardSettled({
       desktopApi: buildApi(),
       instanceLabel: "Studio Mac",
       thread: remoteThread(),
@@ -3133,12 +3149,12 @@ describe("StarMapChatCard title bar tooltips", () => {
     );
   });
 
-  it("tells a peer card where ↗ lands even with no label for that peer", () => {
+  it("tells a peer card where ↗ lands even with no label for that peer", async () => {
     // The label is decoration; the destination is not. StarMapScreen
     // reads the label straight out of `displayLabelById`, so an unlinked
     // peer leaves it undefined — and the sentence used to collapse to
     // "the main window" while ↗ opened a federation window.
-    renderCard({
+    await renderCardSettled({
       desktopApi: buildApi(),
       thread: remoteThread(),
     });
@@ -3152,10 +3168,10 @@ describe("StarMapChatCard title bar tooltips", () => {
     ).toBe("Open in a window connected to that instance");
   });
 
-  it("names the peer in the ↗ tooltip, since the bar only shows its icon", () => {
+  it("names the peer in the ↗ tooltip, since the bar only shows its icon", async () => {
     // ↗ does not land in the same place for every card, and the machine
     // is no longer written out beside it.
-    renderCard({
+    await renderCardSettled({
       desktopApi: buildApi(),
       instanceIcon: "moon",
       instanceLabel: "Studio Mac",

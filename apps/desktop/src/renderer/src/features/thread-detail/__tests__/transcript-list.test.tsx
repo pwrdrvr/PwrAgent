@@ -929,7 +929,7 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("loads one older page when the operator scrolls near the top", () => {
+  it("loads one older page when the operator scrolls near the top", async () => {
     const loadOlder = vi.fn(async () => undefined);
 
     render(
@@ -960,7 +960,9 @@ describe("TranscriptList", () => {
     expect(loadOlder).not.toHaveBeenCalled();
 
     list.scrollTop = 120;
-    fireEvent.scroll(list);
+    await act(async () => {
+      fireEvent.scroll(list);
+    });
     expect(loadOlder).toHaveBeenCalledTimes(1);
   });
 
@@ -1002,7 +1004,7 @@ describe("TranscriptList", () => {
     expect(loadOlder).toHaveBeenCalledTimes(1);
   });
 
-  it("does not carry an in-flight older-page lock into another thread", () => {
+  it("does not carry an in-flight older-page lock into another thread", async () => {
     let resolveFirstLoad: (() => void) | undefined;
     const firstLoad = vi.fn(
       () =>
@@ -1053,7 +1055,9 @@ describe("TranscriptList", () => {
     fireEvent.scroll(secondList);
 
     expect(secondLoad).toHaveBeenCalledTimes(1);
-    resolveFirstLoad?.();
+    await act(async () => {
+      resolveFirstLoad?.();
+    });
   });
 
   it("releases an in-flight older-page lock when loading is superseded", async () => {
@@ -1112,7 +1116,10 @@ describe("TranscriptList", () => {
     });
 
     list.scrollTop = 120;
-    fireEvent.scroll(list);
+    await act(async () => {
+      fireEvent.scroll(list);
+      await secondLoad.mock.results[0]?.value;
+    });
     expect(secondLoad).toHaveBeenCalledTimes(1);
   });
 
