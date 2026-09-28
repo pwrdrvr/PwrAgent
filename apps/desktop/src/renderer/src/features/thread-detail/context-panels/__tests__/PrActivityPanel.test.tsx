@@ -126,3 +126,34 @@ it("shows a coalesced observation once with its repeat count", async () => {
   expect(within(row).getByText(/^×3 since/)).toBeInTheDocument();
   expect(within(row).getByText("On-demand check")).toBeInTheDocument();
 });
+
+it("opens threads absent from the sidebar using main's title or an actionable fallback", async () => {
+  const onShowThread = vi.fn();
+  render(
+    <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+      <PrActivityPanel desktopApi={{ getPrActivity: async () => ({ ...snapshot,
+        threadTitles: { "codex:two": "Collapsed project thread" },
+      }) }} thread={thread} />
+    </ThreadLinkProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "All threads" }));
+  fireEvent.click(screen.getByRole("button", { name: "Collapsed project thread" }));
+  expect(onShowThread).toHaveBeenLastCalledWith(expect.objectContaining({ backend: "codex", threadId: "two" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Open thread" })[0]!);
+  expect(onShowThread).toHaveBeenLastCalledWith(expect.objectContaining({ backend: "codex", threadId: "one" }));
+  expect(screen.queryByText("Thread not in this window")).not.toBeInTheDocument();
+});
+
+it("shows lightweight PR links, the check trigger, and one token for a multi-PR batch", async () => {
+  const history: PrActivitySnapshot = { ...snapshot, events: [{ ...snapshot.events[0]!,
+    prKeys: ["github.com/acme/widgets#128", "git.example/acme/repo#2", "gitlab.com/acme/nested/repo#3"],
+  }], prUrls: { "git.example/acme/repo#2": "https://git.example/acme/repo/-/merge_requests/2" } };
+  render(<PrActivityPanel desktopApi={{ getPrActivity: async () => history }} thread={thread} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Budget" }));
+  expect(screen.getByRole("link", { name: "acme/widgets#128" })).toHaveAttribute("href", "https://github.com/acme/widgets/pull/128");
+  expect(screen.getByRole("link", { name: "acme/repo#2" })).toHaveAttribute("href", history.prUrls!["git.example/acme/repo#2"]);
+  expect(screen.getByRole("link", { name: "nested/repo#3" })).toHaveAttribute("href", "https://gitlab.com/acme/nested/repo/-/merge_requests/3");
+  expect(screen.getByText("Background check")).toBeInTheDocument();
+  expect(screen.getByText("3 PRs")).toBeInTheDocument();
+  expect(screen.getByText("−1 check token · 11 left")).toBeInTheDocument();
+});

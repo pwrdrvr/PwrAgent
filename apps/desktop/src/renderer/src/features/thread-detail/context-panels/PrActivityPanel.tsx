@@ -220,6 +220,8 @@ export function PrActivityPanel({ desktopApi, thread }: {
           {events.slice(0, MAX_ROWS).map((event) => (
             <ActivityRow
               event={event}
+              threadTitles={snapshot?.threadTitles}
+              prUrls={snapshot?.prUrls}
               key={event.id}
               quiet={view === "budget"}
               showThreads={view !== "thread"}
@@ -270,6 +272,8 @@ function BudgetRow(props: { available?: number; capacity?: number; label: string
 
 function ActivityRow(props: {
   event: PrActivityEvent;
+  threadTitles?: Record<string, string>;
+  prUrls?: Record<string, string>;
   quiet: boolean;
   showThreads: boolean;
   /** A budget block whose cause the pause callout does not already trace. */
@@ -288,12 +292,24 @@ function ActivityRow(props: {
       <div className="pr-activity__event-body">
         <p className="pr-activity__message">{event.message}</p>
         <p className="pr-activity__meta">
-          {event.prKeys.map((key) => (
-            <span className="pr-activity__pr" key={key} title={key}>
-              {formatPrKey(key, props.showThreads)}
-            </span>
-          ))}
-          {props.quiet ? null : <span>{formatSource(event.source)}</span>}
+          <span>{formatSource(event.source)}</span>
+          {props.quiet && event.prKeys.length > 0 ? (
+            <span>{event.prKeys.length} {event.prKeys.length === 1 ? "PR" : "PRs"}</span>
+          ) : null}
+          {event.budget ? <BudgetDelta event={event} /> : null}
+          {event.prKeys.map((key) => {
+            const url = activityPrUrl(key, props.prUrls?.[key]);
+            return url ? (
+              <a className="pr-activity__pr" key={key} title={url}
+                href={url} target="_blank" rel="noopener noreferrer">
+                {formatPrKey(key, props.showThreads)}
+              </a>
+            ) : (
+              <span className="pr-activity__pr" key={key} title={key}>
+                {formatPrKey(key, props.showThreads)}
+              </span>
+            );
+          })}
           {event.repeats && event.repeats > 1 ? (
             <span
               className="pr-activity__repeats"
@@ -304,11 +320,10 @@ function ActivityRow(props: {
               ×{event.repeats} since {formatEventTime(event.firstOccurredAt ?? event.occurredAt)}
             </span>
           ) : null}
-          {event.budget ? <BudgetDelta event={event} /> : null}
         </p>
         {props.showThreads && event.threadKeys.length > 0 ? (
           <p className="pr-activity__meta pr-activity__threads">
-            {event.threadKeys.map((key) => <ActivityThread key={key} threadKey={key} />)}
+            {event.threadKeys.map((key) => <ActivityThread key={key} threadKey={key} title={props.threadTitles?.[key]} />)}
           </p>
         ) : null}
         {props.traceable && !props.quiet ? (
@@ -337,9 +352,12 @@ function BudgetDelta({ event }: { event: PrActivityEvent }) {
   const left = event.availableTokens !== undefined ? `${event.availableTokens} left` : undefined;
   // A block without a recorded balance says everything in its message.
   if (delta === 0 && !left) return null;
+  const tokenUnit = event.budget === "polling"
+    ? ` check token${Math.abs(delta) === 1 ? "" : "s"}`
+    : "";
   const label = delta === 0
     ? left
-    : [`${delta > 0 ? "+" : "−"}${Math.abs(delta)}`, left].filter(Boolean).join(" · ");
+    : [`${delta > 0 ? "+" : "−"}${Math.abs(delta)}${tokenUnit}`, left].filter(Boolean).join(" · ");
   const unit = event.budget === "repair" ? "repair" : "PR check";
   return (
     <span
@@ -355,18 +373,18 @@ function BudgetDelta({ event }: { event: PrActivityEvent }) {
  * A quiet text link rather than `ThreadChip`: across threads the same thread
  * repeats on most rows, and a filled chip per row outweighs the event itself.
  */
-function ActivityThread({ threadKey }: { threadKey: string }) {
+function ActivityThread({ threadKey, title: recordedTitle }: { threadKey: string; title?: string }) {
   const threadLinks = useThreadLinks();
   const identity = parseThreadIdentityKey(threadKey);
   const link = identity
     ? threadLinks?.resolve({ backend: identity.backend, threadId: identity.threadId })
     : undefined;
-  const title = link?.title.trim();
-  if (link && threadLinks && title) {
+  const title = recordedTitle?.trim() || link?.title.trim() || "Open thread";
+  if (link && threadLinks) {
     return (
       <button
         className="pr-activity__thread-link"
-        title={`${title}\nOpen thread`}
+        title={`${title}\n${threadKey}`}
         type="button"
         onClick={() => threadLinks.show(link)}
       >
@@ -374,7 +392,7 @@ function ActivityThread({ threadKey }: { threadKey: string }) {
       </button>
     );
   }
-  return <span className="pr-activity__thread" title={threadKey}>Thread not in this window</span>;
+  return <span className="pr-activity__thread" title={threadKey}>{recordedTitle || "Thread title unavailable"}</span>;
 }
 
 function isRoutineAdmission(event: PrActivityEvent): boolean {
@@ -383,6 +401,19 @@ function isRoutineAdmission(event: PrActivityEvent): boolean {
 
 function isBudgetBlock(event: PrActivityEvent): boolean {
   return event.budget === "repair" && event.delta === 0;
+}
+
+/** Prefer main's canonical URL; historical public-host keys remain usable. */
+function activityPrUrl(key: string, recordedUrl?: string): string | undefined {
+  if (recordedUrl) {
+    try {
+      const url = new URL(recordedUrl);
+      if ((url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password) return url.href;
+    } catch { /* Unknown historical URL: try the public-host key. */ }
+  }
+  const match = /^(github\.com|gitlab\.com)\/([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)$/.exec(key);
+  if (!match) return undefined;
+  return `https://${match[1]}/${match[2]}/${match[1] === "github.com" ? "pull" : "-/merge_requests"}/${match[3]}`;
 }
 
 /** `github.com/acme/widgets#128` → `#128`, or `acme/widgets#128` across threads. */
@@ -404,6 +435,9 @@ const SOURCE_LABELS: Record<string, string> = {
   "thread lookup (scheduled)": "Scheduled check",
   "thread lookup (post-turn)": "After turn",
   "background poll": "Background check",
+  "scheduled thread lookup": "Scheduled thread lookup",
+  "recovery refresh": "Recovery refresh",
+  "GitLab additional request": "GitLab follow-up request",
 };
 
 function formatSource(source: string): string {

@@ -53,11 +53,27 @@ export class PrActivityJournal {
     }
   }
 
-  snapshot(): PrActivitySnapshot {
+  snapshot(metadata?: {
+    threadTitle: (key: string) => string | undefined;
+    prUrl: (key: string) => string | undefined;
+  }): PrActivitySnapshot {
+    const threadTitles: Record<string, string> = {};
+    const prUrls: Record<string, string> = {};
+    if (metadata) {
+      for (const key of new Set(this.events.flatMap((event) => event.threadKeys))) {
+        const title = metadata.threadTitle(key)?.trim();
+        if (title) threadTitles[key] = title;
+      }
+      for (const key of new Set(this.events.flatMap((event) => event.prKeys))) {
+        const url = metadata.prUrl(key);
+        if (url) prUrls[key] = url;
+      }
+    }
     return {
       startedAt: this.startedAt,
       droppedEvents: this.dropped,
       events: this.events.slice().reverse(),
+      ...(metadata ? { threadTitles, prUrls } : {}),
     };
   }
 }

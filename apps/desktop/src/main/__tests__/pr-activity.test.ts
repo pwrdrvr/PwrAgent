@@ -91,3 +91,23 @@ describe("PR activity history", () => {
     expect(prRepairDecisionTone("not-actionable")).toBeUndefined();
   });
 });
+
+it("resolves each retained identity once per snapshot without retaining stale titles", () => {
+  const journal = new PrActivityJournal();
+  for (let i = 0; i < 2; i++) journal.record({ category: "budget", source: "background poll",
+    message: "PR check allowed", threadKeys: ["codex:one", "codex:missing"],
+    prKeys: ["git.example/acme/repo#1"], budget: "polling", delta: -1 });
+  let title = "Collapsed project thread";
+  const reads: string[] = [];
+  const metadata = {
+    threadTitle: (key: string) => { reads.push(key); return key === "codex:one" ? title : undefined; },
+    prUrl: () => "https://git.example/acme/repo/-/merge_requests/1",
+  };
+  expect(journal.snapshot(metadata)).toMatchObject({
+    threadTitles: { "codex:one": title },
+    prUrls: { "git.example/acme/repo#1": metadata.prUrl() },
+  });
+  expect(reads).toEqual(["codex:one", "codex:missing"]);
+  title = "Renamed thread";
+  expect(journal.snapshot(metadata).threadTitles).toEqual({ "codex:one": title });
+});

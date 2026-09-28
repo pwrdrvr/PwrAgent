@@ -5608,7 +5608,13 @@ class DesktopAppServerService {
 
   getPrActivity(): PrActivitySnapshot {
     return {
-      ...this.prActivity.snapshot(),
+      ...this.prActivity.snapshot({
+        threadTitle: (key) => {
+          const identity = parseThreadIdentityKey(key);
+          return identity ? getDesktopBackendRegistry().getCachedThreadSummary(identity)?.title : undefined;
+        },
+        prUrl: (key) => this.prStatusRegistry.get(key)?.pr.url,
+      }),
       monitoring: {
         backgroundPollingEnabled: this.backgroundPrPollingEnabled,
         autoFixAllowed: this.prAutoDispatchAllowed,

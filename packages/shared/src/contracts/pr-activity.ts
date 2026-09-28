@@ -32,6 +32,9 @@ export type PrActivitySnapshot = {
   startedAt: number;
   droppedEvents: number;
   events: PrActivityEvent[];
+  /** Main-owned cached metadata, deduplicated across the retained history. */
+  threadTitles?: Record<string, string>;
+  prUrls?: Record<string, string>;
   monitoring?: {
     backgroundPollingEnabled: boolean;
     autoFixAllowed: boolean;
