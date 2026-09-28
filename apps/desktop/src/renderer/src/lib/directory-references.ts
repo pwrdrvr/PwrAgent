@@ -61,10 +61,11 @@ function isReferenceable(directory: ReferenceDirectory): boolean {
 
 /**
  * Rank tracked directories for the `@` autocomplete: referenceable
- * entries whose label or path contains the query, most recently updated
- * first, capped at 10. Unlike the project picker (which filters within
- * its top 10 recents), the query searches the full tracked set so an
- * older project is still reachable by name.
+ * entries whose label or path contains the query. Project-name prefixes
+ * come before other matches; recency orders each group. Cap at 10 after
+ * ranking so newer path matches cannot hide an older name match. Unlike
+ * the project picker (which filters within its top 10 recents), the query
+ * searches the full tracked set so an older project is still reachable.
  */
 export function filterDirectoryReferenceCandidates<T extends ReferenceDirectory>(
   directories: T[],
@@ -85,7 +86,16 @@ export function filterDirectoryReferenceCandidates<T extends ReferenceDirectory>
         || tildifyPath(directory.path ?? "").toLowerCase().includes(trimmed)
       );
     })
-    .sort((left, right) => (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0))
+    .sort((left, right) => {
+      if (trimmed) {
+        const leftNamePrefix = left.label.toLowerCase().startsWith(trimmed);
+        const rightNamePrefix = right.label.toLowerCase().startsWith(trimmed);
+        if (leftNamePrefix !== rightNamePrefix) {
+          return leftNamePrefix ? -1 : 1;
+        }
+      }
+      return (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+    })
     .slice(0, CANDIDATE_LIMIT);
 }
 
