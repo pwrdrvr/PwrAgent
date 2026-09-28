@@ -13,10 +13,15 @@ import {
 import { shell } from "electron";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ErrorCode, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ConnectionRpcClient } from "./mcp-connection-rpc-client";
+import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
+  isAcpBackendId,
+  type AppServerBackendKind,
   type CreateMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
   type ListMcpConnectionToolsResponse,
@@ -37,7 +42,7 @@ import {
   type RuntimeLeaseHolder,
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { getAppStateMode } from "../state/app-state";
+import { getAppStateMode, getAppOverlayStore } from "../state/app-state";
 import {
   McpConnectionRegistry,
 } from "./mcp-connection-registry";
@@ -108,7 +113,7 @@ type BridgeRequest = {
 
 type BridgeResponse =
   | { ok: true; result: unknown }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: number; data?: unknown };
 
 type ProfileOwnership =
   | { owned: true }
@@ -145,6 +150,7 @@ type FetchLike = (
 ) => Promise<Response>;
 
 export type McpConnectionGatewayServiceOptions = {
+  readGatewaySelection?: (context: { backend: AppServerBackendKind; threadId: string }) => Promise<string[]>;
   bridgeEntryPath?: string;
   fetchFn?: FetchLike;
   openExternal?: (url: string) => Promise<void>;
@@ -400,6 +406,7 @@ function callbackHtmlHeaders(): Record<string, string> {
 }
 
 export class McpConnectionGatewayService {
+  private readonly readGatewaySelection: NonNullable<McpConnectionGatewayServiceOptions["readGatewaySelection"]>;
   private readonly bridgeEntryPath: string;
   private readonly fetchFn: FetchLike;
   private readonly openExternal: (url: string) => Promise<void>;
@@ -485,6 +492,8 @@ export class McpConnectionGatewayService {
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
+    this.readGatewaySelection = options.readGatewaySelection
+      ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
     this.bridgeEntryPath =
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
@@ -1035,8 +1044,13 @@ export class McpConnectionGatewayService {
       return this.registrationHandle(existing.token, existing.server, registrationKey);
     }
     await this.startBridgeServer();
+    // Another call may have registered this same scope during broker startup.
+    const started = registrationKey ? this.threadRegistrations.get(registrationKey) : undefined;
+    if (started && this.grants.has(started.token)) {
+      return this.registrationHandle(started.token, started.server, registrationKey);
+    }
     const token = randomBytes(32).toString("base64url");
-    this.grants.set(token, { connectionId });
+    this.grants.set(token, { connectionId, threadId });
     const socketPath = this.bridgeSocketPath;
     if (!socketPath) {
       this.grants.delete(token);
@@ -1047,6 +1061,27 @@ export class McpConnectionGatewayService {
       this.threadRegistrations.set(registrationKey, { server, token });
     }
     return this.registrationHandle(token, server, registrationKey);
+  }
+
+  /** Host callers authorize the live thread selection before entering this seam.
+   * The owner broker independently enforces credentials, availability and schema.
+   * Reuse the revocable connection transport, including across profile instances.
+   */
+  async requestGatewayToolOperation(params: {
+    connectionId: string;
+    scopeKey: string;
+    operation: "gateway/tools/list" | "gateway/tools/call";
+    invocation?: McpGatewayInvocation;
+    signal: AbortSignal;
+  }): Promise<McpGatewayTool[] | CallToolResult> {
+    params.signal.throwIfAborted();
+    const registration = await this.registerBridge(params.connectionId, params.scopeKey);
+    params.signal.throwIfAborted();
+    const rpc = new ConnectionRpcClient(
+      registration.server.env.PWRAGENT_MCP_CONNECTION_SOCKET,
+      registration.server.env.PWRAGENT_MCP_CONNECTION_TOKEN,
+    );
+    return await rpc.request(params.operation, params.invocation, params.signal) as McpGatewayTool[] | CallToolResult;
   }
 
   private registrationHandle(
@@ -1654,6 +1689,7 @@ export class McpConnectionGatewayService {
     token: string,
     connection: McpConnectionRecord,
   ): Promise<Client> {
+    const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
     const session = await this.connectUpstreamClient(connection, {
       clientName: `pwragent-${connection.id}-proxy`,
       // A session evicts itself when it actually dies. Leaving that to the
@@ -1666,6 +1702,13 @@ export class McpConnectionGatewayService {
         }
       },
     });
+    if (!this.grants.has(token)
+      || generation !== (this.toolInventoryGenerations.get(connection.id) ?? 0)
+      || !this.gatewayEnabled()
+      || !this.registry.get(connection.id)?.enabled) {
+      await session.client.close();
+      throw new Error("The MCP connection changed while its session was opening. Retry discovery.");
+    }
     this.upstreamSessions.set(token, session);
     return session.client;
   }
@@ -1704,6 +1747,9 @@ export class McpConnectionGatewayService {
       },
       { capabilities: {} },
     );
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      this.invalidateConnectionTools(connection.id);
+    });
     const onClose = options.onClose;
     if (onClose) client.onclose = () => onClose(client);
     try {
@@ -1747,6 +1793,9 @@ export class McpConnectionGatewayService {
    * Turning the gateway off has to end those too, not only forbid new ones.
    */
   async closeAllUpstreamSessions(): Promise<void> {
+    for (const connectionId of new Set([...this.grants.values()].map((grant) => grant.connectionId))) {
+      this.invalidateConnectionTools(connectionId);
+    }
     await Promise.all(
       [...this.upstreamSessions.keys()].map(
         async (token) => await this.closeUpstreamSession(token),
@@ -1755,6 +1804,8 @@ export class McpConnectionGatewayService {
   }
 
   private async closeConnectionSessions(connectionId: string): Promise<void> {
+    // Invalidate before awaiting close, including sessions still opening.
+    this.invalidateConnectionTools(connectionId);
     await Promise.all(
       [...this.grants.entries()]
         .filter(([, grant]) => grant.connectionId === connectionId)
@@ -1898,7 +1949,11 @@ export class McpConnectionGatewayService {
         errorName: error instanceof Error ? error.name : "Error",
         operation: request.op,
       });
-      this.respond(socket, { ok: false, error: message });
+      this.respond(socket, {
+        ok: false,
+        error: message,
+        ...(error instanceof McpError ? { code: error.code, data: error.data } : {}),
+      });
     }
   }
 
@@ -2091,6 +2146,70 @@ export class McpConnectionGatewayService {
     throw new Error("Unsupported MCP owner broker operation.");
   }
 
+  private async requireGatewaySelection(grant: BridgeGrant): Promise<void> {
+    let scope: unknown;
+    try { scope = JSON.parse(grant.threadId ?? ""); } catch { /* fail closed below */ }
+    if (!Array.isArray(scope) || scope.length !== 3 || scope[0] !== "gateway"
+      || typeof scope[1] !== "string" || (scope[1] !== "codex" && !isAcpBackendId(scope[1]))
+      || typeof scope[2] !== "string" || !scope[2]) {
+      throw new Error("This bridge is not bound to a gateway thread.");
+    }
+    const selected = await this.readGatewaySelection({ backend: scope[1], threadId: scope[2] });
+    if (!selected.includes(grant.connectionId)) throw new Error("This connection is no longer selected for the calling thread.");
+  }
+
+  private async readGatewayCatalog(
+    token: string,
+    grant: BridgeGrant,
+    client: Client,
+    signal?: AbortSignal,
+  ): Promise<McpGatewayTool[]> {
+    const connection = this.requireAvailableConnection(grant.connectionId);
+    const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
+    const deadline = Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
+    const tools: McpGatewayTool[] = [];
+    const names = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    let bytes = 0;
+    for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+      signal?.throwIfAborted();
+      const timeout = deadline - Date.now();
+      if (timeout <= 0) throw new Error("MCP tool discovery timed out.");
+      const result = await client.listTools(cursor ? { cursor } : undefined, { signal, timeout });
+      for (const definition of result.tools) {
+        bytes += Buffer.byteLength(JSON.stringify(definition));
+        if (bytes > 2 * 1024 * 1024 || tools.length >= 2_000) {
+          throw new Error("The MCP catalog exceeds the discovery size limit.");
+        }
+        if (names.has(definition.name)) throw new Error("The MCP server returned duplicate tool names.");
+        names.add(definition.name);
+        tools.push({
+          connectionId: connection.id,
+          serverName: connection.displayName,
+          toolName: definition.name,
+          schemaRevision: gatewayToolRevision(token, generation, definition),
+          definition,
+        });
+      }
+      cursor = result.nextCursor;
+      if (!cursor) break;
+      if (cursors.has(cursor) || page === MAX_TOOL_LIST_PAGES - 1) {
+        throw new Error("The MCP catalog could not be completely paged.");
+      }
+      cursors.add(cursor);
+    }
+    await this.requireGatewaySelection(grant);
+    signal?.throwIfAborted();
+    this.requireAvailableConnection(grant.connectionId);
+    if (this.grants.get(token) !== grant
+      || generation !== (this.toolInventoryGenerations.get(connection.id) ?? 0)
+      || this.upstreamSessions.get(token)?.client !== client) {
+      throw new Error("The MCP connection changed during discovery. Search again.");
+    }
+    return tools;
+  }
+
   private async dispatchBridgeOperation(
     token: string,
     grant: BridgeGrant,
@@ -2098,11 +2217,34 @@ export class McpConnectionGatewayService {
     params: unknown,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    if (operation === "gateway/tools/list" || operation === "gateway/tools/call") {
+      await this.requireGatewaySelection(grant);
+      signal?.throwIfAborted();
+    }
     const client = await this.ensureUpstreamClient(token, grant);
     const values = params && typeof params === "object"
       ? params as Record<string, unknown>
       : {};
     switch (operation) {
+      case "gateway/tools/list":
+        return await this.readGatewayCatalog(token, grant, client, signal);
+      case "gateway/tools/call": {
+        const catalog = await this.readGatewayCatalog(token, grant, client, signal);
+        const tool = catalog.find((entry) => entry.toolName === values.toolName);
+        if (!tool || values.connectionId !== grant.connectionId) {
+          throw new McpError(ErrorCode.InvalidParams, "The selected MCP tool is no longer available. Search again.");
+        }
+        if (tool.schemaRevision !== values.schemaRevision) {
+          throw new McpError(ErrorCode.InvalidParams, "The MCP tool schema or authorization changed. Search again before calling.");
+        }
+        if (!values.arguments || typeof values.arguments !== "object" || Array.isArray(values.arguments)) {
+          throw new McpError(ErrorCode.InvalidParams, "Tool arguments must be an object.");
+        }
+        validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
+        signal?.throwIfAborted();
+        return await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
+          undefined, { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS });
+      }
       case "describe": {
         const capabilities = client.getServerCapabilities();
         return {

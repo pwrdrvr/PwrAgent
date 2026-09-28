@@ -9,6 +9,7 @@ import {
 } from "../mcp-connections/mcp-connection-broker-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import {
   McpConnectionGatewayService,
 } from "../mcp-connections/mcp-connection-gateway-service";
@@ -47,6 +48,7 @@ describe("MCP connection owner broker", () => {
     const settings = createSettings();
     const owner = new McpConnectionGatewayService({
       bridgeEntryPath: "/owner/mcp-connection-bridge.js",
+      readGatewaySelection: async () => [id],
       brokerDiscovery: discovery,
       leaseManager: new RuntimeLeaseManager({
         cwd: "/tmp/PwrAgnt-owner",
@@ -114,6 +116,23 @@ describe("MCP connection owner broker", () => {
       expect(first.server.env.PWRAGENT_MCP_CONNECTION_TOKEN)
         .toBe(second.server.env.PWRAGENT_MCP_CONNECTION_TOKEN);
       expect(JSON.stringify(first.server)).not.toContain("owner-only");
+      const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "owner fixture" }] }));
+      Object.assign(owner, { connectUpstreamClient: async () => ({
+        client: {
+          listTools: async () => ({ tools: [{ name: "late_tool", inputSchema: { type: "object" } }] }),
+          callTool, close: async () => undefined,
+        },
+        transport: { close: async () => undefined },
+      }) });
+      const gateway = { connectionId: connection.id, scopeKey: JSON.stringify(["gateway", "codex", "gateway-fixture"]), signal: new AbortController().signal };
+      const catalog = await viewer.requestGatewayToolOperation({ ...gateway, operation: "gateway/tools/list" }) as McpGatewayTool[];
+      expect(catalog[0].toolName).toBe("late_tool");
+      await viewer.requestGatewayToolOperation({ ...gateway, operation: "gateway/tools/call", invocation: { ...catalog[0], arguments: {} } });
+      expect(callTool).toHaveBeenCalledOnce();
+      await owner.setConnectionEnabled(connection.id, false);
+      await expect(viewer.requestGatewayToolOperation({ ...gateway, operation: "gateway/tools/call", invocation: { ...catalog[0], arguments: {} } }))
+        .rejects.toThrow("not available");
+      expect(callTool).toHaveBeenCalledOnce();
       first.revoke();
     } finally {
       await viewer.close();

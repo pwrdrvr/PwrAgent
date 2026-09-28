@@ -715,6 +715,7 @@ export type MessagingDynamicToolCategory =
   | "app_management"
   | "thread_orchestration"
   | "messaging_context"
+  | "mcp_connections"
   | "star_map";
 
 /**
@@ -758,6 +759,7 @@ export function permissionForDynamicTool(
       return "tools.thread_orchestration";
     case "automation_inspection":
     case "app_management":
+    case "mcp_connections":
       return "tools.instance_management";
     case "messaging_context":
       if (tool === "rename_current_messaging_conversation") {

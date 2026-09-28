@@ -326,6 +326,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           callId: String(extra.requestId),
           tool: request.params.name,
           args: request.params.arguments,
+          signal: extra.signal,
         });
       },
     );

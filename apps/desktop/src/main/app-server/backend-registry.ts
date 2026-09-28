@@ -515,6 +515,10 @@ import {
 import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import { buildPwrAgentToolSearchDefinition, withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";
+import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
+import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import type { McpGatewayInvocation } from "../mcp-connections/mcp-gateway-catalog";
 import {
   getTokenMiserBridgeDescriptorPath,
   TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
@@ -7502,6 +7506,7 @@ export type BackendRegistryMcpConnectionService =
       | "listConnections"
       | "createConnection"
       | "probeConnection"
+      | "requestGatewayToolOperation"
     >
   >;
 
@@ -9001,6 +9006,7 @@ export class DesktopBackendRegistry {
     version?: string;
   }>;
   private readonly mcpConnectionService?: BackendRegistryMcpConnectionService;
+  private readonly mcpGatewayTools?: McpGatewayToolService;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -9556,6 +9562,21 @@ export class DesktopBackendRegistry {
       options?.acpAvailableCommandProbeBudgetMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
+    const gatewayConnections = this.mcpConnectionService;
+    if (gatewayConnections?.requestGatewayToolOperation) {
+      this.mcpGatewayTools = new McpGatewayToolService({
+        connections: { requestGatewayToolOperation: (params) => gatewayConnections.requestGatewayToolOperation!(params) },
+        selectedConnections: async (context) => {
+          if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("MCP gateway tools require an active turn on the owning thread.");
+          const denied = this.dynamicToolPermissionDenied(context.backend, "mcp_connections", {
+            ...context, tool: "call_mcp_tool",
+          });
+          if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
+          return (await this.readThreadMcpConnections(context)).connectionIds;
+        },
+        approve: (invocation, context, signal) => this.approveGatewayInvocation(invocation, context, signal),
+      });
+    }
     if (this.tokenMiserStore) {
       void this.initializeTokenMiserLedger();
     }
@@ -9585,6 +9606,7 @@ export class DesktopBackendRegistry {
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 federationHandler: this.federationHandler,
+                mcpGatewayTools: this.mcpGatewayTools,
                 mcpConnectionHandler: async (request) =>
                   await this.handleAgentMcpConnectionRequest(request),
                 messagingHandler: this.messagingHandler,
@@ -15524,6 +15546,7 @@ export class DesktopBackendRegistry {
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
       federationHandler: this.federationHandler,
+      mcpGatewayTools: this.mcpGatewayTools,
       mcpConnectionHandler: async (request) =>
         await this.handleAgentMcpConnectionRequest(request),
       messagingHandler: this.messagingHandler,
@@ -19018,6 +19041,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.mcpGatewayTools?.cancel(params.backend, params.threadId, params.turnId);
     const review = this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
@@ -21057,6 +21081,7 @@ export class DesktopBackendRegistry {
   async setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
+    this.mcpGatewayTools?.cancel(request.backend, request.threadId);
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
@@ -23318,6 +23343,7 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    this.mcpGatewayTools?.cancel();
     this.closed = true;
     // `closed` rejects observations that enter from this point forward. The
     // snapshot was registered synchronously at each earlier usage emit's
@@ -23810,6 +23836,7 @@ export class DesktopBackendRegistry {
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
         federationHandler: this.federationHandler,
+        mcpGatewayTools: this.mcpGatewayTools,
         mcpConnectionHandler: async (request) =>
           await this.handleAgentMcpConnectionRequest(request),
         messagingHandler: this.messagingHandler,
@@ -32728,6 +32755,15 @@ export class DesktopBackendRegistry {
       )]);
       return await router.handleDynamicToolCall({ backend, call: hostToolCall });
     }
+    const gatewayRouter = new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools));
+    if (hostToolCall && gatewayRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (backend !== "codex" || !this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "MCP gateway tools require an active turn on the owning thread." });
+      }
+      const enabled = await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall);
+      return await new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools, enabled ? this.tokenMiserStore : undefined))
+        .handleDynamicToolCall({ backend, call: hostToolCall });
+    }
     const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
       async (connectionRequest) =>
         await this.handleAgentMcpConnectionRequest(connectionRequest),
@@ -33204,6 +33240,54 @@ export class DesktopBackendRegistry {
           },
         );
       });
+    });
+  }
+
+  private async approveGatewayInvocation(
+    invocation: McpGatewayInvocation,
+    context: AgentToolCallContext,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    signal.throwIfAborted();
+    const requestId = `mcp-gateway:${randomUUID()}`;
+    const notification: AppServerPendingRequestNotification = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: context.threadId,
+        turnId: context.turnId,
+        requestId,
+        serverName: invocation.serverName,
+        mode: "form",
+        message: `Allow ${invocation.serverName} / ${invocation.toolName} for this call?\nConnection: ${invocation.connectionId}\nArguments:\n${JSON.stringify(invocation.arguments, null, 2)}`,
+        requestedSchema: { type: "object", properties: {} },
+        _meta: null,
+      },
+    };
+    // Host-owned, once-only consent. Do not route this through ACP's blanket
+    // Full Access permission shortcut or persist an approval for the wrapper.
+    if (this.findHeadlessAutomationTurnForRequest(context.backend, notification)) return false;
+    const key = buildPendingRequestKey({ ...context, requestId });
+    return await new Promise<boolean>((resolve, reject) => {
+      const finish = (approved: boolean, error?: unknown): void => {
+        signal.removeEventListener("abort", aborted);
+        this.pendingServerRequests.delete(key);
+        if (error) reject(error);
+        else resolve(approved);
+      };
+      const aborted = (): void => {
+        finish(false, signal.reason);
+        void this.emit({ backend: context.backend, notification: {
+          method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
+        } }).catch(() => undefined);
+      };
+      this.pendingServerRequests.set(key, {
+        backend: context.backend, notification,
+        resolve: (response) => finish(Boolean(response && "action" in response && response.action === "accept")),
+        reject: (error) => finish(false, error),
+      });
+      signal.addEventListener("abort", aborted, { once: true });
+      if (signal.aborted) { aborted(); return; }
+      void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
   }
 
@@ -40397,6 +40481,7 @@ export class DesktopBackendRegistry {
       // Most turns still have a buffered usage line. Include the end time in
       // its pending batch so completion does not require a second commit.
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
+      this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
       if (completedTurnId) {
         const dynamicCallPrefix = [
           event.backend,

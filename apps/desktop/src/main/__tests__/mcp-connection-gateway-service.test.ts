@@ -12,6 +12,8 @@ import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registr
 import * as appState from "../state/app-state";
 import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
 import { PwrGitConnectionService } from "../mcp-connections/pwrgit-connection-service";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 
 function createSettings(initial?: string) {
   let credential = initial;
@@ -76,6 +78,102 @@ afterEach(async () => {
 });
 
 describe("McpConnectionGatewayService", () => {
+  it("serves a changing full catalog and validates calls over the revocable socket", async () => {
+    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    services.push(service);
+    let requiredType = "string";
+    const listTools = vi.fn(async () => ({ tools: [{ name: "lookup", inputSchema: {
+      type: "object", required: ["id"], properties: { id: { type: requiredType } }, additionalProperties: false,
+    } }] }));
+    const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "fixture" }] }));
+    const connectUpstreamClient = vi.fn(async () => ({ client: { listTools, callTool, close: vi.fn(async () => undefined) }, transport: { close: vi.fn(async () => undefined) } }));
+    Object.assign(service, { connectUpstreamClient });
+    const base = { connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture-thread-a"]), signal: new AbortController().signal };
+    const first = await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }) as McpGatewayTool[];
+    const other = await service.requestGatewayToolOperation({ ...base, scopeKey: JSON.stringify(["gateway", "codex", "fixture-thread-b"]), operation: "gateway/tools/list" }) as McpGatewayTool[];
+    expect(first[0].definition.inputSchema.properties).toEqual({ id: { type: "string" } });
+    expect(first[0].schemaRevision).not.toEqual(other[0].schemaRevision);
+    expect(connectUpstreamClient).toHaveBeenCalledTimes(2);
+    const invocation = { ...first[0], arguments: { id: "fixture" } };
+    await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation });
+    expect(callTool).toHaveBeenCalledOnce();
+    requiredType = "number";
+    await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation })).rejects.toThrow("schema or authorization changed");
+    expect(callTool).toHaveBeenCalledOnce();
+    const updated = await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }) as McpGatewayTool[];
+    await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation: { ...updated[0], arguments: { id: "wrong" } } })).rejects.toThrow("validated");
+    callTool.mockRejectedValueOnce(new McpError(-32042, "fixture failure", { retry: false }));
+    await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation: { ...updated[0], arguments: { id: 4 } } })).rejects.toMatchObject({ code: -32042, data: { retry: false } });
+    let selected = true;
+    Object.assign(service, { readGatewaySelection: async () => selected ? ["pwrsnap"] : [] });
+    listTools.mockImplementationOnce(async () => { selected = false; return { tools: [] }; });
+    const beforeRevocation = callTool.mock.calls.length;
+    await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation: { ...updated[0], arguments: { id: 4 } } })).rejects.toThrow("no longer selected");
+    expect(callTool).toHaveBeenCalledTimes(beforeRevocation);
+    await service.setConnectionEnabled("pwrsnap", false);
+    await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation })).rejects.toThrow("not available");
+  });
+
+  it("rejects repeated pagination cursors instead of approving an incomplete catalog", async () => {
+    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    services.push(service);
+    const listTools = vi.fn(async () => ({ tools: [], nextCursor: "same" }));
+    Object.assign(service, { connectUpstreamClient: async () => ({ client: { listTools, close: vi.fn(async () => undefined) }, transport: { close: vi.fn(async () => undefined) } }) });
+    await expect(service.requestGatewayToolOperation({ connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture"]), operation: "gateway/tools/list", signal: new AbortController().signal }))
+      .rejects.toThrow("completely paged");
+    expect(listTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates cancellation without closing the shared session", async () => {
+    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    services.push(service);
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let cancelled!: () => void;
+    const aborted = new Promise<void>((resolve) => { cancelled = resolve; });
+    const close = vi.fn(async () => undefined);
+    const listTools = vi.fn(async () => ({ tools: [{ name: "lookup", inputSchema: { type: "object" } }] }));
+    const callTool = vi.fn(async (args: { arguments?: Record<string, unknown> }, _schema: unknown, options: { signal: AbortSignal }) => {
+      if (args.arguments?.wait) return await new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => { cancelled(); reject(options.signal.reason); }, { once: true });
+        entered();
+      });
+      return { content: [{ type: "text", text: "sibling completed" }] };
+    });
+    Object.assign(service, { connectUpstreamClient: async () => ({ client: { listTools, callTool, close }, transport: { close } }) });
+    const controller = new AbortController();
+    const base = { connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture"]), signal: controller.signal };
+    const [tool] = await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }) as McpGatewayTool[];
+    const waiting = service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation: { ...tool, arguments: { wait: true } } });
+    const rejected = expect(waiting).rejects.toThrow("cancelled");
+    await started;
+    controller.abort();
+    await rejected;
+    await aborted;
+    expect(close).not.toHaveBeenCalled();
+    await expect(service.requestGatewayToolOperation({ ...base, signal: new AbortController().signal, operation: "gateway/tools/call", invocation: { ...tool, arguments: {} } }))
+      .resolves.toMatchObject({ content: [{ type: "text", text: "sibling completed" }] });
+  });
+
+  it("does not resurrect a session whose authorization changed during connection", async () => {
+    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    services.push(service);
+    let opened!: () => void;
+    let release!: () => void;
+    const opening = new Promise<void>((resolve) => { opened = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const close = vi.fn(async () => undefined);
+    Object.assign(service, { connectUpstreamClient: async () => { opened(); await gate; return { client: { close }, transport: { close } }; } });
+    const read = service.requestGatewayToolOperation({ connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture"]), operation: "gateway/tools/list", signal: new AbortController().signal });
+    const rejected = expect(read).rejects.toThrow("changed while its session was opening");
+    await opening;
+    await service.setConnectionEnabled("pwrsnap", false);
+    await service.setConnectionEnabled("pwrsnap", true);
+    release();
+    await rejected;
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("does not claim or publish a profile broker during bootstrap, including PwrGit status reads", async () => {
     const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("bootstrap");
     const acquire = vi.fn();

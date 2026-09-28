@@ -328,6 +328,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "mcp-gateway-discovery-and-invocation": {
+    "commits": 0,
+    "note": "Fixed MCP gateway discovery and one scoped approved call use in-memory catalogs and the existing event flow, with no additional SQLite commits.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "mcp-token-rotation": {
     "commits": 1,
     "note": "persist one encrypted rotated MCP credential generation",

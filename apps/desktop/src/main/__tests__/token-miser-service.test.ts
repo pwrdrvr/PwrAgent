@@ -10,6 +10,8 @@ import {
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { buildPwrAgentToolSearchDefinition } from "../agent-tools/pwragent-tool-search";
+import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
+import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import type {
   TokenMiserCodeModeOutputPayload,
   TokenMiserPostToolUsePayload,
@@ -291,6 +293,31 @@ describe("TokenMiserService", () => {
     expect(generateSummary).not.toHaveBeenCalled();
     expect(await store.listMetadata()).toEqual([]);
     expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+  });
+
+  it.each(["direct", "code-mode"])("preserves exact external MCP schemas on the %s path", async (mode) => {
+    const store = await createStore();
+    store.startTurn("thread-1", "turn-1");
+    const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "must not run" }));
+    const reducer = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    const definition = { name: "lookup", description: "Schema documentation. ".repeat(200), inputSchema: { type: "object" as const, properties: { id: { type: "string" } } } };
+    const gateway = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: async () => [{ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", definition }] },
+      selectedConnections: async () => ["one"], approve: async () => false,
+    });
+    const search = buildMcpGatewayToolDefinitions(gateway, store)[0];
+    const response = await search.dispatch({ query: "lookup" }, { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" });
+    const output = response.contentItems?.[0];
+    if (output?.type !== "inputText") throw new Error("Expected exact schema output");
+    expect(output.text).toContain(JSON.stringify(definition.inputSchema));
+    expect(output.text.length).toBeGreaterThan(4_000);
+    if (mode === "direct") {
+      expect(await reducer.preparePostToolUse({ ...payload(output.text), tool_name: "pwragent__search_mcp_tools", tool_input: { query: "lookup" } })).toBeUndefined();
+    } else {
+      expect(await reducer.prepareCodeModeOutput(codeModePayload([{ type: "input_text", text: output.text }]))).toBeUndefined();
+    }
+    expect(generateSummary).not.toHaveBeenCalled();
+    expect(await store.listMetadata()).toEqual([]);
   });
 
   it.each(["modified", "forged", "other-thread", "stale", "mixed"])(
