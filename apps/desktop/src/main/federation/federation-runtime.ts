@@ -1,4 +1,4 @@
-import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD } from "./federation-file-pull";
+import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "./federation-file-pull";
 import { app } from "electron";
 import {
   FederationFilePushReceiver,
@@ -2926,13 +2926,8 @@ export class DesktopFederationRuntime {
     registerFilePushHandlers(router, this.filePushReceiver);
     const filePullReader = new FederationFilePullReader({
       permissions: () => this.receiverPermissions(),
-      resolveThread: async (backend, threadId) => {
-        const threads = await getDesktopBackendRegistry().listThreads({
-          backend,
-          callerReason: "federation-file-pull",
-        });
-        return threads.find((thread) => thread.id === threadId);
-      },
+      resolveThread: (backend, threadId) =>
+        resolveFilePullThread(getDesktopBackendRegistry(), backend, threadId),
     });
     router.registerHandler(FILE_PULL_MARKDOWN_METHOD, (envelope) => filePullReader.readMarkdown(envelope.params));
     this.ptyService = new FederationPtyService({

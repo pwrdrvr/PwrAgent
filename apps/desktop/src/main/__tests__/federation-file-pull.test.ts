@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
-import { FederationFilePullReader, FILE_PULL_MAX_BYTES, FILE_PULL_MARKDOWN_METHOD } from "../federation/federation-file-pull";
+import { FederationFilePullReader, FILE_PULL_MAX_BYTES, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "../federation/federation-file-pull";
 
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
@@ -33,6 +33,52 @@ describe("Federation file pull", () => {
   it("reads an owner-resolved thread file without writing a copy", async () => {
     expect(await pull(path.join(directory, "report.md"))).toEqual({ path: path.join(directory, "report.md"), content: "# Owner report\n" });
     expect(resolveThread).toHaveBeenCalledWith("codex", "owner-thread");
+  });
+
+  it("continues authorized previews after the owning thread is archived", async () => {
+    const registry = {
+      resolveThread: vi.fn(async () => thread),
+      listThreads: vi.fn(async () => [thread!]),
+    };
+    reader = new FederationFilePullReader({
+      permissions: () => permissions,
+      resolveThread: (backend, threadId) => resolveFilePullThread(registry, backend, threadId),
+    });
+    const filePath = path.join(directory, "report.md");
+    expect((await pull(filePath)).content).toContain("Owner report");
+    expect(registry.resolveThread).toHaveBeenCalledWith(identity);
+    expect(registry.listThreads).not.toHaveBeenCalled();
+
+    thread!.archivedAt = Date.now();
+    registry.resolveThread.mockResolvedValue(undefined);
+    expect((await pull(filePath)).content).toContain("Owner report");
+    expect(registry.listThreads).toHaveBeenCalledWith({
+      backend: "codex",
+      archived: true,
+      forceRefresh: true,
+      enrichDirectories: false,
+      callerReason: "federation-file-pull",
+    });
+
+    const outside = path.join(root, "outside.md");
+    await writeFile(outside, "outside");
+    await expect(pull(outside)).rejects.toThrow("outside the thread");
+    permissions.filePull = false;
+    await expect(pull(filePath)).rejects.toThrow("File pull is disabled");
+  });
+
+  it("rejects archived threads with a different identity and truly missing threads", async () => {
+    const registry = {
+      resolveThread: vi.fn(async () => undefined),
+      listThreads: vi.fn(async () => [{ ...thread!, id: "different-thread" }]),
+    };
+    reader = new FederationFilePullReader({
+      permissions: () => permissions,
+      resolveThread: (backend, threadId) => resolveFilePullThread(registry, backend, threadId),
+    });
+    await expect(pull(path.join(directory, "report.md"))).rejects.toThrow("thread was not found");
+    registry.listThreads.mockResolvedValue([]);
+    await expect(pull(path.join(directory, "report.md"))).rejects.toThrow("thread was not found");
   });
 
   it("reads through an authenticated gateway relay and enforces owner permissions", async () => {

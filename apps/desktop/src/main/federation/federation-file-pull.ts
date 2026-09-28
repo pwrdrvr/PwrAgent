@@ -7,6 +7,8 @@ import {
   type ReadMarkdownFileResponse,
 } from "@pwragent/shared";
 
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 export const FILE_PULL_MARKDOWN_METHOD = "file.pull.markdown";
 export const FILE_PULL_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -14,6 +16,25 @@ type Options = {
   permissions: () => { filePull: boolean; filePullOutsideThreadDirectories: boolean };
   resolveThread: (backend: AppServerThreadSummary["source"], threadId: string) => Promise<AppServerThreadSummary | undefined>;
 };
+
+/** Resolve ownership for both current and archived threads. Refresh the archive
+ * on a miss so archiving a thread does not break an already-open file viewer. */
+export async function resolveFilePullThread(
+  registry: Pick<DesktopBackendRegistry, "resolveThread" | "listThreads">,
+  backend: AppServerThreadSummary["source"],
+  threadId: string,
+): Promise<AppServerThreadSummary | undefined> {
+  const thread = await registry.resolveThread({ backend, threadId });
+  if (thread) return thread;
+  const archivedThreads = await registry.listThreads({
+    backend,
+    archived: true,
+    forceRefresh: true,
+    enrichDirectories: false,
+    callerReason: "federation-file-pull",
+  });
+  return archivedThreads.find((candidate) => candidate.source === backend && candidate.id === threadId);
+}
 
 /** Owner-side authorization. Paths and directory membership supplied by the
  * viewer are never trusted. Reads are bounded and create no persistent copy. */
