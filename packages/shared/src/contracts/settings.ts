@@ -1126,6 +1126,8 @@ export type DesktopSettingsSnapshot = {
     codexToolDiscovery?: DesktopSettingsValue<boolean>;
     /** Opt-in focused questions over retained output; independent of ordinary gating. */
     tokenMiserFocusedSummariesEnabled?: DesktopSettingsValue<boolean>;
+    /** Opt-in helper review for ambiguous poll-shaped parent activity. */
+    tokenMiserPollingReviewsEnabled?: DesktopSettingsValue<boolean>;
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
@@ -1416,6 +1418,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
+    tokenMiserPollingReviewsEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     /** Legacy round-trip field; per-review runMode now selects the engine. */

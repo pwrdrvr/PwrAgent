@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AppServerNotification } from "@pwragent/shared";
-import { MonitorJobSuggestionDetector } from "../app-server/monitor-job-suggestion";
+import {
+  buildMonitorJobHeuristicPrompt,
+  MonitorJobHeuristicDetector,
+  MonitorJobSuggestionDetector,
+  parseMonitorJobHeuristicDecision,
+} from "../app-server/monitor-job-suggestion";
 import { toolInvocationFromNotification } from "../app-server/tool-invocation-accounting";
 
 function record(index: number, command = "gh run view 123 --repo owner/repo --json status", turnId = "turn-1", now = index * 120_000) {
@@ -134,5 +139,96 @@ describe("monitor job suggestions", () => {
     expect(polls.map((poll) => detector.observe(poll))).toEqual([false, false, true]);
     detector.clear("codex", "thread-1");
     expect(polls.map((poll) => detector.observe({ ...poll, category: "shell" }))).toEqual([false, false, false]);
+  });
+
+  it("unwraps Code Mode polling through the ordinary suggestion detector", () => {
+    const detector = new MonitorJobSuggestionDetector();
+    const polls = [0, 1, 2].map((index) => ({
+      ...record(index, undefined, "turn-1", index * 30_000),
+      toolName: "exec",
+      category: "polling" as const,
+      normalizedCommand: "poll session 27324",
+    }));
+    expect(polls.map((poll) => detector.observe(poll)))
+      .toEqual([false, false, true]);
+  });
+
+  it("produces one bounded helper review for ambiguous poll-shaped execs", () => {
+    const detector = new MonitorJobHeuristicDetector();
+    detector.observeAssistantMessage({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      observedAt: 5_000,
+      text: "The benchmark is still running; I am checking it again.",
+    });
+    let evidence;
+    for (let index = 0; index < 5; index++) {
+      evidence = detector.observeInvocation({
+        invocation: {
+          ...record(index, undefined, "turn-1", index * 20_000),
+          toolName: "exec",
+          category: "unknown",
+          normalizedCommand: "exec",
+        },
+        inputPreview: "await checkBenchmarkStatus();",
+      }) ?? evidence;
+    }
+    expect(evidence).toMatchObject({
+      signature: "exec:exec",
+      invocations: expect.arrayContaining([
+        expect.objectContaining({ inputPreview: "await checkBenchmarkStatus();" }),
+      ]),
+      assistantMessages: [
+        expect.objectContaining({ text: expect.stringContaining("still running") }),
+      ],
+    });
+    expect(detector.observeInvocation({
+      invocation: {
+        ...record(6, undefined, "turn-1", 120_000),
+        toolName: "exec",
+        category: "unknown",
+        normalizedCommand: "exec",
+      },
+    })).toBeUndefined();
+    expect(buildMonitorJobHeuristicPrompt(evidence!))
+      .toContain("untrusted evidence");
+  });
+
+  it("keeps rapid or varied tool activity out of the helper review", () => {
+    const rapid = new MonitorJobHeuristicDetector();
+    for (let index = 0; index < 10; index++) {
+      expect(rapid.observeInvocation({
+        invocation: {
+          ...record(index, undefined, "turn-1", index * 1_000),
+          toolName: "exec",
+          category: "unknown",
+          normalizedCommand: "exec",
+        },
+      })).toBeUndefined();
+    }
+    const varied = new MonitorJobHeuristicDetector();
+    for (let index = 0; index < 10; index++) {
+      expect(varied.observeInvocation({
+        invocation: {
+          ...record(index, undefined, "turn-1", index * 20_000),
+          toolName: "exec",
+          category: "unknown",
+          normalizedCommand: `exec ${index}`,
+        },
+      })).toBeUndefined();
+    }
+  });
+
+  it("accepts only complete helper decisions", () => {
+    expect(parseMonitorJobHeuristicDecision({
+      decision: "suggest_monitor",
+      reason: "Repeated status checks.",
+    })).toEqual({
+      decision: "suggest_monitor",
+      reason: "Repeated status checks.",
+    });
+    expect(parseMonitorJobHeuristicDecision({ decision: "continue" }))
+      .toBeUndefined();
   });
 });

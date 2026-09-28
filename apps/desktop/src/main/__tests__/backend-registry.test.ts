@@ -24963,6 +24963,85 @@ command = "pnpm dev"
     }
   });
 
+  it.each([
+    { decision: "continue" as const, expectedSteers: 0 },
+    { decision: "suggest_monitor" as const, expectedSteers: 1 },
+  ])("uses the Token Miser helper model to review ambiguous polling: $decision", async ({
+    decision,
+    expectedSteers,
+  }) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const generateStructuredObject = vi.fn(async (_params: Record<string, unknown>) => ({
+      status: "ok" as const,
+      object: {
+        decision,
+        reason: decision === "suggest_monitor"
+          ? "Repeated checks of one long-running benchmark."
+          : "The calls are productive incremental work.",
+      },
+      model: "gpt-6-luna",
+    }));
+    Object.assign(codexClient, { generateStructuredObject });
+    const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
+    const claim = vi.fn(() => true);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: { ...overlayStore, claimMonitorJobSuggestion: claim },
+      resolveTokenMiserEnabled: () => true,
+      resolveTokenMiserPollingReviewsEnabled: () => true,
+    });
+    try {
+      const turn = await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Run the benchmark" }],
+      });
+      const steer = vi.spyOn(registry, "steerTurn");
+      const record = (registry as unknown as {
+        recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
+      }).recordToolInvocationAccounting.bind(registry);
+      const now = vi.spyOn(Date, "now");
+      for (let index = 0; index < 5; index++) {
+        now.mockReturnValue(1_000_000 + index * 20_000);
+        await record({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: turn.turnId,
+              item: {
+                id: `ambiguous-${index}`,
+                type: "functionCall",
+                name: "exec",
+                status: "completed",
+                arguments: {
+                  input: "const status = await inspectBenchmark(); text(status);",
+                },
+                functionCallOutput: "still running",
+              },
+            },
+          },
+        } as AgentEvent);
+      }
+      now.mockRestore();
+      await vi.waitFor(() => expect(generateStructuredObject).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(expectedSteers));
+      expect(generateStructuredObject).toHaveBeenCalledWith(expect.objectContaining({
+        reasoningEffort: "medium",
+        disableExecution: true,
+        prompt: expect.stringContaining("inspectBenchmark"),
+      }));
+      expect(generateStructuredObject.mock.calls[0]?.[0]).not.toHaveProperty("model");
+      expect(claim).toHaveBeenCalledTimes(expectedSteers);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.close();
+    }
+  });
+
   it("steers Codex turns through the single client and surfaces its error", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
