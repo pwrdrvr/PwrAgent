@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import Ajv from "ajv";
-import Ajv2019 from "ajv/dist/2019";
-import Ajv2020 from "ajv/dist/2020";
+import Ajv2019 from "ajv/dist/2019.js";
+import Ajv2020 from "ajv/dist/2020.js";
 import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
 export type McpGatewaySource = {
