@@ -11,11 +11,15 @@ describe("MarkdownFilesWindow", () => {
     window.location.hash = "";
   });
 
-  it("renders the selected markdown file with thread and project context", async () => {
+  it.each([false, true])("renders the selected markdown file with local or remote context: %s", async (remote) => {
+    const federationTarget = remote ? { scope: "remote" as const, instanceId: "owner" } : undefined;
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
     window.location.hash = "#files/codex%3Athread-1";
     const snapshotResponse: ReadMarkdownFileViewerSnapshotResponse = {
       snapshot: {
         context: {
+          federationTarget,
+          thread,
           key: "codex:thread-1",
           title: "Files - Slack-to-Agent automation plan",
           threadTitle: "Slack-to-Agent automation plan",
@@ -67,6 +71,8 @@ describe("MarkdownFilesWindow", () => {
         contextKey: "codex:thread-1",
       });
       expect(readMarkdownFile).toHaveBeenCalledWith({
+        ...(remote ? { federationTarget } : {}),
+        thread,
         path: "/repo/PwrAgent/docs/plan.md",
       });
     });
@@ -75,6 +81,7 @@ describe("MarkdownFilesWindow", () => {
 
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
+        ...(remote ? { federationTarget } : {}),
         applicationId: "vscode",
         kind: "editor",
         targetPath: "/repo/PwrAgent/src/foo.ts",

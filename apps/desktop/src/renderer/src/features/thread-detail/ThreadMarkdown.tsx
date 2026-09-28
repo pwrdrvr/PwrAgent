@@ -815,7 +815,11 @@ function MarkdownDocumentModal(props: {
       };
     }
 
-    void readMarkdownFile({ path: props.target.path })
+    void readMarkdownFile({
+      path: props.target.path,
+      thread: props.fileViewerContext?.thread,
+      federationTarget: props.fileViewerContext?.federationTarget,
+    })
       .then((response) => {
         if (cancelled) return;
         if (response.error || response.content === undefined) {
@@ -839,7 +843,7 @@ function MarkdownDocumentModal(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.desktopApi, props.target.path]);
+  }, [props.desktopApi, props.target.path, props.fileViewerContext]);
 
   if (typeof document === "undefined") {
     return null;

@@ -8,7 +8,7 @@ import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 describe("desktop config [federation] section", () => {
   it.each([true, false])("round-trips receiver permissions %s", (allowed) => {
     const original = '# Preserve me\n[federation]\nmode = "dual"\n';
-    const federation = { allowRemoteShells: allowed, allowFilePush: allowed, filePushDirectory: "/tmp/incoming" };
+    const federation = { allowRemoteShells: allowed, allowFilePush: allowed, allowFilePull: allowed, allowFilePullOutsideThreadDirectories: allowed, filePushDirectory: "/tmp/incoming" };
     const written = applyTomlEdits(original, desktopSettingsPatchToEdits({ federation }));
     expect(written).toContain("# Preserve me");
     expect(parseDesktopSettingsToml(written, "test.toml").federation).toMatchObject({ ...federation, mode: "dual" });

@@ -11,6 +11,8 @@ export function scopeDesktopApiToFederationTarget(
   const setThreadAgent = desktopApi.setThreadAgent;
   const setThreadTokenMiser = desktopApi.setThreadTokenMiser;
   const openApplication = desktopApi.openApplication;
+  const readMarkdownFile = desktopApi.readMarkdownFile;
+  const openMarkdownFileViewer = desktopApi.openMarkdownFileViewer;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
   const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
   const listWorktreeUnpublishedCommits =
@@ -65,8 +67,22 @@ export function scopeDesktopApiToFederationTarget(
     openPwrGitDownload: undefined,
     openPath: undefined,
     revealPath: undefined,
-    readMarkdownFile: undefined,
-    openMarkdownFileViewer: undefined,
+    readMarkdownFile: readMarkdownFile
+      ? async (request) => await readMarkdownFile({ ...request, federationTarget })
+      : undefined,
+    openMarkdownFileViewer: openMarkdownFileViewer
+      ? async (request) => await openMarkdownFileViewer({
+          ...request,
+          context: {
+            ...request.context,
+            key: request.context.federationTarget?.scope === "remote"
+              && request.context.federationTarget.instanceId === federationTarget.instanceId
+              ? request.context.key
+              : `remote:${federationTarget.instanceId}:${request.context.key}`,
+            federationTarget,
+          },
+        })
+      : undefined,
     readMarkdownFileViewerSnapshot: undefined,
     onMarkdownFileViewerSnapshotChanged: undefined,
   };

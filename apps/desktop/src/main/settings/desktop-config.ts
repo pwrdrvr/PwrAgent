@@ -172,6 +172,8 @@ export type DesktopSettingsConfig = {
     compressionEnabled?: boolean;
     allowRemoteShells?: boolean;
     allowFilePush?: boolean;
+    allowFilePull?: boolean;
+    allowFilePullOutsideThreadDirectories?: boolean;
     filePushDirectory?: string;
     publicUrl?: string;
     gatewayUrl?: string;
@@ -1039,6 +1041,12 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.federation?.allowFilePush !== undefined) {
     set(["federation", "allow_file_push"], patch.federation.allowFilePush);
+  }
+  if (patch.federation?.allowFilePull !== undefined) {
+    set(["federation", "allow_file_pull"], patch.federation.allowFilePull);
+  }
+  if (patch.federation?.allowFilePullOutsideThreadDirectories !== undefined) {
+    set(["federation", "allow_file_pull_outside_thread_directories"], patch.federation.allowFilePullOutsideThreadDirectories);
   }
   if (patch.federation?.filePushDirectory !== undefined) {
     const directory = patch.federation.filePushDirectory.trim();
@@ -1915,6 +1923,8 @@ function normalizeDesktopConfig(
       compressionEnabled: readBoolean(federation?.compression_enabled),
       allowRemoteShells: readBoolean(federation?.allow_remote_shells),
       allowFilePush: readBoolean(federation?.allow_file_push),
+      allowFilePull: readBoolean(federation?.allow_file_pull),
+      allowFilePullOutsideThreadDirectories: readBoolean(federation?.allow_file_pull_outside_thread_directories),
       filePushDirectory: readString(federation?.file_push_directory),
       publicUrl: readString(federation?.public_url),
       gatewayUrl: readString(federation?.gateway_url),

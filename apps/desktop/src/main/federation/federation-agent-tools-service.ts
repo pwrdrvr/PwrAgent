@@ -688,7 +688,7 @@ async function localInstanceDescriptor(
     // listener, not this instance's ability to take work.
     status: "connected",
     capabilities: [...FEDERATION_CAPABILITIES],
-    receiverPermissions: { remoteShells: federation.allowRemoteShells !== false, filePush: federation.allowFilePush === true },
+    receiverPermissions: { remoteShells: federation.allowRemoteShells !== false, filePush: federation.allowFilePush === true, filePull: federation.allowFilePull === true, filePullOutsideThreadDirectories: federation.allowFilePullOutsideThreadDirectories === true },
     role: health.role,
     notes: federation.instanceNotes?.trim() || undefined,
     icon: health.localCelestialIcon,
