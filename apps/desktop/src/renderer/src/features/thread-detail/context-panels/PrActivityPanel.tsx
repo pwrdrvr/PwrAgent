@@ -39,7 +39,9 @@ export function PrActivityPanel({ desktopApi, thread }: {
     && (!beforeEvent || event.id < beforeEvent.id)
   ) ?? [];
   const latestBudget = (kind: "polling" | "repair"): PrActivityEvent | undefined =>
-    snapshot?.events.find((event) => event.budget === kind);
+    snapshot?.events.find((event) =>
+      event.budget === kind && event.availableTokens !== undefined
+    );
 
   return (
     <section className="context-panel__section pr-activity">

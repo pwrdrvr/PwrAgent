@@ -52,3 +52,22 @@ it("shows the global pause even when no new checks have run", async () => {
   } }) }} thread={thread} />);
   expect(await screen.findByText(/Auto-fix is paused by the repair budget/)).toBeInTheDocument();
 });
+
+it.each([
+  { message: "Thread busy: token refunded", delta: 1, balance: 7 },
+  { message: "Repair blocked: profile budget paused", delta: 0, balance: 0 },
+])("retains the last recorded balance after $message", async ({ message, delta, balance }) => {
+  const history: PrActivitySnapshot = {
+    ...snapshot,
+    events: [
+      { ...snapshot.events[2]!, id: 5, message, delta },
+      { ...snapshot.events[1]!, id: 4, budget: "polling", availableTokens: 29 },
+      { ...snapshot.events[1]!, id: 3, availableTokens: balance },
+      { ...snapshot.events[1]!, id: 2, availableTokens: 12 },
+    ],
+  };
+  render(<PrActivityPanel desktopApi={{ getPrActivity: async () => history }} thread={thread} />);
+  await screen.findByText(message);
+  expect(screen.getByText("Repair tokens").nextElementSibling).toHaveTextContent(String(balance));
+  expect(screen.getByText("PR request tokens").nextElementSibling).toHaveTextContent("29");
+});
