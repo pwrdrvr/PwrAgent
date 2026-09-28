@@ -34558,14 +34558,9 @@ export class DesktopBackendRegistry {
           : {}),
         ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
       };
-      const input = [
-        { type: "text" as const, text: prompt },
-        ...this.getTurnInputAttachments({
-          backend: request.context.backend,
-          threadId: request.context.threadId,
-          turnId: sourceTurnId,
-        }),
-      ];
+      // Follow-up messages carry only the requested prompt. Copying the source
+      // turn's attachments here makes images bounce back with every reply.
+      const input = [{ type: "text" as const, text: prompt }];
       const messageOrigin = await this.buildAgentMessageOrigin({
         backend: request.context.backend,
         threadId: request.context.threadId,
@@ -34959,11 +34954,6 @@ export class DesktopBackendRegistry {
         ? {
             input: [
               { type: "text" as const, text: request.args.prompt },
-              ...this.getTurnInputAttachments({
-                backend: request.context.backend,
-                threadId: request.context.threadId,
-                turnId: sourceTurnId,
-              }),
             ],
           }
         : {}),
