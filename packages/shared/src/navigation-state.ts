@@ -365,7 +365,7 @@ export function buildNavigationSnapshot(params: {
   };
 }
 
-export function buildNavigationSnapshotHash(params: {
+export function serializeNavigationSnapshotForHash(params: {
   backend: AppServerBackendScope;
   directories?: NavigationSnapshot["directories"];
   launchpadDefaults?: NavigationLaunchpadDefaults;

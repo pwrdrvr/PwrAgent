@@ -8,6 +8,7 @@ import {
   resolveTokenUsagePriceUnavailableReason,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
 import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
 import { getNativeBinding } from "./native-binding.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
@@ -17,7 +18,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 65;
+export const CURRENT_STATE_DB_USER_VERSION = 66;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1837,6 +1838,16 @@ export class StateDb {
         db.transaction(() => {
           db.exec(STORAGE_RETENTION_SCHEMA);
           db.pragma("user_version = 65");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 66) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 66) return;
+          // Earlier builds of the unmerged metadata-index PR also used v65.
+          // Converge those profiles with the retention schema shipped at v65.
+          if (!tableExists(db, "thread_storage_retention")) db.exec(STORAGE_RETENTION_SCHEMA);
+          if (tableExists(db, "backends")) db.exec(NAVIGATION_BACKEND_METADATA_SCHEMA);
+          db.pragma("user_version = 66");
         }).immediate();
       }
       // Keep current-version databases converged without asking pre-v36 profiles

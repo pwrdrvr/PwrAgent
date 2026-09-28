@@ -6,7 +6,7 @@ import type {
 } from "../contracts/navigation";
 import type { AppServerThreadSummary } from "../contracts/normalized-app-server";
 import {
-  buildNavigationSnapshotHash,
+  serializeNavigationSnapshotForHash,
   materializeNavigationThreads,
 } from "../navigation-state";
 
@@ -31,7 +31,7 @@ const hoverCardFields: Array<{ field: HoverCardField; value: number }> = [
   { field: "closedAt", value: 1_723_291_200_000 },
 ];
 
-describe("buildNavigationSnapshotHash", () => {
+describe("serializeNavigationSnapshotForHash", () => {
   it.each(hoverCardFields)(
     "changes when PR hover-card field $field changes",
     ({ field, value }) => {
@@ -44,11 +44,11 @@ describe("buildNavigationSnapshotHash", () => {
 
   it("changes when the Token Miser override changes", () => {
     const thread = navigationThread({ tokenMiserEnabled: false });
-    const baseline = buildNavigationSnapshotHash({
+    const baseline = serializeNavigationSnapshotForHash({
       backend: "codex",
       threads: [thread],
     });
-    const changed = buildNavigationSnapshotHash({
+    const changed = serializeNavigationSnapshotForHash({
       backend: "codex",
       threads: [{ ...thread, tokenMiserEnabled: true }],
     });
@@ -58,11 +58,11 @@ describe("buildNavigationSnapshotHash", () => {
 
   it("changes when the monitor job suggestion override changes", () => {
     const thread = navigationThread({ monitorJobSuggestionsEnabled: false });
-    const baseline = buildNavigationSnapshotHash({
+    const baseline = serializeNavigationSnapshotForHash({
       backend: "codex",
       threads: [thread],
     });
-    const changed = buildNavigationSnapshotHash({
+    const changed = serializeNavigationSnapshotForHash({
       backend: "codex",
       threads: [{ ...thread, monitorJobSuggestionsEnabled: true }],
     });
@@ -90,7 +90,7 @@ describe("materializeNavigationThreads", () => {
       expect(threads[0]?.agent).toBeUndefined();
       expect(threads[0]?.agentChange).toEqual(change ? { enabled: true, ...(change.error ? { error: change.error } : {}) } : undefined);
       expect(JSON.stringify(threads[0]?.agentChange) ?? "").not.toContain("Fixture instructions");
-      return buildNavigationSnapshotHash({ backend: "codex", threads });
+      return serializeNavigationSnapshotForHash({ backend: "codex", threads });
     });
     expect(new Set(hashes).size).toBe(3);
   });
@@ -137,7 +137,7 @@ describe("materializeNavigationThreads", () => {
 });
 
 function buildHash(pr: PrSummary): string {
-  return buildNavigationSnapshotHash({
+  return serializeNavigationSnapshotForHash({
     backend: "codex",
     threads: [
       {
