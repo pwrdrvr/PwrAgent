@@ -5362,7 +5362,16 @@ describe("app server ipc", () => {
       allowCancelledRearm: false,
     })));
     const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({});
-    expect(activity).toMatchObject({ events: expect.arrayContaining([expect.objectContaining({ category: "check", source: `thread lookup (${trigger})` })]) });
+    expect(activity).toMatchObject({
+      events: expect.arrayContaining([expect.objectContaining({
+        category: "check", source: `thread lookup (${trigger})`, tone: "error",
+        message: "Merge conflict, checks passing",
+      })]),
+      monitoring: {
+        pollingBudget: { capacity: 20, refillPerMinute: 20 },
+        repairBudget: expect.objectContaining({ capacity: expect.any(Number) }),
+      },
+    });
   });
 
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {

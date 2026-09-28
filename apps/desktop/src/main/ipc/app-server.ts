@@ -382,7 +382,13 @@ import {
   buildPrRepositoryKey,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
-import { PrActivityJournal, describePrRepairDecision } from "../pr-status/pr-activity";
+import {
+  PrActivityJournal,
+  describePrCheck,
+  describePrRepairDecision,
+  prCheckTone,
+  prRepairDecisionTone,
+} from "../pr-status/pr-activity";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -1205,13 +1211,13 @@ class PrStatusTokenBucket {
 
   get availableTokens(): number { return Math.floor(this.tokens); }
 
+  /** The balance a take at `now` would see, without spending or refilling. */
+  peek(now = Date.now()): number {
+    return Math.floor(this.refilled(now));
+  }
+
   tryTake(now = Date.now()): boolean {
-    const elapsedMs = Math.max(0, now - this.updatedAt);
-    this.tokens = Math.min(
-      PR_STATUS_TOKEN_BUCKET_CAPACITY,
-      this.tokens +
-        (elapsedMs * PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE) / 60_000,
-    );
+    this.tokens = this.refilled(now);
     this.updatedAt = now;
 
     if (this.tokens < 1) {
@@ -1220,6 +1226,15 @@ class PrStatusTokenBucket {
 
     this.tokens -= 1;
     return true;
+  }
+
+  private refilled(now: number): number {
+    const elapsedMs = Math.max(0, now - this.updatedAt);
+    return Math.min(
+      PR_STATUS_TOKEN_BUCKET_CAPACITY,
+      this.tokens +
+        (elapsedMs * PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE) / 60_000,
+    );
   }
 }
 
@@ -4577,8 +4592,8 @@ class DesktopAppServerService {
       if (claim.skippedReason) {
         this.prActivity.record({ category: "check", source: `thread lookup (${trigger})`,
           threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
-          prKeys: params.previousPrs.map(getPrStatusKey),
-          message: `Check deferred: ${claim.skippedReason}${claim.nextAllowedInMs !== undefined ? `; eligible in ${Math.ceil(claim.nextAllowedInMs / 1000)} seconds` : ""}` });
+          prKeys: params.previousPrs.map(getPrStatusKey), tone: "warning",
+          message: `Check postponed: ${claim.skippedReason}${claim.nextAllowedInMs !== undefined ? `; eligible in ${Math.ceil(claim.nextAllowedInMs / 1000)} seconds` : ""}` });
         if (trigger === "user") {
           logDebug("threadPullRequestsRefresh:skipped", {
             ...userPrRefreshLogPayload({
@@ -4632,7 +4647,7 @@ class DesktopAppServerService {
         if (canonical.length === 0) this.prActivity.record({
           category: "check", source: `thread lookup (${trigger})`,
           threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)], prKeys: [],
-          message: incomplete ? "Partial check: no PR status returned" : "Checked: no PR found for this branch",
+          message: incomplete ? "Partial check: no PR status returned" : "No PR for this branch",
         });
         this.recordPrCheck(canonical, `thread lookup (${trigger})`, incomplete, [
           buildThreadIdentityKey(params.backend, params.request.threadId),
@@ -4668,7 +4683,8 @@ class DesktopAppServerService {
           source: `thread lookup (${trigger})`,
           threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
           prKeys: params.previousPrs.map(getPrStatusKey),
-          message: "PR lookup failed; see application log for details",
+          tone: "error",
+          message: "PR lookup failed; see the application log for details",
         });
         appServerLog.warn("background PR lookup refresh failed", {
           threadId: params.request.threadId,
@@ -5546,7 +5562,8 @@ class DesktopAppServerService {
       threadKeys,
       delta: admitted ? -1 : 0,
       availableTokens: this.prStatusTokenBucket.availableTokens,
-      message: admitted ? "PR request admitted" : "PR request deferred: polling budget empty",
+      ...(admitted ? {} : { tone: "warning" as const }),
+      message: admitted ? "PR check allowed" : "PR check postponed: request budget empty",
     });
     return admitted;
   }
@@ -5558,6 +5575,15 @@ class DesktopAppServerService {
         backgroundPollingEnabled: this.backgroundPrPollingEnabled,
         autoFixAllowed: this.prAutoDispatchAllowed,
         repairBudgetPaused: this.prAutoDispatchBudgetPaused,
+        pollingBudget: {
+          availableTokens: this.prStatusTokenBucket.peek(),
+          capacity: PR_STATUS_TOKEN_BUCKET_CAPACITY,
+          refillPerMinute: PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
+        },
+        repairBudget: {
+          capacity: this.prAutoDispatchBudgetConfig.capacity,
+          refillPerMinute: this.prAutoDispatchBudgetConfig.refillPerMinute,
+        },
       },
     };
   }
@@ -5689,6 +5715,7 @@ class DesktopAppServerService {
       onPollUnavailable: (targets, failed) => {
         for (const target of targets) this.prActivity.record({
           category: "check", source: "background poll", threadKeys: target.threadKeys, prKeys: [target.prKey],
+          tone: failed ? "error" : "warning",
           message: failed ? "PR check failed; retry on next poll" : "No fresh status returned; provider may be unavailable or cooling down",
         });
       },
@@ -5972,7 +5999,8 @@ class DesktopAppServerService {
         source,
         threadKeys,
         prKeys: [prKey],
-        message: `${incomplete ? "Partial check" : "Checked"}: merge ${pr.mergeState ?? "unknown"}, checks ${pr.checkState ?? "unknown"}`,
+        tone: prCheckTone(pr),
+        message: describePrCheck(pr, incomplete),
       });
     }
   }
@@ -6006,13 +6034,14 @@ class DesktopAppServerService {
           source: "Auto-fix",
           prKeys: [prKey],
           threadKeys: [...(this.primaryPrThreadsByKey.get(prKey) ?? [])],
+          tone: "warning",
           message: "Not scheduled: no eligible thread owns Auto-fix for this PR",
         });
       }
       for (const outcome of outcomes) {
         const budgetBlocked = outcome.status === "gate-off" && this.prAutoDispatchBudgetPaused;
         const reason = outcome.status === "gate-off"
-          ? budgetBlocked ? "Repair blocked: profile budget paused"
+          ? budgetBlocked ? "Repair blocked: budget paused"
             : !this.backgroundPrPollingEnabled ? "Background polling is off" : "Auto-fix is disabled globally"
           : describePrRepairDecision(outcome.status);
         this.prActivity.record({
@@ -6020,6 +6049,7 @@ class DesktopAppServerService {
           source: "Auto-fix",
           prKeys: [prKey],
           threadKeys: [outcome.threadKey],
+          tone: prRepairDecisionTone(outcome.status),
           message: reason,
           ...(budgetBlocked ? { budget: "repair" as const, delta: 0 } : {}),
         });

@@ -7,6 +7,7 @@ import type {
   PrAutoDispatchBudgetStatus,
   PrSummary,
   PrActivityEvent,
+  PrActivityTone,
   ThreadOverlayState,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
@@ -26,6 +27,7 @@ import type {
   PrAutoDispatchRecoveryResult,
   PrAutoDispatchScheduleResult,
 } from "../state/overlay-store-sqlite";
+import { describePrRepairDecision } from "./pr-activity";
 import { isTerminalPullRequest } from "./pr-derivations";
 
 export const MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT = 2;
@@ -438,10 +440,15 @@ export class PrAutoDispatchCoordinator {
     const record = await this.options.store.getThreadPrAutoDispatchPending(identity);
     if (!record || record.pending.fingerprint !== fingerprint) return;
 
-    const activity = (message: string, budget?: { delta: number; availableTokens?: number }): void => {
+    const activity = (
+      message: string,
+      tone?: PrActivityTone,
+      budget?: { delta: number; availableTokens?: number },
+    ): void => {
       this.options.onActivity?.({
         category: budget ? "budget" : "repair", source: "Auto-fix",
         threadKeys: [this.threadKey(identity)], prKeys: [record.pending.prKey], message,
+        ...(tone ? { tone } : {}),
         ...(budget ? { budget: "repair" as const, ...budget } : {}),
       });
     };
@@ -464,7 +471,7 @@ export class PrAutoDispatchCoordinator {
         now: this.now(),
         status: "deferred",
       });
-      activity("Waiting for running checks to finish");
+      activity("Waiting for running checks to finish", "warning");
       await this.notifyPending(identity, null);
       return;
     }
@@ -494,7 +501,7 @@ export class PrAutoDispatchCoordinator {
       ownerId: this.ownerId,
     });
     if (begin.status !== "ready") {
-      activity(`Repair not started: ${begin.status}`);
+      activity(describePrRepairDecision(begin.status), "warning");
       if (begin.status === "disabled") {
         await this.options.store.cancelThreadPrAutoDispatch({
           ...identity,
@@ -520,8 +527,9 @@ export class PrAutoDispatchCoordinator {
       now: this.now(),
       ownerId: this.ownerId,
     });
-    activity(reservation.status === "reserved" ? "Reserved one repair token"
-      : `Repair blocked: budget ${reservation.status}`, {
+    activity(reservation.status === "reserved" ? "Used a repair"
+      : `Repair blocked: budget ${reservation.status}`,
+    reservation.status === "reserved" ? undefined : "warning", {
       delta: reservation.status === "reserved" ? -1 : 0,
       availableTokens: reservation.budget.availableTokens,
     });
@@ -572,11 +580,11 @@ export class PrAutoDispatchCoordinator {
       });
       if (submission.status === "busy") {
         if (await this.restoreAfterBusy(identity, fingerprint, now)) {
-          activity("Thread busy: refunded repair token; retry in 30 seconds", { delta: 1 });
+          activity("Thread busy: repair refunded, retrying in 30 seconds", "warning", { delta: 1 });
         }
         return;
       }
-      activity(`Repair started (attempt ${begin.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT})`);
+      activity(`Repair started (attempt ${begin.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT})`, "active");
       const completion = await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
         budgetConfig: this.budgetConfig(),
@@ -599,8 +607,8 @@ export class PrAutoDispatchCoordinator {
         status: "failed",
         now: this.now(),
       });
-      activity(completion ? "Repair submission failed: token refunded" : "Repair submission failed; claim ownership changed",
-        completion ? { delta: 1, availableTokens: completion.budget.availableTokens } : undefined);
+      activity(completion ? "Repair submission failed: repair refunded" : "Repair submission failed; claim ownership changed",
+        "error", completion ? { delta: 1, availableTokens: completion.budget.availableTokens } : undefined);
       if (completion?.budget.paused) {
         await this.notifyBudgetStatus(completion.budget);
       }
