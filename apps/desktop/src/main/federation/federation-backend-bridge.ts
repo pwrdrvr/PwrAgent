@@ -538,7 +538,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
-  [FEDERATION_BACKEND_METHODS.analyzeUsageActivity]: "thread_detail",
+  // Starts a paid helper turn on the owner; transcript-read permission is insufficient.
+  [FEDERATION_BACKEND_METHODS.analyzeUsageActivity]: "turn_control",
   [FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",

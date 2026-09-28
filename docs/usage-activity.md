@@ -11,7 +11,8 @@ ledger, not a billing or subscription-quota report.
   superseded rows do not contribute.
 - Boundary-crossing, unfinished and unattributed rows remain inspectable in
   a separate table. Their whole-row prices are never assigned to the window
-  or prorated. Missing records do not imply zero usage.
+  or prorated. A missing completion remains an open interval even when its
+  last ledger update predates the window. Missing records do not imply zero usage.
 - Cached input remains separate from uncached input. Cache-write tokens are
   a subset of uncached input; reasoning tokens are a subset of output.
   Unpriced rows contribute tokens, but not a fabricated dollar estimate.
@@ -22,14 +23,16 @@ ledger, not a billing or subscription-quota report.
   repricing writes. The read returns at most 5,000 recent candidate rows for
   windows up to 31 days. Four owner reads may run concurrently. Capped results,
   unavailable peers and older peers lacking the RPC are reported as partial
-  coverage. Remote reads use the existing `thread_detail` capability.
+  coverage. Remote reads use the existing `thread_detail` capability. Titles
+  are fetched for the bounded result through the search-document identity index.
 - Account rate-limit snapshots are the owner's last observed Codex account
   buckets. They may be stale and are never summed across owners or attributed
   to threads. The available account usage/rate-limit contracts do not establish
   a per-thread subscription quota conversion.
 
 **Select a thread → Analyze thread** makes one explicit model call on the selected row's
-owner, defaulting to GPT-6-Luna. The owner supplies its available Codex model
+owner, defaulting to GPT-6-Luna. Remote analysis requires `turn_control`;
+transcript-read permission alone cannot start this model call. The owner supplies its available Codex model
 choices. Analysis uses one recent protocol page (at most ten turns), then
 selects the newest entries within the operator's 1–100 entry and
 1,000–40,000 character bounds. The UI offers conservative presets. The recent
