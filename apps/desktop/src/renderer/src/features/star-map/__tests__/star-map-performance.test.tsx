@@ -255,7 +255,8 @@ describe("star map idle performance", () => {
       "offsetHeight",
       "get",
     );
-    const { container, rerender } = render(screen([thread("a"), thread("b")]));
+    const desktopApi = buildDesktopApi();
+    const { container, rerender } = render(screen([thread("a"), thread("b")], desktopApi));
     await waitFor(() => {
       expect(container.querySelectorAll("[data-thread-key]")).toHaveLength(2);
     });
@@ -281,8 +282,7 @@ describe("star map idle performance", () => {
     await waitFor(() => {
       expect(shells[1].style.top).toBe("292px");
     });
-    rerender(screen([thread("a"), thread("b")]));
+    rerender(screen([thread("a"), thread("b")], desktopApi));
     expect(offsetHeight).not.toHaveBeenCalled();
   });
 });
-

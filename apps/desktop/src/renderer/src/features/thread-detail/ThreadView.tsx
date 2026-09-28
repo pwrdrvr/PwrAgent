@@ -842,6 +842,7 @@ export type ThreadViewProps = {
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
   tokenMiserDefaultEnabled?: boolean;
+  monitorJobSuggestionsDefaultEnabled?: boolean;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -3699,6 +3700,7 @@ export function ThreadView(props: ThreadViewProps) {
                 pdfAnalysisEnabled={props.pdfAnalysisEnabled}
                 tokenMiserEnabled={props.tokenMiserEnabled}
                 tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
+                monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
                 fullAccessRiskWarningDismissed={
                   props.fullAccessRiskWarningDismissed
                 }
@@ -4116,6 +4118,7 @@ export function ThreadView(props: ThreadViewProps) {
             pdfAnalysisEnabled={props.pdfAnalysisEnabled}
             tokenMiserEnabled={props.tokenMiserEnabled}
             tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
+            monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}

@@ -41,6 +41,53 @@ function makeDependencies(params: {
 }
 
 describe("image normalization", () => {
+  it("allows event-loop work while decode is pending and retains the eventual image", async () => {
+    type DecodedImage = Awaited<ReturnType<ImageNormalizationDependencies["decodeImage"]>>;
+    let finishDecode!: (image: DecodedImage) => void;
+    const decodeResult = new Promise<DecodedImage>((resolve) => {
+      finishDecode = resolve;
+    });
+    const close = vi.fn();
+    const dependencies = makeDependencies({ decode: () => decodeResult });
+    const normalized = normalizeImageFile(
+      new File([new Uint8Array([1, 2, 3])], "delayed.png", { type: "image/png" }),
+      { dependencies },
+    );
+    const settled = vi.fn();
+    void normalized.then(settled);
+
+    // This exercises a pending asynchronous decoder, not a blocked native
+    // clipboard read. No system clipboard or real decoder is involved.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(settled).not.toHaveBeenCalled();
+    expect(dependencies.readBlobAsDataUrl).not.toHaveBeenCalled();
+
+    finishDecode({ width: 1024, height: 1024, draw: vi.fn(), close });
+    await expect(normalized).resolves.toMatchObject({
+      dataUrl: "data:image/png;base64,AQID",
+      original: { name: "delayed.png", size: 3 },
+      width: 1024,
+      height: 1024,
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("releases the decoded image when encoding fails", async () => {
+    const close = vi.fn();
+    const failure = new Error("injected encoder failure");
+    const dependencies = makeDependencies({
+      decode: async () => ({ width: 2880, height: 1920, draw: vi.fn(), close }),
+      encode: async () => { throw failure; },
+    });
+
+    await expect(normalizeImageFile(
+      new File([new Uint8Array([1, 2, 3])], "capture.png", { type: "image/png" }),
+      { dependencies },
+    )).rejects.toBe(failure);
+    expect(close).toHaveBeenCalledOnce();
+    expect(dependencies.readBlobAsDataUrl).not.toHaveBeenCalled();
+  });
+
   it("keeps square 1024 images unchanged", () => {
     expect(calculateBoundedImageDimensions({ width: 1024, height: 1024 })).toEqual({
       width: 1024,

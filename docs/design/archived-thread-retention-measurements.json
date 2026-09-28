@@ -1,0 +1,6150 @@
+{
+  "discovery": {
+    "source": "Codex App Server thread/list; sourceKinds=[]; useStateDbOnly=true",
+    "observedAt": 1790529726.52109,
+    "seconds": 0.44535979197826236,
+    "requests": [
+      {
+        "archived": true,
+        "pages": 11,
+        "responseBytes": 2360834,
+        "seconds": 0.1215159579878673,
+        "count": 1034
+      },
+      {
+        "archived": false,
+        "pages": 6,
+        "responseBytes": 2119319,
+        "seconds": 0.05549662502016872,
+        "count": 521
+      }
+    ]
+  },
+  "preparation": {
+    "migration": {
+      "ms": 192.723625,
+      "wal": {
+        "frames": 403,
+        "unique": 403,
+        "repeated": 0,
+        "commits": 1,
+        "bytes": 1660392
+      },
+      "rows": 1155
+    },
+    "sqlite": "3.53.2",
+    "pragmas": {
+      "page_size": 4096,
+      "page_count": 78652,
+      "freelist_count": 0,
+      "auto_vacuum": 2,
+      "cache_size": -16000,
+      "cache_spill": 3871,
+      "secure_delete": 0
+    },
+    "candidateCount": 911,
+    "discoveryLocalMs": 183.71029100000004,
+    "inventory": [
+      {
+        "table": "thread_usage_boundaries",
+        "rows": 2299,
+        "logicalBytes": 649811
+      },
+      {
+        "table": "thread_usage_lines",
+        "rows": 2907,
+        "logicalBytes": 1613836
+      },
+      {
+        "table": "thread_usage_turns",
+        "rows": 2905,
+        "logicalBytes": 798399
+      },
+      {
+        "table": "thread_tool_invocation_alerts",
+        "rows": 127,
+        "logicalBytes": 284828
+      },
+      {
+        "table": "thread_tool_invocations",
+        "rows": 59654,
+        "logicalBytes": 36397325
+      },
+      {
+        "table": "thread_tool_analysis",
+        "rows": 1,
+        "logicalBytes": 73
+      },
+      {
+        "table": "thread_compactions",
+        "rows": 25,
+        "logicalBytes": 8109
+      },
+      {
+        "table": "thread_message_origins",
+        "rows": 1324,
+        "logicalBytes": 820027
+      },
+      {
+        "table": "thread_pricing_summaries",
+        "rows": 528,
+        "logicalBytes": 58621
+      },
+      {
+        "table": "token_miser_objects",
+        "rows": 3083,
+        "logicalBytes": 4099155
+      },
+      {
+        "table": "token_miser_observations",
+        "rows": 9677,
+        "logicalBytes": 6079571
+      }
+    ],
+    "logicalBytes": {
+      "n": 911,
+      "p50": 16662,
+      "p95": 307228,
+      "max": 1720124
+    },
+    "overlayBytes": {
+      "n": 911,
+      "p50": 10299,
+      "p95": 65857,
+      "max": 392374
+    },
+    "top10LogicalBytes": [
+      1720124,
+      1378472,
+      1083066,
+      1078641,
+      896583,
+      888880,
+      796082,
+      771519,
+      753620,
+      750955
+    ],
+    "integrity": "ok"
+  },
+  "rebuild": {
+    "policy": "explicit approved tool-detail removal only; all metadata and accounting retained",
+    "phases": [
+      {
+        "name": "schema",
+        "ms": 3.0203750000000014,
+        "checkpointBeforeMs": 0.20258300000000062,
+        "wal": {
+          "frames": 157,
+          "unique": 157,
+          "commits": 1,
+          "bytes": 646872
+        }
+      },
+      {
+        "name": "retainedRows",
+        "ms": 546.862666,
+        "checkpointBeforeMs": 1.5946250000000006,
+        "wal": {
+          "frames": 45732,
+          "unique": 45732,
+          "commits": 1,
+          "bytes": 188415872
+        }
+      },
+      {
+        "name": "indexesViewsTriggers",
+        "ms": 228.00145900000007,
+        "checkpointBeforeMs": 216.10233299999993,
+        "wal": {
+          "frames": 9229,
+          "unique": 9229,
+          "commits": 1,
+          "bytes": 38023512
+        }
+      },
+      {
+        "name": "checkpoint",
+        "ms": 0.07395900000028632,
+        "checkpointBeforeMs": 24.524582999999893,
+        "wal": {
+          "frames": 0,
+          "unique": 0,
+          "commits": 0,
+          "bytes": 0
+        }
+      }
+    ],
+    "integrity": "ok",
+    "foreignKeyErrors": 0,
+    "matchedTables": 71,
+    "validationMs": 1835.5886249999999,
+    "counts": [
+      {
+        "table": "meta",
+        "kept": 18,
+        "original": 18
+      },
+      {
+        "table": "bindings",
+        "kept": 37,
+        "original": 37
+      },
+      {
+        "table": "pending_intents",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "browse_sessions",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "callback_handles",
+        "kept": 738,
+        "original": 738
+      },
+      {
+        "table": "deliveries",
+        "kept": 318,
+        "original": 318
+      },
+      {
+        "table": "backends",
+        "kept": 3,
+        "original": 3
+      },
+      {
+        "table": "launchpad_defaults",
+        "kept": 6,
+        "original": 6
+      },
+      {
+        "table": "directory_launchpads",
+        "kept": 32,
+        "original": 32
+      },
+      {
+        "table": "threads",
+        "kept": 2595,
+        "original": 2595
+      },
+      {
+        "table": "secrets",
+        "kept": 3,
+        "original": 3
+      },
+      {
+        "table": "messaging_activity_log",
+        "kept": 501,
+        "original": 501
+      },
+      {
+        "table": "messaging_pairing_tokens",
+        "kept": 3,
+        "original": 3
+      },
+      {
+        "table": "monitor_subscriptions",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "app_runtime_instances",
+        "kept": 7,
+        "original": 7
+      },
+      {
+        "table": "messaging_runtime_lease",
+        "kept": 3,
+        "original": 3
+      },
+      {
+        "table": "directory_git_status",
+        "kept": 70,
+        "original": 70
+      },
+      {
+        "table": "composer_draft_latest",
+        "kept": 23,
+        "original": 23
+      },
+      {
+        "table": "composer_draft_journal",
+        "kept": 308,
+        "original": 308
+      },
+      {
+        "table": "directory_overlay",
+        "kept": 15,
+        "original": 15
+      },
+      {
+        "table": "messaging_managed_topics",
+        "kept": 29,
+        "original": 29
+      },
+      {
+        "table": "messaging_thread_topic_links",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "messaging_topic_cleanup_proposals",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "acp_registry_cache",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "acp_installed_agents",
+        "kept": 4,
+        "original": 4
+      },
+      {
+        "table": "acp_sessions",
+        "kept": 104,
+        "original": 104
+      },
+      {
+        "table": "automations",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "automation_runs",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "automation_run_artifacts",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "messaging_activity_summary",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "thread_search_documents",
+        "kept": 1500,
+        "original": 1500
+      },
+      {
+        "table": "pr_status_cache",
+        "kept": 762,
+        "original": 762
+      },
+      {
+        "table": "pr_lookup_cache",
+        "kept": 1759,
+        "original": 1759
+      },
+      {
+        "table": "thread_git_working_state",
+        "kept": 781,
+        "original": 781
+      },
+      {
+        "table": "pricing_catalog_versions",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "pricing_rates",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "thread_usage_turns",
+        "kept": 19458,
+        "original": 19458
+      },
+      {
+        "table": "thread_usage_lines",
+        "kept": 19605,
+        "original": 19605
+      },
+      {
+        "table": "thread_tool_invocations",
+        "kept": 37390,
+        "original": 97044
+      },
+      {
+        "table": "thread_tool_invocation_alerts",
+        "kept": 27,
+        "original": 154
+      },
+      {
+        "table": "thread_message_origins",
+        "kept": 3144,
+        "original": 3144
+      },
+      {
+        "table": "messaging_default_agent_assignments",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "pr_auto_dispatch_claims",
+        "kept": 481,
+        "original": 481
+      },
+      {
+        "table": "pr_auto_dispatch_incidents",
+        "kept": 11,
+        "original": 11
+      },
+      {
+        "table": "messaging_observed_surfaces",
+        "kept": 41,
+        "original": 41
+      },
+      {
+        "table": "pr_auto_dispatch_candidates",
+        "kept": 267,
+        "original": 267
+      },
+      {
+        "table": "pr_status_watches",
+        "kept": 51,
+        "original": 51
+      },
+      {
+        "table": "pr_auto_dispatch_budget",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "pr_auto_dispatch_budget_reservations",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "federation_peers",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "federation_enrollment_tokens",
+        "kept": 0,
+        "original": 0
+      },
+      {
+        "table": "federation_session_audit",
+        "kept": 500,
+        "original": 500
+      },
+      {
+        "table": "scheduled_thread_actions",
+        "kept": 7,
+        "original": 7
+      },
+      {
+        "table": "remote_thread_pins",
+        "kept": 32,
+        "original": 32
+      },
+      {
+        "table": "star_map_arrangement",
+        "kept": 64,
+        "original": 64
+      },
+      {
+        "table": "remote_thread_targets",
+        "kept": 497,
+        "original": 497
+      },
+      {
+        "table": "remote_directory_overlay",
+        "kept": 6,
+        "original": 6
+      },
+      {
+        "table": "acp_available_commands",
+        "kept": 15,
+        "original": 15
+      },
+      {
+        "table": "thread_tool_analysis",
+        "kept": 1,
+        "original": 2
+      },
+      {
+        "table": "thread_search_fts",
+        "kept": 1500,
+        "original": 1500
+      },
+      {
+        "table": "star_map_workspace",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "thread_compactions",
+        "kept": 110,
+        "original": 110
+      },
+      {
+        "table": "desktop_config_snapshots",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "provider_discovery_snapshots",
+        "kept": 1,
+        "original": 1
+      },
+      {
+        "table": "provider_thread_snapshots",
+        "kept": 5,
+        "original": 5
+      },
+      {
+        "table": "thread_usage_boundaries",
+        "kept": 3833,
+        "original": 3833
+      },
+      {
+        "table": "token_miser_objects",
+        "kept": 10813,
+        "original": 13896
+      },
+      {
+        "table": "token_miser_observations",
+        "kept": 21052,
+        "original": 30729
+      },
+      {
+        "table": "token_miser_retention",
+        "kept": 220,
+        "original": 220
+      },
+      {
+        "table": "thread_pricing_summaries",
+        "kept": 1341,
+        "original": 1341
+      },
+      {
+        "table": "thread_navigation_relationships",
+        "kept": 1155,
+        "original": 1155
+      }
+    ],
+    "sourceBytes": 322158592,
+    "rebuiltBytes": 224894976
+  },
+  "recovery": {
+    "trials": [
+      {
+        "stage": "before",
+        "signal": "SIGKILL",
+        "crashWal": {
+          "frames": 24,
+          "unique": 24,
+          "repeated": 0,
+          "commits": 0,
+          "bytes": 98912
+        },
+        "completed": 0,
+        "allOwnedCountsRestored": true,
+        "integrity": "ok",
+        "recoveryAndIntegrityMs": 396.6553339999999
+      },
+      {
+        "stage": "after",
+        "signal": "SIGKILL",
+        "crashWal": {
+          "frames": 27,
+          "unique": 27,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 111272
+        },
+        "completed": 10,
+        "allOwnedCountsRestored": false,
+        "integrity": "ok",
+        "recoveryAndIntegrityMs": 401.15554099999997
+      }
+    ],
+    "resumedMs": 35.47870799999987,
+    "cancelledAt": 20,
+    "foreignKeyErrors": 0
+  },
+  "sliced": {
+    "rowLimit": 128,
+    "yieldMs": 5,
+    "chunks": 27,
+    "elapsedMs": 181.30133400000003,
+    "lockMs": {
+      "n": 27,
+      "p50": 0.8993340000000103,
+      "p95": 2.001125000000002,
+      "max": 2.5805410000000393
+    },
+    "batchFrames": {
+      "n": 27,
+      "p50": 102,
+      "p95": 209,
+      "max": 213
+    },
+    "wal": {
+      "frames": 2473,
+      "unique": 1390,
+      "repeated": 1083,
+      "commits": 27,
+      "bytes": 10188792
+    },
+    "integrity": "ok",
+    "foreignKeyErrors": 0
+  },
+  "startup": [
+    {
+      "legacy": false,
+      "openMs": 462.13008400000007,
+      "gcMs": 41.888624999999934,
+      "conversion": {
+        "status": "already-incremental"
+      },
+      "walBytes": 144232,
+      "freePages": 0
+    },
+    {
+      "legacy": true,
+      "openMs": 408.72749999999996,
+      "gcMs": 1326.1051659999998,
+      "conversion": {
+        "bytesAfter": 306929664,
+        "bytesBefore": 307142656,
+        "elapsedMs": 1279.596125,
+        "status": "converted"
+      },
+      "walBytes": 308777552,
+      "freePages": 0
+    }
+  ],
+  "runs": [
+    {
+      "name": "owner-history-10-table-0-true",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 2527.2331249999997,
+      "lockMs": {
+        "n": 92,
+        "p50": 26.56166600000006,
+        "p95": 36.603665999999976,
+        "max": 41.63383299999987
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.0057500000002619345,
+        "p95": 0.008083000000169704,
+        "max": 0.011583000000001675
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 177,
+        "p95": 1969,
+        "max": 2796
+      },
+      "wal": {
+        "frames": 44820,
+        "unique": 26213,
+        "repeated": 18607,
+        "commits": 92,
+        "bytes": 184658432
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 100.60404100000005,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [],
+      "incremental256": {
+        "ms": 1.4246670000002268,
+        "wal": {
+          "frames": 279,
+          "unique": 279,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 1149512
+        },
+        "free": 25535
+      },
+      "incrementalAll": {
+        "ms": 180.88750000000027,
+        "wal": {
+          "frames": 26436,
+          "unique": 26436,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 108916352
+        },
+        "pages": 52831
+      },
+      "vacuum": {
+        "ms": 487.9910840000002,
+        "wal": {
+          "frames": 48509,
+          "unique": 48509,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 199857112
+        },
+        "pages": 48509
+      }
+    },
+    {
+      "name": "owner-history-1-thread-0",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "thread",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 8440.012958000001,
+      "lockMs": {
+        "n": 911,
+        "p50": 6.761082999999871,
+        "p95": 19.941249999999854,
+        "max": 217.09912499999973
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.00483299999996234,
+        "p95": 0.009791999999833934,
+        "max": 0.10420799999974406
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 55,
+        "p95": 324,
+        "max": 1391
+      },
+      "wal": {
+        "frames": 90914,
+        "unique": 26226,
+        "repeated": 64688,
+        "commits": 911,
+        "bytes": 374565712
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 155.67595900000015,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-thread-5",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "thread",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 12471.544917000001,
+      "lockMs": {
+        "n": 911,
+        "p50": 7.050083999998606,
+        "p95": 12.939792000001034,
+        "max": 62.56850000000122
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.014583999998649233,
+        "p95": 0.024957999999969616,
+        "max": 0.13245800000004238
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 55,
+        "p95": 324,
+        "max": 1391
+      },
+      "wal": {
+        "frames": 90914,
+        "unique": 26226,
+        "repeated": 64688,
+        "commits": 911,
+        "bytes": 374565712
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 189.28720899999826,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-0",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 6487.022582999998,
+      "lockMs": {
+        "n": 911,
+        "p50": 6.812083000000712,
+        "p95": 9.633499999999913,
+        "max": 16.648667000001296
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.004208000002108747,
+        "p95": 0.006957999998121522,
+        "max": 0.02824999999938882
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 55,
+        "p95": 324,
+        "max": 1391
+      },
+      "wal": {
+        "frames": 90914,
+        "unique": 26226,
+        "repeated": 64688,
+        "commits": 911,
+        "bytes": 374565712
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 129.0955410000024,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-5",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 11785.514250000004,
+      "lockMs": {
+        "n": 911,
+        "p50": 6.8833749999976135,
+        "p95": 9.29133400000137,
+        "max": 27.189166000003752
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.015125000005355105,
+        "p95": 0.02604099999734899,
+        "max": 0.08683299999393057
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 55,
+        "p95": 324,
+        "max": 1391
+      },
+      "wal": {
+        "frames": 90914,
+        "unique": 26226,
+        "repeated": 64688,
+        "commits": 911,
+        "bytes": 374565712
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 112.97550000000047,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-rowid-0",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "rowid",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 6264.659875000005,
+      "lockMs": {
+        "n": 911,
+        "p50": 6.23975000000064,
+        "p95": 9.408750000002328,
+        "max": 36.90337500000169
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.003708000003825873,
+        "p95": 0.006540999995195307,
+        "max": 0.013542000000597909
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 53,
+        "p95": 310,
+        "max": 1412
+      },
+      "wal": {
+        "frames": 88728,
+        "unique": 27147,
+        "repeated": 61581,
+        "commits": 911,
+        "bytes": 365559392
+      },
+      "pages": 78654,
+      "free": 25682,
+      "checkpointMs": 217.14433300000383,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-rowid-5",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "rowid",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 12581.558541999999,
+      "lockMs": {
+        "n": 911,
+        "p50": 7.182667000000947,
+        "p95": 12.77070900000399,
+        "max": 97.17620799999713
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.014999999999417923,
+        "p95": 0.02458400000614347,
+        "max": 0.06304199999431148
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 53,
+        "p95": 310,
+        "max": 1412
+      },
+      "wal": {
+        "frames": 88728,
+        "unique": 27147,
+        "repeated": 61581,
+        "commits": 911,
+        "bytes": 365559392
+      },
+      "pages": 78654,
+      "free": 25682,
+      "checkpointMs": 120.19504099999904,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-thread-0",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "thread",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 5447.187250000003,
+      "lockMs": {
+        "n": 183,
+        "p50": 29.179749999995693,
+        "p95": 36.54108399999677,
+        "max": 43.367874999996275
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.005041999997047242,
+        "p95": 0.006792000000132248,
+        "max": 0.025750000000698492
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1017,
+        "max": 2486
+      },
+      "wal": {
+        "frames": 54413,
+        "unique": 26226,
+        "repeated": 28187,
+        "commits": 183,
+        "bytes": 224181592
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 104.15137500000128,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-thread-5",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "thread",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 6563.715708000003,
+      "lockMs": {
+        "n": 183,
+        "p50": 29.516457999998238,
+        "p95": 36.29554200000712,
+        "max": 47.020166999995126
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.01595899999665562,
+        "p95": 0.02950000000419095,
+        "max": 0.06366699999489356
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1017,
+        "max": 2486
+      },
+      "wal": {
+        "frames": 54413,
+        "unique": 26226,
+        "repeated": 28187,
+        "commits": 183,
+        "bytes": 224181592
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 104.92150000001129,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-table-0",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 3031.904500000004,
+      "lockMs": {
+        "n": 183,
+        "p50": 15.875167000005604,
+        "p95": 21.57370799999626,
+        "max": 32.25958399999945
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.004583000001730397,
+        "p95": 0.007209000003058463,
+        "max": 0.009250000002793968
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1017,
+        "max": 2487
+      },
+      "wal": {
+        "frames": 54415,
+        "unique": 26217,
+        "repeated": 28198,
+        "commits": 183,
+        "bytes": 224189832
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 114.1364590000012,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-table-5",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 4095.7422499999957,
+      "lockMs": {
+        "n": 183,
+        "p50": 15.770082999995793,
+        "p95": 22.856792000005953,
+        "max": 31.94870800001081
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.017959000004339032,
+        "p95": 0.02845800000068266,
+        "max": 0.10291699999652337
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1017,
+        "max": 2487
+      },
+      "wal": {
+        "frames": 54415,
+        "unique": 26217,
+        "repeated": 28198,
+        "commits": 183,
+        "bytes": 224189832
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 105.26137500000186,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-rowid-0",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "rowid",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 3268.5006250000006,
+      "lockMs": {
+        "n": 183,
+        "p50": 17.46083300000464,
+        "p95": 22.16691699999501,
+        "max": 29.457709000009345
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.005208000002312474,
+        "p95": 0.007542000006651506,
+        "max": 0.04258400000981055
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 145,
+        "p95": 1182,
+        "max": 2111
+      },
+      "wal": {
+        "frames": 61982,
+        "unique": 27153,
+        "repeated": 34829,
+        "commits": 183,
+        "bytes": 255365872
+      },
+      "pages": 78654,
+      "free": 25682,
+      "checkpointMs": 104.80866599999717,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-rowid-5",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "rowid",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 4216.247124999994,
+      "lockMs": {
+        "n": 183,
+        "p50": 16.977791999990586,
+        "p95": 23.68887499999255,
+        "max": 29.0666249999922
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.013791999997920357,
+        "p95": 0.026666999998269603,
+        "max": 0.04033399999025278
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 145,
+        "p95": 1182,
+        "max": 2111
+      },
+      "wal": {
+        "frames": 61982,
+        "unique": 27153,
+        "repeated": 34829,
+        "commits": 183,
+        "bytes": 255365872
+      },
+      "pages": 78654,
+      "free": 25682,
+      "checkpointMs": 108.04158400000597,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-thread-0",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "thread",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 5353.067292000007,
+      "lockMs": {
+        "n": 92,
+        "p50": 56.007291000001715,
+        "p95": 79.39416700000584,
+        "max": 86.36258400000224
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.005125000010593794,
+        "p95": 0.008625000002211891,
+        "max": 0.010125000000698492
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 177,
+        "p95": 1971,
+        "max": 2795
+      },
+      "wal": {
+        "frames": 44821,
+        "unique": 26226,
+        "repeated": 18595,
+        "commits": 92,
+        "bytes": 184662552
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 105.40016600000672,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-thread-5",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "thread",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 5937.233042000007,
+      "lockMs": {
+        "n": 92,
+        "p50": 57.8185000000085,
+        "p95": 70.21091700000397,
+        "max": 78.00470900000073
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.015834000005270354,
+        "p95": 0.030875000011292286,
+        "max": 0.08354099999996834
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 177,
+        "p95": 1971,
+        "max": 2795
+      },
+      "wal": {
+        "frames": 44821,
+        "unique": 26226,
+        "repeated": 18595,
+        "commits": 92,
+        "bytes": 184662552
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 104.82474999999977,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-table-0",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 2494.3962089999986,
+      "lockMs": {
+        "n": 92,
+        "p50": 26.574875000005704,
+        "p95": 35.462375000002794,
+        "max": 41.66899999999441
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.004875000013271347,
+        "p95": 0.007250000009662472,
+        "max": 0.0086660000088159
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 177,
+        "p95": 1969,
+        "max": 2796
+      },
+      "wal": {
+        "frames": 44820,
+        "unique": 26213,
+        "repeated": 18607,
+        "commits": 92,
+        "bytes": 184658432
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 102.58324999999604,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-table-5",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 3088.0016250000044,
+      "lockMs": {
+        "n": 92,
+        "p50": 24.779208000007202,
+        "p95": 40.443791999990935,
+        "max": 46.158874999993714
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.01566600000660401,
+        "p95": 0.026624999998603016,
+        "max": 0.03595800000766758
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 177,
+        "p95": 1969,
+        "max": 2796
+      },
+      "wal": {
+        "frames": 44820,
+        "unique": 26213,
+        "repeated": 18607,
+        "commits": 92,
+        "bytes": 184658432
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 104.76354100000754,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-rowid-0",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "rowid",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 2614.6790000000037,
+      "lockMs": {
+        "n": 92,
+        "p50": 26.554000000003725,
+        "p95": 38.562667000005604,
+        "max": 53.86004200000025
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.005333000008249655,
+        "p95": 0.008583000002545305,
+        "max": 0.01166699999885168
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 215,
+        "p95": 1986,
+        "max": 2606
+      },
+      "wal": {
+        "frames": 54391,
+        "unique": 27162,
+        "repeated": 27229,
+        "commits": 92,
+        "bytes": 224090952
+      },
+      "pages": 78654,
+      "free": 25682,
+      "checkpointMs": 110.61445799999638,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-rowid-5",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "rowid",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 3277.9297919999954,
+      "lockMs": {
+        "n": 92,
+        "p50": 28.93466699999408,
+        "p95": 39.245458000004874,
+        "max": 44.600500000000466
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.014374999998835847,
+        "p95": 0.026874999995925464,
+        "max": 0.035875000001396984
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 215,
+        "p95": 1986,
+        "max": 2606
+      },
+      "wal": {
+        "frames": 54391,
+        "unique": 27162,
+        "repeated": 27229,
+        "commits": 92,
+        "bytes": 224090952
+      },
+      "pages": 78654,
+      "free": 25682,
+      "checkpointMs": 103.81420799999614,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-thread-0",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "thread",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 5207.697,
+      "lockMs": {
+        "n": 46,
+        "p50": 111.58099999999104,
+        "p95": 126.29337499999383,
+        "max": 145.1395829999965
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.005583999998634681,
+        "p95": 0.00849999999627471,
+        "max": 0.009791000004042871
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 268,
+        "p95": 2334,
+        "max": 3988
+      },
+      "wal": {
+        "frames": 37621,
+        "unique": 26226,
+        "repeated": 11395,
+        "commits": 46,
+        "bytes": 154998552
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 108.71616599999834,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-thread-5",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "thread",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 5474.858833000006,
+      "lockMs": {
+        "n": 46,
+        "p50": 112.1723750000092,
+        "p95": 130.06599999999162,
+        "max": 138.16512499999953
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.017791999998735264,
+        "p95": 0.03145799999765586,
+        "max": 0.03483399999095127
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 268,
+        "p95": 2334,
+        "max": 3988
+      },
+      "wal": {
+        "frames": 37621,
+        "unique": 26226,
+        "repeated": 11395,
+        "commits": 46,
+        "bytes": 154998552
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 112.54320899999584,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-table-0",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 2190.217249999987,
+      "lockMs": {
+        "n": 46,
+        "p50": 45.18412499999977,
+        "p95": 63.33062500000233,
+        "max": 75.03608299999905
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.0054579999996349216,
+        "p95": 0.008333000005222857,
+        "max": 0.011624999999185093
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 266,
+        "p95": 2333,
+        "max": 3990
+      },
+      "wal": {
+        "frames": 37662,
+        "unique": 26231,
+        "repeated": 11431,
+        "commits": 46,
+        "bytes": 155167472
+      },
+      "pages": 78654,
+      "free": 25792,
+      "checkpointMs": 110.88616600001114,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-table-5",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 2403.4617499999877,
+      "lockMs": {
+        "n": 46,
+        "p50": 46.72054099998786,
+        "p95": 55.23462499998277,
+        "max": 70.88970800000243
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.017583000008016825,
+        "p95": 0.029542000003857538,
+        "max": 0.03366600000299513
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 266,
+        "p95": 2333,
+        "max": 3990
+      },
+      "wal": {
+        "frames": 37662,
+        "unique": 26231,
+        "repeated": 11431,
+        "commits": 46,
+        "bytes": 155167472
+      },
+      "pages": 78654,
+      "free": 25792,
+      "checkpointMs": 111.44899999999325,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-rowid-0",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "rowid",
+      "yieldMs": 0,
+      "threads": 911,
+      "elapsedMs": 2281.940917,
+      "lockMs": {
+        "n": 46,
+        "p50": 48.29833300001337,
+        "p95": 59.99512499998673,
+        "max": 72.84104199998546
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.005708000011509284,
+        "p95": 0.0086660000088159,
+        "max": 0.009917000017594546
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 421,
+        "p95": 2592,
+        "max": 3836
+      },
+      "wal": {
+        "frames": 48410,
+        "unique": 27191,
+        "repeated": 21219,
+        "commits": 46,
+        "bytes": 199449232
+      },
+      "pages": 78656,
+      "free": 25684,
+      "checkpointMs": 110.33970899999258,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-rowid-5",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "rowid",
+      "yieldMs": 5,
+      "threads": 911,
+      "elapsedMs": 2437.071292000008,
+      "lockMs": {
+        "n": 46,
+        "p50": 45.11379200001829,
+        "p95": 58.77266600000439,
+        "max": 73.89824999999837
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.019625000015366822,
+        "p95": 0.033041999995475635,
+        "max": 0.0353330000070855
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 421,
+        "p95": 2592,
+        "max": 3836
+      },
+      "wal": {
+        "frames": 48410,
+        "unique": 27191,
+        "repeated": 21219,
+        "commits": 46,
+        "bytes": 199449232
+      },
+      "pages": 78656,
+      "free": 25684,
+      "checkpointMs": 110.92691599999671,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-5-true",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 6375.3685000000005,
+      "lookupMs": 3.857541999999995,
+      "lockMs": {
+        "n": 911,
+        "p50": 0.835624999999709,
+        "p95": 3.891208000000006,
+        "max": 12.920708000000104
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.01695800000015879,
+        "p95": 0.04004199999997127,
+        "max": 0.31825000000003456
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 55,
+        "p95": 324,
+        "max": 1391
+      },
+      "wal": {
+        "frames": 90914,
+        "unique": 26226,
+        "repeated": 64688,
+        "commits": 911,
+        "bytes": 374565712
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 117.01000000000022,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-table-5-true",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 1584.0022499999995,
+      "lookupMs": 3.1211670000002414,
+      "lockMs": {
+        "n": 183,
+        "p50": 2.2842920000002778,
+        "p95": 8.315999999999804,
+        "max": 19.144584000001487
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.015292000000044936,
+        "p95": 0.03412499999922147,
+        "max": 0.07083300000067538
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1016,
+        "max": 2488
+      },
+      "wal": {
+        "frames": 54368,
+        "unique": 26248,
+        "repeated": 28120,
+        "commits": 183,
+        "bytes": 223996192
+      },
+      "pages": 78654,
+      "free": 25803,
+      "checkpointMs": 101.50083300000006,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-table-5-true",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 971.8252080000002,
+      "lookupMs": 2.735624999999345,
+      "lockMs": {
+        "n": 92,
+        "p50": 1.7104579999995622,
+        "p95": 18.238459000000148,
+        "max": 25.00666700000147
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.013417000000117696,
+        "p95": 0.024374999999054126,
+        "max": 0.06583399999908579
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 182,
+        "p95": 1967,
+        "max": 2803
+      },
+      "wal": {
+        "frames": 44775,
+        "unique": 26228,
+        "repeated": 18547,
+        "commits": 92,
+        "bytes": 184473032
+      },
+      "pages": 78654,
+      "free": 25805,
+      "checkpointMs": 126.84820899999977,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-table-5-true",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 635.7708329999987,
+      "lookupMs": 3.165333000000828,
+      "lockMs": {
+        "n": 46,
+        "p50": 3.02783399999862,
+        "p95": 20.97125000000051,
+        "max": 45.92816599999969
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.014209000000846572,
+        "p95": 0.02291700000023411,
+        "max": 0.025208000000930042
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 263,
+        "p95": 2328,
+        "max": 3987
+      },
+      "wal": {
+        "frames": 37674,
+        "unique": 26265,
+        "repeated": 11409,
+        "commits": 46,
+        "bytes": 155216912
+      },
+      "pages": 78655,
+      "free": 25807,
+      "checkpointMs": 109.32562499999949,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-0-true-true",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 687.2432499999995,
+      "lookupMs": 2.9723329999997077,
+      "lockMs": {
+        "n": 911,
+        "p50": 0.3656670000000304,
+        "p95": 2.397957999999562,
+        "max": 10.957209000000148
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.0018339999987802003,
+        "p95": 0.003416999999899417,
+        "max": 1.5906670000003942
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 55,
+        "p95": 324,
+        "max": 1391
+      },
+      "wal": {
+        "frames": 90918,
+        "unique": 26228,
+        "repeated": 64690,
+        "commits": 914,
+        "bytes": 374582192
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 108.14366700000028,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 306,
+            "p50": 0.029291999999259133,
+            "p95": 0.08474999999998545,
+            "max": 0.9023329999999987
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 3,
+            "p50": 1.3204999999998108,
+            "p95": 1.3642499999987194,
+            "max": 1.3642499999987194
+          },
+          "busy": 191
+        }
+      ]
+    },
+    {
+      "name": "owner-history-1-table-5-true-true",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 6490.2019169999985,
+      "lookupMs": 2.7655419999991864,
+      "lockMs": {
+        "n": 911,
+        "p50": 0.8243750000001455,
+        "p95": 3.635999999998603,
+        "max": 14.689041999999972
+      },
+      "waitMs": {
+        "n": 911,
+        "p50": 0.04512499999873398,
+        "p95": 1.3291250000002037,
+        "max": 3.8686670000006416
+      },
+      "batchFrames": {
+        "n": 911,
+        "p50": 58,
+        "p95": 327,
+        "max": 1393
+      },
+      "wal": {
+        "frames": 93277,
+        "unique": 26228,
+        "repeated": 67049,
+        "commits": 3273,
+        "bytes": 384301272
+      },
+      "pages": 78653,
+      "free": 25791,
+      "checkpointMs": 142.1461249999993,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 2812,
+            "p50": 0.0388329999987036,
+            "p95": 0.09804200000144192,
+            "max": 2.8755419999997684
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 2362,
+            "p50": 0.06233300000167219,
+            "p95": 1.341374999999971,
+            "max": 4.31145800000013
+          },
+          "busy": 165
+        }
+      ]
+    },
+    {
+      "name": "owner-history-5-table-0-true-true",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 454.1536669999987,
+      "lookupMs": 3.087290999999823,
+      "lockMs": {
+        "n": 183,
+        "p50": 1.0607920000002196,
+        "p95": 8.39104099999895,
+        "max": 20.974333999998635
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.0022079999980633147,
+        "p95": 0.004457999999431195,
+        "max": 1.5357079999994312
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1016,
+        "max": 2488
+      },
+      "wal": {
+        "frames": 54371,
+        "unique": 26250,
+        "repeated": 28121,
+        "commits": 185,
+        "bytes": 224008552
+      },
+      "pages": 78654,
+      "free": 25803,
+      "checkpointMs": 103.14087499999732,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 209,
+            "p50": 0.015084000002389075,
+            "p95": 0.039457999999285676,
+            "max": 0.06104100000084145
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 2,
+            "p50": 0.20920900000055553,
+            "p95": 1.3085830000018177,
+            "max": 1.3085830000018177
+          },
+          "busy": 128
+        }
+      ]
+    },
+    {
+      "name": "owner-history-5-table-5-true-true",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 1628.4517080000005,
+      "lookupMs": 3.073500000002241,
+      "lockMs": {
+        "n": 183,
+        "p50": 2.40770799999882,
+        "p95": 8.227750000001834,
+        "max": 18.694791000001715
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.05408299999908195,
+        "p95": 1.335624999999709,
+        "max": 1.5370419999999285
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 141,
+        "p95": 1019,
+        "max": 2491
+      },
+      "wal": {
+        "frames": 54848,
+        "unique": 26250,
+        "repeated": 28598,
+        "commits": 662,
+        "bytes": 225973792
+      },
+      "pages": 78654,
+      "free": 25803,
+      "checkpointMs": 107.21283300000141,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 715,
+            "p50": 0.02312499999970896,
+            "p95": 0.061584000002767425,
+            "max": 0.3739999999997963
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 479,
+            "p50": 0.047207999999955064,
+            "p95": 1.3232920000009472,
+            "max": 1.5029580000009446
+          },
+          "busy": 126
+        }
+      ]
+    },
+    {
+      "name": "owner-history-10-table-0-true-true",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 393.36583299999984,
+      "lookupMs": 2.877667000000656,
+      "lockMs": {
+        "n": 92,
+        "p50": 1.6415830000005371,
+        "p95": 16.9320000000007,
+        "max": 23.9653330000001
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.0022920000010344665,
+        "p95": 0.004499999999097781,
+        "max": 1.4133750000000873
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 182,
+        "p95": 1967,
+        "max": 2803
+      },
+      "wal": {
+        "frames": 44778,
+        "unique": 26230,
+        "repeated": 18548,
+        "commits": 94,
+        "bytes": 184485392
+      },
+      "pages": 78654,
+      "free": 25805,
+      "checkpointMs": 105.1014589999977,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 180,
+            "p50": 0.012042000002111308,
+            "p95": 0.02920799999992596,
+            "max": 0.37420900000142865
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 2,
+            "p50": 0.04650000000037835,
+            "p95": 0.19120900000052643,
+            "max": 0.19120900000052643
+          },
+          "busy": 111
+        }
+      ]
+    },
+    {
+      "name": "owner-history-10-table-5-true-true",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 971.1973749999997,
+      "lookupMs": 2.938417000001209,
+      "lockMs": {
+        "n": 92,
+        "p50": 2.2461249999978463,
+        "p95": 16.82495899999776,
+        "max": 23.893583000000945
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.051500000001396984,
+        "p95": 1.3312499999992724,
+        "max": 1.4232499999998254
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 185,
+        "p95": 1971,
+        "max": 2805
+      },
+      "wal": {
+        "frames": 45015,
+        "unique": 26230,
+        "repeated": 18785,
+        "commits": 331,
+        "bytes": 185461832
+      },
+      "pages": 78654,
+      "free": 25805,
+      "checkpointMs": 107.22054199999911,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 433,
+            "p50": 0.020832999998674495,
+            "p95": 0.049250000000029104,
+            "max": 0.13724999999976717
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 239,
+            "p50": 0.0456659999981639,
+            "p95": 1.321790999998484,
+            "max": 1.3620420000006561
+          },
+          "busy": 103
+        }
+      ]
+    },
+    {
+      "name": "owner-history-20-table-0-true-true",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 364.3383329999997,
+      "lookupMs": 2.9187090000013995,
+      "lockMs": {
+        "n": 46,
+        "p50": 2.9361250000001746,
+        "p95": 21.438375000001543,
+        "max": 44.60066699999879
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.003333999997266801,
+        "p95": 0.004666000000725035,
+        "max": 1.3875840000000608
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 263,
+        "p95": 2328,
+        "max": 3987
+      },
+      "wal": {
+        "frames": 37677,
+        "unique": 26267,
+        "repeated": 11410,
+        "commits": 48,
+        "bytes": 155229272
+      },
+      "pages": 78655,
+      "free": 25807,
+      "checkpointMs": 108.4439999999995,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 168,
+            "p50": 0.010459000000992091,
+            "p95": 0.027249999999185093,
+            "max": 0.0483749999984866
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 2,
+            "p50": 0.06795799999963492,
+            "p95": 0.18924999999944703,
+            "max": 0.18924999999944703
+          },
+          "busy": 104
+        }
+      ]
+    },
+    {
+      "name": "owner-history-20-table-5-true-true",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "concurrent": true,
+      "threads": 911,
+      "elapsedMs": 667.2108750000007,
+      "lookupMs": 2.7700840000034077,
+      "lockMs": {
+        "n": 46,
+        "p50": 3.3683749999981956,
+        "p95": 22.8471669999999,
+        "max": 41.77583299999969
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.08245899999747053,
+        "p95": 1.4684999999990396,
+        "max": 1.5105419999999867
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 265,
+        "p95": 2330,
+        "max": 3990
+      },
+      "wal": {
+        "frames": 37800,
+        "unique": 26267,
+        "repeated": 11533,
+        "commits": 171,
+        "bytes": 155736032
+      },
+      "pages": 78655,
+      "free": 25807,
+      "checkpointMs": 111.74895799999649,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [
+        {
+          "kind": "reader",
+          "latencyMs": {
+            "n": 298,
+            "p50": 0.0152909999997064,
+            "p95": 0.04641700000138371,
+            "max": 0.2886670000007143
+          },
+          "busy": 0
+        },
+        {
+          "kind": "writer",
+          "latencyMs": {
+            "n": 125,
+            "p50": 0.04970799999864539,
+            "p95": 1.3230000000003201,
+            "max": 1.3911670000015874
+          },
+          "busy": 102
+        }
+      ]
+    },
+    {
+      "name": "cache-10-table-5-true",
+      "mode": "cache",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 595.3756670000002,
+      "lookupMs": 1.3366660000028787,
+      "lockMs": {
+        "n": 92,
+        "p50": 0.5756249999976717,
+        "p95": 1.3617919999996957,
+        "max": 6.943082999998296
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.02304100000037579,
+        "p95": 0.04454199999963748,
+        "max": 0.05908400000043912
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 29,
+        "p95": 40,
+        "max": 114
+      },
+      "wal": {
+        "frames": 2740,
+        "unique": 278,
+        "repeated": 2462,
+        "commits": 92,
+        "bytes": 11288832
+      },
+      "pages": 78654,
+      "free": 180,
+      "checkpointMs": 5.881709000001138,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "retain-overlay-10-table-5-true",
+      "mode": "retain-overlay",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 949.0852909999994,
+      "lookupMs": 2.933000000000902,
+      "lockMs": {
+        "n": 92,
+        "p50": 3.1271669999987353,
+        "p95": 16.207041999998182,
+        "max": 21.49541699999827
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.011667000002489658,
+        "p95": 0.028167000000394182,
+        "max": 0.038540999998076586
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 153,
+        "p95": 1921,
+        "max": 2757
+      },
+      "wal": {
+        "frames": 42392,
+        "unique": 25506,
+        "repeated": 16886,
+        "commits": 92,
+        "bytes": 174655072
+      },
+      "pages": 78654,
+      "free": 21949,
+      "checkpointMs": 98.06804199999897,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-0-true-true-false-32",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "giant": true,
+      "secureDelete": false,
+      "cacheKiB": 32,
+      "threads": 1,
+      "elapsedMs": 25.85920900000201,
+      "lookupMs": 3.0796250000021246,
+      "lockMs": {
+        "n": 1,
+        "p50": 25.82087500000125,
+        "p95": 25.82087500000125,
+        "max": 25.82087500000125
+      },
+      "waitMs": {
+        "n": 1,
+        "p50": 0.004041000000142958,
+        "p95": 0.004041000000142958,
+        "max": 0.004041000000142958
+      },
+      "batchFrames": {
+        "n": 1,
+        "p50": 1392,
+        "p95": 1392,
+        "max": 1392
+      },
+      "wal": {
+        "frames": 1392,
+        "unique": 1392,
+        "repeated": 0,
+        "commits": 1,
+        "bytes": 5735072
+      },
+      "pages": 78652,
+      "free": 621,
+      "checkpointMs": 19.241375000001426,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-0-true-true-false-16000",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "giant": true,
+      "secureDelete": false,
+      "cacheKiB": 16000,
+      "threads": 1,
+      "elapsedMs": 10.705999999998312,
+      "lookupMs": 2.7768749999995634,
+      "lockMs": {
+        "n": 1,
+        "p50": 10.68170900000041,
+        "p95": 10.68170900000041,
+        "max": 10.68170900000041
+      },
+      "waitMs": {
+        "n": 1,
+        "p50": 0.004249999998137355,
+        "p95": 0.004249999998137355,
+        "max": 0.004249999998137355
+      },
+      "batchFrames": {
+        "n": 1,
+        "p50": 1392,
+        "p95": 1392,
+        "max": 1392
+      },
+      "wal": {
+        "frames": 1392,
+        "unique": 1392,
+        "repeated": 0,
+        "commits": 1,
+        "bytes": 5735072
+      },
+      "pages": 78652,
+      "free": 621,
+      "checkpointMs": 19.598417000001064,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-0-true-true-true-32",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "giant": true,
+      "secureDelete": true,
+      "cacheKiB": 32,
+      "threads": 1,
+      "elapsedMs": 32.28333300000304,
+      "lookupMs": 2.8615420000023732,
+      "lockMs": {
+        "n": 1,
+        "p50": 32.25500000000102,
+        "p95": 32.25500000000102,
+        "max": 32.25500000000102
+      },
+      "waitMs": {
+        "n": 1,
+        "p50": 0.003540999998222105,
+        "p95": 0.003540999998222105,
+        "max": 0.003540999998222105
+      },
+      "batchFrames": {
+        "n": 1,
+        "p50": 1618,
+        "p95": 1618,
+        "max": 1618
+      },
+      "wal": {
+        "frames": 1618,
+        "unique": 1618,
+        "repeated": 0,
+        "commits": 1,
+        "bytes": 6666192
+      },
+      "pages": 78652,
+      "free": 621,
+      "checkpointMs": 24.523332999997365,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-1-table-0-true-true-true-16000",
+      "mode": "owner-history",
+      "batch": 1,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "giant": true,
+      "secureDelete": true,
+      "cacheKiB": 16000,
+      "threads": 1,
+      "elapsedMs": 12.194958000000042,
+      "lookupMs": 2.8360000000029686,
+      "lockMs": {
+        "n": 1,
+        "p50": 12.167166999999608,
+        "p95": 12.167166999999608,
+        "max": 12.167166999999608
+      },
+      "waitMs": {
+        "n": 1,
+        "p50": 0.003249999997933628,
+        "p95": 0.003249999997933628,
+        "max": 0.003249999997933628
+      },
+      "batchFrames": {
+        "n": 1,
+        "p50": 1618,
+        "p95": 1618,
+        "max": 1618
+      },
+      "wal": {
+        "frames": 1618,
+        "unique": 1618,
+        "repeated": 0,
+        "commits": 1,
+        "bytes": 6666192
+      },
+      "pages": 78652,
+      "free": 621,
+      "checkpointMs": 20.44508300000234,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-table-0-true-32",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 0,
+      "indexed": true,
+      "cacheKiB": 32,
+      "threads": 911,
+      "elapsedMs": 968.2763750000013,
+      "lookupMs": 2.9839169999977457,
+      "lockMs": {
+        "n": 46,
+        "p50": 7.812959000002593,
+        "p95": 53.343667000001005,
+        "max": 98.95970900000248
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.003833000002487097,
+        "p95": 0.008291999998618849,
+        "max": 0.008958999998867512
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 264,
+        "p95": 2329,
+        "max": 3988
+      },
+      "wal": {
+        "frames": 37702,
+        "unique": 26265,
+        "repeated": 11437,
+        "commits": 46,
+        "bytes": 155332272
+      },
+      "pages": 78655,
+      "free": 25807,
+      "checkpointMs": 123.09749999999622,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-table-5-true-true",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "pinnedReader": true,
+      "threads": 911,
+      "elapsedMs": 934.031042,
+      "lookupMs": 4.282624999999996,
+      "lockMs": {
+        "n": 92,
+        "p50": 1.762457999999981,
+        "p95": 16.541417000000024,
+        "max": 26.416207999999983
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.013624999999933607,
+        "p95": 0.02054100000000858,
+        "max": 0.06033399999995481
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 182,
+        "p95": 1967,
+        "max": 2803
+      },
+      "wal": {
+        "frames": 44775,
+        "unique": 26228,
+        "repeated": 18547,
+        "commits": 92,
+        "bytes": 184473032
+      },
+      "pages": 78654,
+      "free": 25805,
+      "checkpointMs": 61.29816699999992,
+      "checkpoint": [
+        {
+          "busy": 1,
+          "log": 44775,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 116.5127500000001,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "tool-detail-10-table-5-true-true",
+      "mode": "tool-detail",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "threads": 911,
+      "elapsedMs": 801.740041,
+      "lookupMs": 2.0055830000000014,
+      "lockMs": {
+        "n": 92,
+        "p50": 0.4933330000000069,
+        "p95": 13.138291999999979,
+        "max": 18.510084000000006
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.010459000000025753,
+        "p95": 0.02037499999994452,
+        "max": 0.02487500000000864
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 36,
+        "p95": 1685,
+        "max": 2418
+      },
+      "wal": {
+        "frames": 32200,
+        "unique": 21531,
+        "repeated": 10669,
+        "commits": 49,
+        "bytes": 132664032
+      },
+      "pages": 78652,
+      "free": 20233,
+      "checkpointMs": 89.25154100000009,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.03449999999997999,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": [],
+      "incremental256": {
+        "ms": 1.3445420000000468,
+        "wal": {
+          "frames": 301,
+          "unique": 301,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 1240152
+        },
+        "free": 19977
+      },
+      "incrementalAll": {
+        "ms": 132.57437499999992,
+        "wal": {
+          "frames": 20707,
+          "unique": 20707,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 85312872
+        },
+        "pages": 58395
+      },
+      "vacuum": {
+        "ms": 549.453125,
+        "wal": {
+          "frames": 54511,
+          "unique": 54511,
+          "repeated": 0,
+          "commits": 1,
+          "bytes": 224585352
+        },
+        "pages": 54511
+      }
+    },
+    {
+      "name": "owner-history-5-table-5-true-2",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "repetition": 2,
+      "threads": 911,
+      "elapsedMs": 1521.549833,
+      "lookupMs": 5.398625000000038,
+      "lockMs": {
+        "n": 183,
+        "p50": 1.3418750000000728,
+        "p95": 8.534708000000137,
+        "max": 23.882917000000134
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.012708000000202446,
+        "p95": 0.017833000000109678,
+        "max": 0.04683299999999235
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1016,
+        "max": 2488
+      },
+      "wal": {
+        "frames": 54368,
+        "unique": 26248,
+        "repeated": 28120,
+        "commits": 183,
+        "bytes": 223996192
+      },
+      "pages": 78654,
+      "free": 25803,
+      "checkpointMs": 131.8864580000004,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.037792000000081316,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-table-5-true-2",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "repetition": 2,
+      "threads": 911,
+      "elapsedMs": 1012.753209,
+      "lookupMs": 3.438625000000229,
+      "lockMs": {
+        "n": 92,
+        "p50": 1.7878329999998641,
+        "p95": 18.115625000000364,
+        "max": 29.81791599999997
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.014208999999937078,
+        "p95": 0.022666999999728432,
+        "max": 0.04345899999998437
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 182,
+        "p95": 1967,
+        "max": 2803
+      },
+      "wal": {
+        "frames": 44775,
+        "unique": 26228,
+        "repeated": 18547,
+        "commits": 92,
+        "bytes": 184473032
+      },
+      "pages": 78654,
+      "free": 25805,
+      "checkpointMs": 114.57408299999997,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.03683399999999892,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-table-5-true-2",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "repetition": 2,
+      "threads": 911,
+      "elapsedMs": 649.7029999999995,
+      "lookupMs": 3.0808750000005602,
+      "lockMs": {
+        "n": 46,
+        "p50": 2.7649579999997513,
+        "p95": 22.700040999999146,
+        "max": 42.57366700000057
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.012374999999337888,
+        "p95": 0.018500000000130967,
+        "max": 0.020333999999820662
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 263,
+        "p95": 2328,
+        "max": 3987
+      },
+      "wal": {
+        "frames": 37674,
+        "unique": 26265,
+        "repeated": 11409,
+        "commits": 46,
+        "bytes": 155216912
+      },
+      "pages": 78655,
+      "free": 25807,
+      "checkpointMs": 112.25220799999988,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.0343750000001819,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-5-table-5-true-3",
+      "mode": "owner-history",
+      "batch": 5,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "repetition": 3,
+      "threads": 911,
+      "elapsedMs": 1574.5720000000001,
+      "lookupMs": 2.9445829999995112,
+      "lockMs": {
+        "n": 183,
+        "p50": 1.3143749999999272,
+        "p95": 9.503249999999753,
+        "max": 23.214750000000095
+      },
+      "waitMs": {
+        "n": 183,
+        "p50": 0.011666000000332133,
+        "p95": 0.017208000000209722,
+        "max": 0.03187499999967258
+      },
+      "batchFrames": {
+        "n": 183,
+        "p50": 138,
+        "p95": 1016,
+        "max": 2488
+      },
+      "wal": {
+        "frames": 54368,
+        "unique": 26248,
+        "repeated": 28120,
+        "commits": 183,
+        "bytes": 223996192
+      },
+      "pages": 78654,
+      "free": 25803,
+      "checkpointMs": 111.12366699999984,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.03608299999996234,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-10-table-5-true-3",
+      "mode": "owner-history",
+      "batch": 10,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "repetition": 3,
+      "threads": 911,
+      "elapsedMs": 971.5174580000012,
+      "lookupMs": 2.8700410000001284,
+      "lockMs": {
+        "n": 92,
+        "p50": 1.7895410000000993,
+        "p95": 18.327792000000045,
+        "max": 29.878249999999753
+      },
+      "waitMs": {
+        "n": 92,
+        "p50": 0.0126669999999649,
+        "p95": 0.016666999999870313,
+        "max": 0.018124999999599822
+      },
+      "batchFrames": {
+        "n": 92,
+        "p50": 182,
+        "p95": 1967,
+        "max": 2803
+      },
+      "wal": {
+        "frames": 44775,
+        "unique": 26228,
+        "repeated": 18547,
+        "commits": 92,
+        "bytes": 184473032
+      },
+      "pages": 78654,
+      "free": 25805,
+      "checkpointMs": 107.54795800000102,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.033832999999503954,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    },
+    {
+      "name": "owner-history-20-table-5-true-3",
+      "mode": "owner-history",
+      "batch": 20,
+      "order": "table",
+      "yieldMs": 5,
+      "indexed": true,
+      "repetition": 3,
+      "threads": 911,
+      "elapsedMs": 646.4079999999994,
+      "lookupMs": 2.8532500000001164,
+      "lockMs": {
+        "n": 46,
+        "p50": 2.929167000000234,
+        "p95": 23.498625000000175,
+        "max": 43.18841699999939
+      },
+      "waitMs": {
+        "n": 46,
+        "p50": 0.01262499999938882,
+        "p95": 0.017749999999068677,
+        "max": 0.03545800000028976
+      },
+      "batchFrames": {
+        "n": 46,
+        "p50": 263,
+        "p95": 2328,
+        "max": 3987
+      },
+      "wal": {
+        "frames": 37674,
+        "unique": 26265,
+        "repeated": 11409,
+        "commits": 46,
+        "bytes": 155216912
+      },
+      "pages": 78655,
+      "free": 25807,
+      "checkpointMs": 109.79820800000016,
+      "checkpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpoint": [
+        {
+          "busy": 0,
+          "log": 0,
+          "checkpointed": 0
+        }
+      ],
+      "releasedCheckpointMs": 0.031000000000858563,
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "probes": []
+    }
+  ],
+  "pageInventory": [
+    [
+      "thread_tool_invocations",
+      17002,
+      69640192,
+      61841977,
+      6855676
+    ],
+    [
+      "threads",
+      10043,
+      41136128,
+      39508511,
+      1545952
+    ],
+    [
+      "composer_draft_journal",
+      6300,
+      25804800,
+      25596191,
+      178605
+    ],
+    [
+      "idx_thread_tool_invocations_read_thread",
+      6051,
+      24784896,
+      17779717,
+      6544403
+    ],
+    [
+      "token_miser_objects",
+      5172,
+      21184512,
+      17974905,
+      3043712
+    ],
+    [
+      "token_miser_observations",
+      4699,
+      19247104,
+      17513251,
+      1458025
+    ],
+    [
+      "sqlite_autoindex_thread_tool_invocations_1",
+      3599,
+      14741504,
+      12916192,
+      1399033
+    ],
+    [
+      "thread_usage_lines",
+      3202,
+      13115392,
+      12267662,
+      675294
+    ],
+    [
+      "backends",
+      2854,
+      11689984,
+      11672397,
+      6108
+    ],
+    [
+      "idx_thread_tool_invocations_turn",
+      2520,
+      10321920,
+      8987099,
+      1013417
+    ],
+    [
+      "idx_thread_tool_invocations_polling",
+      2119,
+      8679424,
+      7571952,
+      790916
+    ],
+    [
+      "thread_usage_turns",
+      1557,
+      6377472,
+      5512027,
+      720628
+    ],
+    [
+      "idx_thread_usage_lines_read_parent",
+      1360,
+      5570560,
+      4021039,
+      1459708
+    ],
+    [
+      "idx_thread_usage_lines_read_thread",
+      1189,
+      4870144,
+      4203307,
+      574155
+    ],
+    [
+      "sqlite_autoindex_thread_usage_lines_1",
+      942,
+      3858432,
+      3222517,
+      551258
+    ],
+    [
+      "sqlite_autoindex_token_miser_observations_1",
+      614,
+      2514944,
+      2150902,
+      264491
+    ],
+    [
+      "idx_thread_usage_lines_source",
+      601,
+      2461696,
+      2109855,
+      285784
+    ],
+    [
+      "thread_message_origins",
+      532,
+      2179072,
+      1844935,
+      307179
+    ],
+    [
+      "idx_thread_usage_lines_turn",
+      508,
+      2080768,
+      1786353,
+      229508
+    ],
+    [
+      "sqlite_autoindex_thread_usage_turns_1",
+      502,
+      2056192,
+      1796798,
+      194974
+    ],
+    [
+      "idx_thread_usage_turns_turn",
+      497,
+      2035712,
+      1772999,
+      198379
+    ],
+    [
+      "idx_token_miser_observations_thread",
+      465,
+      1904640,
+      1474864,
+      332013
+    ],
+    [
+      "pr_auto_dispatch_claims",
+      406,
+      1662976,
+      939169,
+      714610
+    ],
+    [
+      "idx_thread_usage_lines_thread",
+      343,
+      1404928,
+      1195807,
+      146194
+    ],
+    [
+      "idx_thread_usage_turns_thread",
+      341,
+      1396736,
+      1186840,
+      147434
+    ],
+    [
+      "idx_thread_usage_lines_summary_thread",
+      325,
+      1331200,
+      1136992,
+      131497
+    ],
+    [
+      "idx_thread_usage_lines_parent",
+      305,
+      1249280,
+      1013539,
+      173270
+    ],
+    [
+      "thread_usage_boundaries",
+      296,
+      1212416,
+      1106149,
+      78681
+    ],
+    [
+      "idx_thread_usage_lines_summary_parent",
+      283,
+      1159168,
+      954724,
+      142237
+    ],
+    [
+      "pr_lookup_cache",
+      273,
+      1118208,
+      939399,
+      162084
+    ],
+    [
+      "idx_token_miser_objects_thread",
+      204,
+      835584,
+      666880,
+      124572
+    ],
+    [
+      "acp_sessions",
+      187,
+      765952,
+      708267,
+      55510
+    ],
+    [
+      "directory_git_status",
+      173,
+      708608,
+      664657,
+      42218
+    ],
+    [
+      "sqlite_autoindex_token_miser_objects_1",
+      170,
+      696320,
+      569608,
+      82988
+    ],
+    [
+      "thread_search_documents",
+      165,
+      675840,
+      539422,
+      123507
+    ],
+    [
+      "callback_handles",
+      165,
+      675840,
+      594705,
+      73178
+    ],
+    [
+      "thread_search_fts_data",
+      160,
+      655360,
+      623759,
+      26828
+    ],
+    [
+      "pr_status_cache",
+      147,
+      602112,
+      523485,
+      70919
+    ],
+    [
+      "sqlite_autoindex_thread_usage_boundaries_1",
+      113,
+      462848,
+      390838,
+      59159
+    ],
+    [
+      "thread_tool_invocation_alerts",
+      108,
+      442368,
+      336087,
+      103922
+    ],
+    [
+      "sqlite_autoindex_thread_usage_boundaries_2",
+      101,
+      413696,
+      348675,
+      52314
+    ],
+    [
+      "thread_search_fts_content",
+      99,
+      405504,
+      371921,
+      21414
+    ],
+    [
+      "messaging_activity_log",
+      97,
+      397312,
+      352928,
+      39838
+    ],
+    [
+      "meta",
+      93,
+      380928,
+      374025,
+      6406
+    ],
+    [
+      "thread_git_working_state",
+      85,
+      348160,
+      230397,
+      110992
+    ],
+    [
+      "idx_thread_message_origins_thread",
+      85,
+      348160,
+      294342,
+      43370
+    ],
+    [
+      "sqlite_autoindex_thread_message_origins_1",
+      81,
+      331776,
+      272334,
+      49042
+    ],
+    [
+      "sqlite_autoindex_pr_lookup_cache_1",
+      80,
+      327680,
+      275957,
+      43760
+    ],
+    [
+      "provider_thread_snapshots",
+      67,
+      274432,
+      262114,
+      11985
+    ],
+    [
+      "deliveries",
+      51,
+      208896,
+      183696,
+      22488
+    ],
+    [
+      "sqlite_autoindex_threads_1",
+      37,
+      151552,
+      124209,
+      19118
+    ],
+    [
+      "idx_thread_search_documents_project_updated",
+      35,
+      143360,
+      88429,
+      50013
+    ],
+    [
+      "acp_available_commands",
+      35,
+      143360,
+      122288,
+      20664
+    ],
+    [
+      "thread_pricing_summaries",
+      34,
+      139264,
+      125146,
+      7011
+    ],
+    [
+      "sqlite_autoindex_thread_search_documents_1",
+      32,
+      131072,
+      70845,
+      55347
+    ],
+    [
+      "acp_registry_cache",
+      32,
+      131072,
+      127305,
+      3625
+    ],
+    [
+      "federation_session_audit",
+      28,
+      114688,
+      94494,
+      16789
+    ],
+    [
+      "remote_thread_pins",
+      27,
+      110592,
+      78656,
+      31409
+    ],
+    [
+      "sqlite_autoindex_thread_pricing_summaries_1",
+      23,
+      94208,
+      77674,
+      12239
+    ],
+    [
+      "remote_thread_targets",
+      18,
+      73728,
+      58762,
+      12320
+    ],
+    [
+      "sqlite_autoindex_pr_auto_dispatch_claims_1",
+      17,
+      69632,
+      54282,
+      13707
+    ],
+    [
+      "sqlite_schema",
+      16,
+      65536,
+      52817,
+      11173
+    ],
+    [
+      "idx_pr_auto_dispatch_pr_fingerprint",
+      16,
+      65536,
+      49027,
+      14878
+    ],
+    [
+      "directory_launchpads",
+      15,
+      61440,
+      44623,
+      16429
+    ],
+    [
+      "sqlite_autoindex_thread_git_working_state_1",
+      14,
+      57344,
+      44323,
+      10513
+    ],
+    [
+      "sqlite_autoindex_remote_thread_targets_1",
+      14,
+      57344,
+      43705,
+      11984
+    ],
+    [
+      "sqlite_autoindex_callback_handles_1",
+      14,
+      57344,
+      47232,
+      7734
+    ],
+    [
+      "bindings",
+      14,
+      57344,
+      35971,
+      20939
+    ],
+    [
+      "composer_draft_latest",
+      12,
+      49152,
+      38652,
+      10262
+    ],
+    [
+      "thread_compactions",
+      11,
+      45056,
+      35055,
+      9296
+    ],
+    [
+      "idx_pr_lookup_cache_fetched",
+      11,
+      45056,
+      20382,
+      19269
+    ],
+    [
+      "idx_federation_session_audit_peer_created",
+      11,
+      45056,
+      26000,
+      17428
+    ],
+    [
+      "idx_composer_draft_journal_scope_hash_status",
+      11,
+      45056,
+      29153,
+      14836
+    ],
+    [
+      "thread_search_fts_docsize",
+      10,
+      40960,
+      21000,
+      10804
+    ],
+    [
+      "sqlite_autoindex_pr_status_cache_1",
+      10,
+      40960,
+      27706,
+      10852
+    ],
+    [
+      "sqlite_autoindex_deliveries_1",
+      10,
+      40960,
+      31249,
+      8641
+    ],
+    [
+      "pr_status_watches",
+      10,
+      40960,
+      32086,
+      8479
+    ],
+    [
+      "pr_auto_dispatch_candidates",
+      10,
+      40960,
+      24214,
+      15263
+    ],
+    [
+      "idx_deliveries_binding_created",
+      10,
+      40960,
+      30669,
+      9221
+    ],
+    [
+      "idx_thread_search_documents_backend_updated",
+      9,
+      36864,
+      25681,
+      6579
+    ],
+    [
+      "idx_remote_thread_targets_thread",
+      9,
+      36864,
+      26807,
+      8462
+    ],
+    [
+      "idx_composer_draft_journal_scope_updated",
+      9,
+      36864,
+      26738,
+      9083
+    ],
+    [
+      "idx_threads_dismissed",
+      8,
+      32768,
+      15270,
+      9621
+    ],
+    [
+      "idx_threads_directory",
+      8,
+      32768,
+      15270,
+      9621
+    ],
+    [
+      "idx_pr_auto_dispatch_candidate_winner",
+      8,
+      32768,
+      23146,
+      8729
+    ],
+    [
+      "idx_federation_session_audit_session_created",
+      8,
+      32768,
+      20300,
+      10876
+    ],
+    [
+      "token_miser_retention",
+      7,
+      28672,
+      23273,
+      4329
+    ],
+    [
+      "star_map_arrangement",
+      7,
+      28672,
+      19948,
+      8264
+    ],
+    [
+      "sqlite_autoindex_pr_auto_dispatch_candidates_1",
+      7,
+      28672,
+      21277,
+      6514
+    ],
+    [
+      "idx_thread_tool_invocation_alerts_read_thread",
+      7,
+      28672,
+      22949,
+      5028
+    ],
+    [
+      "sqlite_autoindex_token_miser_retention_1",
+      6,
+      24576,
+      15272,
+      8576
+    ],
+    [
+      "messaging_managed_topics",
+      6,
+      24576,
+      18062,
+      6274
+    ],
+    [
+      "acp_installed_agents",
+      6,
+      24576,
+      15847,
+      8630
+    ],
+    [
+      "sqlite_autoindex_thread_tool_invocation_alerts_1",
+      5,
+      20480,
+      15213,
+      4749
+    ],
+    [
+      "messaging_observed_surfaces",
+      5,
+      20480,
+      13175,
+      7006
+    ],
+    [
+      "idx_thread_search_documents_archived",
+      5,
+      20480,
+      7787,
+      8137
+    ],
+    [
+      "idx_messaging_activity_log_thread",
+      5,
+      20480,
+      12441,
+      6480
+    ],
+    [
+      "sqlite_autoindex_thread_compactions_1",
+      4,
+      16384,
+      9634,
+      6376
+    ],
+    [
+      "idx_thread_git_working_state_fetched",
+      4,
+      16384,
+      9359,
+      4638
+    ],
+    [
+      "idx_pr_status_cache_fetched",
+      4,
+      16384,
+      8382,
+      5672
+    ],
+    [
+      "idx_pr_auto_dispatch_pending_schedule",
+      4,
+      16384,
+      10441,
+      4456
+    ],
+    [
+      "idx_messaging_activity_log_platform_created",
+      4,
+      16384,
+      10019,
+      4818
+    ],
+    [
+      "idx_callback_handles_expires",
+      4,
+      16384,
+      8118,
+      6008
+    ],
+    [
+      "sqlite_autoindex_star_map_arrangement_1",
+      3,
+      12288,
+      5480,
+      6584
+    ],
+    [
+      "sqlite_autoindex_directory_git_status_1",
+      3,
+      12288,
+      4604,
+      7441
+    ],
+    [
+      "sqlite_autoindex_acp_sessions_1",
+      3,
+      12288,
+      5264,
+      6680
+    ],
+    [
+      "idx_thread_compactions_thread",
+      3,
+      12288,
+      5850,
+      6076
+    ],
+    [
+      "idx_messaging_activity_log_created",
+      3,
+      12288,
+      5511,
+      5242
+    ],
+    [
+      "idx_composer_draft_journal_updated",
+      3,
+      12288,
+      3388,
+      7944
+    ],
+    [
+      "idx_callback_handles_session",
+      3,
+      12288,
+      3690,
+      6352
+    ],
+    [
+      "star_map_workspace",
+      2,
+      8192,
+      7542,
+      628
+    ],
+    [
+      "desktop_config_snapshots",
+      2,
+      8192,
+      4139,
+      4032
+    ],
+    [
+      "thread_tool_analysis",
+      1,
+      4096,
+      198,
+      3882
+    ],
+    [
+      "thread_search_fts_idx",
+      1,
+      4096,
+      2545,
+      1069
+    ],
+    [
+      "thread_search_fts_config",
+      1,
+      4096,
+      11,
+      4074
+    ],
+    [
+      "sqlite_sequence",
+      1,
+      4096,
+      54,
+      4026
+    ],
+    [
+      "sqlite_autoindex_thread_tool_analysis_1",
+      1,
+      4096,
+      91,
+      3991
+    ],
+    [
+      "sqlite_autoindex_star_map_workspace_1",
+      1,
+      4096,
+      12,
+      4073
+    ],
+    [
+      "sqlite_autoindex_secrets_1",
+      1,
+      4096,
+      86,
+      3993
+    ],
+    [
+      "sqlite_autoindex_scheduled_thread_actions_1",
+      1,
+      4096,
+      574,
+      3493
+    ],
+    [
+      "sqlite_autoindex_remote_thread_pins_1",
+      1,
+      4096,
+      2789,
+      1203
+    ],
+    [
+      "sqlite_autoindex_remote_directory_overlay_1",
+      1,
+      4096,
+      522,
+      3548
+    ],
+    [
+      "sqlite_autoindex_provider_thread_snapshots_1",
+      1,
+      4096,
+      58,
+      4015
+    ],
+    [
+      "sqlite_autoindex_provider_discovery_snapshots_1",
+      1,
+      4096,
+      8,
+      4077
+    ],
+    [
+      "sqlite_autoindex_pricing_rates_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_pricing_catalog_versions_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_pr_status_watches_1",
+      1,
+      4096,
+      2040,
+      1895
+    ],
+    [
+      "sqlite_autoindex_pr_auto_dispatch_incidents_1",
+      1,
+      4096,
+      871,
+      3184
+    ],
+    [
+      "sqlite_autoindex_pr_auto_dispatch_budget_reservations_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_pr_auto_dispatch_budget_1",
+      1,
+      4096,
+      10,
+      4075
+    ],
+    [
+      "sqlite_autoindex_pending_intents_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_monitor_subscriptions_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_meta_1",
+      1,
+      4096,
+      620,
+      3414
+    ],
+    [
+      "sqlite_autoindex_messaging_topic_cleanup_proposals_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_messaging_thread_topic_links_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_messaging_runtime_lease_1",
+      1,
+      4096,
+      69,
+      4010
+    ],
+    [
+      "sqlite_autoindex_messaging_pairing_tokens_2",
+      1,
+      4096,
+      206,
+      3873
+    ],
+    [
+      "sqlite_autoindex_messaging_pairing_tokens_1",
+      1,
+      4096,
+      143,
+      3936
+    ],
+    [
+      "sqlite_autoindex_messaging_observed_surfaces_1",
+      1,
+      4096,
+      1558,
+      2407
+    ],
+    [
+      "sqlite_autoindex_messaging_managed_topics_1",
+      1,
+      4096,
+      1102,
+      2899
+    ],
+    [
+      "sqlite_autoindex_messaging_default_agent_assignments_1",
+      1,
+      4096,
+      65,
+      4020
+    ],
+    [
+      "sqlite_autoindex_messaging_activity_summary_1",
+      1,
+      4096,
+      11,
+      4074
+    ],
+    [
+      "sqlite_autoindex_launchpad_defaults_1",
+      1,
+      4096,
+      87,
+      3983
+    ],
+    [
+      "sqlite_autoindex_federation_peers_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_federation_enrollment_tokens_2",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_federation_enrollment_tokens_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_directory_overlay_1",
+      1,
+      4096,
+      713,
+      3330
+    ],
+    [
+      "sqlite_autoindex_directory_launchpads_1",
+      1,
+      4096,
+      1854,
+      2138
+    ],
+    [
+      "sqlite_autoindex_desktop_config_snapshots_1",
+      1,
+      4096,
+      9,
+      4076
+    ],
+    [
+      "sqlite_autoindex_composer_draft_latest_1",
+      1,
+      4096,
+      1654,
+      2364
+    ],
+    [
+      "sqlite_autoindex_browse_sessions_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_bindings_1",
+      1,
+      4096,
+      3528,
+      446
+    ],
+    [
+      "sqlite_autoindex_backends_1",
+      1,
+      4096,
+      34,
+      4045
+    ],
+    [
+      "sqlite_autoindex_automations_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_automation_runs_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_automation_run_artifacts_1",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "sqlite_autoindex_app_runtime_instances_1",
+      1,
+      4096,
+      302,
+      3765
+    ],
+    [
+      "sqlite_autoindex_acp_registry_cache_1",
+      1,
+      4096,
+      10,
+      4075
+    ],
+    [
+      "sqlite_autoindex_acp_installed_agents_1",
+      1,
+      4096,
+      53,
+      4023
+    ],
+    [
+      "sqlite_autoindex_acp_available_commands_1",
+      1,
+      4096,
+      971,
+      3072
+    ],
+    [
+      "secrets",
+      1,
+      4096,
+      339,
+      3736
+    ],
+    [
+      "scheduled_thread_actions",
+      1,
+      4096,
+      2767,
+      1286
+    ],
+    [
+      "remote_directory_overlay",
+      1,
+      4096,
+      1087,
+      2971
+    ],
+    [
+      "provider_discovery_snapshots",
+      1,
+      4096,
+      923,
+      3160
+    ],
+    [
+      "pricing_rates",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "pricing_catalog_versions",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "pr_auto_dispatch_incidents",
+      1,
+      4096,
+      1135,
+      2909
+    ],
+    [
+      "pr_auto_dispatch_budget_reservations",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "pr_auto_dispatch_budget",
+      1,
+      4096,
+      19,
+      4065
+    ],
+    [
+      "pending_intents",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "monitor_subscriptions",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "messaging_topic_cleanup_proposals",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "messaging_thread_topic_links",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "messaging_runtime_lease",
+      1,
+      4096,
+      301,
+      3775
+    ],
+    [
+      "messaging_pairing_tokens",
+      1,
+      4096,
+      878,
+      3195
+    ],
+    [
+      "messaging_default_agent_assignments",
+      1,
+      4096,
+      432,
+      3651
+    ],
+    [
+      "messaging_activity_summary",
+      1,
+      4096,
+      25,
+      4059
+    ],
+    [
+      "launchpad_defaults",
+      1,
+      4096,
+      698,
+      3365
+    ],
+    [
+      "idx_threads_pending_spend_alert",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_scheduled_thread_actions_thread",
+      1,
+      4096,
+      443,
+      3624
+    ],
+    [
+      "idx_scheduled_thread_actions_queue",
+      1,
+      4096,
+      538,
+      3532
+    ],
+    [
+      "idx_scheduled_thread_actions_due",
+      1,
+      4096,
+      176,
+      3891
+    ],
+    [
+      "idx_remote_thread_pins_instance",
+      1,
+      4096,
+      1631,
+      2361
+    ],
+    [
+      "idx_pricing_rates_lookup",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_pr_status_watches_active_target",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_pr_status_watches_active_pr",
+      1,
+      4096,
+      2383,
+      1552
+    ],
+    [
+      "idx_pr_auto_dispatch_active_thread",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_pending_intents_expires",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_pending_intents_binding",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_monitor_subscriptions_channel",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_messaging_topic_cleanup_proposals_supergroup",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_messaging_thread_topic_links_unique",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_messaging_runtime_lease_status_expires",
+      1,
+      4096,
+      56,
+      4023
+    ],
+    [
+      "idx_messaging_pairing_status",
+      1,
+      4096,
+      55,
+      4024
+    ],
+    [
+      "idx_messaging_pairing_platform_expires",
+      1,
+      4096,
+      80,
+      3999
+    ],
+    [
+      "idx_messaging_observed_surfaces_recent",
+      1,
+      4096,
+      436,
+      3529
+    ],
+    [
+      "idx_messaging_observed_surfaces_platform_recent",
+      1,
+      4096,
+      805,
+      3160
+    ],
+    [
+      "idx_messaging_managed_topics_supergroup",
+      1,
+      4096,
+      999,
+      3002
+    ],
+    [
+      "idx_messaging_managed_topics_conversation",
+      1,
+      4096,
+      928,
+      3073
+    ],
+    [
+      "idx_messaging_default_agent_assignments_thread",
+      1,
+      4096,
+      52,
+      4033
+    ],
+    [
+      "idx_messaging_default_agent_assignments_scope",
+      1,
+      4096,
+      34,
+      4051
+    ],
+    [
+      "idx_messaging_default_agent_assignments_active_scope",
+      1,
+      4096,
+      20,
+      4065
+    ],
+    [
+      "idx_federation_peers_status_updated",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_federation_enrollment_tokens_status_expires",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_federation_enrollment_tokens_peer",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_directory_git_status_fetched",
+      1,
+      4096,
+      770,
+      3108
+    ],
+    [
+      "idx_composer_draft_latest_updated",
+      1,
+      4096,
+      229,
+      3790
+    ],
+    [
+      "idx_browse_sessions_expires",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_bindings_thread",
+      1,
+      4096,
+      1517,
+      2460
+    ],
+    [
+      "idx_bindings_channel",
+      1,
+      4096,
+      1433,
+      2544
+    ],
+    [
+      "idx_automations_thread",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automations_next_run",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automation_runs_thread_updated",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automation_runs_status",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automation_runs_source_event",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automation_runs_one_pending_scheduled",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automation_runs_automation_updated",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_automation_run_artifacts_automation_updated",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "idx_app_runtime_instances_profile_heartbeat",
+      1,
+      4096,
+      126,
+      3941
+    ],
+    [
+      "idx_app_runtime_instances_profile_cwd_hash",
+      1,
+      4096,
+      245,
+      3822
+    ],
+    [
+      "idx_acp_sessions_backend_updated",
+      1,
+      4096,
+      2080,
+      1696
+    ],
+    [
+      "idx_acp_registry_cache_fetched",
+      1,
+      4096,
+      10,
+      4075
+    ],
+    [
+      "idx_acp_installed_agents_updated",
+      1,
+      4096,
+      43,
+      4033
+    ],
+    [
+      "idx_acp_installed_agents_registry",
+      1,
+      4096,
+      37,
+      4039
+    ],
+    [
+      "idx_acp_available_commands_observed",
+      1,
+      4096,
+      164,
+      3879
+    ],
+    [
+      "federation_peers",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "federation_enrollment_tokens",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "directory_overlay",
+      1,
+      4096,
+      2195,
+      1814
+    ],
+    [
+      "browse_sessions",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "automations",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "automation_runs",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "automation_run_artifacts",
+      1,
+      4096,
+      0,
+      4088
+    ],
+    [
+      "app_runtime_instances",
+      1,
+      4096,
+      709,
+      3351
+    ]
+  ],
+  "schemaInventory": [
+    {
+      "table": "meta",
+      "rows": 18,
+      "columns": [
+        "key",
+        "value"
+      ]
+    },
+    {
+      "table": "bindings",
+      "rows": 37,
+      "columns": [
+        "binding_id",
+        "channel_kind",
+        "channel_id",
+        "thread_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "revoked_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pending_intents",
+      "rows": 0,
+      "columns": [
+        "intent_id",
+        "binding_id",
+        "created_at",
+        "expires_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "browse_sessions",
+      "rows": 0,
+      "columns": [
+        "session_id",
+        "binding_id",
+        "created_at",
+        "expires_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "callback_handles",
+      "rows": 738,
+      "columns": [
+        "handle_id",
+        "session_id",
+        "created_at",
+        "expires_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "deliveries",
+      "rows": 318,
+      "columns": [
+        "delivery_id",
+        "binding_id",
+        "created_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "backends",
+      "rows": 3,
+      "columns": [
+        "scope",
+        "payload"
+      ]
+    },
+    {
+      "table": "launchpad_defaults",
+      "rows": 6,
+      "columns": [
+        "key",
+        "value"
+      ]
+    },
+    {
+      "table": "directory_launchpads",
+      "rows": 32,
+      "columns": [
+        "directory_path",
+        "payload",
+        "created_at",
+        "updated_at",
+        "settings_touched_at"
+      ]
+    },
+    {
+      "table": "threads",
+      "rows": 2595,
+      "columns": [
+        "thread_id",
+        "directory_path",
+        "last_seen_at",
+        "dismissed_at",
+        "snoozed_until",
+        "payload"
+      ]
+    },
+    {
+      "table": "secrets",
+      "rows": 3,
+      "columns": [
+        "key",
+        "ciphertext",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "messaging_activity_log",
+      "rows": 501,
+      "columns": [
+        "id",
+        "platform",
+        "kind",
+        "thread_id",
+        "binding_id",
+        "conversation_id",
+        "conversation_title",
+        "actor_id",
+        "actor_display_name",
+        "summary",
+        "created_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "messaging_pairing_tokens",
+      "rows": 3,
+      "columns": [
+        "entry_id",
+        "token_hmac",
+        "platform",
+        "instance_id",
+        "scope",
+        "status",
+        "generated_at",
+        "expires_at",
+        "observed_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "monitor_subscriptions",
+      "rows": 0,
+      "columns": [
+        "subscription_id",
+        "channel_kind",
+        "channel_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "revoked_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "app_runtime_instances",
+      "rows": 7,
+      "columns": [
+        "instance_id",
+        "profile_name",
+        "process_id",
+        "cwd_hint",
+        "cwd_hash",
+        "started_at",
+        "heartbeat_at",
+        "exited_at",
+        "desired_messaging_enabled",
+        "effective_messaging_enabled",
+        "disabled_reason"
+      ]
+    },
+    {
+      "table": "messaging_runtime_lease",
+      "rows": 3,
+      "columns": [
+        "lease_key",
+        "owner_instance_id",
+        "acquired_at",
+        "heartbeat_at",
+        "expires_at",
+        "released_at",
+        "status"
+      ]
+    },
+    {
+      "table": "directory_git_status",
+      "rows": 70,
+      "columns": [
+        "directory_key",
+        "directory_path",
+        "directory_updated_at",
+        "fetched_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "composer_draft_latest",
+      "rows": 23,
+      "columns": [
+        "scope_key",
+        "scope_kind",
+        "status",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "composer_draft_journal",
+      "rows": 308,
+      "columns": [
+        "id",
+        "scope_key",
+        "scope_kind",
+        "status",
+        "content_hash",
+        "char_count",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "directory_overlay",
+      "rows": 15,
+      "columns": [
+        "directory_key",
+        "payload"
+      ]
+    },
+    {
+      "table": "messaging_managed_topics",
+      "rows": 29,
+      "columns": [
+        "topic_record_id",
+        "channel_kind",
+        "supergroup_id",
+        "topic_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "messaging_thread_topic_links",
+      "rows": 0,
+      "columns": [
+        "link_id",
+        "channel_kind",
+        "supergroup_id",
+        "backend",
+        "thread_id",
+        "topic_record_id",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "messaging_topic_cleanup_proposals",
+      "rows": 0,
+      "columns": [
+        "proposal_id",
+        "channel_kind",
+        "supergroup_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "applied_at",
+        "expires_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "acp_registry_cache",
+      "rows": 1,
+      "columns": [
+        "cache_key",
+        "fetched_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "acp_installed_agents",
+      "rows": 4,
+      "columns": [
+        "backend_id",
+        "registry_id",
+        "version",
+        "install_status",
+        "auth_status",
+        "verification_status",
+        "installed_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "acp_sessions",
+      "rows": 104,
+      "columns": [
+        "backend_id",
+        "session_id",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "automations",
+      "rows": 0,
+      "columns": [
+        "automation_id",
+        "backend",
+        "thread_id",
+        "name",
+        "status",
+        "backlog_policy",
+        "next_run_at",
+        "last_run_at",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "automation_runs",
+      "rows": 0,
+      "columns": [
+        "run_id",
+        "automation_id",
+        "backend",
+        "thread_id",
+        "status",
+        "trigger",
+        "scheduled_for",
+        "queued_at",
+        "started_at",
+        "completed_at",
+        "backend_turn_id",
+        "queue_entry_id",
+        "created_at",
+        "updated_at",
+        "payload",
+        "source_event_key"
+      ]
+    },
+    {
+      "table": "automation_run_artifacts",
+      "rows": 0,
+      "columns": [
+        "run_id",
+        "automation_id",
+        "backend",
+        "thread_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "messaging_activity_summary",
+      "rows": 1,
+      "columns": [
+        "platform",
+        "last_request_at",
+        "last_response_at",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "thread_search_documents",
+      "rows": 1500,
+      "columns": [
+        "identity_key",
+        "backend",
+        "thread_id",
+        "title",
+        "title_source",
+        "summary",
+        "project_key",
+        "created_at",
+        "updated_at",
+        "archived_at",
+        "git_branch",
+        "git_origin_url",
+        "model",
+        "linked_directories_json",
+        "display_json",
+        "indexed_at"
+      ]
+    },
+    {
+      "table": "pr_status_cache",
+      "rows": 762,
+      "columns": [
+        "pr_key",
+        "provider",
+        "org",
+        "repo",
+        "number",
+        "fetched_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pr_lookup_cache",
+      "rows": 1759,
+      "columns": [
+        "lookup_key",
+        "provider",
+        "branch",
+        "directory_paths",
+        "fetched_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "thread_git_working_state",
+      "rows": 781,
+      "columns": [
+        "worktree_path",
+        "fetched_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pricing_catalog_versions",
+      "rows": 0,
+      "columns": [
+        "catalog_id",
+        "catalog_version",
+        "provider",
+        "currency",
+        "effective_from",
+        "effective_to",
+        "source_label",
+        "created_at"
+      ]
+    },
+    {
+      "table": "pricing_rates",
+      "rows": 0,
+      "columns": [
+        "rate_id",
+        "catalog_id",
+        "catalog_version",
+        "provider",
+        "currency",
+        "model",
+        "service_tier",
+        "input_micros_per_million",
+        "cached_input_micros_per_million",
+        "output_micros_per_million",
+        "display_name"
+      ]
+    },
+    {
+      "table": "thread_usage_turns",
+      "rows": 19458,
+      "columns": [
+        "usage_turn_id",
+        "provider",
+        "backend",
+        "thread_id",
+        "parent_thread_id",
+        "turn_id",
+        "model",
+        "reasoning_effort",
+        "service_tier",
+        "fast_mode",
+        "settings_source",
+        "settings_confidence",
+        "started_at",
+        "completed_at",
+        "observed_at",
+        "updated_at",
+        "observed_cold_replay_count",
+        "observed_cold_replay_uncached_tokens",
+        "observed_hot_replay_cached_tokens",
+        "observed_hot_replay_count",
+        "final_context_tokens",
+        "peak_context_tokens",
+        "model_context_window"
+      ]
+    },
+    {
+      "table": "thread_usage_lines",
+      "rows": 19605,
+      "columns": [
+        "usage_line_id",
+        "usage_turn_id",
+        "provider",
+        "backend",
+        "thread_id",
+        "parent_thread_id",
+        "turn_id",
+        "source",
+        "source_item_id",
+        "scope",
+        "status",
+        "created_at",
+        "completed_at",
+        "model",
+        "reasoning_effort",
+        "service_tier",
+        "fast_mode",
+        "settings_source",
+        "settings_confidence",
+        "input_tokens",
+        "cached_input_tokens",
+        "uncached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens",
+        "price_status",
+        "price_unavailable_reason",
+        "currency",
+        "pricing_catalog_id",
+        "pricing_catalog_version",
+        "pricing_rate_id",
+        "uncached_input_cost_micros",
+        "cached_input_cost_micros",
+        "output_cost_micros",
+        "total_cost_micros",
+        "updated_at",
+        "cumulative_input_tokens",
+        "cumulative_cached_input_tokens",
+        "cumulative_uncached_input_tokens",
+        "cumulative_output_tokens",
+        "cumulative_reasoning_output_tokens",
+        "cumulative_total_tokens",
+        "cumulative_total_cost_micros",
+        "observed_cold_replay_count",
+        "observed_cold_replay_uncached_tokens",
+        "observed_hot_replay_cached_tokens",
+        "observed_hot_replay_count",
+        "turn_usage_attributed",
+        "cache_write_input_tokens",
+        "cumulative_cache_write_input_tokens",
+        "cache_write_input_cost_micros",
+        "pricing_basis"
+      ]
+    },
+    {
+      "table": "thread_search_fts_data",
+      "rows": 161,
+      "columns": [
+        "id",
+        "block"
+      ]
+    },
+    {
+      "table": "thread_search_fts_idx",
+      "rows": 158,
+      "columns": [
+        "segid",
+        "term",
+        "pgno"
+      ]
+    },
+    {
+      "table": "thread_search_fts_content",
+      "rows": 1500,
+      "columns": [
+        "id",
+        "c0",
+        "c1",
+        "c2",
+        "c3",
+        "c4",
+        "c5",
+        "c6",
+        "c7",
+        "c8",
+        "c9",
+        "c10"
+      ]
+    },
+    {
+      "table": "thread_search_fts_docsize",
+      "rows": 1500,
+      "columns": [
+        "id",
+        "sz"
+      ]
+    },
+    {
+      "table": "thread_search_fts_config",
+      "rows": 1,
+      "columns": [
+        "k",
+        "v"
+      ]
+    },
+    {
+      "table": "thread_tool_invocations",
+      "rows": 97044,
+      "columns": [
+        "invocation_id",
+        "backend",
+        "thread_id",
+        "turn_id",
+        "item_id",
+        "tool_name",
+        "normalized_command",
+        "category",
+        "status",
+        "started_at",
+        "completed_at",
+        "observed_at",
+        "updated_at",
+        "session_id",
+        "process_id",
+        "exit_code",
+        "output_chars",
+        "output_lines",
+        "estimated_output_tokens",
+        "warning_lines",
+        "error_lines",
+        "info_lines",
+        "debug_lines",
+        "output_truncated",
+        "noisy",
+        "noisy_reason",
+        "finding_id",
+        "output_state",
+        "source",
+        "suggested_prompt"
+      ]
+    },
+    {
+      "table": "thread_tool_invocation_alerts",
+      "rows": 154,
+      "columns": [
+        "alert_id",
+        "backend",
+        "thread_id",
+        "kind",
+        "severity",
+        "tool_name",
+        "session_id",
+        "process_id",
+        "first_observed_at",
+        "last_observed_at",
+        "invocation_count",
+        "total_output_chars",
+        "estimated_output_tokens",
+        "average_interval_ms",
+        "message",
+        "suggested_prompt",
+        "created_at",
+        "updated_at",
+        "turn_id",
+        "invocation_ids",
+        "worst_invocation_id",
+        "worst_output_chars"
+      ]
+    },
+    {
+      "table": "thread_message_origins",
+      "rows": 3144,
+      "columns": [
+        "backend",
+        "thread_id",
+        "message_id",
+        "created_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "messaging_default_agent_assignments",
+      "rows": 1,
+      "columns": [
+        "assignment_id",
+        "scope_kind",
+        "scope_key",
+        "channel_kind",
+        "backend",
+        "thread_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "revoked_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pr_auto_dispatch_claims",
+      "rows": 481,
+      "columns": [
+        "backend",
+        "thread_id",
+        "pr_key",
+        "fingerprint",
+        "status",
+        "scheduled_at",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pr_auto_dispatch_incidents",
+      "rows": 11,
+      "columns": [
+        "backend",
+        "thread_id",
+        "pr_key",
+        "attempt_count",
+        "active_kinds",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "messaging_observed_surfaces",
+      "rows": 41,
+      "columns": [
+        "surface_key",
+        "channel_kind",
+        "conversation_kind",
+        "conversation_id",
+        "first_seen_at",
+        "last_seen_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pr_auto_dispatch_candidates",
+      "rows": 267,
+      "columns": [
+        "pr_key",
+        "backend",
+        "thread_id",
+        "eligible_since",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "pr_status_watches",
+      "rows": 51,
+      "columns": [
+        "watch_id",
+        "backend",
+        "thread_id",
+        "pr_key",
+        "head_sha",
+        "notify_on_success",
+        "notify_on_failure",
+        "status",
+        "attempt_count",
+        "lease_owner",
+        "lease_expires_at",
+        "created_at",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "pr_auto_dispatch_budget",
+      "rows": 1,
+      "columns": [
+        "scope",
+        "tokens",
+        "updated_at",
+        "paused_at"
+      ]
+    },
+    {
+      "table": "pr_auto_dispatch_budget_reservations",
+      "rows": 0,
+      "columns": [
+        "backend",
+        "thread_id",
+        "fingerprint",
+        "reserved_at"
+      ]
+    },
+    {
+      "table": "federation_peers",
+      "rows": 0,
+      "columns": [
+        "peer_id",
+        "label",
+        "role",
+        "status",
+        "created_at",
+        "updated_at",
+        "last_seen_at",
+        "revoked_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "federation_enrollment_tokens",
+      "rows": 0,
+      "columns": [
+        "enrollment_id",
+        "token_hmac",
+        "status",
+        "generated_at",
+        "expires_at",
+        "used_at",
+        "peer_id",
+        "payload"
+      ]
+    },
+    {
+      "table": "federation_session_audit",
+      "rows": 500,
+      "columns": [
+        "event_id",
+        "peer_id",
+        "session_id",
+        "kind",
+        "created_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "scheduled_thread_actions",
+      "rows": 7,
+      "columns": [
+        "action_id",
+        "backend",
+        "thread_id",
+        "kind",
+        "origin",
+        "status",
+        "scheduled_for",
+        "queue_entry_id",
+        "turn_id",
+        "error_message",
+        "payload_ref",
+        "claim_owner",
+        "claim_expires_at",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "remote_thread_pins",
+      "rows": 32,
+      "columns": [
+        "instance_id",
+        "backend",
+        "thread_id",
+        "added_at",
+        "payload",
+        "revoked_at"
+      ]
+    },
+    {
+      "table": "star_map_arrangement",
+      "rows": 64,
+      "columns": [
+        "entry_key",
+        "payload"
+      ]
+    },
+    {
+      "table": "remote_thread_targets",
+      "rows": 497,
+      "columns": [
+        "instance_id",
+        "backend",
+        "thread_id",
+        "instance_label",
+        "first_seen_at",
+        "last_seen_at"
+      ]
+    },
+    {
+      "table": "remote_directory_overlay",
+      "rows": 6,
+      "columns": [
+        "instance_id",
+        "directory_key",
+        "payload"
+      ]
+    },
+    {
+      "table": "acp_available_commands",
+      "rows": 15,
+      "columns": [
+        "backend_id",
+        "repository_path",
+        "observed_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "thread_tool_analysis",
+      "rows": 2,
+      "columns": [
+        "backend",
+        "thread_id",
+        "analyzer_version",
+        "analyzed_at",
+        "completeness",
+        "entry_count",
+        "invocation_count",
+        "missing_output_count",
+        "page_count",
+        "scanned_through",
+        "explanation"
+      ]
+    },
+    {
+      "table": "thread_search_fts",
+      "rows": 1500,
+      "columns": [
+        "identity_key",
+        "title",
+        "summary",
+        "project_key",
+        "directory_labels",
+        "directory_paths",
+        "git_branch",
+        "git_origin_url",
+        "model",
+        "backend",
+        "thread_id"
+      ]
+    },
+    {
+      "table": "star_map_workspace",
+      "rows": 1,
+      "columns": [
+        "workspace_key",
+        "revision",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "thread_compactions",
+      "rows": 110,
+      "columns": [
+        "compaction_id",
+        "backend",
+        "thread_id",
+        "turn_id",
+        "item_id",
+        "observed_at",
+        "cold_usage_line_id",
+        "cold_uncached_tokens",
+        "cold_cost_micros",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "desktop_config_snapshots",
+      "rows": 1,
+      "columns": [
+        "snapshot_key",
+        "schema_version",
+        "config_revision",
+        "content_hash",
+        "updated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "provider_discovery_snapshots",
+      "rows": 1,
+      "columns": [
+        "provider_id",
+        "schema_version",
+        "dependency_fingerprint",
+        "validated_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "provider_thread_snapshots",
+      "rows": 5,
+      "columns": [
+        "backend",
+        "schema_version",
+        "observed_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "thread_usage_boundaries",
+      "rows": 3833,
+      "columns": [
+        "provider",
+        "backend",
+        "thread_id",
+        "turn_id",
+        "usage_line_id",
+        "successor_usage_line_id",
+        "cumulative_total_tokens"
+      ]
+    },
+    {
+      "table": "token_miser_objects",
+      "rows": 13896,
+      "columns": [
+        "object_id",
+        "thread_id",
+        "created_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "token_miser_observations",
+      "rows": 30729,
+      "columns": [
+        "observation_id",
+        "thread_id",
+        "created_at",
+        "payload"
+      ]
+    },
+    {
+      "table": "token_miser_retention",
+      "rows": 220,
+      "columns": [
+        "thread_key",
+        "generation",
+        "archived"
+      ]
+    },
+    {
+      "table": "thread_pricing_summaries",
+      "rows": 1341,
+      "columns": [
+        "provider",
+        "backend",
+        "thread_id",
+        "currency",
+        "usage_line_count",
+        "priced_usage_line_count",
+        "unpriced_usage_line_count",
+        "input_tokens",
+        "cached_input_tokens",
+        "uncached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens",
+        "total_cost_micros",
+        "updated_at"
+      ]
+    }
+  ],
+  "sourceCommit": "9dddfffbe067622815df55f65bf7663db468384a"
+}

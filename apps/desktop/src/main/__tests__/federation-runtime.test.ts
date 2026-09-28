@@ -300,6 +300,33 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("runs incoming Agent and Token Miser changes through the owning registry", async () => {
+    const agent = { name: "Manager", instructionLineCount: 0, instructionsTooLong: false, updatedAt: 1 };
+    const setThreadAgent = vi.fn(async () => ({ agent }));
+    const setThreadTokenMiser = vi.fn(async () => ({ backend: "codex", threadId: "collision", tokenMiserEnabled: false }));
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({
+        setThreadAgent, setThreadTokenMiser,
+        listBackends: async () => ({ fetchedAt: 1, backends: [{ kind: "codex" }, { kind: "acp:fixture" }] }),
+        readBackendComposerSettings: (kind: string) => kind === "codex" ? { tokenMiser: { enabled: true, defaultEnabled: false }, codexFastAllowed: false } : { modelDefaults: { model: "owner-model", reasoningEffortsByModel: {} } },
+      } as never);
+    try {
+      const backend = new DesktopFederationRuntime().localBackend();
+      expect(await backend.listBackends()).toEqual({ fetchedAt: 1, backends: [
+        { kind: "codex", tokenMiser: { enabled: true, defaultEnabled: false }, codexFastAllowed: false },
+        { kind: "acp:fixture", modelDefaults: { model: "owner-model", reasoningEffortsByModel: {} } },
+      ] });
+      await expect(backend.setThreadAgent({ threadId: "collision", agent: { name: "Manager" } })).resolves.toEqual({ backend: "codex", threadId: "collision", agent });
+      expect(setThreadAgent).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "collision", agent: { name: "Manager" } });
+      await expect(backend.setThreadTokenMiser({ threadId: "collision", enabled: false })).resolves.toMatchObject({ tokenMiserEnabled: false });
+      expect(setThreadTokenMiser).toHaveBeenCalledExactlyOnceWith({ threadId: "collision", enabled: false });
+      setThreadAgent.mockRejectedValueOnce(new Error("Unsupported Codex runtime"));
+      await expect(backend.setThreadAgent({ threadId: "collision", agent: null })).rejects.toThrow("Unsupported Codex runtime");
+    } finally {
+      registry.mockRestore();
+    }
+  });
+
   it("publishes shutdown control notices without event subscriptions and prevents new remote requests", async () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness & {

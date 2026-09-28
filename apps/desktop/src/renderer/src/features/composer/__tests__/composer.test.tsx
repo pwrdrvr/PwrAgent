@@ -31,7 +31,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   AGENT_THREAD_CAPABILITIES,
-  CODEX_AGENT_THREAD_CREATION_NOTE,
+  CODEX_AGENT_THREAD_CHANGE_NOTE,
   DEFAULT_DESKTOP_AGENT_THREAD,
 } from "../../../lib/agent-thread";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -1102,7 +1102,7 @@ describe("Composer", () => {
     });
   });
 
-  it("keeps a wrapped thread options menu inside the composer settings row", () => {
+  it("keeps a wrapped thread options menu inside the composer settings row", async () => {
     const rect = (left: number, right: number): DOMRect => ({
       bottom: 800,
       height: 400,
@@ -1160,24 +1160,104 @@ describe("Composer", () => {
       expect(screen.getByRole("menu")).toHaveStyle({
         transform: "translateX(208px)",
       });
-      fireEvent.focus(screen.getByRole("menuitemcheckbox", {
-        name: /Agent thread/,
-      }));
+      await act(async () => {
+        fireEvent.focus(screen.getByRole("menuitemcheckbox", {
+          name: /Agent thread/,
+        }));
+        await Promise.resolve();
+      });
       expect(screen.getByRole("tooltip")).toHaveStyle({
         left: "408px",
         maxWidth: "300px",
       });
     } finally {
+      cleanup();
       bounds.mockRestore();
     }
   });
 
-  it("explains that an existing Codex thread cannot be converted into an Agent", () => {
+  it.each(["catalog-owner-one", "catalog-owner-two"])("refreshes provider catalogs on the selected owner %s", async (instanceId) => {
+    const federationTarget = { scope: "remote" as const, instanceId };
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1, backends: [] }));
+    render(<Composer skills={[]} desktopApi={{ listBackends }}
+      backends={[backendSummary("codex"), backendSummary("acp:grok")]}
+      launchpad={{ directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo", directoryPath: "/repo", backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1, federationTarget }}
+      onUpdateLaunchpad={vi.fn()} />);
+    chooseDropdownOption("Provider", "Grok");
+    await waitFor(() => expect(listBackends).toHaveBeenCalledExactlyOnceWith({ includeUnavailable: true, federationTarget }));
+  });
+
+  it.each([true, false])("uses the owner's Fast mode policy (%s), independent of the viewer", (allowed) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    render(<Composer skills={[]} codexFastAllowed={!allowed}
+      backends={[{ ...backendSummary("codex", { models: [{ id: "fixture", supportsFast: true }] }), codexFastAllowed: allowed }]}
+      thread={{ id: "collision", title: "Remote", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false }, federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "collision", target } } }} />);
+    expect(Boolean(screen.queryByLabelText("Fast mode"))).toBe(allowed);
+  });
+
+  it.each(["row", "window"] as const)("routes Agent and Token Miser controls to the %s owner and uses owner defaults", async (surface) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
     const setThreadAgent = vi.fn();
+    const setThreadTokenMiser = vi.fn();
+    const remoteWindow = window as typeof window & { __pwragentFederationTarget?: typeof target };
+    if (surface === "window") remoteWindow.__pwragentFederationTarget = target;
+    try {
+      const thread = {
+        id: "collision", title: "Remote", titleSource: "explicit" as const,
+        source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false },
+        ...(surface === "row" ? { federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "collision", target } } } : {}),
+      };
+      render(<Composer disabled={false} skills={[]} thread={thread}
+        backends={[{ ...backendSummary("codex"), tokenMiser: { enabled: true, defaultEnabled: false } }]}
+        tokenMiserEnabled={false} tokenMiserDefaultEnabled={true}
+        desktopApi={{ setThreadAgent, setThreadTokenMiser }} />);
+      fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Agent thread/ }));
+      await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: "codex", threadId: "collision", agent: DEFAULT_DESKTOP_AGENT_THREAD, federationTarget: target }));
+      const toggle = screen.getByRole("menuitemcheckbox", { name: /Token Miser/ });
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      await waitFor(() => expect(toggle).toBeEnabled());
+      fireEvent.click(toggle);
+      await waitFor(() => expect(setThreadTokenMiser).toHaveBeenCalledWith({ backend: "codex", threadId: "collision", enabled: true, federationTarget: target }));
+    } finally {
+      delete remoteWindow.__pwragentFederationTarget;
+    }
+  });
+
+  it.each([undefined, { enabled: false, defaultEnabled: true }])("hides remote Token Miser when the owner gate is unavailable or off (%j)", (tokenMiser) => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    render(<Composer disabled={false} skills={[]} tokenMiserEnabled
+      desktopApi={{ setThreadTokenMiser: vi.fn() }}
+      backends={[{ ...backendSummary("codex"), tokenMiser }]}
+      thread={{ id: "collision", title: "Remote", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false },
+        federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "collision", target } } }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /Token Miser/ })).toBeNull();
+  });
+
+  it.each([false, true])("shows a queued Agent change and toggles back to the applied designation (Agent: %s)", async (enabled) => {
+    const setThreadAgent = vi.fn();
+    const agent = enabled ? { ...DEFAULT_DESKTOP_AGENT_THREAD, name: "Custom fixture manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1 } : undefined;
+    render(<Composer disabled={false} skills={[]} desktopApi={{ setThreadAgent }} thread={{
+      id: "thread-1", title: "Fixture", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false }, agent, agentChange: { enabled: !enabled },
+    }} />);
+    expect(screen.getByText(/queued until the current turn finishes/)).toHaveAttribute("role", "status");
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const toggle = screen.getByRole("menuitemcheckbox", { name: /Agent thread/ });
+    expect(toggle).toHaveAttribute("aria-checked", String(!enabled));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", agent: agent ?? null }));
+  });
+
+  it("promotes an existing Codex thread and refreshes navigation", async () => {
+    const setThreadAgent = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
 
     render(
       <Composer
         desktopApi={{ setThreadAgent }}
+        onRefreshNavigation={onRefreshNavigation}
         disabled={false}
         skills={[]}
         thread={{
@@ -1195,15 +1275,95 @@ describe("Composer", () => {
     const agentThread = screen.getByRole("menuitemcheckbox", {
       name: /Agent thread/,
     });
-    expect(agentThread).toBeDisabled();
-    expect(agentThread).not.toHaveTextContent(CODEX_AGENT_THREAD_CREATION_NOTE);
+    expect(agentThread).toBeEnabled();
+    expect(agentThread).not.toHaveTextContent(CODEX_AGENT_THREAD_CHANGE_NOTE);
     fireEvent.focus(agentThread.parentElement!);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      CODEX_AGENT_THREAD_CREATION_NOTE,
+      CODEX_AGENT_THREAD_CHANGE_NOTE,
     );
 
     fireEvent.click(agentThread);
-    expect(setThreadAgent).not.toHaveBeenCalled();
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({
+      backend: "codex", threadId: "thread-1", agent: DEFAULT_DESKTOP_AGENT_THREAD,
+    }));
+    expect(onRefreshNavigation).toHaveBeenCalledOnce();
+  });
+
+  it("shows the profile default and lets a thread clear its monitor suggestion override", async () => {
+    const setThreadMonitorJobSuggestions = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
+    const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const { rerender } = render(<Composer desktopApi={{ setThreadMonitorJobSuggestions }}
+      disabled={false} skills={[]} thread={thread} monitorJobSuggestionsDefaultEnabled={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: "Monitor job suggestions" })).toHaveAttribute("aria-checked", "false");
+    rerender(<Composer desktopApi={{ setThreadMonitorJobSuggestions }} disabled={false} skills={[]}
+      thread={{ ...thread, monitorJobSuggestionsEnabled: true }} monitorJobSuggestionsDefaultEnabled={false} />);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Monitor job suggestions" })).toHaveAttribute("aria-checked", "true");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Use default for monitor suggestions" }));
+    });
+    expect(setThreadMonitorJobSuggestions).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", enabled: null });
+  });
+
+  it("toggles monitor job suggestions for this thread from the composer menu", async () => {
+    const setThreadMonitorJobSuggestions = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      monitorJobSuggestionsEnabled: false,
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{ setThreadMonitorJobSuggestions }}
+        disabled={false}
+        onRefreshNavigation={onRefreshNavigation}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const monitorJobSuggestions = screen.getByRole("menuitemcheckbox", {
+      name: /Monitor job suggestions/,
+    });
+    // No override yet: reflects the inherited default, and says nothing about
+    // "this thread".
+    expect(monitorJobSuggestions).toHaveAttribute("aria-checked", "true");
+    expect(monitorJobSuggestions).not.toHaveTextContent("this thread");
+
+    await act(async () => {
+      fireEvent.click(monitorJobSuggestions);
+      await Promise.resolve();
+    });
+
+    expect(setThreadMonitorJobSuggestions).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: false,
+    });
+    expect(onRefreshNavigation).toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Thread options" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread options" }))
+      .toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menu", { name: "Thread options" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu", { name: "Thread options" }))
+      .not.toBeInTheDocument();
   });
 
   // Gating adds a synchronous helper round trip per large tool result, so a
@@ -5752,7 +5912,9 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("switch"));
     expect(screen.getByRole("switch")).not.toBeChecked();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(startTurn.mock.calls[0]![0].input).toEqual([
@@ -5957,7 +6119,7 @@ describe("Composer", () => {
           title: "Secondary change", url, state: "passing", linkedDirectoryPaths: ["/repo/secondary"] }],
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/primary" } });
     const target = screen.getByRole("button", { name: /Attached PR/ });
     if (input === "keyboard") {
@@ -5972,7 +6134,7 @@ describe("Composer", () => {
     })));
   });
 
-  it("keeps a PR across worktrees of its repository and names repositories only when they differ", () => {
+  it("keeps a PR across worktrees of its repository and names repositories only when they differ", async () => {
     const pr = (org: string, repo: string, number: number, path: string) => ({
       provider: "github.com" as const, org, repo, number, title: `Change ${number}`,
       url: `https://github.com/${org}/${repo}/pull/${number}`, state: "passing" as const,
@@ -5993,7 +6155,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/tool" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
@@ -6054,18 +6216,20 @@ describe("Composer", () => {
     }],
   });
 
-  const openReviewComposer = (): void => {
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+  const openReviewComposer = async (): Promise<void> => {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    });
   };
 
-  it("omits the attached PR target when the project has none", () => {
+  it("omits the attached PR target when the project has none", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ withPullRequest: false })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).queryByRole("button", { name: /Attached PR/ }))
       .not.toBeInTheDocument();
@@ -6073,7 +6237,7 @@ describe("Composer", () => {
       .toHaveAttribute("aria-pressed", "true");
   });
 
-  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", (workspacePath) => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", async (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
@@ -6083,7 +6247,7 @@ describe("Composer", () => {
           recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Attached PR/ }))
       .toHaveAttribute("aria-pressed", "true");
@@ -6092,7 +6256,7 @@ describe("Composer", () => {
     expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
   });
 
-  it("keeps local review when directory status belongs to another checkout", () => {
+  it("keeps local review when directory status belongs to another checkout", async () => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]} thread={reviewTargetThread({})}
@@ -6100,13 +6264,13 @@ describe("Composer", () => {
         gitStatus: { currentBranch: "main", behind: 0, branches: ["main"], syncState: "in-sync" },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
   });
 
-  it("offers and submits a scoped upstream PR when origin is a fork", () => {
+  it("offers and submits a scoped upstream PR when origin is a fork", async () => {
     const startReview = vi.fn();
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
@@ -6116,7 +6280,7 @@ describe("Composer", () => {
           branches: ["main", "feat/stack-1"], syncState: "in-sync" },
       }}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
     expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/fixture/project/pull/7");
@@ -6124,15 +6288,16 @@ describe("Composer", () => {
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/7" },
     }));
+    await flushReactUpdates();
   });
 
-  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", (workspacePath) => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", async (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1, workspacePath })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Base branch/ }))
       .toHaveAttribute("aria-pressed", "true");
@@ -6144,13 +6309,13 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
-  it("walks only the targets it offers and waits for a PR before submitting", () => {
+  it("walks only the targets it offers and waits for a PR before submitting", async () => {
     const withoutPrs = render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({ withPullRequest: false })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     let group = screen.getByRole("group", { name: "Review target" });
     fireEvent.keyDown(
       within(group).getByRole("button", { name: /Current changes/ }),
@@ -6166,7 +6331,7 @@ describe("Composer", () => {
       disabled={false} skills={[]}
       thread={reviewTargetThread({ dirtyFiles: 1 })}
     />);
-    openReviewComposer();
+    await openReviewComposer();
     group = screen.getByRole("group", { name: "Review target" });
     fireEvent.keyDown(
       within(group).getByRole("button", { name: /Current changes/ }),
@@ -6182,6 +6347,7 @@ describe("Composer", () => {
         url: "https://github.com/fixture/project/pull/7",
       },
     }));
+    await flushReactUpdates();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -6562,6 +6728,7 @@ describe("Composer", () => {
     await clickButton("Send");
     fireEvent.change(textarea, { target: { value: "/review" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -7055,6 +7222,7 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     fireEvent.keyDown(screen.getByLabelText("New thread"), { key: "Enter" });
+    await flushReactUpdates();
 
     // The launchpad materialize path takes only a review target, so offering
     // the row here would accept a reviewer and then drop it.
@@ -7090,6 +7258,7 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await flushReactUpdates();
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
@@ -8298,7 +8467,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Steer remotely" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await queuedStart.called;
+    await act(async () => {
+      await queuedStart.called;
+    });
     await flushReactUpdates();
     await screen.findByLabelText("Queued message");
     const steerButton = screen.getByRole("button", { name: "Steer" });
@@ -8306,9 +8477,13 @@ describe("Composer", () => {
     // owning peer returns its stable queue entry id. A click before that
     // acknowledgement is intentionally ignored.
     expect(steerButton).toBeDisabled();
-    await queuedStart.acknowledge();
+    await act(async () => {
+      await queuedStart.acknowledge();
+    });
     expect(steerButton).toBeEnabled();
-    fireEvent.click(steerButton);
+    await act(async () => {
+      fireEvent.click(steerButton);
+    });
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -8384,12 +8559,16 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Already admitted once" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await queuedStart.acknowledge();
+    await act(async () => {
+      await queuedStart.acknowledge();
+    });
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
     expect(steerButton).toBeEnabled();
-    fireEvent.click(steerButton);
+    await act(async () => {
+      fireEvent.click(steerButton);
+    });
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -10237,7 +10416,9 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Revise the plan" } });
-    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    });
 
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
@@ -13959,6 +14140,7 @@ describe("Composer", () => {
       "composer__autocomplete"
     );
     fireEvent.click(screen.getByRole("option", { name: /\/review/i }));
+    await flushReactUpdates();
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -14327,10 +14509,12 @@ describe("Composer", () => {
     });
     expect(startReview).not.toHaveBeenCalled();
 
-    compactThreadResponse.resolve({
-      backend: "codex",
-      threadId: "thread-1",
-      turnId: "compact-turn-1",
+    await act(async () => {
+      compactThreadResponse.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "compact-turn-1",
+      });
     });
   });
 
@@ -14412,6 +14596,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -14438,6 +14623,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await flushReactUpdates();
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
 
@@ -18104,13 +18290,13 @@ describe("Composer", () => {
     });
   });
 
-  it("resets one launchpad to the profile model and reasoning baseline", async () => {
+  it.each([false, true])("resets one launchpad to its owner profile baseline (remote=%s)", async (remote) => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
 
     render(
       <Composer
         backends={[
-          backendSummary("codex", {
+          { ...backendSummary("codex", {
             models: [
               {
                 id: "gpt-5.5",
@@ -18128,7 +18314,7 @@ describe("Composer", () => {
                 supportsReasoning: true,
               },
             ],
-          }),
+          }), ...(remote ? { modelDefaults: { model: "gpt-5.6-sol", reasoningEffortsByModel: { "gpt-5.6-sol": "high" } } } : {}) },
         ]}
         directory={{
           key: "directory:/repo",
@@ -18137,6 +18323,7 @@ describe("Composer", () => {
           path: "/repo",
         }}
         launchpad={{
+          ...(remote ? { federationTarget: { scope: "remote" as const, instanceId: "owner" } } : {}),
           directoryKey: "directory:/repo",
           directoryKind: "directory",
           directoryLabel: "Repo",
@@ -18153,7 +18340,7 @@ describe("Composer", () => {
         }}
         providerModelDefaults={{
           codex: {
-            model: "gpt-5.6-sol",
+            model: remote ? "gpt-5.5" : "gpt-5.6-sol",
             reasoningEffortsByModel: {
               "gpt-5.6-sol": "high",
             },
@@ -21811,7 +21998,10 @@ describe("Composer", () => {
       cancelable: true,
     });
 
-    const defaultWasPrevented = !textarea.dispatchEvent(event);
+    let defaultWasPrevented = false;
+    act(() => {
+      defaultWasPrevented = !textarea.dispatchEvent(event);
+    });
 
     expect(defaultWasPrevented).toBe(true);
     expect(startTurn).not.toHaveBeenCalled();
@@ -21852,7 +22042,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
     const option = screen.getByRole("option", { name: /\$ce:plan/i });
-    option.focus();
+    act(() => option.focus());
     fireEvent.keyDown(option, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
@@ -21953,7 +22143,9 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
     const option = screen.getByRole("option", { name: /\$ce:plan/i });
-    option.focus();
+    act(() => {
+      option.focus();
+    });
     fireEvent.keyDown(option, { key: "Escape" });
 
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();

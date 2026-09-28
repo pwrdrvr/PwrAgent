@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -172,11 +172,13 @@ describe("star map sky parallax", () => {
       fireEvent.pointerDown(viewport, { button: 0, clientX: 500, clientY: 400 });
       fireEvent.pointerMove(window, { clientX: 300, clientY: 400 });
       expect(frame).toBeDefined();
-      frame!(0);
-      // Mid-drag, before any pointerup and any React commit, the canvas has
-      // moved by hand — and the sky has already followed it.
-      expect(canvasView().x).toBeCloseTo(before.x - 200, 6);
-      expectSkyFollowsCanvas();
+      act(() => {
+        frame!(0);
+        // Mid-drag, before any pointerup and any React commit, the canvas has
+        // moved by hand — and the sky has already followed it.
+        expect(canvasView().x).toBeCloseTo(before.x - 200, 6);
+        expectSkyFollowsCanvas();
+      });
       fireEvent.pointerUp(window, { clientX: 300, clientY: 400 });
     } finally {
       raf.mockRestore();

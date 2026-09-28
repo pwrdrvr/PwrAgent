@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TurnInputContent } from "../TurnInputContent";
@@ -16,7 +16,9 @@ describe("correspondence navigation", () => {
         origin={{ kind: "agent", sourceThread: { backend: "codex", threadId: sender, messageId: "correspondence:one", title: "Source thread" } }} />
     </ThreadLinkProvider>);
     const link = screen.getByRole("button", { name: /Source thread/ });
-    link.focus();
+    act(() => {
+      link.focus();
+    });
     expect(link).toHaveFocus();
     fireEvent.click(link);
     expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: sender, messageId: "correspondence:one" }));

@@ -64,6 +64,9 @@ export class MainProcessHeapMonitor {
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private stopped = false;
+  private stopPromise?: Promise<void>;
+  private samplePromise?: Promise<void>;
+  private snapshotPromise?: Promise<void>;
   private paused = false;
   private snapshotInFlight = false;
   private snapshotCount = 0;
@@ -86,7 +89,7 @@ export class MainProcessHeapMonitor {
   }
 
   async start(): Promise<void> {
-    if (this.started) {
+    if (this.started || this.stopped) {
       return;
     }
 
@@ -111,6 +114,7 @@ export class MainProcessHeapMonitor {
         deltaThresholdBytes: this.config.deltaThresholdBytes,
       });
 
+      if (this.stopped) return;
       if (this.config.settleDelayMs === 0) {
         await this.beginMonitoring();
         return;
@@ -131,13 +135,16 @@ export class MainProcessHeapMonitor {
     }
   }
 
-  async stop(reason = "stopped"): Promise<void> {
-    if (this.stopped) {
-      return;
-    }
-
+  stop(reason = "stopped"): Promise<void> {
     this.stopped = true;
     this.pauseSampling();
+    this.stopPromise ??= this.stopInner(reason);
+    return this.stopPromise;
+  }
+
+  private async stopInner(reason: string): Promise<void> {
+    await this.samplePromise;
+    await this.snapshotPromise;
 
     await this.appendEvent({
       source: "main",
@@ -182,7 +189,12 @@ export class MainProcessHeapMonitor {
     this.scheduleNextSample();
   }
 
-  private async captureSample(forceBaseline: boolean): Promise<void> {
+  private captureSample(forceBaseline: boolean): Promise<void> {
+    this.samplePromise = this.captureSampleInner(forceBaseline);
+    return this.samplePromise;
+  }
+
+  private async captureSampleInner(forceBaseline: boolean): Promise<void> {
     const capturedAt = this.now().toISOString();
 
     try {
@@ -255,7 +267,7 @@ export class MainProcessHeapMonitor {
     const filename = createSnapshotFilename(snapshotIndex);
     const filePath = path.join(this.session.directoryPath, filename);
     this.snapshotInFlight = true;
-    void this.captureSnapshot({
+    this.snapshotPromise = this.captureSnapshot({
       capturedAt: sample.capturedAt,
       deltaBytes,
       filename,

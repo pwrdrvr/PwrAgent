@@ -316,7 +316,9 @@ describe("NewThreadButton", () => {
 
     // Move keyboard focus into the menu, then dismiss with Escape. Refocusing
     // the trigger must NOT re-open the menu.
-    item.focus();
+    act(() => {
+      item.focus();
+    });
     expect(screen.getByRole("menu")).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
 

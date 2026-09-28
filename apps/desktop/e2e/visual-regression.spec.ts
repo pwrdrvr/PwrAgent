@@ -107,9 +107,12 @@ test.describe("visual regression", () => {
       ).toBeVisible();
       await expect(
         app.window.getByText(
-          /Existing Codex threads cannot be converted/,
+          /Changes made during a turn are queued/,
         ),
       ).toBeVisible();
+      await expect(
+        app.window.getByRole("button", { name: "Mark as Agent", exact: true }),
+      ).toBeEnabled();
       const initialLoadDuration = app.window
         .getByText("Initial load", { exact: true })
         .locator("xpath=following-sibling::dd");

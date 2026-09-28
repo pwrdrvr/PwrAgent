@@ -9013,6 +9013,33 @@ export class CodexAppServerClient {
     return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
   }
 
+  /**
+   * Refresh the catalog without starting inference. The registry negotiates
+   * dynamicToolsResumeField and reserves the idle thread before calling this.
+   */
+  async refreshThreadTools(params: {
+    threadId: string;
+    dynamicTools: CodexDynamicToolSpec[];
+  }): Promise<void> {
+    await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
+    const current = await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/read"],
+      payloads: [buildThreadReadPayload({ threadId: params.threadId })],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    if (readThreadStatus(current) === "active") {
+      throw new Error("Wait for the current turn to finish or stop it, then change Agent thread status.");
+    }
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(params, this.getProtocolCompatibility()),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+  }
+
   async injectThreadItems(params: {
     threadId: string;
     items: CodexThreadInjectItemsParams["items"];

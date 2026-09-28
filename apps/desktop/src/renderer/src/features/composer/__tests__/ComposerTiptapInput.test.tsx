@@ -68,11 +68,13 @@ it("never exposes an editable DOM while mounting a disabled composer", () => {
 });
 
 function setComposerSelection(textbox: HTMLElement, index: number): void {
-  (
-    textbox as HTMLElement & {
-      setSelectionRange: (start: number, end?: number) => void;
-    }
-  ).setSelectionRange(index);
+  act(() => {
+    (
+      textbox as HTMLElement & {
+        setSelectionRange: (start: number, end?: number) => void;
+      }
+    ).setSelectionRange(index);
+  });
 }
 
 const copiedHandoffText = [

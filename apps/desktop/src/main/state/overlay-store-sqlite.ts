@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
@@ -83,7 +85,7 @@ import {
   buildNavigationSnapshot,
   buildDirectorySummaries,
   materializeNavigationThreads,
-  buildNavigationSnapshotHash,
+  serializeNavigationSnapshotForHash,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateTokenUsageCost,
   isAcpBackendId,
@@ -1274,17 +1276,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       });
     }
 
-    const nextHash = buildNavigationSnapshotHash({
-      backend: params.backend,
-      directories: snapshot.directories,
-      launchpadDefaults: snapshot.launchpadDefaults,
-      threads: snapshot.threads,
-    });
+    const nextHash = persistReconciliation
+      ? "sha256:" + createHash("sha256").update(serializeNavigationSnapshotForHash({
+          backend: params.backend,
+          directories: snapshot.directories,
+          launchpadDefaults: snapshot.launchpadDefaults,
+          threads: snapshot.threads,
+        })).digest("hex")
+      : undefined;
     const unchanged =
       persistReconciliation
       && backendState?.lastSnapshotHash === nextHash;
 
-    if (persistReconciliation) {
+    if (persistReconciliation && !unchanged) {
       this.putBackend(params.backend, {
         knownThreadKeys: threads.map((thread) =>
           buildThreadIdentityKey(thread.source, thread.id),
@@ -1294,6 +1298,33 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }
 
     return { ...snapshot, unchanged };
+  }
+
+  /** Project one explicit identity without enumerating navigation membership,
+   * directories, launchpads, queues, or constructing a snapshot/hash. Backend
+   * metadata is a covering index read, including for legacy oversized rows.
+   */
+  async projectNavigationThreadDetail(params: {
+    thread: AppServerThreadSummary;
+    messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
+    queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number };
+  }): Promise<NavigationThreadSummary> {
+    const thread = params.thread;
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const backend = this.getBackend(thread.source);
+    const overlay = this.getThread(threadKey);
+    const queue = params.queuedExecutionMode;
+    return materializeNavigationThreads({
+      firstSnapshot: !backend?.lastSnapshotHash,
+      previousKnownThreadKeys: backend?.knownThreadKeys ?? [],
+      messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
+      overlayByThreadKey: { [threadKey]: queue ? {
+        backend: thread.source, threadId: thread.id,
+        executionMode: thread.executionMode ?? "default", extraLinkedDirectories: [],
+        ...overlay, queuedExecutionMode: queue.mode, queuedExecutionModeAt: queue.queuedAt,
+      } : overlay },
+      threads: [thread],
+    })[0]!;
   }
 
   async markThreadSeen(params: {
@@ -4001,7 +4032,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = {
       ...current,
       agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
+      queuedAgentChange: undefined,
     };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setQueuedThreadAgentChange(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    change: ThreadOverlayState["queuedAgentChange"];
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend, threadId: params.threadId,
+      executionMode: "default" as const, extraLinkedDirectories: [],
+    };
+    const nextState = { ...current, queuedAgentChange: params.change };
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -4022,6 +4069,47 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = params.enabled === null
       ? rest
       : { ...current, tokenMiserEnabled: params.enabled };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  claimMonitorJobSuggestion(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+  }): boolean {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    if (this.getThread(threadKey)?.monitorJobSuggestionTurnId === params.turnId) return false;
+    // Recheck under the write lock so reconnecting instances cannot both claim.
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (current.monitorJobSuggestionTurnId === params.turnId) return false;
+      this.putThread(threadKey, { ...current, monitorJobSuggestionTurnId: params.turnId });
+      return true;
+    }).immediate();
+  }
+
+  async setThreadMonitorJobSuggestions(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const { monitorJobSuggestionsEnabled: _cleared, ...rest } = current;
+    const nextState: ThreadOverlayState = params.enabled === null
+      ? rest
+      : { ...current, monitorJobSuggestionsEnabled: params.enabled };
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -7322,15 +7410,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       && cache.backendChanges === backendChanges) {
       return cache.state && { ...cache.state, knownThreadKeys: [...cache.state.knownThreadKeys] };
     }
-    const row = db.prepare("SELECT payload FROM backends WHERE scope = ?")
-      .get(scope) as { payload: string } | undefined;
-    const state = row ? JSON.parse(row.payload) as {
-      knownThreadKeys: string[];
-      lastSnapshotHash?: string;
-    } : undefined;
-    const normalized = state && {
-      lastSnapshotHash: state.lastSnapshotHash,
-      knownThreadKeys: state.knownThreadKeys.map((threadKey) =>
+    const row = db.prepare(READ_NAVIGATION_BACKEND_METADATA).get(scope) as {
+      known_thread_keys: string;
+      snapshot_hash: string | null;
+    } | undefined;
+    const normalized = row && {
+      lastSnapshotHash: row.snapshot_hash ?? undefined,
+      knownThreadKeys: (JSON.parse(row.known_thread_keys) as string[]).map((threadKey) =>
         normalizeThreadIdentityKey(threadKey) ?? threadKey
       ),
     };
@@ -8767,7 +8853,10 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setQueuedThreadAgentChange"
   | "setThreadTokenMiser"
+  | "setThreadMonitorJobSuggestions"
+  | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
   | "reorderThreadPins"

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
-  NavigationSnapshot,
   NavigationThreadSummary,
   ThreadQueuedTurnSummary,
 } from "@pwragent/shared";
@@ -9,6 +8,7 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 const mocks = vi.hoisted(() => ({
   reconcileNavigationSnapshot: vi.fn(),
+  projectNavigationThreadDetail: vi.fn(),
   getThreadOverlayState: vi.fn(),
   getLaunchpadDefaults: vi.fn(),
   getDirectoryLaunchpad: vi.fn(),
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot: mocks.reconcileNavigationSnapshot,
+    projectNavigationThreadDetail: mocks.projectNavigationThreadDetail,
     getThreadOverlayState: mocks.getThreadOverlayState,
     getLaunchpadDefaults: mocks.getLaunchpadDefaults,
     getDirectoryLaunchpad: mocks.getDirectoryLaunchpad,
@@ -77,6 +78,7 @@ describe("NavigationDetailService", () => {
 
   beforeEach(() => {
     mocks.reconcileNavigationSnapshot.mockReset();
+    mocks.projectNavigationThreadDetail.mockReset();
     mocks.getThreadOverlayState.mockReset();
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
@@ -140,16 +142,7 @@ describe("NavigationDetailService", () => {
       instructionsTooLong: false,
       updatedAt: 1,
     };
-    mocks.reconcileNavigationSnapshot.mockImplementation(async (params) => ({
-      backend: "codex",
-      fetchedAt: 1,
-      unchanged: false,
-      threads: [selected],
-      inboxThreadKeys: [],
-      directories: [],
-      launchpadDefaults: { backend: "codex", executionMode: "default" },
-      params,
-    } satisfies NavigationSnapshot & { params: unknown }));
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const registry = {
       readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "feature", handoffBranches: ["main"] })),
       getCachedThreadSummary: vi.fn(() => undefined),
@@ -174,6 +167,8 @@ describe("NavigationDetailService", () => {
         agent: { instructions: "exact detail only" },
       },
     });
+    expect(mocks.reconcileNavigationSnapshot).not.toHaveBeenCalled();
+    expect(mocks.projectNavigationThreadDetail).toHaveBeenCalledOnce();
     expect(first.thread).not.toHaveProperty("queuedTurns");
     expect(first.thread).not.toHaveProperty("subAgents");
     expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(NAVIGATION_QUERY_MAX_RESULT_BYTES);
@@ -223,7 +218,7 @@ describe("NavigationDetailService", () => {
     };
     const liveAgents = new Map([[live.monitorId, live]]);
     mocks.getThreadOverlayState.mockResolvedValue({ subAgents: persisted });
-    mocks.reconcileNavigationSnapshot.mockResolvedValue({ threads: [selected] });
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const registry = {
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
@@ -263,7 +258,7 @@ describe("NavigationDetailService", () => {
         ...running, monitorId: `old-${index}`, status: "success" as const,
       })),
     ];
-    mocks.reconcileNavigationSnapshot.mockResolvedValue({ threads: [selected] });
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const service = new NavigationDetailService({
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,

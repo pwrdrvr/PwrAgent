@@ -243,6 +243,9 @@ function createSnapshot(
       listenHost: { value: "127.0.0.1", source: "default" },
       listenPort: { value: 47830, source: "default" },
       compressionEnabled: { value: true, source: "default" },
+      allowRemoteShells: { value: true, source: "default" },
+      allowFilePush: { value: false, source: "default" },
+      filePushDirectory: { value: "", source: "default" },
       publicUrl: { value: "", source: "default" },
       gatewayUrl: { value: "", source: "default" },
       gatewayEndpoints: { value: [], source: "default" },
@@ -1508,6 +1511,14 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Usage & pricing" }),
     ).toBeInTheDocument();
+    const monitorSuggestions = screen.getByRole("switch", { name: "Monitor job suggestions" });
+    expect(monitorSuggestions).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(monitorSuggestions);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { toolOutputAlerts: { monitorJobSuggestionsEnabled: false } },
+      });
+    });
     expect(
       screen.getByRole("heading", { name: "Alerts" }),
     ).toBeInTheDocument();
@@ -6564,7 +6575,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("reconciles the Discord permission server after authorized guilds change", () => {
+  it("reconciles the Discord permission server after authorized guilds change", async () => {
     const applicationId = "1480556454498009351";
     const firstGuildId = "1480556454498009353";
     const replacementGuildId = "1480556454498009354";
@@ -6630,9 +6641,11 @@ describe("SettingsScreen", () => {
       }),
     ).toHaveValue(replacementGuildId);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Request suggested permissions" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Request suggested permissions" }),
+      );
+    });
     expect(openDiscordThreadPermissionRequest).toHaveBeenCalledWith({
       guildId: replacementGuildId,
     });

@@ -1,3 +1,4 @@
+import type { FederationReceiverPermissions } from "@pwragent/shared";
 import type {
   FederationCapability,
   FederationHostInfo,
@@ -157,6 +158,8 @@ export function completeFederationEnrollment(params: {
     profileName?: string;
     notes?: string;
     host?: FederationHostInfo;
+    /** Absent on older peers; never infer permission from protocol support. */
+    receiverPermissions?: FederationReceiverPermissions;
   };
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peer.instanceId)) {
@@ -227,6 +230,7 @@ export function completeFederationEnrollment(params: {
     profileName: params.peer.profileName,
     notes: params.peer.notes?.trim() || undefined,
     host: params.peer.host,
+    receiverPermissions: params.peer.receiverPermissions,
     lastConnectedAt: params.now,
     lastActivityAt: params.now,
     pinnedPublicKeyPem: params.peer.publicKeyPem,
@@ -279,6 +283,8 @@ export function authenticateFederationReconnect(params: {
    * wholesale; absent keeps it (older clients never advertise host facts).
    */
   host?: FederationHostInfo;
+  /** Absent on older peers; never infer permission from protocol support. */
+  receiverPermissions?: FederationReceiverPermissions;
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peerInstanceId)) {
     return {
@@ -343,6 +349,7 @@ export function authenticateFederationReconnect(params: {
     notes:
       params.notes === undefined ? peer.notes : params.notes.trim() || undefined,
     host: params.host ?? peer.host,
+    receiverPermissions: params.receiverPermissions,
     // Stored capabilities are informational, not an allowlist: refresh
     // them to what the peer's current build advertises so peer cards and
     // capability-gated surfaces (messaging fan-out, event forwarding)

@@ -1320,11 +1320,13 @@ describe("DesktopSettingsService", () => {
       repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
       repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
       repeatedQueuedChecksEnabled: { value: false, source: "default" },
+      monitorJobSuggestionsEnabled: { value: true, source: "default" },
     });
 
     await service.writeConfigPatchTargeted({
       general: {
         toolOutputAlerts: {
+          monitorJobSuggestionsEnabled: false,
           repeatedLargeOutputsEnabled: true,
           repeatedLargeOutputMinimumCalls: 7,
           repeatedLargeOutputMinimumPercent: 65,
@@ -1347,7 +1349,10 @@ describe("DesktopSettingsService", () => {
       repeatedLargeOutputMinimumCalls: 7,
       repeatedLargeOutputMinimumPercent: 65,
       repeatedQueuedChecksEnabled: false,
+      monitorJobSuggestionsEnabled: false,
     });
+    expect(fs.readFileSync(configPath, "utf8")).toContain("monitor_job_suggestions_enabled = false");
+    expect((await service.readSettingsProjection()).general.toolOutputAlerts.monitorJobSuggestionsEnabled).toEqual({ value: false, source: "config" });
   });
 
   // Token Miser fails open, so an inert gate looks exactly like a thread with

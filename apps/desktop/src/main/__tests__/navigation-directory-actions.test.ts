@@ -105,3 +105,56 @@ it.each(["checking", "degraded"] as const)("rejects directory actions while prov
   expect(writes.commits).toBe(0);
   expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeDefined();
 });
+
+
+it("archives unloaded members before rechecking and removing the registration", async () => {
+  mocks.loadIndex.mockResolvedValueOnce({ threads: [{ id: "unloaded", source: "codex" }],
+    directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });
+  const archive = vi.fn(async () => undefined);
+  const { writes } = await measureSqliteWrites(() => removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, archive));
+  expect(archive).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "unloaded" });
+  expect(mocks.loadIndex).toHaveBeenCalledTimes(2);
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeUndefined();
+  expectSqliteWriteBudget({ scenario: "navigation-archive-project-registration", writes,
+    note: "Archive orchestration with provider mocked: one existing registration removal commit (~8 KiB); 100 projects/day is ~0.8 MB/day plus unchanged provider archive costs; no idle writes" });
+});
+
+it("retains the project when a member fails to archive", async () => {
+  mocks.loadIndex.mockResolvedValue({ threads: [{ id: "unloaded", source: "codex" }],
+    directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });
+  await expect(removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, async () => {
+    throw new Error("Archive failed");
+  })).rejects.toThrow("Archive failed");
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeDefined();
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it("retains a project if new threads arrive while archiving", async () => {
+  mocks.loadIndex.mockResolvedValueOnce({ threads: [{ id: "old", source: "codex" }],
+    directories: [{ ...directory, threadKeys: ["codex:old"] }] })
+    .mockResolvedValueOnce({ threads: [{ id: "new", source: "codex" }],
+      directories: [{ ...directory, threadKeys: ["codex:new"] }] });
+  await expect(removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, async () => undefined))
+    .rejects.toThrow("contains threads");
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeDefined();
+});
+
+it("refuses incomplete archive membership before archiving any thread", async () => {
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [{ ...directory, threadKeys: ["codex:missing"] }] });
+  const archive = vi.fn();
+  await expect(removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, archive))
+    .rejects.toThrow("resolved completely");
+  expect(archive).not.toHaveBeenCalled();
+});
+
+
+it("archives the Workspaces group without removing its permanent navigation entry", async () => {
+  const workspaceKey = "workspace:/scratch";
+  mocks.loadIndex.mockResolvedValue({ threads: [{ id: "scratch", source: "codex" }],
+    directories: [{ ...directory, key: workspaceKey, kind: "workspace", threadKeys: ["codex:scratch"] }] });
+  const archive = vi.fn(async () => undefined);
+  await expect(removeLocalNavigationDirectory({ directoryKey: workspaceKey, archiveThreads: true }, archive))
+    .resolves.toEqual({ directoryKey: workspaceKey, cleanup: [] });
+  expect(archive).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "scratch" });
+  expect(mocks.publish).not.toHaveBeenCalled();
+});

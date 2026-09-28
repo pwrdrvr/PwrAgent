@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/shared";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { threadCopyTargets } from "../ThreadChip";
@@ -145,7 +145,9 @@ describe("thread links in transcript markdown", () => {
     fireEvent.contextMenu(firstChip, { clientX: 80, clientY: 60 });
     expect(screen.getAllByRole("menu")).toHaveLength(1);
 
-    secondChip.focus();
+    act(() => {
+      secondChip.focus();
+    });
     fireEvent.contextMenu(secondChip, { clientX: 160, clientY: 90 });
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     expect(screen.getByRole("menuitem", { name: "Copy Thread Link" })).toHaveFocus();

@@ -134,6 +134,37 @@ describe("filterDirectoryReferenceCandidates", () => {
     ).toEqual([CATALOG_SERVICE.key, CATALOG_PORTAL.key]);
   });
 
+  it("keeps a project-name prefix ahead of a newer path-only match as the query grows", () => {
+    const workspaces = makeDirectory({
+      key: "dir:workspaces",
+      label: "Workspaces",
+      path: `${HOME}/.pwragent/profiles/default/projects/PwrAgnt-workspaces`,
+      latestUpdatedAt: 500,
+    });
+
+    for (const query of ["pwr", "Pwrag"]) {
+      expect(
+        filterDirectoryReferenceCandidates([workspaces, PWRAGNT], query).map((d) => d.key),
+      ).toEqual([PWRAGNT.key, workspaces.key]);
+    }
+  });
+
+  it("includes older project-name prefixes before applying the ten-result limit", () => {
+    const pathMatches = Array.from({ length: 10 }, (_, index) =>
+      makeDirectory({
+        key: `dir:path-${index}`,
+        label: `Workspace ${index}`,
+        path: `${HOME}/pwragnt/workspace-${index}`,
+        latestUpdatedAt: index + 200,
+      }),
+    );
+
+    expect(
+      filterDirectoryReferenceCandidates([...pathMatches, PWRAGNT], "pwrag")
+        .map((d) => d.key),
+    ).toEqual([PWRAGNT.key, ...pathMatches.slice().reverse().slice(0, 9).map((d) => d.key)]);
+  });
+
   it("excludes unlinked pseudo-directories and path-less entries", () => {
     const pathless = makeDirectory({ key: "dir:pathless", latestUpdatedAt: 500 });
     expect(

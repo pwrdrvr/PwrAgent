@@ -4403,6 +4403,95 @@ describe("Sidebar", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("Shift-selects visible threads across expanded projects", () => {
+    const secondThread = { ...sharedThread, id: "across-project", title: "Across project" };
+    const thirdThread = { ...sharedThread, id: "last-project", title: "Last project" };
+    const projects = [sharedThread, secondThread, thirdThread].map((thread, index) => ({
+      ...directories[0]!, key: `directory:/project-${index}`, label: `Project ${index}`,
+      path: `/project-${index}`, threadKeys: [`codex:${thread.id}`],
+    }));
+    render(<Sidebar backends={backends} browseMode="directories" directories={projects}
+      inboxThreads={[]} threads={[sharedThread, secondThread, thirdThread]} loading={false}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
+      onSelectThread={() => undefined} />);
+    for (let index = 0; index < 3; index++) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Project ${index}(,|$)`) }));
+    }
+    const first = screen.getByRole("button", { name: sharedThread.title });
+    const middle = screen.getByRole("button", { name: secondThread.title });
+    const last = screen.getByRole("button", { name: thirdThread.title });
+    fireEvent.click(first);
+    fireEvent.click(last, { shiftKey: true });
+    for (const button of [first, middle, last]) expect(button).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each([false, true])("keeps shared-thread ranges in the clicked project (shared anchor: %s)", (sharedAnchor) => {
+    const x = { ...sharedThread, id: "only-a", title: "Only A" };
+    const y = { ...sharedThread, id: "only-b", title: "Only B" };
+    const projects = [
+      { ...directories[0]!, key: "directory:/a", label: "Project A", path: "/a",
+        pinnedRank: "1024", threadKeys: ["codex:thread-1", "codex:only-a"] },
+      { ...directories[0]!, key: "directory:/b", label: "Project B", path: "/b",
+        pinnedRank: "2048", threadKeys: ["codex:only-b", "codex:thread-1"] },
+    ];
+    const onArchiveThread = vi.fn(async (_thread: NavigationThreadSummary) => undefined);
+    const sidebar = (selectedItemKey?: string) => <Sidebar backends={backends}
+      browseMode="directories" directories={projects} inboxThreads={[]} threads={[y, sharedThread, x]}
+      selectedItemKey={selectedItemKey} loading={false} onArchiveThread={onArchiveThread}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined} />;
+    const { rerender } = render(sidebar());
+    for (const label of ["Project A", "Project B"]) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}(,|$)`) }));
+    }
+    const sharedRows = screen.getAllByRole("button", { name: sharedThread.title });
+    const yRow = screen.getByRole("button", { name: y.title });
+    const xRow = screen.getByRole("button", { name: x.title });
+    fireEvent.click(sharedAnchor ? sharedRows[1]! : yRow);
+    // The navigation update after a plain click must preserve the clicked occurrence.
+    rerender(sidebar(sharedAnchor ? "codex:thread-1" : "codex:only-b"));
+    fireEvent.click(sharedAnchor ? yRow : sharedRows[1]!, { shiftKey: true });
+    expect(yRow).toHaveAttribute("aria-pressed", "true");
+    expect(xRow).toHaveAttribute("aria-pressed", "false");
+    for (const row of sharedRows) expect(row).toHaveAttribute("aria-pressed", "true");
+    fireEvent.contextMenu(yRow);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" }));
+    expect(onArchiveThread.mock.calls.map(([thread]) => (thread as NavigationThreadSummary).id))
+      .toEqual([y.id, sharedThread.id]);
+
+    // A range between two occurrences of the same thread includes the intervening rows,
+    // but each thread is archived only once.
+    onArchiveThread.mockClear();
+    fireEvent.click(sharedRows[0]!);
+    fireEvent.click(sharedRows[1]!, { shiftKey: true });
+    expect(xRow).toHaveAttribute("aria-pressed", "true");
+    expect(yRow).toHaveAttribute("aria-pressed", "true");
+    fireEvent.contextMenu(yRow);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 Threads" }));
+    expect(onArchiveThread.mock.calls.map(([thread]) => (thread as NavigationThreadSummary).id))
+      .toEqual([y.id, sharedThread.id, x.id]);
+  });
+
+  it("archives selected projects through complete owner membership", () => {
+    const onArchiveDirectories = vi.fn(async () => undefined);
+    const projects = [0, 1].map((index) => ({ ...directories[0]!,
+      key: `directory:/project-${index}`, label: `Project ${index}`, path: `/project-${index}`, threadKeys: [],
+    }));
+    render(<Sidebar backends={backends} browseMode="directories" directories={projects}
+      inboxThreads={[]} threads={[]} loading={false} onArchiveDirectories={onArchiveDirectories}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
+      onSelectThread={() => undefined} />);
+    const first = screen.getByRole("button", { name: "Project 0" });
+    const last = screen.getByRole("button", { name: "Project 1" });
+    fireEvent.click(first, { metaKey: true });
+    fireEvent.click(last, { shiftKey: true });
+    fireEvent.contextMenu(last);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" }));
+    expect(onArchiveDirectories).toHaveBeenCalledWith(projects.map((project) => project.key));
+  });
+
   it("marks unread threads read across a Shift-selected range of collapsed directories", () => {
     const onMarkThreadsSeen = vi.fn(async () => undefined);
     const onSetDirectoryPin = vi.fn(async () => undefined);
@@ -7925,7 +8014,7 @@ describe("Sidebar menus from the keyboard", () => {
     expect(trigger).toHaveAttribute("aria-haspopup", "menu");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     // The current profile is disabled, so the walk starts after it.
@@ -7944,7 +8033,7 @@ describe("Sidebar menus from the keyboard", () => {
     const trigger = screen.getByRole("button", {
       name: "Open PwrAgent profile menu",
     });
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     const menu = screen.getByRole("menu");
     expect(menu).toHaveFocus();
@@ -7981,14 +8070,14 @@ describe("Sidebar menus from the keyboard", () => {
     });
     // Both triggers stop their click, so neither reaches the other menu's
     // outside-click listener.
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     const actions = openThreadActions();
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(actions).toHaveAttribute("aria-expanded", "true");
 
-    trigger.focus();
+    act(() => trigger.focus());
     act(() => trigger.click());
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     expect(actions).toHaveAttribute("aria-expanded", "false");
@@ -8021,7 +8110,7 @@ describe("Sidebar menus from the keyboard", () => {
     const chip = screen.getByRole("button", {
       name: "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser",
     });
-    chip.focus();
+    act(() => chip.focus());
     fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
     const detach = screen.getByRole("menuitem", { name: "Detach Pull Request" });
     for (let i = 0; i < 20 && document.activeElement !== detach; i++) {
@@ -8040,4 +8129,56 @@ describe("Sidebar menus from the keyboard", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(chip).toHaveFocus();
   });
+});
+
+it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {
+  const { scrollIntoView, restore } = withMockScrollIntoView();
+  const onOpenLaunchpad = vi.fn(async () => undefined);
+  const onBrowseModeChange = vi.fn();
+  const onThreadJumpOpenChange = vi.fn();
+  const props = {
+    backends, directories: [...directories, {
+      ...directories[0]!, key: "directory:/repos/PwrSnap", label: "PwrSnap", path: "/repos/PwrSnap",
+    }], inboxThreads: [sharedThread], loading: false,
+    threads: [sharedThread], onBrowseModeChange, onCreateThread: async () => undefined,
+    onOpenLaunchpad, onSelectThread: () => undefined, onThreadJumpOpenChange,
+  };
+  try {
+    const { rerender } = render(<Sidebar {...props} browseMode="inbox" threadJumpOpen />);
+    const input = screen.getByRole("textbox", { name: "Jump to thread or project" });
+    fireEvent.change(input, { target: { value: "PwrAgent" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }));
+    expect(onBrowseModeChange).toHaveBeenCalledWith("directories");
+    expect(onThreadJumpOpenChange).toHaveBeenCalledWith(false);
+    rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
+      selectedItemKey={`launchpad:${directories[0]!.key}`} />);
+    await waitFor(() => {
+      expect(document.activeElement).toHaveClass("directory-row__summary");
+      expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+    });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+
+    // Visit another project, then return to the already expanded first one.
+    // Its sticky header may be visible while its threads are above the viewport;
+    // the normal-flow section must remain the scroll target on repeated jumps.
+    for (const project of [props.directories[1]!, props.directories[0]!]) {
+      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen />);
+      const search = screen.getByRole("textbox", { name: "Jump to thread or project" });
+      fireEvent.change(search, { target: { value: project.label } });
+      fireEvent.keyDown(search, { key: "Enter" });
+      scrollIntoView.mockClear();
+      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
+        selectedItemKey={`launchpad:${project.key}`} />);
+      await waitFor(() => {
+        expect(document.activeElement).toHaveClass("directory-row__summary");
+        expect(document.activeElement).toHaveTextContent(project.label);
+        expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+        expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+      });
+    }
+  } finally {
+    restore();
+  }
 });

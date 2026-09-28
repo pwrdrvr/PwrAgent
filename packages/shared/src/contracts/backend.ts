@@ -1,6 +1,6 @@
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
-import type { DesktopUpdateChannel } from "./settings";
+import type { DesktopProviderModelDefaults, DesktopUpdateChannel } from "./settings";
 
 export type BackendSourceKind = "builtin" | "acp";
 
@@ -258,6 +258,11 @@ export type BackendRuntimeBuild = {
 };
 
 export type BackendSummary = {
+  /** Owner settings for the per-thread Token Miser control; absent on older peers. */
+  tokenMiser?: { enabled: boolean; defaultEnabled: boolean };
+  /** Owner preferences used by federated composer controls. */
+  modelDefaults?: DesktopProviderModelDefaults;
+  codexFastAllowed?: boolean;
   kind: AppServerBackendKind;
   source?: BackendSourceKind;
   label: string;

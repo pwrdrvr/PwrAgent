@@ -63,6 +63,7 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     remotePtyInput: vi.fn(async () => undefined),
+    remotePtyFailure: undefined as Error | undefined,
     // Shared rather than built per `remotePty()` call, so a test can count
     // the requests that actually reached the wire.
     remotePtyResize: vi.fn(
@@ -134,13 +135,16 @@ vi.mock("../window-channels", () => ({
 
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => ({
-    remotePty: () => ({
-      open: mocks.remotePtyOpen,
-      input: mocks.remotePtyInput,
-      resize: mocks.remotePtyResize,
-      ack: mocks.remotePtyAck,
-      close: mocks.remotePtyClose,
-    }),
+    remotePty: () => {
+      if (mocks.remotePtyFailure) throw mocks.remotePtyFailure;
+      return {
+        open: mocks.remotePtyOpen,
+        input: mocks.remotePtyInput,
+        resize: mocks.remotePtyResize,
+        ack: mocks.remotePtyAck,
+        close: mocks.remotePtyClose,
+      };
+    },
     connectedPeerTargets: () => mocks.connectedPeers,
     celestialIconFor: (instanceId: string) =>
       instanceId === "peer-a" ? ("moon" as const) : undefined,
@@ -184,6 +188,7 @@ function resetIpcHarness() {
   mocks.federationWindowIds.clear();
   mocks.federationTargets.clear();
   mocks.remotePtyEventListener = undefined;
+  mocks.remotePtyFailure = undefined;
   mocks.connectedPeers = [
     {
       target: { scope: "remote" as const, instanceId: "peer-a" },
@@ -848,6 +853,28 @@ describe("integrated terminal IPC federation branch", () => {
     expect(mocks.remotePtyClose).toHaveBeenCalledWith({
       sessionId: "remote-session",
     });
+  });
+
+  it.each(["synchronous", "asynchronous"])("retries a terminal open after a %s permission denial", async (failure) => {
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(7);
+    mocks.federationTargets.set(7, { scope: "remote", instanceId: "peer-a" });
+    const denied = new Error("The target does not allow remote shells.");
+    if (failure === "synchronous") {
+      mocks.remotePtyFailure = denied;
+    } else {
+      mocks.remotePtyOpen.mockRejectedValueOnce(denied);
+    }
+    const request = { threadKey: "codex:remote-thread", cols: 80, rows: 24 };
+    await expect(invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request))
+      .rejects.toThrow("does not allow remote shells");
+
+    // The owner enables shells. Retrying the same pane must create a new
+    // request instead of reusing the original rejected promise.
+    mocks.remotePtyFailure = undefined;
+    await expect(invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request))
+      .resolves.toMatchObject({ sessionId: "remote-session" });
+    expect(mocks.remotePtyOpen).toHaveBeenCalledTimes(failure === "synchronous" ? 1 : 2);
   });
 
   it("honors a close issued while the remote open is still in flight", async () => {

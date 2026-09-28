@@ -27,6 +27,85 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it.each([FEDERATION_BACKEND_METHODS.removeNavigationDirectory, FEDERATION_BACKEND_METHODS.archiveNavigationDirectory])(
+    "prevents navigation-only peers archiving projects through %s", async (method) => {
+      const removeNavigationDirectory = vi.fn();
+      const replies: FederationProtocolEnvelope[] = [];
+      const router = new FederationRouter({ localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+      router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_navigation"],
+        sendEnvelope: (envelope) => replies.push(envelope) });
+      registerFederationBackendHandlers({ router, backend: { removeNavigationDirectory } as unknown as FederationBackendOperations });
+      await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: {
+        id: "archive-project", kind: "request", method, params: { directoryKey: "directory:/repo", archiveThreads: true },
+        protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1_000,
+      } });
+      expect(replies[0]).toMatchObject({ kind: "error" });
+      expect(removeNavigationDirectory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("routes project archiving through the thread-control method", async () => {
+    const request = vi.fn(async () => ({ directoryKey: "directory:/repo" }));
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await client.removeNavigationDirectory({ directoryKey: "directory:/repo", archiveThreads: true });
+    expect(request).toHaveBeenCalledWith({ method: FEDERATION_BACKEND_METHODS.archiveNavigationDirectory,
+      params: { directoryKey: "directory:/repo", archiveThreads: true } });
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.archiveNavigationDirectory]).toBe("turn_control");
+  });
+
+  it.each([true, false])("routes Agent and Token Miser changes only with turn-control permission (%s)", async (allowed) => {
+    const setThreadAgent = vi.fn(async (request) => ({ ...request, agent: request.agent ?? undefined }));
+    const setThreadTokenMiser = vi.fn(async (request) => ({ backend: request.backend, threadId: request.threadId, tokenMiserEnabled: request.enabled ?? undefined }));
+    const router = new FederationRouter({
+      localInstanceId: "owner",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer",
+      remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); },
+    });
+    router.registerConnection({
+      peerId: "viewer",
+      capabilities: allowed ? ["turn_control"] : ["thread_navigation"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: { setThreadAgent, setThreadTokenMiser } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    for (const agent of [{ name: "Manager" }, null]) {
+      const request = { backend: "codex" as const, threadId: "collision", agent };
+      if (allowed) {
+        await expect(client.setThreadAgent(request)).resolves.toMatchObject({ agent: agent ?? undefined });
+        expect(setThreadAgent).toHaveBeenLastCalledWith(request);
+      } else {
+        await expect(client.setThreadAgent(request)).rejects.toThrow();
+        expect(setThreadAgent).not.toHaveBeenCalled();
+      }
+    }
+    for (const enabled of [true, false, null]) {
+      const request = { backend: "codex" as const, threadId: "collision", enabled };
+      if (allowed) {
+        await expect(client.setThreadTokenMiser(request)).resolves.toMatchObject({ tokenMiserEnabled: enabled ?? undefined });
+        expect(setThreadTokenMiser).toHaveBeenLastCalledWith(request);
+      } else {
+        await expect(client.setThreadTokenMiser(request)).rejects.toThrow();
+        expect(setThreadTokenMiser).not.toHaveBeenCalled();
+      }
+    }
+    if (allowed) {
+      setThreadAgent.mockRejectedValueOnce(new Error("Wait for the current turn to finish."));
+      await expect(client.setThreadAgent({ threadId: "collision", agent: null })).rejects.toThrow("Wait for the current turn");
+    }
+  });
+
+  it("fails closed with an actionable explanation on older owners", async () => {
+    const request = vi.fn(async () => { throw Object.assign(new Error("No handler"), { code: "method_not_found" }); });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await expect(client.setThreadAgent({ threadId: "collision", agent: { name: "Manager" } })).rejects.toThrow("Update PwrAgent on the owning instance");
+    await expect(client.setThreadTokenMiser({ threadId: "collision", enabled: false })).rejects.toThrow("Update PwrAgent on the owning instance");
+    expect(request.mock.calls).toHaveLength(2);
+  });
+
   it("gates explicit review modes before sending them to an old Federation owner", async () => {
     const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
@@ -3519,6 +3598,8 @@ describe("federation backend bridge", () => {
       queueThreadExecutionMode: vi.fn(),
       cancelThreadExecutionModeQueue: vi.fn(),
       setAcpSessionRuntimeOption: vi.fn(),
+      setThreadAgent: vi.fn(),
+      setThreadTokenMiser: vi.fn(),
       setThreadModelSettings: vi.fn(),
       checkThreadBranchDrift: vi.fn(),
       updateThreadExpectedBranch: vi.fn(),
@@ -3889,7 +3970,9 @@ describe("federation backend bridge", () => {
         queueThreadExecutionMode: vi.fn(),
         cancelThreadExecutionModeQueue: vi.fn(),
         setAcpSessionRuntimeOption: vi.fn(),
-        setThreadModelSettings: vi.fn(),
+        setThreadAgent: vi.fn(),
+      setThreadTokenMiser: vi.fn(),
+      setThreadModelSettings: vi.fn(),
         checkThreadBranchDrift: vi.fn(),
         updateThreadExpectedBranch: vi.fn(),
         retainThreadBranchDrift: vi.fn(),

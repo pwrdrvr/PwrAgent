@@ -557,10 +557,14 @@ describe("ThreadRow chip flow", () => {
       // is what React's enter/leave plugin synthesizes `onMouseEnter` from,
       // and it dispatches along the ancestor path to the container.
       fireEvent.mouseOver(container.querySelector(".pr-chip")!);
-      vi.advanceTimersByTime(749);
+      act(() => {
+        vi.advanceTimersByTime(749);
+      });
       expect(onPrefetchPullRequests).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(1);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
       expect(onPrefetchPullRequests).toHaveBeenCalledWith(thread);
     } finally {
       vi.useRealTimers();
@@ -591,7 +595,7 @@ describe("ThreadRow chip flow", () => {
       const { container } = renderRow({ thread, onPrefetchPullRequests });
 
       fireEvent.mouseOver(container.querySelector(".pr-chip")!);
-      beginNativeDragInteraction();
+      act(() => beginNativeDragInteraction());
       vi.advanceTimersByTime(750);
 
       expect(onPrefetchPullRequests).not.toHaveBeenCalled();
@@ -1114,7 +1118,9 @@ describe("ThreadRow chip flow", () => {
     const prChip = screen.getByRole("button", {
       name: /Open pwrdrvr\/PwrAgent#123/,
     });
-    prChip.focus();
+    act(() => {
+      prChip.focus();
+    });
     fireEvent.focus(prChip);
     expect(prChip).toHaveFocus();
     expect(screen.getByRole("tooltip")).toBeInTheDocument();

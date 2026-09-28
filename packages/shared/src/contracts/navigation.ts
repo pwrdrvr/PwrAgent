@@ -2,6 +2,7 @@ import type { ForgeCli } from "../forge-product";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
+  ArchiveThreadCleanupResult,
   AppServerBackendScope,
   AppServerBuiltinBackendKind,
   AppServerBackendKind,
@@ -87,6 +88,12 @@ export type ThreadInboxState = {
 
 export const AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE = 200;
 
+/** A requested designation is not authority until its runtime refresh succeeds. */
+export type ThreadAgentChangeStatus = {
+  enabled: boolean;
+  error?: string;
+};
+
 export type ThreadAgentMetadata = {
   name: string;
   instructions?: string;
@@ -152,6 +159,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * to act as a personal Agent surface.
    */
   agent?: ThreadAgentMetadata;
+  agentChange?: ThreadAgentChangeStatus;
   /**
    * Per-thread Token Miser override. `true`/`false` force the gate on or off
    * for this thread regardless of the global setting; absent means follow the
@@ -160,6 +168,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * sensitive thread wants a way to opt out without touching Settings.
    */
   tokenMiserEnabled?: boolean;
+  /** Absent follows the profile default. */
+  monitorJobSuggestionsEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -1681,6 +1691,7 @@ export type NavigationRow = {
   messagingBindingsTruncated?: boolean;
   automationSummary?: AutomationThreadSummary;
   agent?: NavigationRowAgent;
+  agentChange?: ThreadAgentChangeStatus;
   executionMode?: ThreadExecutionMode;
   model?: string;
   serviceTier?: string;
@@ -2145,6 +2156,7 @@ export type FederationJumpSearchProgress = FederationJumpSearchResponse & {
 };
 
 export type SetThreadAgentRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /**
@@ -2161,9 +2173,11 @@ export type SetThreadAgentResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
+  agentChange?: ThreadAgentChangeStatus;
 };
 
 export type SetThreadTokenMiserRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /** Null clears the override so the thread follows the global setting. */
@@ -2174,6 +2188,19 @@ export type SetThreadTokenMiserResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   tokenMiserEnabled?: boolean;
+};
+
+export type SetThreadMonitorJobSuggestionsRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Null clears the override so the thread follows the global setting. */
+  enabled: boolean | null;
+};
+
+export type SetThreadMonitorJobSuggestionsResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  monitorJobSuggestionsEnabled?: boolean;
 };
 
 export type NavigationRelativePinMove = {
@@ -2536,9 +2563,18 @@ export type DirectoryOverlayState = {
 };
 
 export type ThreadOverlayState = {
+  /** Absent follows the profile default. */
+  monitorJobSuggestionsEnabled?: boolean;
+  /** Durable once-per-turn reminder claim, including failed delivery attempts. */
+  monitorJobSuggestionTurnId?: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
+  queuedAgentChange?: {
+    agent: NavigationLaunchpadAgent | null;
+    requestedAt: number;
+    error?: string;
+  };
   /**
    * Per-thread Token Miser override. `true`/`false` force the gate on or off
    * for this thread regardless of the global setting; absent means follow the
@@ -2955,12 +2991,14 @@ export type ThreadBranchDriftPair = {
 
 export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;
 
-/** Revalidate complete owner membership before removing an empty registration. */
+/** Revalidate complete owner membership before removing a registration. */
 export type RemoveNavigationDirectoryRequest = {
   directoryKey: string;
+  /** Archive owner-resolved members first, then recheck that the directory is empty. */
+  archiveThreads?: boolean;
   federationTarget?: FederationTarget;
 };
-export type RemoveNavigationDirectoryResponse = { directoryKey: string };
+export type RemoveNavigationDirectoryResponse = { directoryKey: string; cleanup?: ArchiveThreadCleanupResult[] };
 
 /** Resolve complete directory membership on its owner; never accept a renderer row allowlist. */
 export type MarkNavigationDirectorySeenRequest = {

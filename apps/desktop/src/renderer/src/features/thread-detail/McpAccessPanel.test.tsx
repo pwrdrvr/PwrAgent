@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { McpConnectionStatus } from "@pwragent/shared";
 import { McpAccessPanel, ThreadMcpAccessPanel } from "./McpAccessPanel";
@@ -324,7 +324,9 @@ describe("ThreadMcpAccessPanel", () => {
       }),
     );
     expect(onSelectionChange).toHaveBeenCalledTimes(1);
-    release?.();
+    await act(async () => {
+      release?.();
+    });
   });
 
   it("offers the isolation control even with no managed connections", async () => {

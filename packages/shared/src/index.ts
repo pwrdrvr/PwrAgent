@@ -77,3 +77,5 @@ export * from "./forge-product";
 export { isCodexAuthenticationFailure } from "./codex-authentication";
 
 export * from "./local-model-pricing";
+
+export * from "./thread-search-query";

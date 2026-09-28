@@ -52,6 +52,8 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
 }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    setThreadAgent: vi.fn(),
+    setThreadTokenMiser: vi.fn(),
     inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
     archiveThread: vi.fn(async (request: ArchiveThreadRequest) => ({
       backend: request.backend,
@@ -4297,6 +4299,30 @@ describe("app server ipc", () => {
     );
 
     expect(fetched).toEqual({ diff });
+  });
+
+  it("routes Agent and Token Miser mutations to the owner without accessing the local registry", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const federationTarget = { scope: "remote" as const, instanceId: "owner-one" };
+    backendRegistryLifecycle.get.mockClear();
+    for (const agent of [{ name: "Manager" }, null]) {
+      const request = { backend: "codex" as const, threadId: "collision", agent };
+      federationMock.remoteBackend.setThreadAgent.mockResolvedValueOnce({ ...request, agent: agent ?? undefined });
+      await expect(appServerService.setThreadAgent({ ...request, federationTarget })).resolves.toMatchObject({ agent: agent ?? undefined });
+      expect(federationMock.remoteBackend.setThreadAgent).toHaveBeenLastCalledWith(request);
+    }
+    for (const enabled of [true, false, null]) {
+      const request = { backend: "codex" as const, threadId: "collision", enabled };
+      federationMock.remoteBackend.setThreadTokenMiser.mockResolvedValueOnce({ backend: "codex", threadId: "collision", tokenMiserEnabled: enabled ?? undefined });
+      await expect(appServerService.setThreadTokenMiser({ ...request, federationTarget })).resolves.toMatchObject({ tokenMiserEnabled: enabled ?? undefined });
+      expect(federationMock.remoteBackend.setThreadTokenMiser).toHaveBeenLastCalledWith(request);
+    }
+    federationMock.remoteBackend.setThreadAgent.mockRejectedValueOnce(new Error("Wait for the current turn"));
+    await expect(appServerService.setThreadAgent({ federationTarget, threadId: "collision", agent: null })).rejects.toThrow("Wait for the current turn");
+    federationMock.remoteBackend.setThreadTokenMiser.mockRejectedValueOnce(new Error("Owner disconnected"));
+    await expect(appServerService.setThreadTokenMiser({ federationTarget, threadId: "collision", enabled: null })).rejects.toThrow("Owner disconnected");
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+    expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
   });
 
   it("routes output inspection to the owning instance without using the local store", async () => {

@@ -46,10 +46,6 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
 import { Select, type SelectOption } from "../../components/Select";
-import {
-  CODEX_AGENT_THREAD_CREATION_NOTE,
-  canChangeExistingThreadAgentDesignation,
-} from "../../lib/agent-thread";
 import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
@@ -1354,17 +1350,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
       (props.threads ?? [])
         .filter(
           (thread) =>
-            !thread.agent && canChangeExistingThreadAgentDesignation(thread),
+            !thread.agent,
         )
         .map((thread) => buildAgentOption(thread)),
-    [props.threads],
-  );
-  const hasUnpromotableCodexThreads = useMemo(
-    () =>
-      (props.threads ?? []).some(
-        (thread) =>
-          !thread.agent && !canChangeExistingThreadAgentDesignation(thread),
-      ),
     [props.threads],
   );
   const visibleAgentOptions = useMemo(
@@ -2985,9 +2973,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               ))
                             ) : (
                               <p className="automation-agent-picker__empty">
-                                {threadOptions.length === 0 && hasUnpromotableCodexThreads
-                                  ? CODEX_AGENT_THREAD_CREATION_NOTE
-                                  : "No regular threads match."}
+                                No regular threads match.
                               </p>
                             )}
                           </div>

@@ -382,7 +382,7 @@ not verified measurements.
 
 In-thread agents get a `federation` tool catalog (`list_federation_instances`,
 `list_instance_projects`, `create_instance_thread`,
-`search_federation_threads`) that composes the same capability-gated RPCs the
+`search_federation_threads`, `push_instance_file`) that composes the same capability-gated RPCs the
 UI uses; agent-originated cross-instance control is authorized exactly like
 operator-originated control, with enrollment as the trust boundary. Instances
 describe themselves to peers with the Settings → Federation "Instance name"
@@ -428,6 +428,42 @@ Once a messaging surface is attached to a remote thread, its status card and
 subsequent backend-driven refreshes read navigation state from that owning
 instance. The gateway must not render a remote binding from its local thread
 snapshot or silently fall back to a same-shaped local thread.
+
+### Receiver permissions and push files
+
+Protocol support and receiver permission are separate. `remote_pty` and
+`file_push` identify supported protocols; `receiverPermissions` on peer summaries
+and instance descriptors advertises `{ remoteShells, filePush }`. It travels with
+peer metadata during enrollment/reconnect and gateway directory broadcasts.
+Absence means an older peer has not advertised a policy. Push senders require an
+explicit `filePush: true`; existing remote-shell callers remain compatible with
+older peers. The owner enforces its current settings even if a caller ignores or
+has a stale advertisement. Disabling receipt does not disable sending or relay.
+
+`allow_remote_shells` defaults to true to preserve existing behavior;
+`allow_file_push` defaults to false. The optional `file_push_directory` selects
+an absolute receiver-owned folder; blank uses Electron's native Downloads path.
+Saving these settings restarts Federation, closes remote terminals, and cleans
+up active file transfers. These controls cover direct remote terminals and file
+pushes; enrolled peers with turn-control access can still ask agents to run work.
+
+`push_instance_file` accepts a remote `instanceId`, absolute local `sourcePath`,
+and optional plain `name`. The sender uses acknowledged `file.push.begin`,
+`file.push.chunk`, `file.push.finish`, and `file.push.cancel` RPCs, all gated by
+`file_push`. Each transfer belongs to its authenticated end-to-end sender,
+including through a gateway. Chunks are at most 256 KiB; files are at most
+512 MiB, with four concurrent incoming transfers per receiver. No transfer
+writes to SQLite. Memory is bounded by chunk size, not file size.
+
+The receiver stages files privately in the destination filesystem, checks the
+size and SHA-256, and publishes with an atomic no-overwrite link. Name collisions
+receive a numeric suffix. Paths, reserved names, and control characters in names
+are rejected. Received files are never opened or executed. Cancel, validation
+failure, idle expiry after one minute, and normal shutdown remove staging files.
+A process crash can leave a hidden `.pwragent-transfer-*` staging directory;
+these incomplete files are never published. Transfers do not resume across
+reconnects, and a lost final response can leave a completed file whose result the
+sender did not receive. Retrying can therefore create a suffixed duplicate.
 
 ### Temporary frame diagnostics
 

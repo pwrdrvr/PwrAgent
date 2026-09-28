@@ -9,6 +9,8 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  parseThreadSearchQuery,
+  matchesThreadSearchProjects,
   normalizeThreadSearchContentMode,
   normalizeThreadSearchLimit,
   normalizeThreadSearchSemanticMode,
@@ -39,7 +41,8 @@ export class ThreadSearchService {
     const contentMode = normalizeThreadSearchContentMode(request.contentMode);
     const semanticMode = normalizeThreadSearchSemanticMode(request.semanticMode);
     const limit = normalizeThreadSearchLimit(request.limit);
-    const query = request.query?.trim() ?? "";
+    const rawQuery = request.query?.trim() ?? "";
+    const { query, projects } = parseThreadSearchQuery(rawQuery);
 
     const listBackend = backend === "all" ? undefined : backend;
     const activeThreads = await this.listThreads({
@@ -66,10 +69,15 @@ export class ThreadSearchService {
       ),
     });
 
+    const identityKeys = projects.length
+      ? threads.filter((thread) => matchesThreadSearchProjects(thread, projects))
+          .map((thread) => buildThreadIdentityKey(thread.source, thread.id))
+      : undefined;
     const metadataResults = this.store
       .search({
         backend: backend === "all" ? undefined : backend,
         filters,
+        identityKeys,
         includeArchived: filters.includeArchived,
         limit,
         query,
@@ -82,6 +90,7 @@ export class ThreadSearchService {
             candidates: buildContentCandidates({
               backend,
               filters,
+              identityKeys,
               metadataResults,
               store: this.store,
             }),
@@ -96,7 +105,7 @@ export class ThreadSearchService {
     return {
       backend,
       fetchedAt: Date.now(),
-      query,
+      query: rawQuery,
       filters,
       contentMode,
       semanticMode,
@@ -173,6 +182,7 @@ function buildUnavailableScopes(params: {
 function buildContentCandidates(params: {
   backend: AppServerBackendScope;
   filters: ThreadSearchFilters;
+  identityKeys?: string[];
   metadataResults: ThreadSearchResponse["results"];
   store: ThreadSearchStore;
 }): ThreadSearchResponse["results"] {
@@ -180,6 +190,7 @@ function buildContentCandidates(params: {
     .search({
       backend: params.backend === "all" ? undefined : params.backend,
       filters: params.filters,
+      identityKeys: params.identityKeys,
       includeArchived: params.filters.includeArchived,
       limit: CONTENT_SEARCH_CANDIDATE_LIMIT,
     })

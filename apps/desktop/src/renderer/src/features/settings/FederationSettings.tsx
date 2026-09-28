@@ -105,6 +105,9 @@ export function FederationSettings(props: FederationSettingsProps) {
     mode: federation.mode.value,
     instanceLabel: federation.instanceLabel.value,
     compressionEnabled: federation.compressionEnabled.value,
+    allowRemoteShells: federation.allowRemoteShells.value,
+    allowFilePush: federation.allowFilePush.value,
+    filePushDirectory: federation.filePushDirectory.value,
     instanceNotes: federation.instanceNotes.value,
     listenHost: federation.listenHost.value,
     listenPort: String(federation.listenPort.value),
@@ -467,6 +470,9 @@ export function FederationSettings(props: FederationSettingsProps) {
       federation: {
         mode,
         compressionEnabled,
+        allowRemoteShells: configuration.values.allowRemoteShells,
+        allowFilePush: configuration.values.allowFilePush,
+        filePushDirectory: configuration.values.filePushDirectory,
         instanceLabel,
         instanceNotes,
         listenHost,
@@ -817,6 +823,44 @@ export function FederationSettings(props: FederationSettingsProps) {
                 onChange={(event) =>
                   setAdvertisedEndpointsText(event.target.value)
                 }
+              />
+            }
+          />
+          <SettingsField
+            label="Allow remote shells"
+            sub="Let enrolled peers open terminals on this machine. Saving reconnects Federation and closes existing remote terminals."
+            control={
+              <SettingsSwitch
+                label="Allow remote shells"
+                checked={configuration.values.allowRemoteShells}
+                disabled={props.saving}
+                onChange={(value) => configuration.set("allowRemoteShells", value)}
+              />
+            }
+          />
+          <SettingsField
+            label="Allow incoming files"
+            sub="Let enrolled peers push files to this machine. Existing files are never overwritten. Files are not opened automatically."
+            control={
+              <SettingsSwitch
+                label="Allow incoming files"
+                checked={configuration.values.allowFilePush}
+                disabled={props.saving}
+                onChange={(value) => configuration.set("allowFilePush", value)}
+              />
+            }
+          />
+          <SettingsField
+            label="Incoming files folder"
+            sub="Leave blank to use this machine’s Downloads folder. Use an absolute path for a different folder."
+            control={
+              <input
+                className="settings-input"
+                aria-label="Incoming files folder"
+                value={configuration.values.filePushDirectory}
+                disabled={props.saving}
+                placeholder="Downloads (default)"
+                onChange={(event) => configuration.set("filePushDirectory", event.target.value)}
               />
             }
           />
@@ -1264,6 +1308,12 @@ export function FederationSettings(props: FederationSettingsProps) {
                   <span>
                     Available: {formatFederationCapabilities(peer.capabilities)}
                   </span>
+                  {peer.receiverPermissions && (
+                    <span>
+                      Remote shells: {peer.receiverPermissions.remoteShells ? "allowed" : "blocked"}
+                      {" · "}Incoming files: {peer.receiverPermissions.filePush ? "allowed" : "blocked"}
+                    </span>
+                  )}
                   {peer.unavailableReason ? (
                     <span>{peer.unavailableReason}</span>
                   ) : null}
@@ -1828,7 +1878,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   messaging_route: "route messaging threads",
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
-  remote_pty: "open a remote terminal",
+  remote_pty: "remote terminal protocol",
+  file_push: "file push protocol",
   event_subscriptions: "stream explicitly subscribed events",
   turn_input_blobs: "transfer turn attachments",
   // Transport negotiation is informational, not a remote action.

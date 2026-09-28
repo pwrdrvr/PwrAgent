@@ -13,20 +13,20 @@ afterEach(() => { vi.restoreAllMocks(); db.close(); if (tempDir) removeTempState
 function seed(scope = "all", keys = ["codex:known"], target = db.raw) {
   const payload = JSON.stringify({ knownThreadKeys: keys, lastSnapshotHash: "fixture-hash" });
   target.prepare("INSERT OR REPLACE INTO backends(scope, payload) VALUES (?, ?)").run(scope, payload);
-  return Buffer.byteLength(payload, "utf8");
+  return Buffer.byteLength(JSON.stringify(keys) + "fixture-hash", "utf8");
 }
 
-function payloadReads() {
+function metadataReads() {
   const counts = { reads: 0, bytes: 0 };
   const prepare = db.raw.prepare.bind(db.raw);
   vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
     const statement = prepare(sql);
-    if (/SELECT payload FROM backends/.test(sql)) {
+    if (/FROM backends/.test(sql)) {
       const get = statement.get.bind(statement);
       vi.spyOn(statement, "get").mockImplementation((...args: unknown[]) => {
-        const row = get(...args) as { payload: string } | undefined;
+        const row = get(...args) as { known_thread_keys: string; snapshot_hash: string | null } | undefined;
         counts.reads++;
-        counts.bytes += Buffer.byteLength(row?.payload ?? "", "utf8");
+        counts.bytes += Buffer.byteLength((row?.known_thread_keys ?? "") + (row?.snapshot_hash ?? ""), "utf8");
         return row;
       });
     }
@@ -37,10 +37,10 @@ function payloadReads() {
 
 const read = () => store["getBackend"]("all");
 
-describe("navigation backend payload reuse", () => {
+describe("navigation backend metadata reuse", () => {
   it.each([10, 1000, 10000])("reads %i known identities once across 15 unchanged index builds", (size) => {
     const bytes = seed("all", Array.from({ length: size }, (_, i) => `codex:fixture-${i}`));
-    const counts = payloadReads();
+    const counts = metadataReads();
     for (let i = 0; i < 15; i++) {
       const result = store.readNavigationQueryIndex({ backend: "all", threads: [{
         id: "fixture-0", source: "codex", title: "Fixture", titleSource: "explicit", updatedAt: 1, linkedDirectories: [],
@@ -53,7 +53,7 @@ describe("navigation backend payload reuse", () => {
 
   it("retains the backend cache across unrelated local thread writes", () => {
     const bytes = seed();
-    const counts = payloadReads();
+    const counts = metadataReads();
     read();
     db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run("codex:other", "{}");
     expect(read()?.knownThreadKeys).toEqual(["codex:known"]);
@@ -98,7 +98,7 @@ describe("navigation backend payload reuse", () => {
 
   it("shares local invalidation across stores and caches missing scopes", () => {
     const otherStore = new SqliteOverlayStore(db);
-    const counts = payloadReads();
+    const counts = metadataReads();
     expect(read()).toBeUndefined(); expect(read()).toBeUndefined();
     expect(counts).toEqual({ reads: 1, bytes: 0 });
     otherStore["putBackend"]("all", { knownThreadKeys: ["codex:other-store"] });

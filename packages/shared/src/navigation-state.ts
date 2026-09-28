@@ -258,6 +258,7 @@ export function materializeNavigationThreads(params: {
     return {
       ...thread,
       agent: overlay?.agent,
+      agentChange: summarizeThreadAgentChange(overlay?.queuedAgentChange),
       gitBranch,
       observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
@@ -279,6 +280,7 @@ export function materializeNavigationThreads(params: {
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
       tokenMiserEnabled: overlay?.tokenMiserEnabled,
+      monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,
       codexEnvironmentRuntime:
@@ -363,7 +365,7 @@ export function buildNavigationSnapshot(params: {
   };
 }
 
-export function buildNavigationSnapshotHash(params: {
+export function serializeNavigationSnapshotForHash(params: {
   backend: AppServerBackendScope;
   directories?: NavigationSnapshot["directories"];
   launchpadDefaults?: NavigationLaunchpadDefaults;
@@ -376,6 +378,7 @@ export function buildNavigationSnapshotHash(params: {
       id: thread.id,
       title: thread.title,
       titleSource: thread.titleSource,
+      agentChange: thread.agentChange,
       agent: thread.agent
         ? {
             name: thread.agent.name,
@@ -515,6 +518,7 @@ export function buildNavigationSnapshotHash(params: {
       serviceTier: thread.serviceTier ?? null,
       fastMode: thread.fastMode ?? null,
       tokenMiserEnabled: thread.tokenMiserEnabled ?? null,
+      monitorJobSuggestionsEnabled: thread.monitorJobSuggestionsEnabled ?? null,
       scheduledStart: thread.scheduledStart
         ? {
             actionId: thread.scheduledStart.actionId,
@@ -774,4 +778,10 @@ export function buildNavigationSnapshotHash(params: {
       executionMode: "default",
     },
   });
+}
+
+export function summarizeThreadAgentChange(
+  change: ThreadOverlayState["queuedAgentChange"],
+): NavigationThreadSummary["agentChange"] {
+  return change ? { enabled: change.agent !== null, ...(change.error ? { error: change.error } : {}) } : undefined;
 }

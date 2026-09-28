@@ -1,0 +1,14 @@
+{
+  "deletion": {
+    "frames": 29,
+    "uniquePages": 29,
+    "commits": 1,
+    "bytes": 119512
+  },
+  "vacuum": {
+    "frames": 256,
+    "uniquePages": 255,
+    "commits": 2,
+    "bytes": 1054752
+  }
+}

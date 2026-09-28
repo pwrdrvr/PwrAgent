@@ -189,6 +189,7 @@ export type FederationPtyAuditEntry = {
 };
 
 type FederationPtyServiceOptions = {
+  allowOpen?: () => boolean;
   /** Spawns the shell. The desktop runtime passes the shared
    *  integrated-terminal spawn core; harnesses inject their own. */
   spawnPty: FederationPtySpawn;
@@ -277,6 +278,7 @@ export class FederationPtyService {
     peerId: FederationInstanceId,
     request: FederationPtyOpenRequest,
   ): Promise<FederationPtyOpenResponse> {
+    if (this.options.allowOpen?.() === false) throw new Error("This machine does not allow remote shells.");
     if (this.disposed) {
       throw new Error("Remote terminal service is shutting down.");
     }
@@ -302,6 +304,7 @@ export class FederationPtyService {
         backend: request.backend,
         threadId,
       });
+      if (this.options.allowOpen?.() === false) throw new Error("This machine does not allow remote shells.");
       spawned = await this.options.spawnPty({
         cwd,
         cols: clampTerminalColumns(request.cols),
@@ -318,7 +321,7 @@ export class FederationPtyService {
     // The requester disconnected (or the service shut down) while the shell
     // was spawning: nobody can ever learn this sessionId, so a live shell
     // here is a leak, not a session.
-    if (this.disposed || (this.peerEpochs.get(peerId) ?? 0) !== epoch) {
+    if (this.disposed || this.options.allowOpen?.() === false || (this.peerEpochs.get(peerId) ?? 0) !== epoch) {
       try {
         spawned.pty.kill();
       } catch (error) {

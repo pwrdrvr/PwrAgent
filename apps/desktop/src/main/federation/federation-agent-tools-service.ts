@@ -139,6 +139,10 @@ export function createFederationAgentToolsHandler(
   const cursors = new Map<string, InstanceListCursorEntry>();
   return async (request) => {
     try {
+      if (request.operation === "push_instance_file") {
+        const result = await runtime().pushFile({ scope: "remote", instanceId: request.args.instanceId }, request.args.sourcePath, request.args.name);
+        return ok({ ...result, instanceId: request.args.instanceId });
+      }
       if (request.operation === "list_federation_instances") {
         return await listFederationInstances(
           runtime(),
@@ -218,6 +222,7 @@ async function listFederationInstances(
     icon: peer.celestialIcon,
     profileName: peer.profileName,
     host: peer.host,
+    receiverPermissions: peer.receiverPermissions,
     unavailableReason: peer.unavailableReason,
   }));
   const instances = [local, ...peers].filter((instance) =>
@@ -683,6 +688,7 @@ async function localInstanceDescriptor(
     // listener, not this instance's ability to take work.
     status: "connected",
     capabilities: [...FEDERATION_CAPABILITIES],
+    receiverPermissions: { remoteShells: federation.allowRemoteShells !== false, filePush: federation.allowFilePush === true },
     role: health.role,
     notes: federation.instanceNotes?.trim() || undefined,
     icon: health.localCelestialIcon,
@@ -863,7 +869,7 @@ function failure(
 function classifyFederationToolError(error: unknown): PwrAgentFederationErrorCode {
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error);
-  if (message.includes("capability_denied") || message.includes("forbidden")) {
+  if (message.includes("capability_denied") || message.includes("forbidden") || message.includes("does not allow")) {
     return "forbidden";
   }
   if (

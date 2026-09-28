@@ -134,6 +134,37 @@ async function advance(ms: number) {
 }
 
 describe("RendererHeapMonitor", () => {
+  it("keeps an in-flight snapshot alive until its manifest write finishes", async () => {
+    const session = createSessionStub();
+    let finishSnapshot!: () => void;
+    const snapshot = new Promise<void>((resolve) => { finishSnapshot = resolve; });
+    const { target, debuggerApi } = createTarget([
+      { usedSize: 100, totalSize: 200 },
+      { usedSize: 300, totalSize: 400 },
+    ], { takeHeapSnapshot: () => snapshot });
+    const monitor = new RendererHeapMonitor({
+      target,
+      session: session.session,
+      config: createMonitorConfig(),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await monitor.start();
+    await vi.advanceTimersByTimeAsync(6);
+    const stopped = vi.fn();
+    const stop = monitor.stop("app-quit");
+    void stop.then(stopped);
+    expect(monitor.stop("window-closed")).toBe(stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).not.toHaveBeenCalled();
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+    finishSnapshot();
+    await stop;
+    expect(session.session.registerSnapshotFile).toHaveBeenCalledOnce();
+    expect(session.events.at(-1)).toMatchObject({ type: "monitor-stopped" });
+    expect(debuggerApi.detach).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-18T21:02:00.000Z"));

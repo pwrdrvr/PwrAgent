@@ -156,7 +156,10 @@ describe("Cloudflare setup flow", () => {
     expect(screen.getByRole("button", { name: "Create protected endpoint" })).toHaveAttribute("aria-busy", "true");
     // Reading the docs is exactly what an operator does while provisioning runs.
     expect(screen.getByRole("button", { name: "Access mTLS documentation" })).toBeEnabled();
-    release();
+    await act(async () => {
+      release();
+      await gate;
+    });
   });
   it("defaults to service tokens and provisions with that gate", async () => {
     const events: CloudflareSetupRequest[] = [];

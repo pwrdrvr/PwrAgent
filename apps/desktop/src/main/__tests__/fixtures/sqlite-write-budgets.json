@@ -13,6 +13,27 @@
     "rowsChanged": 4,
     "statements": 4
   },
+  "agent-designation-queue-apply": {
+    "commits": 2,
+    "note": "one queue commit plus one apply/error commit; 100 duplicate requests and 100 idle boundaries add no writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "agent-designation-queue-failure": {
+    "commits": 2,
+    "note": "one queue commit plus one apply/error commit; 100 duplicate requests and 100 idle boundaries add no writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "agent-designation-toggle": {
+    "commits": 2,
+    "note": "one promotion plus one demotion; no per-turn, per-tool or idle writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "auto-access-selection": {
     "commits": 2,
     "note": "one operator mode selection and permission audit; no per-review persistence",
@@ -349,6 +370,13 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "monitor-job-suggestion-claim": {
+    "commits": 1,
+    "note": "one durable claim per qualifying turn; 100 duplicate events and store reopen write nothing",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "move-thread-project": {
     "commits": 1,
     "note": "one operator project move replaces the workspace and clears project runtime atomically",
@@ -376,6 +404,27 @@
     "observedWalBytes": 0,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "navigation-archive-project-registration": {
+    "commits": 1,
+    "note": "Archive orchestration with provider mocked: one existing registration removal commit (~8 KiB); 100 projects/day is ~0.8 MB/day plus unchanged provider archive costs; no idle writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "navigation-backend-digest-reconciliation": {
+    "commits": 1,
+    "note": "One changed complete snapshot commits compact metadata and index; unchanged and partial reads add no commits.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "navigation-detail-twenty-point-reads": {
+    "commits": 0,
+    "note": "Twenty selected configuration projections: no reconciliation, no persistence.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
   },
   "navigation-mark-directory-seen-100-threads": {
     "commits": 1,
@@ -565,6 +614,41 @@
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "storage-maintenance-archive-lifecycle": {
+    "commits": 3,
+    "note": "Archive receipt, duplicate observation and restore; duplicate writes no pages",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 3
+  },
+  "storage-maintenance-daily-bookkeeping": {
+    "commits": 2,
+    "note": "Daily admission and completion; no timer heartbeat",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "storage-maintenance-detail-slice": {
+    "commits": 1,
+    "note": "128 synthetic 1 KiB objects plus retention fence, one bounded transaction; WAL measured after explicit truncation",
+    "observedWalBytes": 119512,
+    "rowsChanged": 129,
+    "statements": 2
+  },
+  "storage-maintenance-explicit-preference": {
+    "commits": 2,
+    "note": "Explicit on/off choices persist; duplicate choice does not write",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "storage-maintenance-initial-expiry": {
+    "commits": 1,
+    "note": "One deferred ordinary expiry transaction and capped reclamation per startup, including profiles that skip maintenance",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 16
   },
   "streamed-command-output": {
     "commits": 2,

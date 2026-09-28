@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -93,18 +94,22 @@ describe("CodexConfigWarningBanner", () => {
     }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    publish?.(configWarningEvent({
-      federationTarget: {
-        scope: "remote",
-        instanceId: "selected-instance",
-      },
-      summary: "Selected warning",
-    }));
+    act(() => {
+      publish?.(configWarningEvent({
+        federationTarget: {
+          scope: "remote",
+          instanceId: "selected-instance",
+        },
+        summary: "Selected warning",
+      }));
+    });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Selected warning",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Trust repo" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Trust repo" }));
+    });
     await waitFor(() => {
       expect(trustCodexProject).toHaveBeenCalledWith({
         federationTarget: {

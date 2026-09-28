@@ -1,3 +1,4 @@
+import type { FederationReceiverPermissions } from "@pwragent/shared";
 import {
   createHmac,
   randomBytes,
@@ -74,6 +75,8 @@ type FederationPeerPayload = {
   profileName?: string;
   notes?: string;
   host?: FederationHostInfo;
+  /** Absent on older peers; never infer permission from protocol support. */
+  receiverPermissions?: FederationReceiverPermissions;
   pinnedPublicKeyPem?: string;
   lastConnectedAt?: number;
   lastActivityAt?: number;
@@ -153,6 +156,7 @@ export class FederationStore {
       profileName: params.peer.profileName,
       notes: params.peer.notes,
       host: params.peer.host,
+      receiverPermissions: params.peer.receiverPermissions,
       pinnedPublicKeyPem: params.peer.pinnedPublicKeyPem,
       lastConnectedAt: params.peer.lastConnectedAt,
       lastActivityAt: params.peer.lastActivityAt,
@@ -536,6 +540,7 @@ function rowToPeer(row: FederationPeerRow): FederationPeerSummary & {
     profileName: payload.profileName,
     notes: payload.notes,
     host: payload.host,
+    receiverPermissions: payload.receiverPermissions,
     pinnedPublicKeyPem: payload.pinnedPublicKeyPem,
     lastConnectedAt: payload.lastConnectedAt,
     lastActivityAt: payload.lastActivityAt,

@@ -2629,6 +2629,8 @@ function DesktopAppShell(props: {
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
+    monitorJobSuggestionsDefaultEnabled:
+      settings.snapshot?.general.toolOutputAlerts?.monitorJobSuggestionsEnabled?.value ?? true,
     tokenMiserDefaultEnabled:
       settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
     platform: threadOwnerPlatform({
@@ -2994,6 +2996,11 @@ function DesktopAppShell(props: {
             }
             threadJump.closeJump();
           }}
+          onJumpToProject={(directory) => {
+            setSidebarHiddenPersisted(false);
+            setMainView("thread");
+            void navigation.openDirectoryLaunchpad(directory);
+          }}
           onJumpToThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
@@ -3048,6 +3055,7 @@ function DesktopAppShell(props: {
             await navigation.refresh();
           }}
           onArchiveThread={navigation.archiveThread}
+          onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
           onMarkDirectoriesSeen={desktopApi?.markNavigationDirectorySeen ? navigation.markDirectoriesSeen : undefined}
           onMarkThreadsSeen={
             desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined

@@ -8,6 +8,8 @@ export function scopeDesktopApiToFederationTarget(
   if (!desktopApi || !federationTarget) {
     return desktopApi;
   }
+  const setThreadAgent = desktopApi.setThreadAgent;
+  const setThreadTokenMiser = desktopApi.setThreadTokenMiser;
   const openApplication = desktopApi.openApplication;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
   const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
@@ -18,6 +20,12 @@ export function scopeDesktopApiToFederationTarget(
 
   return {
     ...desktopApi,
+    setThreadAgent: setThreadAgent
+      ? async (request) => await setThreadAgent({ ...request, federationTarget })
+      : undefined,
+    setThreadTokenMiser: setThreadTokenMiser
+      ? async (request) => await setThreadTokenMiser({ ...request, federationTarget })
+      : undefined,
     openApplication: openApplication
       ? async (request) => await openApplication({
           ...request,

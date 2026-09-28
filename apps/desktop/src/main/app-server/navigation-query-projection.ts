@@ -280,6 +280,7 @@ function projectNavigationRow(params: {
     ...(thread.automationSummary
       ? { automationSummary: thread.automationSummary }
       : {}),
+    ...(thread.agentChange ? { agentChange: thread.agentChange } : {}),
     ...(thread.agent
       ? {
           agent: {

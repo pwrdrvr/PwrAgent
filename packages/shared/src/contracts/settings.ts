@@ -336,6 +336,8 @@ export type DesktopToolOutputAlertPolicy = {
   repeatedLargeOutputMinimumCalls: number;
   repeatedLargeOutputMinimumPercent: number;
   repeatedQueuedChecksEnabled: boolean;
+  /** Default-on active-turn guidance, independent of operator-facing alerts. */
+  monitorJobSuggestionsEnabled?: boolean;
 };
 
 export const MIN_REPEATED_LARGE_OUTPUT_CALLS = 2;
@@ -354,6 +356,7 @@ export const DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT: DesktopToolOutputAlertPol
   repeatedLargeOutputMinimumCalls: TOOL_OUTPUT_WARNING_INVOCATIONS,
   repeatedLargeOutputMinimumPercent: TOOL_OUTPUT_WARNING_PERCENT,
   repeatedQueuedChecksEnabled: false,
+  monitorJobSuggestionsEnabled: true,
 };
 
 export type DesktopSpendAlertPolicy = {
@@ -720,6 +723,7 @@ export type DesktopGeneralSettingsSnapshot = {
     repeatedLargeOutputMinimumCalls: DesktopSettingsValue<number>;
     repeatedLargeOutputMinimumPercent: DesktopSettingsValue<number>;
     repeatedQueuedChecksEnabled: DesktopSettingsValue<boolean>;
+    monitorJobSuggestionsEnabled?: DesktopSettingsValue<boolean>;
   };
   spendAlerts: {
     activeTurnSpendEnabled: DesktopSettingsValue<boolean>;
@@ -984,6 +988,9 @@ export type DesktopFederationSettingsSnapshot = {
   listenHost: DesktopSettingsValue<string>;
   listenPort: DesktopSettingsValue<number>;
   compressionEnabled: DesktopSettingsValue<boolean>;
+  allowRemoteShells: DesktopSettingsValue<boolean>;
+  allowFilePush: DesktopSettingsValue<boolean>;
+  filePushDirectory: DesktopSettingsValue<string>;
   publicUrl: DesktopSettingsValue<string>;
   gatewayUrl: DesktopSettingsValue<string>;
   /**
@@ -1444,6 +1451,9 @@ export type DesktopSettingsConfigPatch = {
     listenHost?: string;
     listenPort?: number;
     compressionEnabled?: boolean;
+    allowRemoteShells?: boolean;
+    allowFilePush?: boolean;
+    filePushDirectory?: string;
     publicUrl?: string;
     gatewayUrl?: string;
     gatewayEndpoints?: string[];

@@ -860,3 +860,44 @@ describe("SidebarSearchPopup, focus", () => {
     await settleRemoteSearch();
   });
 });
+
+describe("project destinations", () => {
+  const project = { key: "directory:/repos/PwrAgnt", kind: "directory" as const, label: "PwrAgnt", path: "/repos/PwrAgnt" };
+
+  it("ranks a case-insensitive exact project before prefix projects and thread metadata, and Enter opens it", async () => {
+    const onJumpToProject = vi.fn();
+    const onJumpToThread = vi.fn();
+    const onClose = vi.fn();
+    render(<SidebarSearchPopup
+      projects={[{ ...project, key: "other", label: "PwrAgnt tools", path: "/repos/tools" }, project]}
+      threads={[localThread({ title: "PwrAgnt thread" })]}
+      onJumpToProject={onJumpToProject} onJumpToThread={onJumpToThread} onClose={onClose}
+    />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "  pwragnt  " } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("PwrAgnt/repos/PwrAgntProject");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToProject).toHaveBeenCalledWith(project);
+    expect(onJumpToThread).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("finds an owner project absent from loaded sidebar rows and keeps thread keyboard navigation", async () => {
+    getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "projects", generation: "generation", ownerEpoch: "owner",
+      countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },
+      entries: [], directories: [{ ...project, counts: { total: 0, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false }], complete: true });
+    const thread = localThread({ title: "PwrAgnt thread" });
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup projects={[]} threads={[thread]}
+      onJumpToProject={vi.fn()} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "PwrAgnt" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("Project");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(thread);
+  });
+});

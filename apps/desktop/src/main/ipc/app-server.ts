@@ -1,3 +1,4 @@
+import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { setBundledGitLfsAdvisory } from "../bundled-git-lfs-advisory";
@@ -144,6 +145,8 @@ import {
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
   type SetThreadTokenMiserRequest,
+  type SetThreadMonitorJobSuggestionsRequest,
+  type SetThreadMonitorJobSuggestionsResponse,
   type SetThreadTokenMiserResponse,
   type SetThreadAgentResponse,
   type SetThreadPinRequest,
@@ -301,6 +304,7 @@ import {
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
+  NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
@@ -2079,7 +2083,7 @@ class DesktopAppServerService {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       return getDesktopFederationRuntime().remoteRemoveNavigationDirectory(request.federationTarget, request);
     }
-    return removeLocalNavigationDirectory(request);
+    return removeLocalNavigationDirectory(request, (member) => this.archiveThread(member));
   }
 
   async getNavigationLaunchpadConfig(
@@ -6382,52 +6386,51 @@ class DesktopAppServerService {
   async setThreadAgent(
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .setThreadAgent(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
 
-    const overlay = await this.getOverlayStore().setThreadAgent({
+    const overlay = await getDesktopBackendRegistry().setThreadAgent({
       backend,
       threadId: request.threadId,
       agent: request.agent,
-    });
-
-    logDebug("setThreadAgent", {
-      backend,
-      threadId: request.threadId,
-      agentName: overlay.agent?.name ?? null,
-      instructionLineCount: overlay.agent?.instructionLineCount ?? 0,
-      instructionsTooLong: overlay.agent?.instructionsTooLong ?? false,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "thread/agent/updated",
-        params: {
-          threadId: request.threadId,
-        },
-      },
     });
 
     return {
       backend,
       threadId: request.threadId,
       agent: overlay.agent,
+      agentChange: summarizeThreadAgentChange(overlay.queuedAgentChange),
     };
   }
 
   async setThreadTokenMiser(
     request: SetThreadTokenMiserRequest,
   ): Promise<SetThreadTokenMiserResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .setThreadTokenMiser(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadTokenMiser(request);
+  }
+
+  async setThreadMonitorJobSuggestions(
+    request: SetThreadMonitorJobSuggestionsRequest,
+  ): Promise<SetThreadMonitorJobSuggestionsResponse> {
     const backend = request.backend ?? "codex";
-    const overlay = await this.getOverlayStore().setThreadTokenMiser({
+    const overlay = await this.getOverlayStore().setThreadMonitorJobSuggestions({
       backend,
       threadId: request.threadId,
       enabled: request.enabled,
     });
-    logDebug("setThreadTokenMiser", {
+    logDebug("setThreadMonitorJobSuggestions", {
       backend,
       threadId: request.threadId,
-      tokenMiserEnabled: overlay.tokenMiserEnabled ?? null,
+      monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled ?? null,
     });
     // Reuse the thread-agent notification path: it already tells every window
     // to re-read this thread's summary, and the override lives on the same
@@ -6444,8 +6447,8 @@ class DesktopAppServerService {
     return {
       backend,
       threadId: request.threadId,
-      ...(overlay.tokenMiserEnabled !== undefined
-        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+      ...(overlay.monitorJobSuggestionsEnabled !== undefined
+        ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
         : {}),
     };
   }
@@ -8442,6 +8445,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadTokenMiserRequest,
     ): Promise<SetThreadTokenMiserResponse> => {
       return await appServerService.setThreadTokenMiser(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
+    async (
+      _event,
+      request: SetThreadMonitorJobSuggestionsRequest,
+    ): Promise<SetThreadMonitorJobSuggestionsResponse> => {
+      return await appServerService.setThreadMonitorJobSuggestions(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REORDER_THREAD_PINS_CHANNEL);

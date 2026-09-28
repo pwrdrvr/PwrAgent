@@ -33,10 +33,30 @@ export function createShutdownBarrier(options: {
   logger: ShutdownBarrierLogger;
   now?: () => number;
   observer?: ShutdownBarrierObserver;
-}): (source: string) => Promise<ShutdownSummary> {
+}): (source: string, remainingMs?: number) => Promise<ShutdownSummary> {
   let shutdownPromise: Promise<ShutdownSummary> | undefined;
-  return (source) => {
-    shutdownPromise ??= runShutdownPhases({ ...options, source });
+  return (source, remainingMs = options.globalTimeoutMs) => {
+    shutdownPromise ??= runShutdownPhases({
+      ...options,
+      source,
+      globalTimeoutMs: Math.max(0, Math.min(options.globalTimeoutMs, remainingMs)),
+      logger: {
+        info: (...args) => {
+          try {
+            options.logger.info(...args);
+          } catch {
+            // Logging must not block shutdown.
+          }
+        },
+        warn: (...args) => {
+          try {
+            options.logger.warn(...args);
+          } catch {
+            // Logging must not block shutdown.
+          }
+        },
+      },
+    });
     return shutdownPromise;
   };
 }
@@ -130,6 +150,7 @@ async function runPhase(
   const outcome = await Promise.race([
     operation,
     new Promise<{ outcome: "timed-out" }>((resolve) => {
+      // Keep the deadline referenced even after the last window closes.
       timer = setTimeout(() => resolve({ outcome: "timed-out" }), timeoutMs);
     }),
   ]);

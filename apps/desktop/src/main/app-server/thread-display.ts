@@ -162,6 +162,7 @@ export function projectThreadDisplay(
     threadId: response.threadId,
     tokenMiserEnabled: response.tokenMiserEnabled,
     tokenMiserOverride: response.tokenMiserOverride,
+    monitorJobSuggestionsEnabled: response.monitorJobSuggestionsEnabled,
     pendingRequest: response.pendingRequest,
     threadStatus: response.threadStatus,
     replay: {

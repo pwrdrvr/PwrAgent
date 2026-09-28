@@ -1,3 +1,4 @@
+import type { FederationReceiverPermissions } from "./federation";
 import type {
   FederatedSearchInstanceSummary,
   FederatedSearchPeerFailure,
@@ -24,6 +25,7 @@ export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
   "list_instance_projects",
   "create_instance_thread",
   "search_federation_threads",
+  "push_instance_file",
 ] as const;
 
 export type PwrAgentFederationOperationName =
@@ -71,6 +73,8 @@ export type FederationInstanceDescriptor = {
    * capacity must not be summed.
    */
   host?: FederationHostInfo;
+  /** Absent on older peers; never infer permission from protocol support. */
+  receiverPermissions?: FederationReceiverPermissions;
   /**
    * Live load reading, present only when the caller asked for it via
    * `includeLoad` AND the instance answered within the short load-query
@@ -112,6 +116,19 @@ export type ListFederationInstancesResult = {
    * tokens expire after about a minute.
    */
   nextCursor?: string;
+};
+
+export type PushInstanceFileToolArgs = {
+  instanceId: FederationInstanceId;
+  sourcePath: string;
+  name?: string;
+};
+
+export type PushInstanceFileResult = {
+  instanceId: FederationInstanceId;
+  path: string;
+  sizeBytes: number;
+  sha256: string;
 };
 
 export type ListInstanceProjectsToolArgs = {
@@ -250,6 +267,7 @@ export type PwrAgentFederationToolArgs<
 > = {
   list_federation_instances: ListFederationInstancesToolArgs;
   list_instance_projects: ListInstanceProjectsToolArgs;
+  push_instance_file: PushInstanceFileToolArgs;
   create_instance_thread: CreateInstanceThreadToolArgs;
   search_federation_threads: SearchFederationThreadsToolArgs;
 }[TOperation];
@@ -270,6 +288,7 @@ export type PwrAgentFederationResponse =
       ok: true;
       data:
         | ListFederationInstancesResult
+        | PushInstanceFileResult
         | ListInstanceProjectsResult
         | CreateInstanceThreadResult
         | SearchFederationThreadsResult;

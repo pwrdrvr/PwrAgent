@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -725,7 +725,9 @@ describe("star map chat cards in map space", () => {
     expect(canvas.style.transform).toBe(before);
 
     // Once that trackpad gesture has ended, bare sky starts a canvas pan.
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
     fireEvent.wheel(
       container.querySelector(".star-map__viewport") as HTMLElement,
       { deltaY: 240 },
@@ -736,7 +738,9 @@ describe("star map chat cards in map space", () => {
 
     // Focus is sticky after the pointer leaves a transcript, but a fresh
     // wheel sequence over bare sky still belongs to the canvas.
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
     transcript.tabIndex = 0;
     transcript.focus();
     const beforeFocusedSkyGesture = canvas.style.transform;
@@ -789,7 +793,9 @@ describe("star map chat cards in map space", () => {
 
     // Ownership is symmetric: a new gesture that begins over a transcript
     // remains a transcript scroll if later events target the sky.
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
     const beforeTranscriptGesture = canvas.style.transform;
     fireEvent.wheel(transcript, { deltaY: 80 });
     fireEvent.wheel(viewport, { deltaY: 80 });

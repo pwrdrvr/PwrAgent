@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AutomationDetail,
@@ -9,7 +9,6 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { CODEX_AGENT_THREAD_CREATION_NOTE } from "../../../lib/agent-thread";
 import { AutomationsScreen } from "../AutomationsScreen";
 
 const thread: NavigationThreadSummary = {
@@ -231,7 +230,7 @@ describe("AutomationsScreen", () => {
     expect(onRefreshNavigation).toHaveBeenCalled();
   });
 
-  it("does not offer existing Codex threads for Agent promotion", async () => {
+  it("offers existing Codex threads for Agent promotion", async () => {
     const setThreadAgent = vi.fn();
     const desktopApi: DesktopApi = {
       listAutomations: vi.fn(async () => ({ automations: [] })),
@@ -252,10 +251,9 @@ describe("AutomationsScreen", () => {
     fireEvent.click(within(editor).getByLabelText("Agent"));
     fireEvent.click(within(editor).getByRole("tab", { name: "Threads" }));
 
-    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
     expect(
       within(editor).queryByRole("option", { name: /Slack helper/ }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
     expect(setThreadAgent).not.toHaveBeenCalled();
   });
 
@@ -530,11 +528,12 @@ describe("row runtime and actions", () => {
       />,
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Show run history for Check email",
-      }),
-    );
+    const history = await screen.findByRole("button", {
+      name: "Show run history for Check email",
+    });
+    await act(async () => {
+      fireEvent.click(history);
+    });
 
     // An ARIA table may only own rows and rowgroups. The group exists for
     // sticky containment, so the panels it expands into need a row of their

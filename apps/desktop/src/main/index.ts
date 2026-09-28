@@ -7,6 +7,9 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } fro
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
+import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
+import { observeStorageArchive } from "./state/storage-maintenance";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
@@ -181,7 +184,7 @@ import {
   recordBootDecision,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
-import { createMainWindow } from "./window";
+import { createMainWindow, stopWindowDiagnostics } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
@@ -284,10 +287,9 @@ let integratedTerminalShutdownPromise: Promise<void> | undefined;
 let rendererWindowShutdownPromise: Promise<void> | undefined;
 let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
+let startupWindowCreated = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
-let startupCpuProfilerForNewWindows:
-  | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
-  | undefined;
+let startupCpuProfilerForNewWindows: StartupCpuProfiler | undefined;
 
 // --- Boot failure surfacing -------------------------------------------------
 // A rejected startup must never leave the app "running but unusable" with no
@@ -425,6 +427,16 @@ function logBootDecision(decision: ProfileBootDecision): void {
   }
 }
 
+function startStartupSettingsDiscovery(permit: ProviderDiscoveryPermit): void {
+  void getDesktopSettingsService()
+    .refreshStartupDiscovery(permit)
+    .catch((error) => {
+      mainLog.warn("startup settings discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
 function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
@@ -439,13 +451,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     return;
   }
   const startedAt = Date.now();
-  void getDesktopSettingsService()
-    .refreshStartupDiscovery(permit)
-    .catch((error) => {
-      mainLog.warn("startup settings discovery failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  startStartupSettingsDiscovery(permit);
   // The durable thread snapshot painted below is allowed to appear
   // immediately. A cold profile has no executable selection yet, though, so
   // this live provider refresh waits only until Codex has a usable selection.
@@ -779,8 +785,30 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
   ],
 });
 
+const flushDiagnostics = createShutdownBarrier({
+  globalTimeoutMs: 10_000,
+  logger: mainLog,
+  phases: [{
+    name: "diagnostics",
+    timeoutMs: 10_000,
+    run: async () => {
+      // Start both even if one throws, and wait for every capture's final writes.
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => startupCpuProfilerForNewWindows?.stop("app-quit")),
+        Promise.resolve().then(() => stopWindowDiagnostics("app-quit")),
+      ]);
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    },
+  }],
+});
+
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    // Diagnostics consumes the existing 2s window + 12s resource allowance;
+    // it must not add another serial 10s wait to application shutdown.
+    const deadline = performance.now()
+      + RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS + MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS;
     // Includes immediate paths (signals and update installation). Send while
     // the tunnel and sockets are still alive; never wait on peer acknowledgments.
     getDesktopFederationRuntime().shutdown.exiting();
@@ -788,12 +816,13 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();
     try {
+      await flushDiagnostics(source);
       // Electron emits before-quit while renderer windows are still live. Close
       // them first so in-flight renderer work cannot cross the boundary where
       // IPC handlers and their backing stores are disposed.
       await closeRendererWindowsBeforeResourceShutdown(source);
       disposeMainProcessResourcesSync({ releaseFederationLease: false });
-      await runMainProcessShutdownBarrier(source);
+      await runMainProcessShutdownBarrier(source, deadline - performance.now());
       // Keep the scheduler subscribed until the app-server registry is closed.
       // A queued registry entry can otherwise start after its durable lease was
       // released, leaving the next process free to dispatch the same action.
@@ -842,8 +871,11 @@ function quitAfterResourceShutdown(source: string): void {
     })
     .finally(() => {
       mainProcessShutdownComplete = true;
-      appQuitManager.allowImmediateQuit();
-      app.quit();
+      // An accepted update may take ownership while this normal quit waits.
+      if (!isUpdateInstallInProgress()) {
+        appQuitManager.allowImmediateQuit();
+        app.quit();
+      }
     });
 }
 
@@ -1300,9 +1332,13 @@ export function bootstrapApp(): void {
     })) {
       return;
     }
+    if (mainProcessShutdownPromise) return;
     const startupCpuProfiler = new StartupCpuProfiler();
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
+    // A quit may have joined an in-flight profiler start. Do not resume boot
+    // and create fresh windows or captures after diagnostics shutdown began.
+    if (mainProcessShutdownPromise) return;
     recordStartupProfileEvent({ type: "app-when-ready" });
     installDevelopmentDockIcon();
     registerManagedGrokSignatureRejectionBroadcast();
@@ -1363,6 +1399,35 @@ export function bootstrapApp(): void {
     });
     reportAutoVacuumConversion(initializeAppState(bootMode).autoVacuum);
     getDesktopConfigStore();
+    if (bootMode === "active-profile") {
+      const registry = getDesktopBackendRegistry();
+      registry.onEvent(async (event) => {
+        const method = event.notification.method;
+        if (method === "thread/archived" || method === "thread/unarchived") {
+          await interruptStartupStorageMaintenance();
+          observeStorageArchive(getAppStateDb().raw, event.backend, event.notification.params.threadId, method === "thread/archived");
+        }
+      });
+      await runStartupStorageMaintenance({
+        state: getAppStateDb(),
+        existingDatabase: hadExistingAppStateDatabase(),
+        onboardingCompleted: getDesktopConfigStore().read("onboarding").completed === true,
+        discover: async () => {
+          // Discovery is normally started after the main window appears. This
+          // earlier consumer must start it and await only Codex readiness.
+          startStartupSettingsDiscovery(issueProviderDiscoveryPermit("startup"));
+          await getDesktopSettingsService().resolveCodexCommand();
+          const [archived, active] = await Promise.all([
+            registry.listThreads({ callerReason: "archive-cleanup", archived: true, forceRefresh: true, enrichDirectories: false, skipArchivedMetadataRefresh: true }),
+            registry.listThreads({ callerReason: "archive-cleanup", archived: false, forceRefresh: true, enrichDirectories: false }),
+          ]);
+          return {
+            archived: archived.map((thread) => ({ backend: thread.source, threadId: thread.id, archivedAt: thread.archivedAt })),
+            active: active.map((thread) => ({ backend: thread.source, threadId: thread.id })),
+          };
+        },
+      });
+    }
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent
@@ -1687,6 +1752,7 @@ export function bootstrapApp(): void {
       startupCpuProfiler,
     });
     quitAppOnMainWindowClose(mainWindow);
+    startupWindowCreated = true;
     recordStartupProfileEvent({ type: "main-window-create:end" });
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
     prewarmInitialThreadList(issueProviderDiscoveryPermit("startup"));
@@ -1717,6 +1783,8 @@ export function bootstrapApp(): void {
   });
 
   app.on("window-all-closed", () => {
+    // Closing/cancelling the preliminary storage window continues startup.
+    if (!startupWindowCreated && !quitInProgress) return;
     if (isUpdateInstallInProgress()) {
       // The auto updater's quitAndInstall() closes every window as the first
       // step of staging the Squirrel.Mac relaunch, then calls app.quit()

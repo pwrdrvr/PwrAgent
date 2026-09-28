@@ -171,6 +171,7 @@ describe("navigation query projection", () => {
   it("index_never_serializes_thread_detail_or_payload_fields", () => {
     const source = snapshot([
       thread("1", {
+        agentChange: { enabled: false },
         agent: {
           name: "Agent",
           instructions: "PRIVATE INSTRUCTIONS",
@@ -208,6 +209,7 @@ describe("navigation query projection", () => {
 
     expect(page.entries[0]?.row).toEqual(expect.objectContaining({
       agent: expect.objectContaining({ name: "Agent" }),
+      agentChange: { enabled: false },
       queueCount: 1,
       queueState: "ready",
     }));

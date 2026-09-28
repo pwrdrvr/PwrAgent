@@ -133,9 +133,9 @@ import {
 import { normalizeImageFile } from "../../lib/image-normalization";
 import {
   AGENT_THREAD_CAPABILITIES,
-  CODEX_AGENT_THREAD_CREATION_NOTE,
-  canChangeExistingThreadAgentDesignation,
+  CODEX_AGENT_THREAD_CHANGE_NOTE,
   createDesktopAgentThread,
+  formatAgentChangeStatus,
 } from "../../lib/agent-thread";
 import {
   usePullRequestLinks,
@@ -325,6 +325,7 @@ type ComposerProps = {
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
   tokenMiserDefaultEnabled?: boolean;
+  monitorJobSuggestionsDefaultEnabled?: boolean;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -431,26 +432,29 @@ type ComposerProps = {
   threadModelSettingsError?: string;
 };
 
-const providerCatalogsRefreshedThisSession = new Set<AppServerBackendKind>();
+const providerCatalogsRefreshedThisSession = new Set<string>();
 
 async function refreshProviderCatalogOnFirstSelection(
   desktopApi: DesktopApi | undefined,
   backend: AppServerBackendKind,
+  federationTarget?: FederationTarget,
 ): Promise<void> {
+  const key = JSON.stringify([federationTarget?.scope === "remote" ? federationTarget.instanceId : null, backend]);
   if (
-    providerCatalogsRefreshedThisSession.has(backend)
+    providerCatalogsRefreshedThisSession.has(key)
     || !desktopApi?.listBackends
   ) {
     return;
   }
-  providerCatalogsRefreshedThisSession.add(backend);
+  providerCatalogsRefreshedThisSession.add(key);
   try {
     await desktopApi.listBackends({
       includeUnavailable: true,
+      federationTarget,
     });
     window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
   } catch {
-    providerCatalogsRefreshedThisSession.delete(backend);
+    providerCatalogsRefreshedThisSession.delete(key);
   }
 }
 
@@ -1645,6 +1649,9 @@ function ComposerThreadOptionsMenu(props: {
   /**
    * Effective Token Miser state for this thread. Undefined hides the item.
    */
+  monitorJobSuggestions?: boolean;
+  monitorJobSuggestionsOverridden?: boolean;
+  onMonitorJobSuggestionsChange?: (enabled: boolean | null) => void;
   tokenMiser?: boolean;
   tokenMiserOverridden?: boolean;
   onTokenMiserChange?: (enabled: boolean | null) => void;
@@ -1684,10 +1691,9 @@ function ComposerThreadOptionsMenu(props: {
   });
   const agentThreadChangeDisabled =
     props.disabled ||
-    props.existingCodexThread ||
     !props.onAgentThreadChange;
   const agentThreadTooltip = props.existingCodexThread
-    ? CODEX_AGENT_THREAD_CREATION_NOTE
+    ? `${AGENT_THREAD_CAPABILITIES} ${CODEX_AGENT_THREAD_CHANGE_NOTE}`
     : AGENT_THREAD_CAPABILITIES;
   const tokenMiserTooltip =
     "Summarize large tool results with a helper model before they "
@@ -1787,6 +1793,37 @@ function ComposerThreadOptionsMenu(props: {
               </span>
             </button>
           </div>
+          {props.onMonitorJobSuggestionsChange ? (
+            <>
+              <button
+                aria-checked={props.monitorJobSuggestions ?? true}
+                className="composer-dropdown__option composer-thread-options__option"
+                disabled={props.disabled}
+                role="menuitemcheckbox"
+                type="button"
+                title="Suggest a monitor job once per turn when repeated polling is detected."
+                onClick={() => props.onMonitorJobSuggestionsChange?.(!(props.monitorJobSuggestions ?? true))}
+              >
+                <span className="composer-thread-options__label">Monitor job suggestions</span>
+                <span aria-hidden="true" className={`composer-thread-options__toggle${
+                  (props.monitorJobSuggestions ?? true) ? " is-checked" : ""
+                }`}>
+                  <span className="composer-thread-options__toggle-thumb" />
+                </span>
+              </button>
+              {props.monitorJobSuggestionsOverridden ? (
+                <button
+                  className="composer-dropdown__option"
+                  disabled={props.disabled}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => props.onMonitorJobSuggestionsChange?.(null)}
+                >
+                  Use default for monitor suggestions
+                </button>
+              ) : null}
+            </>
+          ) : null}
           {props.tokenMiser !== undefined && props.onTokenMiserChange ? (
             <>
               <div
@@ -9150,7 +9187,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const thread = props.thread;
     if (
       !thread ||
-      !canChangeExistingThreadAgentDesignation(thread) ||
       !props.desktopApi?.setThreadAgent
     ) {
       return;
@@ -9161,8 +9197,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.setThreadAgent({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? rendererFederationTarget,
         threadId: thread.id,
-        agent: agentThread ? createDesktopAgentThread() : null,
+        agent: agentThread ? (thread.agent ?? createDesktopAgentThread()) : null,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setAgentThreadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentThreadSaving(false);
+    }
+  };
+
+  const changeMonitorJobSuggestions = async (enabled: boolean | null): Promise<void> => {
+    const thread = props.thread;
+    if (!thread || !props.desktopApi?.setThreadMonitorJobSuggestions) return;
+    setAgentThreadSaving(true);
+    setAgentThreadError(undefined);
+    try {
+      await props.desktopApi.setThreadMonitorJobSuggestions({
+        backend: thread.source,
+        threadId: thread.id,
+        enabled,
       });
       await props.onRefreshNavigation?.();
     } catch (error) {
@@ -9199,6 +9255,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.setThreadTokenMiser({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? rendererFederationTarget,
         threadId: thread.id,
         enabled,
       });
@@ -9250,7 +9307,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           && latestLaunchpad.model === automaticModel
           && latestLaunchpad.reasoningEffort === automaticReasoningEffort;
         const refreshedModels = refreshedBackend.launchpadOptions?.models ?? [];
-        const configuredDefaults = props.providerModelDefaults?.[backend];
+        const configuredDefaults = filesystemFederationTarget?.scope === "remote"
+          ? refreshedBackend.modelDefaults
+          : props.providerModelDefaults?.[backend];
         const configuredModelOption = refreshedModels.find(
           (model) => model.id === configuredDefaults?.model,
         );
@@ -9311,6 +9370,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     props.onProviderSelected,
     props.onUpdateLaunchpad,
     props.providerModelDefaults,
+    filesystemFederationTarget?.scope,
   ]);
 
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
@@ -9437,6 +9497,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     void props.onSetThreadModelSettings(patch);
   };
 
+  // Remote controls use the owner's feature gate/default, never the viewer's.
+  // Older owners omit this metadata, so the override control stays hidden.
+  const tokenMiserEnabled = filesystemFederationTarget?.scope === "remote"
+    ? backend?.tokenMiser?.enabled
+    : props.tokenMiserEnabled;
+  const tokenMiserDefaultEnabled = filesystemFederationTarget?.scope === "remote"
+    ? backend?.tokenMiser?.defaultEnabled
+    : props.tokenMiserDefaultEnabled;
   const currentSettings = props.launchpad ?? props.thread;
   const backgroundPrPollingEnabled =
     props.backgroundPrPollingEnabled ?? true;
@@ -9467,7 +9535,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       )
     : undefined;
   const profileModelDefaults = backend
-    ? props.providerModelDefaults?.[backend.kind]
+    ? filesystemFederationTarget?.scope === "remote"
+      ? backend.modelDefaults
+      : props.providerModelDefaults?.[backend.kind]
     : undefined;
   const profileModelOption =
     modelOptions.find((option) => option.id === profileModelDefaults?.model)
@@ -9495,7 +9565,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     );
   const supportsFast =
     backend?.kind === "codex"
-    && props.codexFastAllowed !== false
+    && (filesystemFederationTarget?.scope === "remote"
+      ? backend?.codexFastAllowed !== false
+      : props.codexFastAllowed !== false)
       ? selectedModelOption?.supportsFast ??
         backend.launchpadOptions?.supportsFastMode ??
         false
@@ -12144,6 +12216,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   void refreshProviderCatalogOnFirstSelection(
                     props.desktopApi,
                     nextBackend,
+                    filesystemFederationTarget,
                   );
                 }
                 handleLaunchpadPatch({
@@ -12691,11 +12764,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             </ReferencePicker>
           ) : null}
           <ComposerThreadOptionsMenu
-            agentThread={Boolean(props.launchpad?.agent ?? props.thread?.agent)}
+            agentThread={props.thread?.agentChange && !props.thread.agentChange.error
+              ? props.thread.agentChange.enabled
+              : Boolean(props.launchpad?.agent ?? props.thread?.agent)}
             disabled={launchpadSubmitting || agentThreadSaving}
             existingCodexThread={
               props.thread !== undefined &&
-              !canChangeExistingThreadAgentDesignation(props.thread)
+              props.thread.source === "codex"
             }
             onAgentThreadChange={
               props.launchpad
@@ -12705,7 +12780,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     }
                   : undefined
                 : props.thread &&
-                    canChangeExistingThreadAgentDesignation(props.thread) &&
                     props.desktopApi?.setThreadAgent
                   ? (agentThread) => {
                       void changeAgentThread(agentThread);
@@ -12717,15 +12791,26 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }
-            {...(props.tokenMiserEnabled === true
+            {...(props.thread?.source === "codex"
+              && props.thread.federation?.ref.target.scope !== "remote"
+              && props.desktopApi?.setThreadMonitorJobSuggestions
+              ? {
+                  monitorJobSuggestions: props.thread.monitorJobSuggestionsEnabled
+                    ?? props.monitorJobSuggestionsDefaultEnabled ?? true,
+                  monitorJobSuggestionsOverridden: props.thread.monitorJobSuggestionsEnabled !== undefined,
+                  onMonitorJobSuggestionsChange: (enabled: boolean | null) => {
+                    void changeMonitorJobSuggestions(enabled);
+                  },
+                }
+              : {})}
+            {...(tokenMiserEnabled === true
               && ((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
                 || (props.thread?.source === "codex"
-                  && props.thread.federation?.ref.target.scope !== "remote"
                   && props.desktopApi?.setThreadTokenMiser))
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled
-                    ?? props.tokenMiserDefaultEnabled
+                    ?? tokenMiserDefaultEnabled
                     ?? true,
                   tokenMiserOverridden:
                     (props.launchpad?.tokenMiserEnabled
@@ -12757,6 +12842,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         />
       ) : null}
       {sendError && !isReviewComposerOpen ? <p className="composer__meta composer__meta--error" role="alert">{sendError}</p> : null}
+      {props.thread?.agentChange ? (
+        <p className="composer__meta" role={props.thread.agentChange.error ? "alert" : "status"}>
+          {formatAgentChangeStatus(props.thread.agentChange)}
+        </p>
+      ) : null}
       {agentThreadError ? (
         <p className="composer__meta composer__meta--error" role="alert">
           {agentThreadError}

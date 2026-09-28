@@ -1655,3 +1655,14 @@ it("returns one bounded project page and requires an explicit continuation", asy
   expect((next as { ok: true; data: ListInstanceProjectsResult }).data.projects[0]?.key).toBe("directory:10");
   expect(readPopulation).toHaveBeenCalledTimes(2);
 });
+
+
+describe("push_instance_file", () => {
+  it("routes the local source path and returns the receiver's saved path", async () => {
+    const pushFile = vi.fn(async () => ({ path: "/remote/Downloads/report.txt", sizeBytes: 3, sha256: "abc" }));
+    const handler = createFederationAgentToolsHandler({ runtime: buildRuntime({ pushFile }) });
+    const result = await handler({ operation: "push_instance_file", context, args: { instanceId: "pwr_remote", sourcePath: "/local/report.txt", name: "report.txt" } });
+    expect(pushFile).toHaveBeenCalledWith({ scope: "remote", instanceId: "pwr_remote" }, "/local/report.txt", "report.txt");
+    expect(result).toEqual({ ok: true, data: { instanceId: "pwr_remote", path: "/remote/Downloads/report.txt", sizeBytes: 3, sha256: "abc" } });
+  });
+});

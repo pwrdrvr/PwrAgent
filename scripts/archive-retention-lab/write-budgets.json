@@ -1,0 +1,12 @@
+{
+  "progress-only-64-batches": {
+    "commits": 64,
+    "frames": 64,
+    "uniquePages": 1,
+    "walBytes": 263712
+  },
+  "cancelled-before-first-batch": {
+    "commits": 0,
+    "frames": 0
+  }
+}

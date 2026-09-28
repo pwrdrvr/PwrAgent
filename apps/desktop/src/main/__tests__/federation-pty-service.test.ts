@@ -86,6 +86,7 @@ type SentNotification = {
 };
 
 function createHarness(options?: {
+  allowOpen?: () => boolean;
   graceMs?: number;
   deliverable?: () => boolean;
   spawnPty?: () => Promise<{
@@ -101,6 +102,7 @@ function createHarness(options?: {
   const sent: SentNotification[] = [];
   const audits: { peerId: string; kind: string; detail: string }[] = [];
   const service = new FederationPtyService({
+    allowOpen: options?.allowOpen,
     spawnPty:
       options?.spawnPty ??
       (async () => ({
@@ -751,5 +753,18 @@ describe("federation pty router integration", () => {
     });
     expect(result.status).toBe("handled");
     expect(service.sessionCountForPeer("viewer")).toBe(1);
+  });
+});
+
+
+describe("remote shell receiver permission", () => {
+  it("refuses shell creation before resolving a thread or spawning", async () => {
+    const spawnPty = vi.fn();
+    const resolveThreadCwd = vi.fn();
+    const { service } = createHarness({ allowOpen: () => false, spawnPty, resolveThreadCwd });
+    await expect(service.open("pwr_peer", { backend: "codex", threadId: "thread", cols: 80, rows: 24 })).rejects.toThrow("does not allow remote shells");
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(resolveThreadCwd).not.toHaveBeenCalled();
+    service.disposeAll();
   });
 });

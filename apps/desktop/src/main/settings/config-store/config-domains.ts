@@ -332,6 +332,7 @@ export function resolveToolOutputAlertPolicy(
       MIN_REPEATED_LARGE_OUTPUT_PERCENT,
       MAX_REPEATED_LARGE_OUTPUT_PERCENT,
     ),
+    monitorJobSuggestionsEnabled: config?.monitorJobSuggestionsEnabled ?? true,
     repeatedQueuedChecksEnabled:
       config?.repeatedQueuedChecksEnabled
       ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,

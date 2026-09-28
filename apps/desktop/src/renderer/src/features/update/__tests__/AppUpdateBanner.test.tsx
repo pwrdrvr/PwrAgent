@@ -117,7 +117,9 @@ describe("AppUpdateBanner", () => {
     await waitFor(() => {
       expect(desktopApi.onAppUpdateStatus).toHaveBeenCalledTimes(1);
     });
-    emit({ status: "downloaded", version: "1.2.3" });
+    act(() => {
+      emit({ status: "downloaded", version: "1.2.3" });
+    });
     expect(
       await screen.findByText("Restart to update to v1.2.3."),
     ).toBeInTheDocument();
@@ -478,12 +480,16 @@ describe("AppUpdateBanner", () => {
       expect(desktopApi.onAppUpdateStatus).toHaveBeenCalledTimes(1);
     });
 
-    listener?.({ status: "downloaded", version: "1.2.3" });
+    act(() => {
+      listener?.({ status: "downloaded", version: "1.2.3" });
+    });
     expect(
       await screen.findByText("Restart to update to v1.2.3."),
     ).toBeInTheDocument();
 
-    resolveInitialStatus?.({ status: "available", version: "1.2.3" });
+    await act(async () => {
+      resolveInitialStatus?.({ status: "available", version: "1.2.3" });
+    });
 
     await waitFor(() => {
       expect(

@@ -1,4 +1,5 @@
 import {
+  useId,
   useMemo,
   useState,
   type FormEvent,
@@ -7,6 +8,9 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  parseThreadSearchQuery,
+  threadSearchTextTerms,
+  matchesThreadSearchProjects,
   type AppServerBackendKind,
   type MessagingChannelKind,
   type NavigationThreadSummary,
@@ -20,6 +24,7 @@ import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
 import { AgentThreadChip } from "../navigation/AgentThreadChip";
+import { ProjectSearchInput } from "./ProjectSearchInput";
 import { mergeAgentMatches, mergePrNumberMatches } from "./thread-match";
 import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
 
@@ -133,9 +138,8 @@ export function basename(value: string): string {
 export function highlightSnippet(text: string, query: string): ReactNode[] {
   const tokens = Array.from(
     new Set(
-      query
-        .toLowerCase()
-        .split(/\s+/)
+      threadSearchTextTerms(query)
+        .map((term) => term.text.toLowerCase())
         .filter((token) => token.length >= 2),
     ),
   ).sort((a, b) => b.length - a.length);
@@ -260,6 +264,8 @@ function ThreadSearchEmptyState(props: {
 export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   const localState = useThreadSearchPanelState();
   const { query, setQuery, response, setResponse } = props.state ?? localState;
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpId = useId();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -288,11 +294,15 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         limit: 25,
         query: trimmed,
       });
+      const parsed = parseThreadSearchQuery(trimmed);
+      const scopedThreads = props.threads?.filter((thread) =>
+        matchesThreadSearchProjects(thread, parsed.projects),
+      );
       setResponse(
         mergeAgentMatches(
-          mergePrNumberMatches(result, trimmed, props.threads),
-          trimmed,
-          props.threads,
+          mergePrNumberMatches(result, parsed.query, scopedThreads),
+          parsed.query,
+          scopedThreads,
         ),
       );
     } catch (searchError) {
@@ -337,18 +347,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
 
       <div className="thread-search__body">
         <form className="thread-search__form" onSubmit={(event) => void submit(event)}>
-          <div className="thread-search__field">
-            <span className="thread-search__field-icon" aria-hidden>
-              <SearchIcon size={16} />
-            </span>
-            <input
-              autoFocus
-              aria-label="Search threads"
-              value={query}
-              placeholder="Search by title, message content, or branch"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
+          <ProjectSearchInput value={query} onChange={setQuery} desktopApi={props.desktopApi} />
           <button
             className="button button--primary thread-search__submit"
             disabled={loading || !query.trim() || searchUnavailable}
@@ -357,7 +356,28 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
             <SearchIcon size={15} aria-hidden />
             <span>{loading ? "Searching" : "Search"}</span>
           </button>
+          <button
+            className="button"
+            type="button"
+            aria-label="Search help"
+            aria-expanded={helpOpen}
+            aria-controls={helpId}
+            onClick={() => setHelpOpen((open) => !open)}
+          >
+            ?
+          </button>
         </form>
+
+        {helpOpen ? (
+          <div id={helpId} className="thread-search__help" role="region" aria-label="Search syntax">
+            <strong>Search tips</strong>
+            <p>Type <code>@</code> or <code>in:@</code> to choose a project. Use ↑ / ↓ to browse and Enter or Tab to select. Add another mention to search multiple projects.</p>
+            <p>Search titles, message content, branches, PR numbers (like #779), or Agent names. Use <code>"ad hoc"</code> to search a phrase.</p>
+            <p><code>build @disk</code> or <code>build in:@disk</code> searches projects whose names start with “disk”. Names are case-insensitive.</p>
+            <p><code>build @PwrAgent @PwrSnap</code> searches either project. Use <code>@"My Project"</code> for spaces, or a full path to distinguish checkouts.</p>
+            <p>A project mention alone lists its recent threads. Quote a literal mention, like <code>"@disk"</code>, to search its text.</p>
+          </div>
+        ) : null}
 
         {error ? <p className="thread-search__error">{error}</p> : null}
 
@@ -397,7 +417,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
                   <ThreadSearchResultRow
                     result={result}
                     isAgent={agentThreadKeys.has(result.identityKey)}
-                    query={response.query}
+                    query={parseThreadSearchQuery(response.query).query}
                     onOpen={() => {
                       void props.onOpenResult({
                         backend: result.backend,

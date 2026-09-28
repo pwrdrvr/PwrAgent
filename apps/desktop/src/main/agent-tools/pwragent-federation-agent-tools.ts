@@ -4,6 +4,7 @@ import type {
   FederationSearchScope,
   ListFederationInstancesToolArgs,
   ListInstanceProjectsToolArgs,
+  PushInstanceFileToolArgs,
   PwrAgentFederationOperationName,
   PwrAgentFederationRequest,
   PwrAgentFederationResponse,
@@ -94,6 +95,8 @@ function descriptionForOperation(
   operation: PwrAgentFederationOperationName,
 ): string {
   switch (operation) {
+    case "push_instance_file":
+      return "Push a local file to another enrolled PwrAgent instance. Use list_federation_instances first: the receiver must advertise receiverPermissions.filePush=true and the file_push capability. sourcePath is an absolute path on this machine. name is an optional plain filename. The receiver chooses the folder (Downloads by default) and never overwrites files. Maximum 512 MiB. Returns the saved remote path, size, and SHA-256. Only send files the user asked to transfer.";
     case "list_federation_instances":
       return "List the local instance and known PwrAgent peers. Results include identity, purpose, status, capabilities, and host facts. Use this before you route work to a machine. Profiles with the same machineId share one host. Do not add their CPU, memory, or disk capacity. Host facts come from the last connection. Set includeLoad=true for current load, available memory, free disk, and sample time. A peer can omit load if it does not reply in time. Load is per machineId. Count it once. Use query instead of paging when possible. Cursor tokens expire after about one minute. A local-only result is valid when Federation is disabled. Only local or connected instances can accept work.";
     case "list_instance_projects":
@@ -109,6 +112,17 @@ function inputSchemaForOperation(
   operation: PwrAgentFederationOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "push_instance_file":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["instanceId", "sourcePath"],
+        properties: {
+          instanceId: { type: "string", description: "Receiving instance from list_federation_instances." },
+          sourcePath: { type: "string", description: "Absolute local path to a regular file, at most 512 MiB." },
+          name: { type: "string", description: "Optional destination filename without a directory." },
+        },
+      };
     case "list_federation_instances":
       return {
         type: "object",
@@ -266,12 +280,20 @@ function normalizeArgsForOperation(
   operation: PwrAgentFederationOperationName,
   args: Record<string, unknown>,
 ):
+  | PushInstanceFileToolArgs
   | ListFederationInstancesToolArgs
   | ListInstanceProjectsToolArgs
   | CreateInstanceThreadToolArgs
   | SearchFederationThreadsToolArgs
   | undefined {
   switch (operation) {
+    case "push_instance_file": {
+      const instanceId = readTrimmedString(args.instanceId);
+      const sourcePath = readTrimmedString(args.sourcePath);
+      const name = args.name === undefined ? undefined : readTrimmedString(args.name);
+      return instanceId && sourcePath && (args.name === undefined || name)
+        ? { instanceId, sourcePath, ...(name ? { name } : {}) } : undefined;
+    }
     case "list_federation_instances":
       return normalizeListFederationInstancesArgs(args);
     case "list_instance_projects":
@@ -287,6 +309,8 @@ function invalidArgumentsMessageForOperation(
   operation: PwrAgentFederationOperationName,
 ): string {
   switch (operation) {
+    case "push_instance_file":
+      return "push_instance_file requires instanceId and sourcePath strings, and an optional non-empty filename.";
     case "list_federation_instances":
       return "list_federation_instances accepts an optional non-empty query, an integer limit between 1 and 100, an optional non-empty cursor, and an optional boolean includeLoad.";
     case "list_instance_projects":

@@ -137,6 +137,18 @@ type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop">;
 
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
+const windowDiagnosticsStopHandlers = new Map<number, (reason: string) => Promise<void>>();
+
+export async function stopWindowDiagnostics(reason: string): Promise<void> {
+  const results = await Promise.allSettled(
+    [...windowDiagnosticsStopHandlers.values()].map((stop) =>
+      Promise.resolve().then(() => stop(reason)),
+    ),
+  );
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+}
+
 const hotCpuProfilerSyncHandlers = new Map<number, (reason: string) => void>();
 
 function serializeError(error: unknown): string {
@@ -510,6 +522,7 @@ export function createMainWindow(options?: {
   attachWindowFocusSync(window);
   attachWindowFullscreenSync(window);
   let rendererLoaded = false;
+  let diagnosticsStopping = false;
   let hotCpuProfilerConfigKey: string | null = null;
   let hotCpuProfilerPromise: Promise<HotCpuProfilerLifecycle | null> | null = null;
   let hotCpuProfilerGeneration = 0;
@@ -585,10 +598,12 @@ export function createMainWindow(options?: {
       },
       stop: async (reason = "stopped") => {
         stopped = true;
-        await Promise.all([
+        const results = await Promise.allSettled([
           renderer?.stop(reason),
           sharedMainHotCpuProfiler.release(owner, reason),
         ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
       },
     };
   };
@@ -633,7 +648,7 @@ export function createMainWindow(options?: {
 
   const runHotCpuProfilerSync = async (reason: string): Promise<void> => {
     try {
-      if (!rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
+      if (diagnosticsStopping || !rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
         return;
       }
 
@@ -770,17 +785,19 @@ export function createMainWindow(options?: {
     };
   })();
 
-  const stopHeapMonitor = (reason: string) => {
-    void heapMonitorPromise
+  const stopHeapMonitor = (reason: string): Promise<void> => {
+    return heapMonitorPromise
       .then(async (monitors) => {
         if (!monitors) {
           return;
         }
 
-        await Promise.all([
+        const results = await Promise.allSettled([
           monitors.rendererMonitor.stop(reason),
           monitors.mainMonitor.stop(reason),
         ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
       })
       .catch((error: unknown) => {
         heapLog.warn("failed to stop heap diagnostics", {
@@ -789,6 +806,22 @@ export function createMainWindow(options?: {
         });
       });
   };
+
+  let diagnosticsStopPromise: Promise<void> | undefined;
+  const stopDiagnostics = (reason: string): Promise<void> => {
+    diagnosticsStopping = true;
+    diagnosticsStopPromise ??= (async () => {
+      // A settings sync may still be creating or replacing a profiler. Drain
+      // that queue before stopping its final instance; queued syncs are disabled.
+      await Promise.allSettled([
+        hotCpuProfilerSyncQueue.then(() => stopHotCpuProfiler(reason)),
+        stopHeapMonitor(reason),
+      ]);
+    })().finally(() => windowDiagnosticsStopHandlers.delete(window.id));
+    return diagnosticsStopPromise;
+  };
+  // Keep closed windows registered until their pending writes finish too.
+  windowDiagnosticsStopHandlers.set(window.id, stopDiagnostics);
 
   if (typeof webContents.on === "function") {
     webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
@@ -800,15 +833,16 @@ export function createMainWindow(options?: {
     });
 
     webContents.on("render-process-gone", (_event, details) => {
-      stopHeapMonitor("render-process-gone");
-      void stopHotCpuProfiler("render-process-gone");
+      void stopDiagnostics("render-process-gone");
       mainLog.error("renderer process gone", details);
     });
 
     if (typeof webContents.once === "function") {
       webContents.once("did-finish-load", () => {
         rendererLoaded = true;
-        void heapMonitorPromise.then((monitors) => monitors?.rendererMonitor.start());
+        void heapMonitorPromise.then((monitors) => {
+          if (!diagnosticsStopping) return monitors?.rendererMonitor.start();
+        });
         syncHotCpuProfiler("did-finish-load");
       });
     }
@@ -877,8 +911,7 @@ export function createMainWindow(options?: {
   window.on("closed", () => {
     hotCpuProfilerSyncHandlers.delete(window.id);
     unsubscribeHotCpuSettings();
-    stopHeapMonitor("window-closed");
-    void stopHotCpuProfiler("window-closed");
+    void stopDiagnostics("window-closed");
   });
 
   return window;

@@ -159,6 +159,7 @@ export function buildToolInvocationSteeringPrompt(params: {
 }
 
 export function toolInvocationFromNotification(params: {
+  includeSmallTools?: boolean;
   backend: AppServerBackendKind;
   largeOutputThresholdChars?: number;
   notification: AppServerNotification;
@@ -242,7 +243,8 @@ export function toolInvocationFromNotification(params: {
     outputTruncated: output.truncated,
   });
   if (
-    itemType !== "commandExecution"
+    !params.includeSmallTools
+    && itemType !== "commandExecution"
     && toolName !== "wait"
     && toolName !== "write_stdin"
     && metrics.outputChars

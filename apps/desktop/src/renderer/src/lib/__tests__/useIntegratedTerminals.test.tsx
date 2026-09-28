@@ -145,11 +145,14 @@ describe("useIntegratedTerminals", () => {
     expect(result.current.panes).toHaveLength(0);
   });
 
-  it("carries the owning instance on a pane opened before its session lands", () => {
+  it("carries the owning instance on a pane opened before its session lands", async () => {
     const desktopApi: DesktopApi = {
       listIntegratedTerminals: vi.fn(async () => []),
     };
     const { result } = renderHook(() => useIntegratedTerminals(desktopApi));
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     act(() => {
       result.current.openPanel("codex:remote-thread", undefined, {

@@ -204,3 +204,62 @@ test("Cancel stops the download and says so without crying failure", async () =>
     await app.close();
   }
 });
+
+for (const theme of ["dark", "light"] as const) {
+  test(`restart controls use aligned solid primary CTAs in ${theme} mode`, async () => {
+    const testInfo = test.info();
+    const app = await launchElectronApp({
+      env: { ...FAKE_UPDATE_ENV, PWRAGENT_DEV_FAKE_UPDATE_STEP_MS: "10" },
+      appearance: { theme },
+      requiresReplayDriver: false,
+    });
+    try {
+      const { window } = app;
+      await checkForUpdates(app.electronApp);
+      const banner = window.locator(".app-update-banner:not(.app-update-banner--progress)");
+      const bannerRestart = banner.getByRole("button", { name: "Restart", exact: true });
+      await expect(bannerRestart).toBeVisible();
+      const background = theme === "dark" ? "rgb(255, 138, 31)" : "rgb(183, 76, 0)";
+      const hoverBackground = theme === "dark" ? "rgb(255, 163, 61)" : "rgb(179, 74, 0)";
+      const foreground = theme === "dark" ? "rgb(18, 8, 0)" : "rgb(255, 255, 255)";
+      const assertPrimary = async (button: Locator) => {
+        await window.mouse.move(0, 0);
+        await expect(button).toHaveCSS("background-color", background);
+        await expect(button).toHaveCSS("color", foreground);
+        await button.hover();
+        await expect(button).toHaveCSS("background-color", hoverBackground);
+        await expect(button).toHaveCSS("color", foreground);
+        await window.mouse.move(0, 0);
+        await expect(button).toHaveCSS("background-color", background);
+      };
+      await assertPrimary(bannerRestart);
+      await banner.screenshot({ path: testInfo.outputPath(`restart-banner-${theme}.png`) });
+
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window.getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "Updates", exact: true }).click();
+      const settings = window.getByRole("region", { name: "Update settings" });
+      const restart = settings.getByRole("button", { name: `Restart to Update (${FAKE_VERSION})`, exact: true });
+      await expect(restart).toBeVisible();
+      await assertPrimary(restart);
+      await expect(restart.locator(".settings-update-channel__restart-version")).toHaveCSS("color", foreground);
+      const check = settings.getByRole("button", { name: "Check for Update", exact: true });
+      const restartBox = await box(restart);
+      const checkBox = await box(check);
+      expect(checkBox.height, "Check and Restart have equal heights").toBeCloseTo(restartBox.height, 1);
+      expect(checkBox.y, "Check and Restart start on the same row").toBeCloseTo(restartBox.y, 1);
+      expect(checkBox.height, "the controls retain their minimum hit target").toBeGreaterThanOrEqual(34);
+      // Release notes belong below BOTH buttons. A wrapper that includes
+      // the notes in this flex row would stretch Check past Restart.
+      const notesBox = await box(settings.locator(".settings-update-channel__downloaded"));
+      expect(notesBox.y).toBeGreaterThanOrEqual(restartBox.y + restartBox.height);
+      expect(notesBox.y).toBeGreaterThanOrEqual(checkBox.y + checkBox.height);
+      await settings.screenshot({ path: testInfo.outputPath(`restart-settings-${theme}.png`) });
+      await settings.locator(".settings-update-channel").screenshot({
+        path: testInfo.outputPath(`restart-controls-${theme}.png`),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+}
