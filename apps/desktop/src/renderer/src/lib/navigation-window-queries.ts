@@ -431,12 +431,12 @@ export class NavigationWindowQueries {
             assertRetained(extended);
             next = extended;
           } catch (error) {
-            // A rebuild owes the window every row it already displays, so a
-            // failed extension discards the partial range. A continuation
-            // owes it only the requested block: commit the rows this click
-            // did deliver, then report what stopped it. A silent stop would
-            // leave the button looking inert at the retained-page budget.
-            if (!pageCursor) throw error;
+            if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
+            // Discard a rebuild only while it still owes displayed rows.
+            // Once restored, commit refreshed membership and metadata plus
+            // any growth delivered before the failure. Continuations also
+            // retain their progress; both paths still report the error.
+            if (!pageCursor && size(next.page) < restoring) throw error;
             resource.value = { ...resource.value, state: next, restoredFromCache: false };
             throw error;
           }

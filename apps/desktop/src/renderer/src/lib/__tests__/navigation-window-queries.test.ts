@@ -479,6 +479,44 @@ it("retains a short continuation's bounded demand across release, growth and fil
   } finally { queries.dispose(); }
 });
 
+it.each([10, 20, 30])("commits a failed refresh only after restoring its displayed range (failure at %s)", async (failureAt) => {
+  let serve = owner("initial", 20);
+  const read = vi.fn(async (request: NavigationQueryRequest) => serve(request));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const state = () => queries.getSnapshot().resources.get("pins")!.state;
+  try {
+    queries.setDemand(new Map([["pins", request()]]));
+    await vi.waitFor(() => expect(state().page?.directories).toHaveLength(10));
+    await queries.loadMore("pins");
+    const baseline = state().page;
+    expect(baseline?.directories).toHaveLength(20);
+    for (const revision of ["fresh", "newer"]) {
+      serve = async (request) => {
+        if (Number(request.cursor?.split(":")[1] ?? 0) >= failureAt) throw new Error("Extension unavailable");
+        const next = await owner(revision, 100)({ ...request, pageSize: 10 });
+        return { ...next, directories: next.directories?.map((directory) => ({ ...directory,
+          key: `${revision}:${directory.key}`, label: `${revision} label ${directory.key}`,
+        })) };
+      };
+      queries.invalidate();
+      await queries.refresh();
+      expect(state().error).toBe("Extension unavailable");
+      if (failureAt < 20) {
+        // An incomplete restoration must not shrink the displayed range.
+        expect(state().page).toBe(baseline);
+      } else {
+        // Failure while admitting extra rows must not discard fresh
+        // membership/metadata, even when the next refresh fails there too.
+        expect(state().page?.countsRevision).toBe(revision);
+        expect(state().page?.directories).toEqual(directoryRows(0, failureAt).map((directory) => ({ ...directory,
+          key: `${revision}:${directory.key}`, label: `${revision} label ${directory.key}`,
+        })));
+        expect(state().page?.nextCursor).toBe(`${revision}:${failureAt}`);
+      }
+    }
+  } finally { queries.dispose(); }
+});
+
 it.each(["reads", "time"] as const)("bounds newly admitted growth on refresh by %s while restoring existing rows", async (budget) => {
   let grow = false;
   let now = 0;
