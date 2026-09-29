@@ -41,6 +41,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "automation-run-prune-retain-usage-title": {
+    "commits": 2,
+    "note": "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
+    "observedWalBytes": 78280,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
@@ -52,6 +59,13 @@
     "commits": 1,
     "note": "50 cumulative pricing snapshots for one run, one debounced payload write",
     "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "automation-run-usage-title-index": {
+    "commits": 1,
+    "note": "One automation run insert, including indexed owner and execution thread identities, remains one commit",
+    "observedWalBytes": 32960,
     "rowsChanged": 1,
     "statements": 1
   },
@@ -579,6 +593,13 @@
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "prune-usage-thread-search-title": {
+    "commits": 1,
+    "note": "Preserving a last-known usage title shares the existing search-document deletion transaction",
+    "observedWalBytes": 28840,
+    "rowsChanged": 2,
+    "statements": 3
   },
   "queued-scheduled-action-hold": {
     "commits": 1,

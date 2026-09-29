@@ -30,6 +30,7 @@ import {
   AUTOMATION_SCHEDULE_KINDS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
+  buildLegacyEncodedThreadIdentityKey,
   buildThreadIdentityKey,
   formatAutomationConversationList,
   formatAutomationScheduleSummary,
@@ -1307,18 +1308,66 @@ export class AutomationStore {
   }
 
   private pruneRuns(automationId: string): void {
-    this.stateDb.raw
-      .prepare(
-        `DELETE FROM automation_runs
+    const count = this.stateDb.raw.prepare(
+      "SELECT COUNT(*) AS count FROM automation_runs WHERE automation_id = ?",
+    ).get(automationId) as { count: number };
+    if (count.count <= this.runHistoryLimit) return;
+    this.stateDb.raw.transaction(() => {
+      const expired = this.stateDb.raw.prepare(`
+        SELECT r.backend, r.thread_id AS owner_thread_id,
+               json_extract(r.payload, '$.backendThreadId') AS execution_thread_id,
+               a.name AS automation_name
+          FROM automation_runs r
+          JOIN automations a ON a.automation_id = r.automation_id
+         WHERE r.automation_id = ?
+           AND r.run_id IN (
+             SELECT run_id FROM automation_runs
+              WHERE automation_id = ?
+              ORDER BY updated_at DESC, rowid DESC
+              LIMIT -1 OFFSET ?
+           )
+      `).all(automationId, automationId, this.runHistoryLimit) as Array<{
+        backend: AppServerBackendKind;
+        owner_thread_id: string;
+        execution_thread_id: string | null;
+        automation_name: string;
+      }>;
+      if (expired.length === 0) return;
+      const currentTitle = this.stateDb.raw.prepare(
+        "SELECT title FROM thread_search_documents WHERE identity_key = ?",
+      );
+      const historicalTitle = this.stateDb.raw.prepare(
+        "SELECT title FROM thread_usage_titles WHERE identity_key = ?",
+      );
+      const retainTitle = this.stateDb.raw.prepare(`
+        INSERT INTO thread_usage_titles (identity_key, title)
+        VALUES (?, ?)
+        ON CONFLICT(identity_key) DO UPDATE SET title = excluded.title
+      `);
+      for (const run of expired) {
+        if (!run.execution_thread_id) continue;
+        const ownerKey = buildLegacyEncodedThreadIdentityKey(
+          run.backend, run.owner_thread_id,
+        );
+        const executionKey = buildLegacyEncodedThreadIdentityKey(
+          run.backend, run.execution_thread_id,
+        );
+        const title = (currentTitle.get(ownerKey) as { title: string } | undefined)?.title
+          ?? (historicalTitle.get(ownerKey) as { title: string } | undefined)?.title
+          ?? run.automation_name;
+        retainTitle.run(executionKey, title);
+      }
+      this.stateDb.raw.prepare(`
+        DELETE FROM automation_runs
          WHERE automation_id = ?
            AND run_id IN (
              SELECT run_id FROM automation_runs
-             WHERE automation_id = ?
-             ORDER BY updated_at DESC, rowid DESC
-             LIMIT -1 OFFSET ?
-           )`,
-      )
-      .run(automationId, automationId, this.runHistoryLimit);
+              WHERE automation_id = ?
+              ORDER BY updated_at DESC, rowid DESC
+              LIMIT -1 OFFSET ?
+           )
+      `).run(automationId, automationId, this.runHistoryLimit);
+    })();
   }
 
   private get runHistoryLimit(): number {

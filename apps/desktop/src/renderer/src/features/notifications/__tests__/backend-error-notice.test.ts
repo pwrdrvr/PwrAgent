@@ -6,6 +6,34 @@ import {
 } from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
+  it("names a failed automation and links its visible Agent thread", () => {
+    const notice = resolveBackendErrorNotice({
+      kind: "turn-failed",
+      backend: "codex",
+      threadId: "headless-thread",
+      turnId: "turn-1",
+      threadLabel: "Search/Signals Agent",
+      errorMessage: "Spend cap",
+      originLabel: "This machine",
+      errorNoticeContext: {
+        backend: "codex",
+        threadId: "agent-thread",
+        title: "Search/Signals Agent",
+        automationName: "Search Bots",
+      },
+    }, undefined);
+    expect(notice).toMatchObject({
+      title: "Automation failed",
+      status: { label: "Automation: Search Bots · This machine" },
+      message: "Spend cap",
+      threadLink: {
+        backend: "codex",
+        threadId: "agent-thread",
+        title: "Search/Signals Agent",
+      },
+    });
+  });
+
   it.each([undefined, "peer-fixture"])("links a failed monitor to its parent on instance %s", (instanceId) => {
     const signal: BackendErrorSignal = {
       kind: "turn-failed",

@@ -666,6 +666,17 @@ export function federationEventClassForMethod(
   return "transcript";
 }
 
+/** Older peers receive full events without stream sequencing or patches. */
+export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent {
+  return {
+    backend: event.backend,
+    notification: event.notification,
+    ...(event.errorNoticeContext
+      ? { errorNoticeContext: event.errorNoticeContext }
+      : {}),
+  };
+}
+
 function eventSubscriptionKey(params: {
   sourceInstanceId: FederationInstanceId;
   subscriberInstanceId: FederationInstanceId;
@@ -823,12 +834,21 @@ function equalFederationThreadSelections(
   return federationThreadSelectionKey(left) === federationThreadSelectionKey(right);
 }
 
-function eventMatchesThreadSelection(
+export function eventMatchesThreadSelection(
   event: AgentEvent,
   eventClass: FederationEventClass,
   selection: FederationThreadSelection,
 ): boolean {
   if (selection.kind === "all") return true;
+  // Private execution threads do not appear in navigation. Failure notices
+  // name their visible owner separately, so subscribers of that owner still
+  // need the terminal event while unrelated sparse subscribers do not.
+  const noticeOwner = event.errorNoticeContext;
+  if (noticeOwner && selection.threads.some((thread) =>
+    thread.backend === noticeOwner.backend
+    && thread.threadId === noticeOwner.threadId)) {
+    return true;
+  }
   const params = event.notification.params as Record<string, unknown> | undefined;
   if (eventClass === "navigation" && event.notification.method === "navigation/invalidated"
     && navigationInvalidationMayChangeMembership(params?.sourceMethod)) return true;
@@ -5404,7 +5424,7 @@ export class DesktopFederationRuntime {
               epoch: subscription.stream.epoch,
               sequence: ++subscription.stream.sequence,
             })
-          : { backend: federatedEvent.backend, notification: federatedEvent.notification };
+          : unsequencedFederationEventPayload(federatedEvent);
         this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-event:${randomUUID()}`,
           kind: "notification",
@@ -5512,6 +5532,9 @@ export class DesktopFederationRuntime {
         instanceId: sourceInstanceId,
       },
       notification: decoded.notification,
+      ...(decoded.errorNoticeContext
+        ? { errorNoticeContext: decoded.errorNoticeContext }
+        : {}),
     };
     // Match retained demand directly; do not rebuild/sort the entire fleet's
     // aggregate selectors for every streamed item.

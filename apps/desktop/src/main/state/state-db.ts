@@ -489,6 +489,10 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_automation_updated
   ON automation_runs(automation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_execution_thread
+  ON automation_runs(json_extract(payload, '$.backendThreadId'), backend);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_owner_thread
+  ON automation_runs(backend, thread_id);
 -- NOTE: idx_automation_runs_source_event is created in the v23 migration
 -- (ensureAutomationRunSourceEventKey), NOT here. ensureCurrentSchema runs
 -- before migrations, and on an existing DB the source_event_key column does
@@ -996,6 +1000,13 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
   ON thread_usage_lines(provider, backend, currency, parent_thread_id)
   WHERE status != 'superseded';
+
+-- A navigation search document can be pruned after archive or page omission.
+-- Keep its last observed title only for threads represented in the usage ledger.
+CREATE TABLE IF NOT EXISTS thread_usage_titles (
+  identity_key TEXT PRIMARY KEY,
+  title TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
   provider                  TEXT NOT NULL DEFAULT 'openai',
