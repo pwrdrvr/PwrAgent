@@ -8133,6 +8133,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
+    | "completeThreadUsageTurns"
+    | "repairUnfinishedThreadUsageTurns"
     | "readUsageActivity"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
@@ -8183,6 +8185,13 @@ const TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS = 250;
 // and turn terminals flush immediately; one second keeps pricing UI responsive
 // while allowing concurrent turns to share one sqlite transaction.
 const LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS = 1_000;
+// A turn owned by another live runtime is left open until it has written no
+// usage for this long. Every model response writes usage, so a quiet turn is
+// waiting on a person or is dead; a live one still replaces the inferred end.
+const USAGE_TURN_REPAIR_PEER_QUIET_MS = 24 * 60 * 60_000;
+// Bounds one startup transaction. A real profile had 1,177 open turns
+// (21 ms to select); anything past the limit is repaired at the next start.
+const USAGE_TURN_REPAIR_BATCH_LIMIT = 2_000;
 
 type PendingLiveThreadUsageLine = {
   backend: AppServerBackendKind;
@@ -8650,6 +8659,7 @@ export class DesktopBackendRegistry {
   private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
   private readonly subAgentStartupReconciliation: Promise<void>;
+  private readonly usageTurnStartupRepair: Promise<void>;
   /**
    * Streamed command-output accounting waiting to be written, keyed by
    * invocation id. Deltas fold together here instead of each one paying a
@@ -9881,6 +9891,12 @@ export class DesktopBackendRegistry {
           message: error instanceof Error ? error.message : String(error),
         });
       });
+    this.usageTurnStartupRepair =
+      this.repairUnfinishedThreadUsageTurnsAtStartup().catch((error) => {
+        backendRegistryLog.warn("usage-turn-startup-repair-failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
 
     // Kick off a one-shot scan of persisted codexEnvironmentRuntime
     // entries: zombie "started" runs from a prior session become
@@ -9951,6 +9967,74 @@ export class DesktopBackendRegistry {
     if (result.repairedSubAgents > 0) {
       backendRegistryLog.info("sub-agent-startup-reconciliation", result);
       this.invalidateThreadListCache();
+    }
+  }
+
+  /**
+   * Record an end for pricing-ledger turns that no process will ever finish.
+   *
+   * Each turn runs in an app-server or ACP agent process that one registry
+   * owns, and only that registry receives its events. When this is the
+   * profile's only live runtime, no process can still report an end for a
+   * turn written before this session started, so every such open turn is
+   * over. Another live runtime may be running one of its own, and a turn
+   * waiting on an approval writes no usage at all, so then only turns with no
+   * usage write for a day qualify. The repair marks each end as inferred, so
+   * if such a turn is still live, its terminal event replaces the estimate.
+   */
+  private async repairUnfinishedThreadUsageTurnsAtStartup(): Promise<void> {
+    const repair = this.overlayStore.repairUnfinishedThreadUsageTurns;
+    if (!repair) {
+      return;
+    }
+    const liveRuntimeInstanceIds = this.liveProfileRuntimeInstanceIds();
+    if (!liveRuntimeInstanceIds) {
+      return;
+    }
+    const soleRuntime = liveRuntimeInstanceIds.every(
+      (instanceId) => instanceId === this.runtimeInstanceId,
+    );
+    const result = await repair.call(this.overlayStore, {
+      lastWriteBefore: soleRuntime
+        ? this.registrySessionStartedAt
+        : Math.min(
+            this.registrySessionStartedAt,
+            Date.now() - USAGE_TURN_REPAIR_PEER_QUIET_MS,
+          ),
+      limit: USAGE_TURN_REPAIR_BATCH_LIMIT,
+    });
+    if (result.repaired > 0) {
+      backendRegistryLog.info("usage-turn-startup-repair", {
+        ...result,
+        soleRuntime,
+      });
+    }
+  }
+
+  /**
+   * Closing stops the app-server and ACP agent processes, which ends every
+   * turn still running in them, and no terminal event will arrive for any of
+   * them. Record the stop as their end.
+   */
+  private async completeRunningThreadUsageTurnsAtShutdown(): Promise<void> {
+    const complete = this.overlayStore.completeThreadUsageTurns;
+    if (!complete) {
+      return;
+    }
+    const turns = Array.from(this.activeTurnKeys).flatMap((key) => {
+      const parsed = parseActiveTurnKey(key);
+      return parsed ? [parsed] : [];
+    });
+    if (turns.length === 0) {
+      return;
+    }
+    try {
+      await complete.call(this.overlayStore, { completedAt: Date.now(), turns });
+    } catch (error) {
+      backendRegistryLog.warn("usage-turn-shutdown-completion-failed", {
+        message: error instanceof Error ? error.message : String(error),
+        turns: turns.length,
+      });
     }
   }
 
@@ -23462,6 +23546,8 @@ export class DesktopBackendRegistry {
     await this.tokenMiserLedgerReconciliation;
     this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
+    await this.usageTurnStartupRepair;
+    await this.completeRunningThreadUsageTurnsAtShutdown();
     // A command streaming at quit time has accounting worth up to one flush
     // window sitting in memory; write it before the store goes away. The flush
     // owns the timer, and `closed` above stops anything re-arming it.

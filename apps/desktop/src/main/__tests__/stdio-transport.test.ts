@@ -94,6 +94,27 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it("reports an app-server exit it did not ask for, and not one it did", async () => {
+    const exited = vi.fn();
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: "/fixture/exit-codex" },
+      onUnexpectedExit: exited,
+    });
+    const crashed = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(crashed);
+    await transport.connect();
+    crashed.emit("close");
+    expect(exited).toHaveBeenCalledTimes(1);
+
+    const stopped = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(stopped);
+    await transport.connect();
+    await transport.close();
+    expect(stopped.killCalled).toBe(true);
+    expect(exited).toHaveBeenCalledTimes(1);
+  });
+
   it("stops further requests after a rejected refresh token", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);

@@ -38,6 +38,11 @@ export type StdioJsonRpcTransportOptions = {
   command: string;
   authenticationRecovery?: boolean;
   onAuthenticationRejected?: (home: string) => void;
+  /**
+   * The app-server process ended without `close()` asking it to. Any turn it
+   * was running ended with it, and no terminal notification will follow.
+   */
+  onUnexpectedExit?: () => void;
 
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -281,6 +286,9 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
         this.childProcess = null;
       }
       this.closeHandler();
+      if (!this.closeRequested && generation === this.lifecycleGeneration) {
+        this.options.onUnexpectedExit?.();
+      }
     });
   }
 

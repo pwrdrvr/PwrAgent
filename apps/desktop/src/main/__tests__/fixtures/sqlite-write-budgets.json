@@ -838,5 +838,19 @@
     "observedWalBytes": 28840,
     "rowsChanged": 26,
     "statements": 27
+  },
+  "usage-turn-shutdown-completion": {
+    "commits": 1,
+    "note": "Two turns still running at shutdown: one commit per shutdown, only when a running turn has a ledger row",
+    "observedWalBytes": 4120,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "usage-turn-startup-repair": {
+    "commits": 1,
+    "note": "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",
+    "observedWalBytes": 4120,
+    "rowsChanged": 2,
+    "statements": 2
   }
 }

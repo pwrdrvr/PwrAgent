@@ -1994,6 +1994,98 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  // ACP has no turn id on the wire. The client mints `pending:<session>:<ms>`
+  // for each prompt, and that is the turn's permanent id: usage and the
+  // terminal event both carry it, so the pricing ledger row can be completed.
+  // The terminal comes from the session/prompt request settling, whatever the
+  // agent does or does not send when the turn is cancelled or its process ends.
+  it.each([
+    ["cancelled prompt", "turn/completed"],
+    ["agent process exit", "turn/failed"],
+  ] as const)("ends a %s under the pending turn id its usage carried", async (ending, terminal) => {
+    const backendId = "acp:qwen" as AcpBackendId;
+    let settlePrompt!: { resolve: (value: unknown) => void; reject: (error: Error) => void };
+    const transport = new FakeAcpAgentTransport();
+    const request = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method !== "session/prompt") return await request(method, params, timeoutMs);
+      void request(method, params, timeoutMs);
+      return await new Promise((resolve, reject) => { settlePrompt = { resolve, reject }; });
+    };
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "qwen",
+      name: "Qwen Code",
+      launchDescriptor: {
+        backendId,
+        registryId: "qwen",
+        distributionKind: "local",
+        command: "qwen",
+        args: ["--experimental-acp"],
+        env: {},
+      },
+    };
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const { turnId } = client.startPrompt({ sessionId: session.sessionId, prompt: "Summarize" });
+    expect(turnId).toMatch(new RegExp(`^pending:${session.sessionId}:\\d+$`));
+    const [firstCall] = JSON.parse(
+      readFileSync(path.join(fixtureDir, "qwen-tool-usage.json"), "utf8"),
+    ) as Array<Record<string, unknown>>;
+    transport.emitSessionUpdate(session.sessionId, firstCall!);
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.notification.method === "thread/tokenUsage/updated")).toBe(true);
+    });
+    if (ending === "cancelled prompt") {
+      settlePrompt.resolve({ stopReason: "cancelled" });
+    } else {
+      settlePrompt.reject(new Error("json-rpc transport closed"));
+    }
+
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.notification.method === terminal)).toBe(true);
+    });
+    const turnIdsFor = (method: string) => events
+      .filter((event) => event.notification.method === method)
+      .map((event) => (event.notification.params as { turnId?: string }).turnId);
+    expect(new Set(turnIdsFor("thread/tokenUsage/updated"))).toEqual(new Set([turnId]));
+    expect(turnIdsFor(terminal)).toEqual([turnId]);
+
+    await adapter.close();
+  });
+
   it("reports Grok model-call usage while a turn is still running", async () => {
     // Grok Build reports usage only on `response_completed`, a transient
     // extension update. It was read by nothing, so a long Grok turn produced
