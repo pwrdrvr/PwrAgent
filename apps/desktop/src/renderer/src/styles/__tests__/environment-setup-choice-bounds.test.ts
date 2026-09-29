@@ -78,6 +78,20 @@ describe("environment setup failure panel bounds", () => {
     expect(error).toMatch(/min-height:\s*0/);
     expect(error).toMatch(/overflow-y:\s*auto/);
 
+    const setupWithHistoryError = ruleBody(
+      ".thread-view__primary:has(> .transcript-panel .transcript-error) > .environment-setup-choice",
+    );
+    expect(setupWithHistoryError).toMatch(/flex-direction:\s*column/);
+    expect(setupWithHistoryError).toMatch(/flex-wrap:\s*nowrap/);
+    expect(setupWithHistoryError).toMatch(/align-items:\s*stretch/);
+    expect(setupWithHistoryError).toMatch(/overflow:\s*hidden/);
+
+    const setupActions = ruleBody(
+      ".thread-view__primary:has(> .transcript-panel .transcript-error) > .environment-setup-choice > .environment-setup-choice__actions",
+    );
+    expect(setupActions).toMatch(/width:\s*100%/);
+    expect(setupActions).toMatch(/align-self:\s*end/);
+
     const combinedFailure = ruleBody(
       ".thread-view__primary:has(> .environment-setup-choice) > .transcript-panel:has(.transcript-error)",
     );
