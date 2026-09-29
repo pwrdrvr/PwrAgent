@@ -227,7 +227,7 @@ describe("TranscriptList", () => {
       </ThreadLinkProvider>,
     );
 
-    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByText("From thread")).toBeInTheDocument();
     expect(screen.queryByText("User")).not.toBeInTheDocument();
     expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
 
