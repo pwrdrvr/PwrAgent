@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.3 - 2026-09-28
+
+- MCP Connections - Supported existing threads can discover and invoke newly added tools from their selected connections, with current permissions and approval checked on each call.
+- Federation - Preview remote Markdown files locally through permission-controlled file pull; file and terminal capability switches now save immediately.
+- Usage Activity - Compare attributed usage and account limits across selected instances, inspect costly turns, and request bounded analysis on demand.
+- PR Monitoring - Evaluate Auto-fix promptly after a PR lookup; a new activity view shows checks, repair decisions, and budgets.
+- Cost Control - Detect polling hidden inside Code Mode so monitor-job suggestions catch it; an optional review can flag less obvious repeated loops.
+- Active Work - Thread navigation and Attention show sub-agents still running after the parent turn ends, and Enter submission keeps the composer focused.
+
 ## v1.1.2 - 2026-09-28
 
 - Federation - Push files between instances with receiver-controlled file and remote-shell permissions; remote links open in the local viewer.
