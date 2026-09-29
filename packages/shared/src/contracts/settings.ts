@@ -772,6 +772,29 @@ export type DesktopCodexCandidateSource =
   | "path"
   | "application";
 
+/** Who installed a Codex executable, as far as its path can tell. */
+export type DesktopCodexInstaller =
+  | "homebrew"
+  | "npm"
+  | "pnpm"
+  | "bun"
+  | "application"
+  | "pwragent"
+  | "unknown";
+
+/**
+ * The Codex PwrAgent launches is older than the newest models need. Present
+ * only then; a current or unidentifiable version carries none.
+ */
+export type DesktopCodexVersionAdvisory = {
+  version: string;
+  minimumVersion: string;
+  command: string;
+  installer: DesktopCodexInstaller;
+  /** Shell command that updates this install, when the installer is one we can name. */
+  upgradeCommand?: string;
+};
+
 export type DesktopCodexDiscoveryCandidate = {
   command: string;
   source: DesktopCodexCandidateSource;
@@ -1285,6 +1308,14 @@ export type DesktopSettingsSnapshot = {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
       allowFast?: DesktopSettingsValue<boolean>;
+      /**
+       * The saved choice to use PwrAgent's own Codex build. It is not the whole
+       * answer: `managedBuildsRequiredBy` names a feature that forces the build
+       * on whatever this says.
+       */
+      managedBuilds?: DesktopSettingsValue<boolean>;
+      managedBuildsRequiredBy?: "token-miser";
+      versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
       localModelIds?: DesktopSettingsValue<string[]>;
       discovery: DesktopCodexDiscoverySnapshot;
@@ -1570,6 +1601,7 @@ export type DesktopSettingsConfigPatch = {
       path?: string;
       profile?: string;
       allowFast?: boolean;
+      managedBuilds?: boolean;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
       /** Exact model IDs explicitly declared to have zero local API cost. */

@@ -1477,6 +1477,14 @@ function SettingsSectionBody(props: {
           },
         });
       }}
+      onManagedCodexBuildsChange={async (managedBuilds) => {
+        return await props.settings.writeConfig({
+          models: {
+            codex: { managedBuilds },
+          },
+        });
+      }}
+      onOpenTokenMiser={() => props.onOpenRoute("experimental")}
       onAcpCliPathChange={async (registryId, cliPath) => {
         return await props.settings.writeConfig({
           acpAgents: { [registryId]: { cliPath } } as NonNullable<

@@ -282,6 +282,8 @@ export type DesktopSettingsConfig = {
       path?: string;
       profile?: string;
       allowFast?: boolean;
+      /** Download and use PwrAgent's own Codex build. Token Miser implies it. */
+      managedBuilds?: boolean;
       configOverrides?: string[];
       localModelIds?: string[];
     };
@@ -1561,6 +1563,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.allowFast !== undefined) {
     set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
   }
+  if (patch.models?.codex?.managedBuilds !== undefined) {
+    set(["models", "codex", "managed_builds"], patch.models.codex.managedBuilds);
+  }
   if (patch.models?.providerDefaults !== undefined) {
     const providerDefaults = normalizeProviderModelDefaults(
       patch.models.providerDefaults,
@@ -2130,6 +2135,7 @@ function normalizeDesktopConfig(
         path: readString(codex?.path),
         profile: readString(codex?.profile),
         allowFast: readBoolean(codex?.allow_fast),
+        managedBuilds: readBoolean(codex?.managed_builds),
         localModelIds: codex?.local_model_ids === undefined ? undefined : validateLocalModelIds(codex.local_model_ids),
         configOverrides: codex?.config_overrides === undefined
           ? undefined

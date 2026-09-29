@@ -99,6 +99,10 @@ export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
 export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =
   "acp:managed-grok-signature-rejected";
+export const MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL =
+  "managed-runtime:progress-event";
+export const MANAGED_RUNTIME_PROGRESS_READ_CHANNEL =
+  "managed-runtime:progress-read";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL =

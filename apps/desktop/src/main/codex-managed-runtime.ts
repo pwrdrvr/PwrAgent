@@ -31,6 +31,10 @@ import {
   verifyMatchingPlatformSignature,
 } from "./managed-runtime-signature.js";
 import { managedCodexRoot } from "./codex-build-channel.js";
+import {
+  createManagedRuntimeProgressReporter,
+  type ManagedRuntimeProgressReporter,
+} from "./managed-runtime-progress.js";
 
 const execFile = promisify(execFileCallback);
 const managedCodexLog = getMainLogger("pwragent:codex-managed-runtime");
@@ -303,6 +307,8 @@ async function ensureManagedCodexRuntimeInner(
   }
 
   processChecks.add(rootDir);
+  const progress = createManagedRuntimeProgressReporter("codex");
+  progress.checking();
   try {
     const release = await fetchLatestCompatibleRelease(options);
     if (!release) {
@@ -312,25 +318,44 @@ async function ensureManagedCodexRuntimeInner(
       const metadata = { ...cached.metadata, checkedAt: now };
       await writeMetadata(rootDir, metadata);
       retryChecksAfter.delete(rootDir);
+      // Nothing new to fetch: the check ends quietly instead of leaving a
+      // "Checking" strip up for a build that was already installed.
+      progress.idle();
       return await activateRuntime(
         rootDir,
         { ...cached, metadata },
         options,
       );
     }
-    const runtime = await installRelease(rootDir, release, now, options);
+    const runtime = await installRelease(
+      rootDir,
+      release,
+      now,
+      options,
+      progress,
+    );
     retryChecksAfter.delete(rootDir);
     managedCodexLog.info("managed_codex_runtime_installed", {
       asset: runtime.metadata.asset,
       command: runtime.command,
       tag: runtime.metadata.tag,
     });
-    return await activateRuntime(rootDir, runtime, options);
+    const active = await activateRuntime(rootDir, runtime, options);
+    progress.ready(runtime.metadata.tag);
+    return active;
   } catch (error) {
     managedCodexLog.warn("managed_codex_runtime_update_failed", {
       error: error instanceof Error ? error.message : String(error),
       usingCachedTag: cached?.metadata.tag,
     });
+    if (options.signal?.aborted) {
+      // The operator turned the build off; there is nothing to report.
+      progress.idle();
+    } else {
+      progress.failed(error, {
+        ...(cached ? { fallbackTag: cached.metadata.tag } : {}),
+      });
+    }
     if (cached) {
       if (!options.signal?.aborted) {
         retryChecksAfter.set(rootDir, now + MANAGED_CODEX_RETRY_BACKOFF_MS);
@@ -606,6 +631,7 @@ async function installRelease(
   release: ManagedCodexRelease,
   now: number,
   options: ManagedCodexRuntimeOptions,
+  progress: ManagedRuntimeProgressReporter,
 ): Promise<ManagedCodexRuntime> {
   options.signal?.throwIfAborted();
   await mkdir(rootDir, { recursive: true });
@@ -618,6 +644,12 @@ async function installRelease(
     const signaturePath = path.join(stagingRoot, release.signature.name);
     // The publisher uploads this marker last. Fetch it first so an Atom feed
     // entry cannot expose a partially uploaded release as installable.
+    // The small files are not metered, only the archive: a bar that filled
+    // for a few KB of manifest and then restarted would read as a retry.
+    const onArchiveBytes = progress.downloading(
+      release.tag,
+      release.archive.size,
+    );
     await downloadFile(
       release.completion.url,
       completionPath,
@@ -647,8 +679,10 @@ async function installRelease(
       archivePath,
       options.fetch,
       options.signal,
+      onArchiveBytes,
     );
     options.signal?.throwIfAborted();
+    progress.verifying(release.tag);
     const completionBytes = await readFile(completionPath);
     const manifestBytes = await readFile(manifestPath);
     const publication = parseManagedCodexPublicationMarker(
@@ -729,6 +763,7 @@ async function installRelease(
     });
     options.signal?.throwIfAborted();
 
+    progress.unpacking(release.tag);
     const extractedRoot = path.join(stagingRoot, "extracted");
     await mkdir(extractedRoot);
     await (options.extractArchive ?? extractArchive)(
@@ -746,6 +781,7 @@ async function installRelease(
       validationOptions,
     );
     options.signal?.throwIfAborted();
+    progress.activating(release.tag);
     const versionRoot = path.join(rootDir, "versions", release.tag);
     await mkdir(path.dirname(versionRoot), { recursive: true });
     await activateExtractedVersion(
@@ -1163,6 +1199,7 @@ async function downloadFile(
   targetPath: string,
   fetchOverride: typeof globalThis.fetch | undefined,
   signal?: AbortSignal,
+  onBytes?: (chunkBytes: number) => void,
 ): Promise<void> {
   const fetchSignal = managedCodexFetchSignal(signal);
   const response = await (fetchOverride ?? globalThis.fetch)(url, {
@@ -1190,6 +1227,7 @@ async function downloadFile(
         );
         return;
       }
+      onBytes?.(chunk.length);
       callback(null, chunk);
     },
   });

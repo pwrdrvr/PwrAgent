@@ -25,6 +25,11 @@ import {
   selectManagedCodexRelease,
   selectManagedCodexReleaseFromFeed,
 } from "../codex-managed-runtime";
+import {
+  readManagedRuntimeProgress,
+  subscribeManagedRuntimeProgress,
+} from "../managed-runtime-progress";
+import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 
 const verifySigstoreMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("sigstore", () => ({ verify: verifySigstoreMock }));
@@ -160,6 +165,132 @@ describe("retaining a managed startup selection", () => {
       expect(verifyMacosCodeModeHostEntitlements).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("managed Codex progress", () => {
+  it("reports each install phase in order and ends on ready", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("verified codex archive bytes");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const events: ManagedRuntimeProgress[] = [];
+    const unsubscribe = subscribeManagedRuntimeProgress((event) => {
+      if (event.runtime === "codex") events.push(event);
+    });
+
+    try {
+      await ensureManagedCodexRuntime({
+        arch: "x64",
+        checkMode: "force",
+        extractArchive: async (_archivePath, targetDir) => {
+          await writeFakeBundle(targetDir, "linux");
+        },
+        fetch: releaseFetch({ archive, archiveName, digest, tag }) as typeof globalThis.fetch,
+        now: () => 1_000,
+        platform: "linux",
+        probeVersion: versionProbe(version),
+        rootDir,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const phases = events.map((event) => event.phase);
+    // The download reports at least its opening 0-byte state; further byte
+    // updates are throttled, so collapse repeats before comparing the order.
+    expect(phases.filter((phase, index) => phase !== phases[index - 1])).toEqual([
+      "checking",
+      "downloading",
+      "verifying",
+      "unpacking",
+      "activating",
+      "ready",
+    ]);
+    expect(events.find((event) => event.phase === "downloading")).toMatchObject({
+      tag,
+      receivedBytes: 0,
+    });
+    expect(events.at(-1)).toMatchObject({ phase: "ready", tag });
+    expect(readManagedRuntimeProgress().find((entry) => entry.runtime === "codex"))
+      .toMatchObject({ phase: "ready", tag });
+  });
+
+  it("names the step a failed first install stopped in", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("verified codex archive bytes");
+    const events: ManagedRuntimeProgress[] = [];
+    const unsubscribe = subscribeManagedRuntimeProgress((event) => {
+      if (event.runtime === "codex") events.push(event);
+    });
+
+    try {
+      await expect(ensureManagedCodexRuntime({
+        arch: "x64",
+        checkMode: "force",
+        // A digest that is not the archive's fails the checksum step.
+        fetch: releaseFetch({
+          archive,
+          archiveName,
+          digest: "0".repeat(64),
+          tag,
+        }) as typeof globalThis.fetch,
+        platform: "linux",
+        rootDir,
+      })).rejects.toThrow();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.at(-1)).toMatchObject({
+      phase: "failed",
+      failedPhase: "verifying",
+    });
+    expect(events.at(-1)?.error).toBeTruthy();
+    // No fallback build was installed, so the failure is not the quiet kind.
+    expect(events.at(-1)?.fallbackTag).toBeUndefined();
+  });
+
+  it("ends a check quietly when the installed build is already the newest", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("verified codex archive bytes");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const options = {
+      arch: "x64" as const,
+      checkMode: "force" as const,
+      extractArchive: async (_archivePath: string, targetDir: string) => {
+        await writeFakeBundle(targetDir, "linux");
+      },
+      fetch: releaseFetch({ archive, archiveName, digest, tag }) as typeof globalThis.fetch,
+      now: () => 1_000,
+      platform: "linux" as const,
+      probeVersion: versionProbe(version),
+      rootDir,
+    };
+    await ensureManagedCodexRuntime(options);
+
+    const events: ManagedRuntimeProgress[] = [];
+    const unsubscribe = subscribeManagedRuntimeProgress((event) => {
+      if (event.runtime === "codex") events.push(event);
+    });
+    try {
+      await ensureManagedCodexRuntime({ ...options, now: () => 2_000 });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.map((event) => event.phase)).toEqual(["checking", "idle"]);
+    expect(
+      readManagedRuntimeProgress().find((entry) => entry.runtime === "codex"),
+    ).toBeUndefined();
+  });
 });
 
 describe("ensureManagedCodexRuntime", () => {

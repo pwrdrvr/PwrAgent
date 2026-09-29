@@ -497,6 +497,7 @@ import type {
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
+import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
 import type { BundledGitLfsAdvisoryEvent } from "../shared/bundled-git-lfs";
 import type {
   GithubPrAuthenticationFailureEvent,
@@ -624,6 +625,8 @@ import {
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
+  MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
+  MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -2627,6 +2630,20 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
     };
   },
+  onManagedRuntimeProgress: (
+    callback: (event: ManagedRuntimeProgress) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ManagedRuntimeProgress,
+    ) => callback(payload);
+    ipcRenderer.on(MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL, listener);
+    };
+  },
+  readManagedRuntimeProgress: async (): Promise<ManagedRuntimeProgress[]> =>
+    await ipcRenderer.invoke(MANAGED_RUNTIME_PROGRESS_READ_CHANNEL),
   onGithubPrAuthenticationFailure: (
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
   ): (() => void) => {
