@@ -5616,6 +5616,118 @@ describe("Composer", () => {
     });
   });
 
+  it("restores reply focus after an Enter submit finishes its pre-send check", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        onBeforeStartTurn={() => check.promise}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Checked send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    textarea.focus();
+    fireEvent.change(textarea, { target: { value: "Start a checked turn" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(textarea).toHaveAttribute("contenteditable", "false");
+    // Chromium drops focus when the active contenteditable becomes read-only.
+    // jsdom does not model that browser behavior, so reproduce the blur here.
+    textarea.blur();
+
+    await act(async () => {
+      check.resolve(true);
+      await check.promise;
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText("Reply")).toHaveFocus();
+    });
+  });
+
+  it("preserves pointer interaction during an Enter submit pre-send check", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <>
+        <p data-testid="transcript-copy-target">Earlier transcript text</p>
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          disabled={false}
+          onBeforeStartTurn={() => check.promise}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Checked send",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      </>
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    textarea.focus();
+    const focus = vi.spyOn(textarea, "focus");
+    fireEvent.change(textarea, { target: { value: "Start a checked turn" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    textarea.blur();
+
+    const transcript = screen.getByTestId("transcript-copy-target");
+    fireEvent.pointerDown(transcript);
+    const range = document.createRange();
+    range.selectNodeContents(transcript);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+
+    await act(async () => {
+      check.resolve(true);
+      await check.promise;
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    });
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(focus).not.toHaveBeenCalled();
+    expect(textarea).not.toHaveFocus();
+    expect(window.getSelection()?.toString()).toBe("Earlier transcript text");
+  });
+
   it("restores the reply draft when starting a turn fails after clearing", async () => {
     const startTurn = vi.fn(async () => {
       throw new Error("Start failed");

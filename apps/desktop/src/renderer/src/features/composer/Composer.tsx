@@ -6416,11 +6416,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   const prepareThreadTurnPayload = async (
     payloadOrPromise: ComposerTurnPayload | Promise<ComposerTurnPayload>,
+    options?: { restoreComposerFocus?: boolean },
   ): Promise<ComposerTurnPayload | undefined> => {
     // Nothing has been sent yet. Keep the draft in place while remote file
     // inspection and the branch check run. Cancellation abandons this attempt
     // without waiting for the remote read or letting its result send later.
     const preparation = new AbortController();
+    const preparationScopeKey = composerScopeKey;
+    const preparationFocusedElement = options?.restoreComposerFocus
+      ? document.activeElement
+      : undefined;
+    let pointerInteractionDuringPreparation = false;
+    const recordPointerInteraction = (): void => {
+      pointerInteractionDuringPreparation = true;
+    };
+    if (options?.restoreComposerFocus) {
+      document.addEventListener("pointerdown", recordPointerInteraction, true);
+    }
     sendPreparationRef.current = preparation;
     setPreparingSend(true);
     updateSending(true);
@@ -6451,6 +6463,33 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (sendPreparationRef.current === preparation) {
         sendPreparationRef.current = undefined;
         setPreparingSend(false);
+        if (options?.restoreComposerFocus) {
+          requestAnimationFrame(() => {
+            document.removeEventListener(
+              "pointerdown",
+              recordPointerInteraction,
+              true,
+            );
+            const activeElement = document.activeElement;
+            if (
+              !pointerInteractionDuringPreparation
+              && activeComposerScopeKeyRef.current === preparationScopeKey
+              && (
+                !activeElement
+                || activeElement === document.body
+                || activeElement === preparationFocusedElement
+              )
+            ) {
+              inputRef.current?.focus();
+            }
+          });
+        }
+      } else if (options?.restoreComposerFocus) {
+        document.removeEventListener(
+          "pointerdown",
+          recordPointerInteraction,
+          true,
+        );
       }
     }
   };
@@ -7795,7 +7834,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return await sendThreadTurn(reply, { payload: prepared });
   };
 
-  const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
+  const submitTurn = async (
+    mode: "default" | "steer" = "default",
+    options?: { restoreComposerFocus?: boolean },
+  ): Promise<void> => {
     const reviewCommand = parsedReviewCommand;
     if (turnPayloadPreparationInFlightRef.current || sendPreparationRef.current) {
       return;
@@ -8021,7 +8063,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     );
     let payload: ComposerTurnPayload;
     if (!props.launchpad && (isPromiseLike(payloadOrPromise) || props.onBeforeStartTurn)) {
-      const prepared = await prepareThreadTurnPayload(payloadOrPromise);
+      const prepared = await prepareThreadTurnPayload(payloadOrPromise, options);
       if (!prepared) return;
       payload = prepared;
     } else if (isPromiseLike(payloadOrPromise)) {
@@ -10458,7 +10500,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        void submitTurn(event.metaKey ? "steer" : "default");
+        void submitTurn(event.metaKey ? "steer" : "default", {
+          restoreComposerFocus: true,
+        });
       }
       return;
     }
