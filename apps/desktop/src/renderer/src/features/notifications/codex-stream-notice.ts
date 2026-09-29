@@ -8,8 +8,8 @@ export type CodexStreamSignal = {
   threadLabel: string;
 };
 
-const SKILL_QUESTIONS_WARNING_PREFIX =
-  "Under-development features enabled: default_mode_request_user_input.";
+const UNDER_DEVELOPMENT_FEATURES_PREFIX = "Under-development features enabled:";
+const SKILL_QUESTIONS_FEATURE = "default_mode_request_user_input";
 
 const MODEL_PROGRESS_METHODS = new Set([
   "item/agentMessage/delta",
@@ -52,7 +52,7 @@ export function resolveCodexStreamNotice(
     const message = readText(method === "warning" ? params.message : error?.message);
     if (!message) return undefined;
     const skillQuestionsWarning = method === "warning"
-      && message.startsWith(SKILL_QUESTIONS_WARNING_PREFIX);
+      && isSkillQuestionsDevelopmentWarning(message);
     if (skillQuestionsWarning && signal.skillQuestionsWarningDismissed) return undefined;
     const details = readText(error?.additionalDetails);
     const retrying = method === "error" && params.willRetry === true;
@@ -120,4 +120,11 @@ export function resolveCodexStreamNotice(
 
 function readText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isSkillQuestionsDevelopmentWarning(message: string): boolean {
+  if (!message.startsWith(UNDER_DEVELOPMENT_FEATURES_PREFIX)) return false;
+  const featureList = message.slice(UNDER_DEVELOPMENT_FEATURES_PREFIX.length)
+    .split(".", 1)[0] ?? "";
+  return featureList.split(/[,\s]+/).includes(SKILL_QUESTIONS_FEATURE);
 }

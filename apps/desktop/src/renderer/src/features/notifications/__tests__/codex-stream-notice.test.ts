@@ -47,15 +47,42 @@ describe("Codex stream notices", () => {
       ...warning,
       skillQuestionsWarningDismissed: true,
     }, [])).toBeUndefined();
+    for (const features of [
+      "default_mode_request_user_input, another_feature",
+      "another_feature, default_mode_request_user_input",
+    ]) {
+      const multiFeatureWarning = {
+        ...warning,
+        notification: {
+          ...warning.notification,
+          params: {
+            ...warning.notification.params,
+            message: `Under-development features enabled: ${features}. Under-development features are incomplete.`,
+          },
+        },
+      };
+      expect(resolveCodexStreamNotice(multiFeatureWarning, [])).toMatchObject({
+        notice: { skillQuestionsWarning: true },
+      });
+      expect(resolveCodexStreamNotice({
+        ...multiFeatureWarning,
+        skillQuestionsWarningDismissed: true,
+      }, [])).toBeUndefined();
+    }
     expect(resolveCodexStreamNotice({
       ...warning,
       skillQuestionsWarningDismissed: true,
       notification: {
         ...warning.notification,
-        params: { ...warning.notification.params, message: "A different warning." },
+        params: {
+          ...warning.notification.params,
+          message: "Under-development features enabled: another_feature. default_mode_request_user_input is not enabled.",
+        },
       },
     }, [])).toMatchObject({
-      notice: { message: "A different warning." },
+      notice: {
+        message: "Under-development features enabled: another_feature. default_mode_request_user_input is not enabled.",
+      },
     });
   });
 });
