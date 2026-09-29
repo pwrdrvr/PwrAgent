@@ -10,6 +10,7 @@ import {
   mergeLargeToolOutputIncident,
   normalizeToolInvocationCommand,
   toolInvocationFromNotification,
+  toolInvocationReviewInputFromNotification,
 } from "../app-server/tool-invocation-accounting";
 
 const ALERTING_TOOL_OUTPUT_POLICY = {
@@ -90,6 +91,41 @@ describe("tool invocation accounting", () => {
     expect(normalized.normalizedCommand).not.toContain("sk-secret");
     expect(normalized.normalizedCommand).not.toContain("abc123");
     expect(normalized.normalizedCommand).not.toContain("hunter2");
+  });
+
+  it("unwraps read-only polling hidden inside a Code Mode exec", () => {
+    const notification = {
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "code-mode-1",
+          type: "functionCall",
+          name: "exec",
+          status: "completed",
+          arguments: {
+            input:
+              "const r = await tools.write_stdin({session_id:27324, chars:\"\", yield_time_ms:30000, max_output_tokens:4000}); text(r.output);",
+          },
+          functionCallOutput: "still running",
+        },
+      },
+    } as AppServerNotification;
+
+    expect(toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification,
+      includeSmallTools: true,
+    })).toMatchObject({
+      category: "polling",
+      normalizedCommand: "poll session 27324",
+      sessionId: "27324",
+      toolName: "exec",
+    });
+    expect(toolInvocationReviewInputFromNotification(notification))
+      .toContain("tools.write_stdin");
   });
 
   it("counts output volume and sbt-style warning/error/info/debug lines", () => {
@@ -381,6 +417,39 @@ describe("tool invocation accounting", () => {
     expect(detection?.alert.suggestedPrompt).toContain(
       "create_monitor_delegation",
     );
+  });
+
+  it("detects repeated Code Mode exec wrappers around one session poll", () => {
+    const records = Array.from({ length: 5 }, (_, index) =>
+      toolInvocationFromNotification({
+        backend: "codex",
+        now: 1_800_000_000_000 + index * 30_000,
+        includeSmallTools: true,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: `code-poll-${index}`,
+              type: "functionCall",
+              name: "exec",
+              status: "completed",
+              arguments: {
+                input:
+                  "const r = await tools.write_stdin({session_id:27324, chars:\"\", yield_time_ms:30000}); text(r.output);",
+              },
+              functionCallOutput: "",
+            },
+          },
+        } as AppServerNotification,
+      })!,
+    );
+
+    expect(detectNoisyPolling({
+      current: records[4]!,
+      recent: records.slice(0, 4),
+    })?.invocationIds).toHaveLength(5);
   });
 
   it("groups deferred waits by turn even when each check has a new cell", () => {

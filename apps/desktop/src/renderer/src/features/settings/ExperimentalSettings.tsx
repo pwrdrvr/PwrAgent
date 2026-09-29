@@ -51,6 +51,7 @@ export function ExperimentalSettings(props: {
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserPollingReviewsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
@@ -77,6 +78,9 @@ export function ExperimentalSettings(props: {
     DEFAULT_TOKEN_MISER_ENABLED;
   const tokenMiserFocusedSummariesEnabled =
     props.snapshot.experimental.tokenMiserFocusedSummariesEnabled ??
+    { value: false, source: "default" as const };
+  const tokenMiserPollingReviewsEnabled =
+    props.snapshot.experimental.tokenMiserPollingReviewsEnabled ??
     { value: false, source: "default" as const };
   const tokenMiserDefaultEnabled =
     props.snapshot.experimental.tokenMiserDefaultEnabled ??
@@ -211,6 +215,16 @@ export function ExperimentalSettings(props: {
             help="Off by default. Uses the configured Token Miser model and incurs additional helper usage. Turning this off stops new focused summaries; ordinary Token Miser summaries and exact-source reads remain available."
             source={sourceBadge(tokenMiserFocusedSummariesEnabled)}
             onChange={props.onTokenMiserFocusedSummariesEnabledChange}
+          />
+          <ToggleField
+            checked={tokenMiserPollingReviewsEnabled.value}
+            disabled={props.saving || !tokenMiserEnabled.value}
+            label="Review hidden polling loops"
+            switchQualifier="Token Miser"
+            sub="Ask the Token Miser helper model—Luna when available—to review ambiguous repeated tool calls before suggesting a Job Monitor."
+            help="Off by default. Obvious polling is still detected locally. This review sends only bounded timing, tool metadata, redacted Code Mode snippets, and recent assistant updates to the same helper-model selector Token Miser uses; it never includes full tool output. A review that finds productive work leaves the turn alone."
+            source={sourceBadge(tokenMiserPollingReviewsEnabled)}
+            onChange={props.onTokenMiserPollingReviewsEnabledChange}
           />
           {tokenMiserInert ? (
             <SettingsField

@@ -1,7 +1,16 @@
 import { analyzeUsageActivity } from "./usage-activity-analysis";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
-import { MonitorJobSuggestionDetector, MONITOR_JOB_SUGGESTION } from "./monitor-job-suggestion";
+import {
+  buildMonitorJobHeuristicPrompt,
+  MonitorJobHeuristicDetector,
+  MONITOR_JOB_HEURISTIC_SCHEMA,
+  MONITOR_JOB_HEURISTIC_SYSTEM,
+  MonitorJobSuggestionDetector,
+  MONITOR_JOB_SUGGESTION,
+  parseMonitorJobHeuristicDecision,
+  type MonitorJobHeuristicEvidence,
+} from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
@@ -599,6 +608,7 @@ import {
   mergeToolInvocationLifecycleWithStreamedOutput,
   toolAccountingLookbackSince,
   toolInvocationFromNotification,
+  toolInvocationReviewInputFromNotification,
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
 import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
@@ -8955,6 +8965,7 @@ export class DesktopBackendRegistry {
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
+  private readonly resolveTokenMiserPollingReviewsEnabledFn: () => boolean;
   private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
   private readonly resolveCodexDiscoveryPendingFn: () => boolean;
   private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
@@ -8962,6 +8973,7 @@ export class DesktopBackendRegistry {
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
   private readonly monitorJobSuggestionDetector = new MonitorJobSuggestionDetector();
+  private readonly monitorJobHeuristicDetector = new MonitorJobHeuristicDetector();
   private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
@@ -9079,6 +9091,8 @@ export class DesktopBackendRegistry {
     resolveCodexFastAllowed?: () => boolean;
     resolveCodexLocalModelIds?: () => string[];
     resolvePdfAnalysisEnabled?: () => boolean;
+    resolveTokenMiserEnabled?: () => boolean;
+    resolveTokenMiserPollingReviewsEnabled?: () => boolean;
     configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
@@ -9238,7 +9252,7 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
-    this.resolveTokenMiserEnabledFn = () => {
+    this.resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
       try {
         return (
           settingsService ?? getDesktopSettingsService()
@@ -9249,7 +9263,7 @@ export class DesktopBackendRegistry {
         });
         return false;
       }
-    };
+    });
     this.resolveTokenMiserDefaultEnabledFn = () => {
       try {
         return (
@@ -9265,6 +9279,23 @@ export class DesktopBackendRegistry {
         return true;
       }
     };
+    this.resolveTokenMiserPollingReviewsEnabledFn =
+      options?.resolveTokenMiserPollingReviewsEnabled
+      ?? (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolveTokenMiserPollingReviewsEnabled?.() ?? false;
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve Token Miser polling review setting",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return false;
+        }
+      });
     this.resolveManagedTokenMiserActivationRequiredFn =
       options?.resolveManagedTokenMiserActivationRequired
       ?? (() => settingsService?.requiresManagedTokenMiserActivation() ?? false);
@@ -29147,9 +29178,7 @@ export class DesktopBackendRegistry {
     if (Array.from(this.taskMonitorDelegations.values()).some(
       (record) => record.backend === backend && record.monitorThreadId === threadId,
     ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return;
-    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
-    if (!(overlay?.monitorJobSuggestionsEnabled
-      ?? this.toolOutputAlertPolicy.monitorJobSuggestionsEnabled ?? true)) return;
+    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return;
     if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return;
     if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return;
     await this.steerTurn({
@@ -29161,21 +29190,141 @@ export class DesktopBackendRegistry {
     }, { kind: "pwragent", systemReason: "monitor-job-suggestion" });
   }
 
+  private async monitorJobSuggestionEnabledForThread(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<boolean> {
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    return overlay?.monitorJobSuggestionsEnabled
+      ?? this.toolOutputAlertPolicy.monitorJobSuggestionsEnabled
+      ?? true;
+  }
+
+  private monitorJobHeuristicEnabled(): boolean {
+    return this.resolveTokenMiserEnabledFn()
+      && this.resolveTokenMiserPollingReviewsEnabledFn();
+  }
+
+  private rememberMonitorJobHeuristicMessage(event: AgentEvent): void {
+    if (
+      !this.monitorJobHeuristicEnabled()
+      || event.backend !== "codex"
+      || event.notification.method !== "item/completed"
+      || readNotificationItemType(event.notification) !== "agentMessage"
+    ) return;
+    const params = readRecord(event.notification.params);
+    const threadId = readNonEmptyString(params?.threadId);
+    const turnId = readNonEmptyString(params?.turnId);
+    const text = textFragmentsFromCodexNotification(event.notification)
+      .join("\n")
+      .trim();
+    if (!threadId || !turnId || !text) return;
+    this.monitorJobHeuristicDetector.observeAssistantMessage({
+      backend: event.backend,
+      threadId,
+      turnId,
+      observedAt: Date.now(),
+      text,
+    });
+  }
+
+  private async reviewMonitorJobHeuristic(
+    evidence: MonitorJobHeuristicEvidence,
+    invocation: ThreadToolInvocationRecord,
+  ): Promise<void> {
+    if (
+      !this.monitorJobHeuristicEnabled()
+      || evidence.backend !== "codex"
+      || this.getActiveTurnForThread({
+        backend: evidence.backend,
+        threadId: evidence.threadId,
+      })?.turnId !== evidence.turnId
+      || !this.codexClient.generateStructuredObject
+    ) return;
+    if (
+      this.resolveSubAgentThreadOwner({
+        backend: evidence.backend,
+        threadId: evidence.threadId,
+      }).isSubAgent
+      || Array.from(this.taskMonitorDelegations.values()).some(
+        (record) =>
+          record.backend === evidence.backend
+          && record.monitorThreadId === evidence.threadId,
+      )
+      || this.completedTaskMonitorsByThread.has(
+        taskMonitorThreadKey(evidence.backend, evidence.threadId),
+      )
+      || !await this.monitorJobSuggestionEnabledForThread(
+        evidence.backend,
+        evidence.threadId,
+      )
+    ) return;
+    const result = await this.codexClient.generateStructuredObject({
+      system: MONITOR_JOB_HEURISTIC_SYSTEM,
+      prompt: buildMonitorJobHeuristicPrompt(evidence),
+      schema: MONITOR_JOB_HEURISTIC_SCHEMA,
+      reasoningEffort: "medium",
+      disableExecution: true,
+      isMatch: (record) => Boolean(parseMonitorJobHeuristicDecision(record)),
+      timeoutMs: 45_000,
+      turnTimeoutMs: 45_000,
+    });
+    if (result.status !== "ok") {
+      backendRegistryLog.warn("monitor job heuristic review failed open", {
+        threadId: evidence.threadId,
+        turnId: evidence.turnId,
+        reason: result.reason,
+      });
+      return;
+    }
+    const decision = parseMonitorJobHeuristicDecision(result.object);
+    if (!decision) return;
+    backendRegistryLog.info("monitor job heuristic review completed", {
+      threadId: evidence.threadId,
+      turnId: evidence.turnId,
+      decision: decision.decision,
+      model: result.model,
+    });
+    if (decision.decision === "suggest_monitor") {
+      await this.suggestMonitorJob(invocation);
+    }
+  }
+
   private async recordToolInvocationAccounting(event: AgentEvent): Promise<void> {
+    this.rememberMonitorJobHeuristicMessage(event);
     if (event.notification.method === "item/completed" && event.backend === "codex") {
       const observed = toolInvocationFromNotification({
         backend: event.backend,
         notification: event.notification,
         includeSmallTools: true,
       });
-      if (observed && this.monitorJobSuggestionDetector.observe(observed)) {
-        void this.suggestMonitorJob(observed).catch((error) => {
-          backendRegistryLog.warn("monitor job suggestion was not delivered", {
-            threadId: observed.threadId,
-            turnId: observed.turnId,
-            error: error instanceof Error ? error.message : String(error),
+      if (observed) {
+        if (this.monitorJobSuggestionDetector.observe(observed)) {
+          this.monitorJobHeuristicDetector.clear(observed.backend, observed.threadId);
+          void this.suggestMonitorJob(observed).catch((error) => {
+            backendRegistryLog.warn("monitor job suggestion was not delivered", {
+              threadId: observed.threadId,
+              turnId: observed.turnId,
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-        });
+        } else if (this.monitorJobHeuristicEnabled()) {
+          const evidence = this.monitorJobHeuristicDetector.observeInvocation({
+            invocation: observed,
+            inputPreview: toolInvocationReviewInputFromNotification(
+              event.notification,
+            ),
+          });
+          if (evidence) {
+            void this.reviewMonitorJobHeuristic(evidence, observed).catch((error) => {
+              backendRegistryLog.warn("monitor job heuristic review failed open", {
+                threadId: observed.threadId,
+                turnId: observed.turnId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
+        }
       }
     }
     if (
@@ -29188,6 +29337,7 @@ export class DesktopBackendRegistry {
       const turnId = readNonEmptyString(params?.turnId);
       if (threadId && turnId) {
         this.monitorJobSuggestionDetector.clear(event.backend, threadId);
+        this.monitorJobHeuristicDetector.clear(event.backend, threadId);
         this.liveToolOutputIncidents.delete(
           `large-output:${event.backend}:${threadId}:${turnId}`,
         );

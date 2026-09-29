@@ -3561,6 +3561,39 @@ describe("SettingsScreen", () => {
     expect(toggle).toBeDisabled();
   });
 
+  it("offers default-off polling reviews inside Token Miser", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    const settings = createSettingsState(snapshot);
+    const view = render(<SettingsScreen
+      desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental"
+      settings={settings}
+      onClose={() => undefined}
+    />);
+    const toggle = screen.getByRole("switch", {
+      name: "Review hidden polling loops — Token Miser",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      experimental: { tokenMiserPollingReviewsEnabled: true },
+    }));
+    view.rerender(<SettingsScreen
+      desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental"
+      settings={createSettingsState({
+        ...snapshot,
+        experimental: {
+          ...snapshot.experimental,
+          tokenMiserEnabled: { value: false, source: "config" },
+        },
+      })}
+      onClose={() => undefined}
+    />);
+    expect(toggle).toBeDisabled();
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };

@@ -196,6 +196,14 @@ describe("desktopSettingsPatchToEdits — general", () => {
     }]);
   });
 
+  it("writes Token Miser polling reviews", () => {
+    expect(desktopSettingsPatchToEdits({
+      experimental: { tokenMiserPollingReviewsEnabled: true },
+    })).toEqual([{
+      op: "set", path: ["experimental", "token_miser_polling_reviews_enabled"], value: true,
+    }]);
+  });
+
   it("writes the inherited Token Miser thread default", () => {
     expect(
       desktopSettingsPatchToEdits({

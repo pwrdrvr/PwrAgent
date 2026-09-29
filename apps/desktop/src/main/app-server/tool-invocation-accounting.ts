@@ -50,6 +50,8 @@ export type NormalizedToolCommand = {
   normalizedCommand?: string;
 };
 
+const CODE_MODE_REVIEW_INPUT_MAX_CHARS = 800;
+
 export type NoisyPollingDetection = {
   alert: ThreadToolInvocationAlert;
   cases: Record<string, { outputChars: number }>;
@@ -276,7 +278,8 @@ export function toolInvocationFromNotification(params: {
     readString(args, "cell_id") ??
     readString(args, "cellId") ??
     readString(item, "sessionId") ??
-    readString(item, "session_id");
+    readString(item, "session_id") ??
+    pollingTargetIdFromNormalizedCommand(normalized.normalizedCommand);
   const exitCode = readExitCode(item);
   const status = normalizeToolInvocationStatus({
     exitCode: exitCode.exitCode,
@@ -469,6 +472,15 @@ export function normalizeToolInvocationCommand(params: {
     };
   }
 
+  if (toolName === "exec") {
+    const nestedPolling = normalizeCodeModePollingCommand(
+      readString(params.args, "input") ?? readString(params.args, "code"),
+    );
+    if (nestedPolling) {
+      return nestedPolling;
+    }
+  }
+
   if (
     toolName === "create_monitor_delegation" ||
     toolName === "spawn_agent" ||
@@ -494,19 +506,117 @@ export function normalizeToolInvocationCommand(params: {
   };
 }
 
+/**
+ * Code Mode exposes one outer `exec` item to the App Server even when the
+ * script performs a nested `write_stdin` or deferred `wait`. Recognize only
+ * the unambiguous read-only forms here. Ambiguous scripts stay `unknown` and
+ * may be reviewed by the opt-in polling heuristic instead.
+ */
+export function normalizeCodeModePollingCommand(
+  input: string | undefined,
+): NormalizedToolCommand | undefined {
+  if (!input) return undefined;
+  const nestedToolCalls = input.match(/tools\.[A-Za-z0-9_]+\s*\(/g) ?? [];
+  if (nestedToolCalls.length !== 1) return undefined;
+  const writeStdin = input.match(/tools\.write_stdin\s*\(\s*\{([\s\S]*?)\}\s*\)/);
+  if (writeStdin) {
+    const body = writeStdin[1] ?? "";
+    const chars = readJavascriptLiteralProperty(body, "chars");
+    if (chars === "") {
+      const sessionId = readJavascriptLiteralProperty(body, "session_id")
+        ?? readJavascriptLiteralProperty(body, "sessionId");
+      if (!sessionId) return undefined;
+      return {
+        category: "polling",
+        normalizedCommand: `poll session ${sessionId}`,
+      };
+    }
+  }
+
+  const wait = input.match(/tools\.wait\s*\(\s*\{([\s\S]*?)\}\s*\)/);
+  if (wait) {
+    const body = wait[1] ?? "";
+    const cellId = readJavascriptLiteralProperty(body, "cell_id")
+      ?? readJavascriptLiteralProperty(body, "cellId");
+    if (!cellId) return undefined;
+    return {
+      category: "polling",
+      normalizedCommand: `wait cell ${cellId}`,
+    };
+  }
+
+  const nestedSleep = input.match(
+    /tools\.exec_command\s*\([\s\S]*?\bcmd\s*:\s*(["'`])\s*(sleep\s+\d+(?:\.\d+)?)\b[\s\S]*?\1/,
+  );
+  if (nestedSleep?.[2]) {
+    return {
+      category: "polling",
+      normalizedCommand: nestedSleep[2],
+    };
+  }
+  return undefined;
+}
+
+/** Bounded, redacted evidence for the optional Luna polling review. */
+export function toolInvocationReviewInputFromNotification(
+  notification: AppServerNotification,
+): string | undefined {
+  if (
+    notification.method !== "item/started"
+    && notification.method !== "item/completed"
+  ) return undefined;
+  const params = readRecord(notification.params);
+  const item = readRecord(params?.item);
+  const args = readToolArguments(item);
+  const toolName =
+    readString(item, "toolName")
+    ?? readString(item, "tool_name")
+    ?? readString(item, "tool")
+    ?? readString(item, "name");
+  if (toolName !== "exec") return undefined;
+  const input = readString(args, "input") ?? readString(args, "code");
+  if (!input?.trim()) return undefined;
+  const redacted = redactCommandText(input.replace(/\s+/g, " ").trim());
+  return redacted.length <= CODE_MODE_REVIEW_INPUT_MAX_CHARS
+    ? redacted
+    : `${redacted.slice(0, CODE_MODE_REVIEW_INPUT_MAX_CHARS)}…`;
+}
+
+function readJavascriptLiteralProperty(
+  objectBody: string,
+  property: string,
+): string | undefined {
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = objectBody.match(
+    new RegExp(`(?:^|[,\\s])${escapedProperty}\\s*:\\s*(?:(["'])(.*?)\\1|(-?\\d+(?:\\.\\d+)?))`),
+  );
+  return match?.[2] ?? match?.[3];
+}
+
+function pollingTargetIdFromNormalizedCommand(
+  command: string | undefined,
+): string | undefined {
+  return command?.match(/^(?:poll session|wait cell) (.+)$/)?.[1];
+}
+
 export function detectNoisyPolling(params: {
   current: ThreadToolInvocationRecord;
   recent: ThreadToolInvocationRecord[];
   now?: number;
 }): NoisyPollingDetection | undefined {
   const current = params.current;
-  const isDeferredWait = current.toolName === "wait";
+  const isSessionPoll =
+    current.toolName === "write_stdin"
+    || current.normalizedCommand?.startsWith("poll session ") === true;
+  const isDeferredWait =
+    current.toolName === "wait"
+    || current.normalizedCommand?.startsWith("wait cell ") === true;
   const isShellDelay =
     current.category === "polling"
     && current.normalizedCommand?.startsWith("sleep ") === true;
   const isTurnScopedPolling = isDeferredWait || isShellDelay;
   if (
-    (current.toolName !== "write_stdin" && !isTurnScopedPolling) ||
+    (!isSessionPoll && !isTurnScopedPolling) ||
     current.category !== "polling" ||
     (isTurnScopedPolling
       ? !current.turnId

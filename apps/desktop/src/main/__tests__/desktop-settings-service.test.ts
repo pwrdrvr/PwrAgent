@@ -1415,6 +1415,28 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("defaults polling reviews off and persists their toggle", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(service.resolveTokenMiserPollingReviewsEnabled()).toBe(false);
+    expect((await service.readSettingsProjection()).experimental.tokenMiserPollingReviewsEnabled)
+      .toEqual({ value: false, source: "default" });
+    await service.writeConfigPatchTargeted({
+      experimental: { tokenMiserPollingReviewsEnabled: true },
+    });
+    expect(service.resolveTokenMiserPollingReviewsEnabled()).toBe(true);
+    const reopened = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(reopened.resolveTokenMiserPollingReviewsEnabled()).toBe(true);
+  });
+
   it("defaults Token Miser unavailable with inherited thread use on", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
