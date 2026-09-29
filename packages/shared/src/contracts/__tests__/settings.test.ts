@@ -141,6 +141,10 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        codexSkillQuestionsWarningDismissed: {
+          value: false,
+          source: "default",
+        },
         diffCondensation: {
           enabled: { value: false, source: "default" },
         },

@@ -1048,6 +1048,8 @@ function DesktopAppShell(props: {
           type: "codex-stream-event",
           notification: { method: event.notification.method, params },
           ...(instanceId ? { instanceId } : {}),
+          skillQuestionsWarningDismissed:
+            props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
           threadLabel: labelForThread(
             "codex",
             typeof params.threadId === "string" ? params.threadId : undefined,
@@ -1398,7 +1400,12 @@ function DesktopAppShell(props: {
         return;
       }
     });
-  }, [acknowledgeThreadSpendAlert, desktopApi, openCodexLogin]);
+  }, [
+    acknowledgeThreadSpendAlert,
+    desktopApi,
+    openCodexLogin,
+    props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
+  ]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
   // a smooth scroll is animated over several frames, and hiding the sidebar
   // mid-animation abandons it wherever it got to. An instant scroll lands in one
@@ -3343,6 +3350,9 @@ function DesktopAppShell(props: {
           durableNotices={appNotices.durable}
           onDismissDurable={dismissAppNotice}
           onOpenThread={showThreadFromLink}
+          onSuppressSkillQuestionsWarning={() => settings.writeConfig({
+            experimental: { codexSkillQuestionsWarningDismissed: true },
+          })}
           transientNotices={[
             {
               notice: navigation.archiveThreadNotice,

@@ -7861,6 +7861,21 @@ a.button {
   z-index: 150;
 }
 
+/* Two classes: `.composer__checkbox` is declared far below this rule and
+   would otherwise win the equal-specificity tie on `font-size`. */
+.app-notice-toast .app-notice-toast__suppress {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.app-notice-toast__suppression-error {
+  margin: 4px 0 0;
+  color: var(--status-error);
+  font-size: 12px;
+}
+
 .app-notice-toast__body {
   min-width: 0;
   grid-column: 1 / -1;

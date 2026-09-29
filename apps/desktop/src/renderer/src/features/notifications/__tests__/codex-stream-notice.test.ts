@@ -28,4 +28,61 @@ describe("Codex stream notices", () => {
       notice: { title: "Codex warning", message: "Model fallback in use.", tone: "warning" },
     });
   });
+
+  it("offers dismissal only for the Skill Questions development warning", () => {
+    const warning = {
+      threadLabel: "Package lookup",
+      notification: {
+        method: "warning",
+        params: {
+          threadId: "thread-1",
+          message: "Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably.",
+        },
+      },
+    };
+    expect(resolveCodexStreamNotice(warning, [])).toMatchObject({
+      notice: { skillQuestionsWarning: true },
+    });
+    expect(resolveCodexStreamNotice({
+      ...warning,
+      skillQuestionsWarningDismissed: true,
+    }, [])).toBeUndefined();
+    for (const features of [
+      "default_mode_request_user_input, another_feature",
+      "another_feature, default_mode_request_user_input",
+    ]) {
+      const multiFeatureWarning = {
+        ...warning,
+        notification: {
+          ...warning.notification,
+          params: {
+            ...warning.notification.params,
+            message: `Under-development features enabled: ${features}. Under-development features are incomplete.`,
+          },
+        },
+      };
+      expect(resolveCodexStreamNotice(multiFeatureWarning, [])).toMatchObject({
+        notice: { skillQuestionsWarning: true },
+      });
+      expect(resolveCodexStreamNotice({
+        ...multiFeatureWarning,
+        skillQuestionsWarningDismissed: true,
+      }, [])).toBeUndefined();
+    }
+    expect(resolveCodexStreamNotice({
+      ...warning,
+      skillQuestionsWarningDismissed: true,
+      notification: {
+        ...warning.notification,
+        params: {
+          ...warning.notification.params,
+          message: "Under-development features enabled: another_feature. default_mode_request_user_input is not enabled.",
+        },
+      },
+    }, [])).toMatchObject({
+      notice: {
+        message: "Under-development features enabled: another_feature. default_mode_request_user_input is not enabled.",
+      },
+    });
+  });
 });

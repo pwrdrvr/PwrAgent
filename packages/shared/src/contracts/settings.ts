@@ -1141,6 +1141,8 @@ export type DesktopSettingsSnapshot = {
      * outside Plan mode when the installed Codex build supports it.
      */
     codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
+    /** Hide only Codex's default-mode request_user_input development warning toast. */
+    codexSkillQuestionsWarningDismissed: DesktopSettingsValue<boolean>;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
@@ -1421,6 +1423,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserPollingReviewsEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
+    codexSkillQuestionsWarningDismissed?: boolean;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
     diffCondensation?: {

@@ -4,8 +4,12 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
 export type CodexStreamSignal = {
   notification: { method: string; params: Record<string, unknown> };
   instanceId?: FederationInstanceId;
+  skillQuestionsWarningDismissed?: boolean;
   threadLabel: string;
 };
+
+const UNDER_DEVELOPMENT_FEATURES_PREFIX = "Under-development features enabled:";
+const SKILL_QUESTIONS_FEATURE = "default_mode_request_user_input";
 
 const MODEL_PROGRESS_METHODS = new Set([
   "item/agentMessage/delta",
@@ -47,6 +51,9 @@ export function resolveCodexStreamNotice(
       : undefined;
     const message = readText(method === "warning" ? params.message : error?.message);
     if (!message) return undefined;
+    const skillQuestionsWarning = method === "warning"
+      && isSkillQuestionsDevelopmentWarning(message);
+    if (skillQuestionsWarning && signal.skillQuestionsWarningDismissed) return undefined;
     const details = readText(error?.additionalDetails);
     const retrying = method === "error" && params.willRetry === true;
     return {
@@ -59,6 +66,7 @@ export function resolveCodexStreamNotice(
           ? "Codex warning"
           : retrying ? "Codex is retrying" : "Codex error",
         message: details ? `${message}\n${details}` : message,
+        ...(skillQuestionsWarning ? { skillQuestionsWarning: true } : {}),
         tone: method === "warning" || retrying ? "warning" : "error",
         detail: signal.threadLabel,
         threadLink: {
@@ -112,4 +120,11 @@ export function resolveCodexStreamNotice(
 
 function readText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isSkillQuestionsDevelopmentWarning(message: string): boolean {
+  if (!message.startsWith(UNDER_DEVELOPMENT_FEATURES_PREFIX)) return false;
+  const featureList = message.slice(UNDER_DEVELOPMENT_FEATURES_PREFIX.length)
+    .split(".", 1)[0] ?? "";
+  return featureList.split(/[,\s]+/).includes(SKILL_QUESTIONS_FEATURE);
 }

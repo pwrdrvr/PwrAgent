@@ -1073,6 +1073,10 @@ export class DesktopSettingsService {
           config.experimental?.codexDefaultModeRequestUserInput,
           false,
         ),
+        codexSkillQuestionsWarningDismissed: this.resolveConfigBoolean(
+          config.experimental?.codexSkillQuestionsWarningDismissed,
+          false,
+        ),
         managedReview: this.resolveConfigBoolean(
           config.experimental?.managedReview,
           false,
