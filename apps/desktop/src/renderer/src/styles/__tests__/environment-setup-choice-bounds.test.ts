@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { firstCssRuleBody as ruleBody } from "./css-rule-body";
+import {
+  cssRuleBody,
+  firstCssRuleBody as ruleBody,
+} from "./css-rule-body";
 
 /**
  * Locks the declarations that keep the environment-setup failure panel from
@@ -67,6 +70,24 @@ describe("environment setup failure panel bounds", () => {
     // out of the inner one to reach the rest of the panel.
     expect(ruleBody(".environment-setup-choice__pre--output")).not.toMatch(
       /max-height:/,
+    );
+  });
+
+  it("reserves a readable, internally scrolling history error lane", () => {
+    const error = cssRuleBody(".transcript-error");
+    expect(error).toMatch(/min-height:\s*0/);
+    expect(error).toMatch(/overflow-y:\s*auto/);
+
+    const combinedFailure = ruleBody(
+      ".thread-view__primary:has(> .environment-setup-choice) > .transcript-panel:has(.transcript-error)",
+    );
+    expect(combinedFailure).toMatch(/flex-basis:\s*132px/);
+    expect(combinedFailure).toMatch(/min-height:\s*132px/);
+  });
+
+  it("insets a history error even when no transcript list was created", () => {
+    expect(ruleBody(".transcript-panel > .transcript-error")).toMatch(
+      /margin:\s*12px 16px/,
     );
   });
 });
