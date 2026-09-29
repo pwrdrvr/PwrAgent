@@ -7059,6 +7059,8 @@ a.button {
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .transcript-error__text {
@@ -18665,6 +18667,42 @@ a.button {
   min-height: 0;
 }
 
+/* A failed environment can coincide with a failed first history read. The
+   setup choice and composer both have substantial natural heights, while the
+   transcript normally starts from a zero flex basis. On a short or narrow
+   pane that left only a sliver for the history error; its text then painted
+   out of that sliver and underneath the composer.
+
+   Reserving the error row makes the setup panel surrender height. Its normal
+   wrapping flex layout cannot pass that deficit into `__body`: the wrapped
+   flex lines keep their content heights and overflow the panel, including the
+   escape actions. In this combined state, use one non-wrapping column instead.
+   `__body` is the only child allowed to shrink and already scrolls, while the
+   natural-height action row remains `flex: 0 0 auto` inside the panel. */
+.thread-view__primary:has(> .transcript-panel .transcript-error)
+  > .environment-setup-choice {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.thread-view__primary:has(> .transcript-panel .transcript-error)
+  > .environment-setup-choice
+  > .environment-setup-choice__actions {
+  width: 100%;
+  align-self: end;
+}
+
+/* Reserve one readable error row. Longer errors scroll inside
+   `.transcript-error` instead of escaping the card. */
+.thread-view__primary:has(> .environment-setup-choice)
+  > .transcript-panel:has(.transcript-error) {
+  flex-basis: 132px;
+  min-height: 132px;
+}
+
 /* In-thread find (⌘F). Matches are painted with the CSS Custom Highlight API
    (Range-based) so the React-rendered transcript DOM is never mutated. */
 ::highlight(thread-find) {
@@ -19015,6 +19053,14 @@ a.button {
      provide for error rows above the items. */
   align-self: flex-start;
   margin: 12px 16px 0;
+}
+
+.transcript-panel > .transcript-error {
+  /* The no-history error returns without `.transcript-list`, so give that
+     state the same chat-column inset and enough bottom clearance to keep the
+     card distinct from the composer below it. */
+  align-self: stretch;
+  margin: 12px 16px;
 }
 
 .transcript-list__items {
