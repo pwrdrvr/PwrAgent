@@ -246,11 +246,19 @@ export function toolInvocationFromNotification(params: {
   const metrics = buildToolOutputMetrics(output.text, {
     outputTruncated: output.truncated,
   });
+  const normalized = normalizeToolInvocationCommand({
+    args,
+    command,
+    itemType,
+    ...(readString(item, "server") ? { server: readString(item, "server") } : {}),
+    toolName,
+  });
   if (
     !params.includeSmallTools
     && itemType !== "commandExecution"
     && toolName !== "wait"
     && toolName !== "write_stdin"
+    && normalized.category !== "polling"
     && metrics.outputChars
       < (params.largeOutputThresholdChars ?? LARGE_OUTPUT_WARNING_CHARS)
   ) {
@@ -260,13 +268,6 @@ export function toolInvocationFromNotification(params: {
     // sqlite commit for every ordinary local tool call.
     return undefined;
   }
-  const normalized = normalizeToolInvocationCommand({
-    args,
-    command,
-    itemType,
-    ...(readString(item, "server") ? { server: readString(item, "server") } : {}),
-    toolName,
-  });
   const processId =
     readString(item, "processId") ??
     readString(item, "process_id") ??
@@ -524,7 +525,8 @@ export function normalizeCodeModePollingCommand(
   if (writeStdin) {
     const body = writeStdin[1] ?? "";
     const chars = readJavascriptLiteralProperty(body, "chars");
-    if (chars === "") {
+    const hasChars = hasJavascriptProperty(body, "chars");
+    if (!hasChars || chars === "") {
       const sessionId = readJavascriptLiteralProperty(body, "session_id")
         ?? readJavascriptLiteralProperty(body, "sessionId");
       if (!sessionId) return undefined;
@@ -547,13 +549,17 @@ export function normalizeCodeModePollingCommand(
     };
   }
 
-  const nestedSleep = input.match(
-    /tools\.exec_command\s*\([\s\S]*?\bcmd\s*:\s*(["'`])\s*(sleep\s+\d+(?:\.\d+)?)\b[\s\S]*?\1/,
+  const nestedExecCommand = input.match(
+    /tools\.exec_command\s*\(\s*\{([\s\S]*?)\}\s*\)/,
   );
-  if (nestedSleep?.[2]) {
+  const nestedCommand = nestedExecCommand
+    ? readJavascriptLiteralProperty(nestedExecCommand[1] ?? "", "cmd")
+    : undefined;
+  const pureSleep = nestedCommand?.trim().match(/^sleep\s+(\d+(?:\.\d+)?)$/);
+  if (pureSleep?.[1]) {
     return {
       category: "polling",
-      normalizedCommand: nestedSleep[2],
+      normalizedCommand: `sleep ${pureSleep[1]}`,
     };
   }
   return undefined;
@@ -590,9 +596,14 @@ function readJavascriptLiteralProperty(
 ): string | undefined {
   const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = objectBody.match(
-    new RegExp(`(?:^|[,\\s])${escapedProperty}\\s*:\\s*(?:(["'])(.*?)\\1|(-?\\d+(?:\\.\\d+)?))`),
+    new RegExp(`(?:^|[,\\s])${escapedProperty}\\s*:\\s*(?:(["'\x60])([\\s\\S]*?)\\1|(-?\\d+(?:\\.\\d+)?))`),
   );
   return match?.[2] ?? match?.[3];
+}
+
+function hasJavascriptProperty(objectBody: string, property: string): boolean {
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[,\\s])${escapedProperty}\\s*:`).test(objectBody);
 }
 
 function pollingTargetIdFromNormalizedCommand(

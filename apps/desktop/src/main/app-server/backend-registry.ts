@@ -29484,6 +29484,7 @@ export class DesktopBackendRegistry {
       && (
         invocationWithStreamedOutput.toolName === "wait"
         || invocationWithStreamedOutput.toolName === "write_stdin"
+        || invocationWithStreamedOutput.toolName === "exec"
       );
     const volatileRecent = isVolatileDeferredCheck
       ? this.readVolatileDeferredChecks(invocationWithStreamedOutput, now)
