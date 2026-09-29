@@ -7725,8 +7725,8 @@ a.button {
   pointer-events: none;
 }
 
-/* Keyboard focus on a control the stack covers moves it to the top edge
-   until focus moves on (`toast-stack-placement.ts`). It stays under the
+/* Keyboard focus on a control the stack hides entirely moves it to the top
+   edge (`toast-stack-placement.ts`); nothing else does. It stays under the
    chrome band: macOS draws the traffic lights inside the window's top-left. */
 .app-toast-stack[data-placement="top"] {
   top: calc(var(--chrome-band-h) + var(--app-toast-stack-edge));
