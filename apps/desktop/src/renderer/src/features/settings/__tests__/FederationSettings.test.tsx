@@ -17,6 +17,7 @@ import type {
   ReadFederationDiagnosticsResponse,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { FederationCapabilities } from "../FederationCapabilities";
 import { FederationSettings } from "../FederationSettings";
 
 afterEach(() => {
@@ -26,7 +27,7 @@ afterEach(() => {
 
 describe("FederationSettings", () => {
   it("saves the compression toggle with federation settings", async () => {
-    const onWriteConfig = vi.fn(async () => true);
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
     render(
       <FederationSettings
         desktopApi={{ readFederationHealth: vi.fn(async () => ({
@@ -40,27 +41,130 @@ describe("FederationSettings", () => {
         onWriteConfig={onWriteConfig}
       />,
     );
-    const pull = screen.getByRole("switch", { name: "Allow file pull" });
-    const outside = screen.getByRole("switch", { name: "Allow file pull outside thread directories" });
-    expect(pull).not.toBeChecked();
-    expect(outside).not.toBeChecked();
-    expect(outside).toBeDisabled();
-    fireEvent.click(pull);
-    expect(outside).toBeEnabled();
-    expect(outside).not.toBeChecked();
     const toggle = screen.getByRole("switch", { name: "Protocol compression" });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
-    expect(screen.getByRole("switch", { name: "Allow remote shells" })).toBeChecked();
-    expect(screen.getByRole("switch", { name: "Allow incoming files" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("switch", { name: "Allow remote shells" }));
-    fireEvent.click(screen.getByRole("switch", { name: "Allow incoming files" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Incoming files folder" }), { target: { value: "/tmp/incoming" } });
     fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false, allowRemoteShells: false, allowFilePush: true, allowFilePull: true, allowFilePullOutsideThreadDirectories: false, filePushDirectory: "/tmp/incoming" }) }),
+      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false }) }),
     ));
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePush");
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowRemoteShells");
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("filePushDirectory");
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePull");
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePullOutsideThreadDirectories");
   });
+  it.each([
+    ["Allow incoming files", "allowFilePush", true],
+    ["Allow remote shells", "allowRemoteShells", false],
+    ["Allow file pull", "allowFilePull", true],
+  ] as const)("saves %s immediately without connection drafts", async (label, key, value) => {
+    const snapshot = settingsSnapshot();
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+    const { rerender } = render(
+      <FederationSettings
+        desktopApi={federationHealthApi()}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={snapshot}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Advertised endpoints" }), {
+      target: { value: "unfinished connection edit" },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: label }));
+    await waitFor(() => expect(onWriteConfig).toHaveBeenCalledExactlyOnceWith({ federation: { [key]: value } }));
+    rerender(
+      <FederationSettings
+        desktopApi={federationHealthApi()}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={{ ...snapshot, federation: { ...snapshot.federation, [key]: { value, source: "config" } } }}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+    expect(screen.getByRole("switch", { name: label })).toHaveAttribute("aria-checked", String(value));
+    expect(screen.getByRole("textbox", { name: "Advertised endpoints" })).toHaveValue("unfinished connection edit");
+  });
+
+  it.each([false, new Error("Write failed")])("reports failed capability saves without changing the switch (%s)", async (result) => {
+    const onWriteConfig = vi.fn(async () => {
+      if (result instanceof Error) throw result;
+      return result;
+    });
+    render(<FederationCapabilities federation={settingsSnapshot().federation} saving={false} onWriteConfig={onWriteConfig} />);
+    fireEvent.click(screen.getByRole("switch", { name: "Allow incoming files" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(result instanceof Error ? "Write failed" : "could not be saved");
+    expect(screen.getByRole("switch", { name: "Allow incoming files" })).not.toBeChecked();
+  });
+
+  it("saves the incoming folder on blur, including clearing it to Downloads", async () => {
+    const snapshot = settingsSnapshot();
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+    const { rerender } = render(<FederationCapabilities federation={snapshot.federation} saving={false} onWriteConfig={onWriteConfig} />);
+    const input = screen.getByRole("textbox", { name: "Incoming files folder" });
+    fireEvent.change(input, { target: { value: "/tmp/incoming" } });
+    expect(onWriteConfig).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(onWriteConfig).toHaveBeenCalledExactlyOnceWith({ federation: { filePushDirectory: "/tmp/incoming" } });
+    rerender(<FederationCapabilities federation={{ ...snapshot.federation, filePushDirectory: { value: "/tmp/incoming", source: "config" } }} saving={false} onWriteConfig={onWriteConfig} />);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(onWriteConfig).toHaveBeenLastCalledWith({ federation: { filePushDirectory: "" } });
+    fireEvent.blur(input);
+    expect(onWriteConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, new Error("Write failed")])("preserves a failed folder draft for retry (%s)", async (result) => {
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true)
+      .mockImplementationOnce(async () => {
+        if (result instanceof Error) throw result;
+        return result;
+      });
+    render(<FederationCapabilities federation={settingsSnapshot().federation} saving={false} onWriteConfig={onWriteConfig} />);
+    const input = screen.getByRole("textbox", { name: "Incoming files folder" });
+    fireEvent.change(input, { target: { value: "/tmp/incoming" } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole("alert")).toHaveTextContent(result instanceof Error ? "Write failed" : "could not be saved");
+    expect(input).not.toBeDisabled();
+    expect(input).toHaveValue("/tmp/incoming");
+
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(onWriteConfig).toHaveBeenCalledTimes(2);
+    expect(onWriteConfig).toHaveBeenNthCalledWith(2, { federation: { filePushDirectory: "/tmp/incoming" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // A successful retry discards the draft, so an unchanged blur does not write again.
+    fireEvent.blur(input);
+    expect(onWriteConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("gates broader file pull access on the saved file pull permission", async () => {
+    const federation = settingsSnapshot().federation;
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+    const { rerender } = render(<FederationCapabilities federation={federation} saving={false} onWriteConfig={onWriteConfig} />);
+    const outside = screen.getByRole("switch", { name: "Allow file pull outside thread directories" });
+    expect(outside).not.toBeChecked();
+    expect(outside).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch", { name: "Allow file pull" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Allow file pull" })).not.toBeDisabled());
+    expect(outside).toBeDisabled();
+    rerender(<FederationCapabilities federation={{ ...federation, allowFilePull: { value: true, source: "config" } }} saving={false} onWriteConfig={onWriteConfig} />);
+    expect(outside).toBeEnabled();
+    expect(outside).not.toBeChecked();
+    fireEvent.click(outside);
+    await waitFor(() => expect(outside).not.toBeDisabled());
+    expect(onWriteConfig).toHaveBeenLastCalledWith({ federation: { allowFilePullOutsideThreadDirectories: true } });
+  });
+
   // The pane shipped on browser-default controls once. Nothing else here
   // reads a class, so without this the next bare <input> passes every test
   // and only shows up by eye.

@@ -1743,7 +1743,10 @@ test.describe("federation remote window", () => {
     );
     await seedFixtureGitRepo({
       repoDir: fixtureRepo,
-      environmentSetupScript: `touch ${FEDERATION_CHILD_ENVIRONMENT_MARKER}`,
+      // Environment setup uses PowerShell on Windows, not Git Bash.
+      environmentSetupScript: process.platform === "win32"
+        ? `New-Item -ItemType File -Force -Path '${FEDERATION_CHILD_ENVIRONMENT_MARKER}' | Out-Null`
+        : `touch ${FEDERATION_CHILD_ENVIRONMENT_MARKER}`,
       commitMessage: "Seed federation environment fixture",
       initializeGit: false,
     });

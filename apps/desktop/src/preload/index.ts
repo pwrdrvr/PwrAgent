@@ -1,6 +1,7 @@
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
@@ -617,6 +618,7 @@ import {
   CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
   CLIPBOARD_WRITE_TEXT_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
+  APP_SERVER_GET_PR_ACTIVITY_CHANNEL,
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
@@ -1410,6 +1412,8 @@ const desktopApi = Object.freeze({
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>
     await ipcRenderer.invoke(APP_SERVER_LIST_SKILLS_CHANNEL, request),
+  getPrActivity: async (): Promise<PrActivitySnapshot> =>
+    await ipcRenderer.invoke(APP_SERVER_GET_PR_ACTIVITY_CHANNEL),
   getPrAutoDispatchBudgetStatus: async (): Promise<PrAutoDispatchBudgetStatus> =>
     await ipcRenderer.invoke(APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL),
   resumePrAutoDispatchBudget: async (): Promise<PrAutoDispatchBudgetStatus> =>

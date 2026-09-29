@@ -1,4 +1,4 @@
-import { FORGE_PRODUCTS, type PrSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, FORGE_PRODUCTS, type PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef as PrRef } from "./forge-pr-ref";
 import {
@@ -99,8 +99,9 @@ export type PrPollingSchedulerDeps = {
   getFocusedThreadKeys: () => ReadonlySet<string>;
   isWindowVisible: () => boolean;
   /** Global scheduled-fetch ceiling. One token per REQUEST, not per PR. */
-  tryTakeToken: () => boolean;
+  tryTakeToken: (targets?: PrPollTarget[]) => boolean;
   fetchPullRequests: (refs: PrRef[]) => Promise<PrSummary[]>;
+  onPollUnavailable?: (targets: PrPollTarget[], failed: boolean) => void;
   /** One token-bounded probe allowed through the client's outage cooldown. */
   fetchPullRequestsAfterReconnect?: (refs: PrRef[]) => Promise<PrSummary[]>;
   /** Persist + publish. Returns the prKeys whose status actually changed. */
@@ -327,7 +328,7 @@ export class PrPollingScheduler {
     for (const batch of batches) {
       // One token per request. If the bucket is dry, leave the rest of the
       // backlog for the next tick rather than dropping it silently.
-      if (!this.deps.tryTakeToken()) {
+      if (!this.deps.tryTakeToken(batch)) {
         schedulerLog.debug("PR poll deferred: token bucket empty", {
           deferredBatches: batches.length - admitted.length,
         });
@@ -356,7 +357,7 @@ export class PrPollingScheduler {
     if (batch.length === 0) {
       return;
     }
-    if (!this.deps.tryTakeToken()) {
+    if (!this.deps.tryTakeToken(batch)) {
       this.reconnectProbeWaitingForBudget = true;
       schedulerLog.debug("PR reconnect probe deferred: token bucket empty");
       return;
@@ -462,7 +463,16 @@ export class PrPollingScheduler {
       return;
     }
 
-    const prs = await fetchPullRequests(refs);
+    let prs: PrSummary[];
+    try {
+      prs = await fetchPullRequests(refs);
+    } catch (error) {
+      this.deps.onPollUnavailable?.(batch, true);
+      throw error;
+    }
+    const returnedKeys = new Set(prs.map((pr) => buildPullRequestStatusKey(pr)));
+    const missing = batch.filter((target) => !returnedKeys.has(target.prKey));
+    if (missing.length > 0) this.deps.onPollUnavailable?.(missing, false);
     if (prs.length === 0) {
       return;
     }

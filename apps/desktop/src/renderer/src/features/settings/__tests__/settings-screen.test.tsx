@@ -8117,6 +8117,7 @@ describe("SettingsScreen", () => {
       ),
     ).toEqual([
       "Configuration",
+      "Capabilities",
       "Encryption",
       "Invites",
       "Connection",
