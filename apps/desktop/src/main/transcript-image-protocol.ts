@@ -27,6 +27,7 @@ const IMAGE_MIME_TYPES = new Map<string, string>([
   [".jpeg", "image/jpeg"],
   [".jpg", "image/jpeg"],
   [".png", "image/png"],
+  [".svg", "image/svg+xml"],
   [".webp", "image/webp"],
 ]);
 
@@ -37,6 +38,7 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
   ["image/jpeg", "jpg"],
   ["image/jpg", "jpg"],
   ["image/png", "png"],
+  ["image/svg+xml", "svg"],
   ["image/webp", "webp"],
 ]);
 
@@ -1166,6 +1168,9 @@ function transcriptImageResponse(
     headers: {
       "cache-control": "public, max-age=31536000, immutable",
       "content-type": mimeType,
+      ...(mimeType === "image/svg+xml"
+        ? { "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" }
+        : {}),
     },
   });
 }

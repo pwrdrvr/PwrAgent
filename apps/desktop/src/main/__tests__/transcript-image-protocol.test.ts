@@ -254,6 +254,33 @@ describe("transcript image protocol", () => {
     });
   });
 
+  it("serves SVG images with a restrictive content policy", async () => {
+    const {
+      installTranscriptImageProtocol,
+      toFederatedTranscriptImageProtocolUrl,
+    } = await import("../transcript-image-protocol");
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>');
+    installTranscriptImageProtocol({
+      resolveFederatedImage: async () => ({
+        dataBase64: svg.toString("base64"),
+        mimeType: "image/svg+xml",
+      }),
+    });
+    const handler = protocolHandleMock.mock.calls[0]?.[1] as (
+      request: { url: string },
+    ) => Promise<Response>;
+    const response = await handler({
+      url: toFederatedTranscriptImageProtocolUrl("owner", toProtocolUrl("/image.svg")),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/svg+xml");
+    expect(response.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    );
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(svg);
+  });
+
   it("materializes data image URLs into thread-scoped files before renderer IPC", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"
@@ -538,22 +565,26 @@ describe("transcript image protocol", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("snapshots approved worktree Markdown image links into transcript galleries", async () => {
+  it.each(["png", "svg"])("snapshots approved worktree Markdown %s links into transcript galleries", async (extension) => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"
     );
-    const imagePath = path.join(tempDir, "worktree", "dmg-background.png");
+    const imageName = `dmg-background.${extension}`;
+    const imagePath = path.join(tempDir, "worktree", imageName);
     const linkedImagePath = imagePath;
     const sourceUrl = pathToFileURL(linkedImagePath).toString();
     await mkdir(path.dirname(imagePath), { recursive: true });
-    await writeFile(imagePath, Buffer.from([7, 8, 9]));
+    const imageBytes = extension === "svg"
+      ? Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>')
+      : Buffer.from([7, 8, 9]);
+    await writeFile(imagePath, imageBytes);
     const resolveApprovedLocalImageRoots = vi.fn(async () => [
       path.join(tempDir, "worktree"),
     ]);
     const message = {
       id: "message-image-link",
       role: "assistant" as const,
-      text: `The background is [dmg-background.png](${linkedImagePath}).`,
+      text: `The background is [${imageName}](${linkedImagePath}).`,
     };
 
     const response = await materializeTranscriptImageUrlsForRenderer(
@@ -583,7 +614,7 @@ describe("transcript image protocol", () => {
       type: "image",
       url: expect.stringMatching(/^pwragent-image:\/\/file\//),
       sourceUrl,
-      alt: "dmg-background.png",
+      alt: imageName,
     });
     expect(response.replay.entries[0]).toMatchObject({
       type: "message",
@@ -604,7 +635,8 @@ describe("transcript image protocol", () => {
     const materializedPath =
       entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";
     expect(materializedPath).toContain(path.join("thread-images"));
-    await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([7, 8, 9]));
+    expect(materializedPath).toMatch(new RegExp(`\\.${extension}$`));
+    await expect(readFile(materializedPath)).resolves.toEqual(imageBytes);
   });
 
   it("snapshots Markdown image links from agent temporary directories", async () => {
@@ -807,7 +839,7 @@ describe("transcript image protocol", () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"
     );
-    const unsupportedDataUrl = "data:image/svg+xml;base64,PHN2Zy8+";
+    const unsupportedDataUrl = "data:image/heic;base64,AQID";
     const malformedDataUrl = "data:image/png;base64,!!!!";
 
     const response = await materializeTranscriptImageUrlsForRenderer(
