@@ -40,7 +40,9 @@ describe("PwrAgent correspondence persistence", () => {
     const lines = readFileSync(path.join(directory, files[0]!), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines.filter((event) => event.record?.input)).toHaveLength(1);
     const replay = new ThreadCorrespondenceStore(directory).appendToReplay(message.source, emptyReplay);
-    expect(replay.messages[0]?.text).toContain("**Cancelled**");
+    expect(replay.messages[0]?.origin).toEqual({ kind: "pwragent", systemReason: "thread-correspondence" });
+    expect(replay.messages[0]?.text).toContain("**Message to [Recipient]");
+    expect(replay.messages[0]?.text).toContain(" · Cancelled");
     expect(replay.messages[0]?.text).toContain("Tail.");
     expect(replay.messages[0]?.parts).toContainEqual({ type: "image", url: "data:image/png;base64,AQID", alt: "diagram.png" });
     expect(store.appendToReplay(message.source, replay).entries).toHaveLength(1);
@@ -79,7 +81,7 @@ describe("PwrAgent correspondence persistence", () => {
     expect(merged.messages.map((entry) => entry.id)).toEqual([
       "first-user", "first-response", message.id, "next-user", "later-send", "next-response",
     ]);
-    expect(merged.messages.find((entry) => entry.id === message.id)?.text).toContain("**Cancelled**");
+    expect(merged.messages.find((entry) => entry.id === message.id)?.text).toContain(" · Cancelled");
     expect(restored.appendToReplay(message.source, merged)).toEqual(merged);
   });
 
@@ -101,5 +103,15 @@ describe("PwrAgent correspondence persistence", () => {
     expect(store.appendToReplay(message.source, emptyReplay).messages[0]?.text).toContain("Held for retry");
     store.update(message.source, message.id, { state: "failed" });
     expect(store.appendToReplay(message.source, emptyReplay).messages[0]?.text).toContain("Failed to send");
+  });
+
+  it("names the destination and distinguishes a started turn from its reply", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record(message);
+    store.update(message.source, message.id, { state: "started", turnId: "turn-one" });
+    const entry = store.appendToReplay(message.source, emptyReplay).messages[0];
+    expect(entry?.text).toContain("**Message to [Recipient]");
+    expect(entry?.text).toContain("Receiving thread started work");
   });
 });

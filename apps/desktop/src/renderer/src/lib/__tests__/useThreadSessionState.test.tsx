@@ -3451,6 +3451,7 @@ describe("useThreadSessionState", () => {
               type: "agentMessage",
               phase: "final_answer",
               text: "Sent.",
+              origin: { kind: "pwragent", systemReason: "thread-correspondence" },
             },
           },
         },
@@ -3480,6 +3481,9 @@ describe("useThreadSessionState", () => {
           && entry.text === "Sent."
       )
     ).toHaveLength(1);
+    expect(result.current.entries[0]).toMatchObject({
+      origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+    });
   });
 
   it("replaces a promoted optimistic user message when the completed user item arrives later", async () => {
@@ -3576,6 +3580,7 @@ describe("useThreadSessionState", () => {
                 kind: "agent",
                 sourceThread: {
                   backend: "codex",
+                  messageId: "correspondence:source-message",
                   instanceId: "pwr_source",
                   instanceLabel: "Source Mac",
                   celestialIcon: "moon",
@@ -3616,6 +3621,7 @@ describe("useThreadSessionState", () => {
           kind: "agent",
           sourceThread: {
             backend: "codex",
+            messageId: "correspondence:source-message",
             instanceId: "pwr_source",
             instanceLabel: "Source Mac",
             celestialIcon: "moon",

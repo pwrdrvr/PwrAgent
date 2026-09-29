@@ -39721,7 +39721,8 @@ script = "printf setup"
     expect(registry.cancelQueuedTurnWithDisposition(payload.queueEntryId, "Operator cancellation", updated.contentHash).cancelled).toBe(true);
     const emptyReplay = { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } };
     const restored = new ThreadCorrespondenceStore(directory).appendToReplay({ backend: "codex", threadId: "sender" }, emptyReplay);
-    expect(restored.messages[0]?.text).toContain("**Cancelled**");
+    expect(restored.messages[0]?.text).toContain("**Message to [recipient]");
+    expect(restored.messages[0]?.text).toContain(" · Cancelled");
     expect(restored.messages[0]?.text).toContain(prompt);
     expect(restored.entries).toHaveLength(1);
     await expect(registry.readQueuedTurn(request)).rejects.toThrow("no longer waiting");

@@ -144,19 +144,19 @@ export class ThreadCorrespondenceStore {
       const state = {
         sending: "Send outcome unknown",
         queued: "Queued (last confirmed)",
-        started: "Accepted for execution",
+        started: "Receiving thread started work",
         failed: "Failed to send",
         cancelled: "Cancelled",
         held: "Held for retry",
       }[record.state];
-      const heading = `**${state}** · To ${destination}`;
+      const heading = `**Message to ${destination}** · ${state}`;
       const body = record.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
       return {
         type: "message",
         id: record.id,
         role: "assistant",
         createdAt: record.createdAt,
-        origin: { kind: "pwragent" },
+        origin: { kind: "pwragent", systemReason: "thread-correspondence" },
         text: `${heading}\n\n${body}`,
         parts: [
           { type: "text", text: `${heading}\n\n${body}` },
