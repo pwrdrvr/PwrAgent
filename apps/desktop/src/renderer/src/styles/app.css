@@ -23785,6 +23785,28 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+.composer-error-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* An error with nothing more to show keeps the row but not the disclosure. */
+.composer-error-row .composer__queued-env-action-chevron[data-inert="true"] {
+  visibility: hidden;
+}
+
+.composer-error-row:not(:has(.composer__queued-env-action-body)) > summary {
+  cursor: default;
+}
+
+/* Two classes: `.composer__queued-env-action-output` sets `white-space: pre`
+   further down at the same specificity. */
+.composer-error-row .composer-error-row__detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .transcript-activity {
   width: min(100%, 760px);
   /* 2026-08 transcript density pass: the full-width `border-top`
@@ -32158,13 +32180,6 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--text-primary);
 }
 
-.composer__inline-error {
-  max-width: min(320px, 100%);
-  color: var(--danger-text);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
 .composer__action-button--busy {
   min-width: 54px;
 }
@@ -33888,23 +33903,6 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__meta--warning {
   color: var(--status-warning);
-}
-
-.composer__meta--copyable {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.composer__meta-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  -webkit-user-select: text;
-  user-select: text;
 }
 
 .transcript-copy-button--composer-error {

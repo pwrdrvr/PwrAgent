@@ -870,16 +870,14 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("keeps launchpad composer errors selectable and directly copyable", () => {
-    const errorRule = extractRuleBody(css, ".composer__meta--copyable");
-    const errorTextRule = extractRuleBody(css, ".composer__meta-text");
+  it("keeps composer error rows selectable and directly copyable", () => {
+    const detailRule = extractRuleBody(css, ".composer__queued-env-action-output");
     const copyButtonRule = extractRuleBody(
       css,
       ".transcript-copy-button--composer-error"
     );
 
-    expect(errorRule).toContain("user-select: text;");
-    expect(errorTextRule).toContain("user-select: text;");
+    expect(detailRule).toContain("user-select: text;");
     expect(copyButtonRule).toContain("opacity: 1;");
   });
 
