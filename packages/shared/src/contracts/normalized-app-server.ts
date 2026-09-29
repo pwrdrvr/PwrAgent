@@ -614,7 +614,7 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
-  systemReason?: "monitor-job-suggestion";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence";
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;

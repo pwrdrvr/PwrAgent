@@ -4097,6 +4097,11 @@ function threadMessageOriginFromUnknown(
   ) {
     return undefined;
   }
+  const systemReason =
+    record.systemReason === "thread-correspondence"
+    || record.systemReason === "monitor-job-suggestion"
+      ? record.systemReason
+      : undefined;
   const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);
   const subAgent =
     record.kind === "sub-agent"
@@ -4110,6 +4115,7 @@ function threadMessageOriginFromUnknown(
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
       kind: record.kind,
+      ...(systemReason ? { systemReason } : {}),
       ...(messaging ? { messaging } : {}),
       ...(subAgent ? { subAgent } : {}),
       ...(prAutomation ? { prAutomation } : {}),
@@ -4122,14 +4128,19 @@ function threadMessageOriginFromUnknown(
   ) {
     return {
       kind: record.kind,
+      ...(systemReason ? { systemReason } : {}),
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
     };
   }
   return {
     kind: record.kind,
+    ...(systemReason ? { systemReason } : {}),
     sourceThread: {
       backend: sourceRecord.backend as AppServerBackendKind,
+      ...(typeof sourceRecord.messageId === "string"
+        ? { messageId: sourceRecord.messageId }
+        : {}),
       ...(typeof sourceRecord.instanceId === "string"
         ? { instanceId: sourceRecord.instanceId }
         : {}),
@@ -4355,6 +4366,7 @@ function assistantMessageEntryFromCompletedItem(params: {
             ? `${itemParams.turnId}:assistant`
             : `assistant-${Date.now()}`;
   const phase = normalizeLiveAssistantMessagePhase(record.phase);
+  const origin = threadMessageOriginFromUnknown(record.origin);
 
   return {
     type: "message",
@@ -4383,6 +4395,7 @@ function assistantMessageEntryFromCompletedItem(params: {
     createdAt: Date.now(),
     ...(params.turn ? { turn: params.turn } : {}),
     ...(phase ? { phase } : {}),
+    ...(origin ? { origin } : {}),
   };
 }
 

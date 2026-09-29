@@ -29,9 +29,19 @@ describe("correspondence navigation", () => {
     render(<ThreadLinkProvider onShowThread={onShowThread} threads={[{
       id: recipient, source: "codex", title: "Destination", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
     }]}>
-      <TranscriptMessage parentThreadId={sender} skills={[]} message={{ type: "message", id: "correspondence:one", role: "assistant", origin: { kind: "pwragent" }, text: `**Accepted for execution** · To [Destination](pwragent://thread/${recipient}?backend=codex&messageId=user%3Aturn-1)\n\nFull outgoing content.` }} />
+      <TranscriptMessage parentThreadId={sender} skills={[]} message={{ type: "message", id: "correspondence:one", role: "assistant", origin: { kind: "pwragent", systemReason: "thread-correspondence" }, text: `**Message to [Destination](pwragent://thread/${recipient}?backend=codex&messageId=user%3Aturn-1)** · Receiving thread started work\n\nFull outgoing content.` }} />
     </ThreadLinkProvider>);
+    expect(screen.getByText("Thread delivery")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Destination/ }));
     expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: recipient, messageId: "user:turn-1" }));
+  });
+
+  it("identifies a received prompt as coming from another thread", () => {
+    render(<TranscriptMessage parentThreadId={recipient} skills={[]} message={{
+      type: "message", id: "received-one", role: "user", text: "Please check the query name.",
+      origin: { kind: "agent", sourceThread: { backend: "codex", threadId: sender, title: "Source thread" } },
+    }} />);
+    expect(screen.getByText("From thread")).toBeInTheDocument();
+    expect(screen.getByText("Source thread")).toBeInTheDocument();
   });
 });

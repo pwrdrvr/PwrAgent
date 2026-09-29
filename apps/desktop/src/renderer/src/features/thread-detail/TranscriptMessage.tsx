@@ -1228,6 +1228,9 @@ function messageToneClass(message: AppServerThreadMessageEntry): string {
 }
 
 function labelForMessage(message: AppServerThreadMessageEntry): string {
+  if (message.origin?.systemReason === "thread-correspondence") {
+    return "Thread delivery";
+  }
   if (message.role === "assistant") {
     return "Assistant";
   }
@@ -1239,7 +1242,7 @@ function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
     return "PwrAgent System - Monitor Job Suggestion";
   }
   if (origin.kind === "agent") {
-    return "Agent";
+    return origin.sourceThread ? "From thread" : "Agent";
   }
   if (origin.kind === "automation") {
     return "Automation";
