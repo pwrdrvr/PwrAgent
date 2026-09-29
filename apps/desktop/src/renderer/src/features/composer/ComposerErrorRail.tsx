@@ -65,35 +65,46 @@ function ComposerErrorRow(props: {
   message: string;
   onDismiss: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const { summary, detail } = summarizeComposerError(props.message);
+  const toggleContent = (
+    <>
+      <span
+        className="composer__queued-env-action-chevron"
+        aria-hidden="true"
+        data-inert={detail ? undefined : "true"}
+      />
+      <span className="composer__queued-env-action-summary-text">
+        <span className="composer__queued-label">{props.label}</span>
+        <span className="composer__queued-text">{summary}</span>
+      </span>
+    </>
+  );
+  // Not a <details>: Copy and Dismiss beside the disclosure would sit inside
+  // its <summary>, which axe rejects as nested interactive controls.
   return (
-    <details
+    <div
       className="composer__queued composer__queued--env-action composer__queued--env-action-failed composer-error-row"
+      data-open={open ? "true" : undefined}
       aria-label={props.label}
       role="alert"
     >
-      <summary
-        className="composer__queued-env-action-summary"
-        // Nothing to open: keep the row a plain one-liner.
-        onClick={detail ? undefined : (event) => event.preventDefault()}
-      >
-        <span
-          className="composer__queued-env-action-chevron"
-          aria-hidden="true"
-          data-inert={detail ? undefined : "true"}
-        />
-        <span className="composer__queued-env-action-summary-text">
-          <span className="composer__queued-label">{props.label}</span>
-          <span className="composer__queued-text">{summary}</span>
-        </span>
-        <span
-          className="composer__queued-env-action-actions"
-          // Buttons inside a <summary> would otherwise also toggle the row.
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-        >
+      <div className="composer-error-row__header">
+        {detail ? (
+          <button
+            aria-expanded={open}
+            className="composer__queued-env-action-summary composer-error-row__toggle"
+            type="button"
+            onClick={() => setOpen((current) => !current)}
+          >
+            {toggleContent}
+          </button>
+        ) : (
+          <div className="composer__queued-env-action-summary composer-error-row__toggle">
+            {toggleContent}
+          </div>
+        )}
+        <span className="composer__queued-env-action-actions">
           <TranscriptCopyButton
             className="transcript-copy-button--composer-error"
             copiedLabel="Copied error"
@@ -109,14 +120,14 @@ function ComposerErrorRow(props: {
             Dismiss
           </button>
         </span>
-      </summary>
-      {detail ? (
+      </div>
+      {detail && open ? (
         <div className="composer__queued-env-action-body">
           <pre className="composer__queued-env-action-output composer-error-row__detail">
             {detail}
           </pre>
         </div>
       ) : null}
-    </details>
+    </div>
   );
 }

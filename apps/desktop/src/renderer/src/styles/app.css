@@ -23791,13 +23791,41 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+.composer-error-row__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+}
+
+/* The disclosure is a button here, not a <summary>: reset its chrome so it
+   reads as the same row. */
+.composer-error-row__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.composer-error-row__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 /* An error with nothing more to show keeps the row but not the disclosure. */
+div.composer-error-row__toggle {
+  cursor: default;
+}
+
 .composer-error-row .composer__queued-env-action-chevron[data-inert="true"] {
   visibility: hidden;
 }
 
-.composer-error-row:not(:has(.composer__queued-env-action-body)) > summary {
-  cursor: default;
+.composer-error-row[data-open="true"] .composer__queued-env-action-chevron {
+  transform: rotate(45deg);
 }
 
 /* Two classes: `.composer__queued-env-action-output` sets `white-space: pre`

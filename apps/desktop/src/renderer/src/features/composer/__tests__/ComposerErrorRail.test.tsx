@@ -104,10 +104,20 @@ describe("ComposerErrorRail", () => {
     expect(copyText).toHaveBeenCalledWith(raw);
   });
 
+  it("has no disclosure button for a message with nothing more to show", () => {
+    render(
+      <ComposerErrorRail entries={[entry({ message: "Choose a project to review." })]} />,
+    );
+    expect(screen.queryByRole("button", { expanded: false })).toBeNull();
+  });
+
   it("does not toggle the row when the copy or dismiss buttons are used", () => {
     render(<ComposerErrorRail entries={[entry()]} />);
-    const details = screen.getByRole("alert") as HTMLDetailsElement;
+    const toggle = screen.getByRole("button", { expanded: false });
     fireEvent.click(screen.getByRole("button", { name: /Copy error/ }));
-    expect(details.open).toBe(false);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/npm ERR! network timeout/)).toBeInTheDocument();
   });
 });
