@@ -87,6 +87,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
@@ -98,6 +99,8 @@ import {
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
 } from "../../shared/ipc";
+import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
+import { readManagedRuntimeProgress } from "../managed-runtime-progress";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import {
   getDesktopConfigStore,
@@ -1660,6 +1663,12 @@ export function registerSettingsIpcHandlers(
       store.upsertInstalledAgent({ ...record, update });
       return { applied: true, update };
     },
+  );
+
+  ipcMain.removeHandler(MANAGED_RUNTIME_PROGRESS_READ_CHANNEL);
+  ipcMain.handle(
+    MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
+    (): ManagedRuntimeProgress[] => readManagedRuntimeProgress(),
   );
 
   ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
