@@ -3,6 +3,7 @@ import { buildLegacyEncodedThreadIdentityKey, usageActivityCoverage } from "@pwr
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
@@ -103,6 +104,86 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     ) as Array<{ detail: string }>;
     expect(plan.some((row) => /SEARCH thread_search_documents USING INDEX.*\(identity_key=\?\)/.test(row.detail))).toBe(true);
     expect(plan.some((row) => /SCAN thread_search_documents/.test(row.detail))).toBe(false);
+  });
+
+  it("uses an automation's visible thread title for headless usage, including archived titles", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", startedAt: start,
+      threadId: "headless-thread",
+    }) });
+    stateDb.raw.prepare(`
+      INSERT INTO thread_search_documents
+        (identity_key, backend, thread_id, title, archived_at,
+         linked_directories_json, display_json, indexed_at)
+      VALUES (?, 'codex', 'agent-thread', 'Search/Signals Agent', ?, '[]', '{}', ?)
+    `).run(buildLegacyEncodedThreadIdentityKey("codex", "agent-thread"), start, start);
+    stateDb.raw.prepare(`
+      INSERT INTO automations
+        (automation_id, backend, thread_id, name, status, backlog_policy,
+         created_at, updated_at, payload)
+      VALUES ('automation-1', 'codex', 'agent-thread', 'Search Bots', 'active',
+              'skip', ?, ?, '{}')
+    `).run(start, start);
+    const { writes } = await measureSqliteWrites(() => stateDb.raw.prepare(`
+      INSERT INTO automation_runs
+        (run_id, automation_id, backend, thread_id, status, trigger,
+         created_at, updated_at, payload)
+      VALUES ('run-1', 'automation-1', 'codex', 'agent-thread', 'failed',
+              'schedule', ?, ?, '{"backendThreadId":"headless-thread"}')
+    `).run(start, start));
+    expectSqliteWriteBudget({
+      scenario: "automation-run-usage-title-index",
+      writes,
+      note: "One automation run insert, including indexed owner and execution thread identities, remains one commit",
+    });
+
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 5000 });
+    const automationQuery = prepare.mock.calls.map(([sql]) => sql).find((sql) =>
+      sql.includes("FROM automation_runs r"));
+    prepare.mockRestore();
+    expect(automationQuery).toBeDefined();
+    const plan = stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${automationQuery}`).all(
+      JSON.stringify(["headless-thread"]),
+    ) as Array<{ detail: string }>;
+    expect(plan.some((row) => row.detail.includes("idx_automation_runs_execution_thread"))).toBe(true);
+    expect(snapshot.rows[0].title).toBe("Search/Signals Agent");
+    new ThreadSearchStore(stateDb).deleteThread({
+      backend: "codex", threadId: "agent-thread",
+    });
+    const archived = await store.readUsageActivity({ from: start, to: start + 5000 });
+    expect(archived.rows[0].title).toBe("Search/Signals Agent");
+  });
+
+  it("keeps the last indexed title for usage after navigation prunes the thread", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", startedAt: start,
+    }) });
+    const identityKey = buildLegacyEncodedThreadIdentityKey("codex", "thread-1");
+    stateDb.raw.prepare(`
+      INSERT INTO thread_search_documents
+        (identity_key, backend, thread_id, title,
+         linked_directories_json, display_json, indexed_at)
+      VALUES (?, 'codex', 'thread-1', 'Last known title', '[]', '{}', ?)
+    `).run(identityKey, start);
+    const { writes } = await measureSqliteWrites(() =>
+      new ThreadSearchStore(stateDb).deleteThread({
+        backend: "codex", threadId: "thread-1",
+      }));
+    expectSqliteWriteBudget({
+      scenario: "prune-usage-thread-search-title",
+      writes,
+      note: "Preserving a last-known usage title shares the existing search-document deletion transaction",
+    });
+
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 5000 });
+    expect(snapshot.rows[0].title).toBe("Last known title");
   });
 
   it("reads usage activity without writes and retains completed pending turn timing", async () => {

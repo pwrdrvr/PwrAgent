@@ -24805,8 +24805,23 @@ export class DesktopBackendRegistry {
             threadId: notification.params.threadId,
           });
         }
+        const headlessErrorNoticeContext =
+          notification.method === "turn/failed"
+          || (notification.method === "thread/status/changed"
+            && readStatusType(notification.params.status) === "systemError")
+            ? this.headlessAutomationErrorNoticeContext(
+                backend,
+                notification.params.threadId,
+              )
+            : undefined;
         await this.emitHeadlessAutomationLifecycle(backend, notification);
-        await this.emit({ backend, notification });
+        await this.emit({
+          backend,
+          notification,
+          ...(headlessErrorNoticeContext
+            ? { errorNoticeContext: headlessErrorNoticeContext }
+            : {}),
+        });
         if (
           backend === "codex"
           && (
@@ -24972,6 +24987,28 @@ export class DesktopBackendRegistry {
         },
       },
     });
+  }
+
+  private headlessAutomationErrorNoticeContext(
+    backend: AppServerBackendKind,
+    executionThreadId: string,
+  ): AgentEvent["errorNoticeContext"] | undefined {
+    for (const run of this.headlessAutomationTurns.values()) {
+      if (run.backend !== backend || run.executionThreadId !== executionThreadId) {
+        continue;
+      }
+      const title = this.getCachedThreadSummary({
+        backend,
+        threadId: run.agentThreadId,
+      })?.title ?? run.automationName;
+      return {
+        backend,
+        threadId: run.agentThreadId,
+        ...(title ? { title } : {}),
+        ...(run.automationName ? { automationName: run.automationName } : {}),
+      };
+    }
+    return undefined;
   }
 
   private findHeadlessAutomationTurnForRequest(
@@ -40512,16 +40549,24 @@ export class DesktopBackendRegistry {
       const monitor = Array.from(this.taskMonitorDelegations.values()).find(
         (record) => record.backend === event.backend && record.monitorThreadId === threadId,
       ) ?? this.completedTaskMonitorsByThread.get(taskMonitorThreadKey(event.backend, threadId));
-      const backend = monitor?.parentBackend ?? event.backend;
-      const ownerThreadId = monitor?.parentThreadId ?? threadId;
-      const title = this.getCachedThreadSummary({ backend, threadId: ownerThreadId })?.title;
+      const backend = event.errorNoticeContext?.backend
+        ?? monitor?.parentBackend ?? event.backend;
+      const ownerThreadId = event.errorNoticeContext?.threadId
+        ?? monitor?.parentThreadId ?? threadId;
+      const title = event.errorNoticeContext?.title
+        ?? this.getCachedThreadSummary({ backend, threadId: ownerThreadId })?.title;
       event = {
         ...event,
         errorNoticeContext: {
           backend,
           threadId: ownerThreadId,
           ...(title ? { title } : {}),
-          ...(monitor ? { taskMonitor: true } : {}),
+          ...(event.errorNoticeContext?.taskMonitor || monitor
+            ? { taskMonitor: true }
+            : {}),
+          ...(event.errorNoticeContext?.automationName
+            ? { automationName: event.errorNoticeContext.automationName }
+            : {}),
         },
       };
     }

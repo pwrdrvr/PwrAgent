@@ -2254,6 +2254,65 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        WHERE identity_key IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify(identities)) as Array<{ identity_key: string; title: string }> : [];
     const titles = new Map(titleRows.map((row) => [row.identity_key, row.title]));
+    const missingIdentities = identities.filter((identity) => !titles.has(identity));
+    const historicalTitles = missingIdentities.length ? this.stateDb.raw.prepare(`
+      SELECT identity_key, title FROM thread_usage_titles
+       WHERE identity_key IN (SELECT value FROM json_each(?))
+    `).all(JSON.stringify(missingIdentities)) as Array<{ identity_key: string; title: string }> : [];
+    for (const row of historicalTitles) titles.set(row.identity_key, row.title);
+    const untitledThreadIds = [...new Set(visibleRows
+      .filter((row) => !titles.has(identityFor(row)))
+      .map((row) => row.thread_id))];
+    // Headless automation execution threads are ephemeral and never join the
+    // navigation index. Resolve only the bounded missing ids through the run
+    // index, then use the owning Agent thread's last indexed title.
+    const automationRuns = untitledThreadIds.length ? this.stateDb.raw.prepare(`
+      SELECT r.backend, r.thread_id AS owner_thread_id,
+             json_extract(r.payload, '$.backendThreadId') AS execution_thread_id,
+             a.name AS automation_name
+        FROM automation_runs r
+        JOIN automations a ON a.automation_id = r.automation_id
+       WHERE json_extract(r.payload, '$.backendThreadId')
+         IN (SELECT value FROM json_each(?))
+    `).all(JSON.stringify(untitledThreadIds)) as Array<{
+      backend: AppServerBackendKind;
+      owner_thread_id: string;
+      execution_thread_id: string;
+      automation_name: string;
+    }> : [];
+    const ownerIdentities = [...new Set(automationRuns.map((run) =>
+      buildLegacyEncodedThreadIdentityKey(run.backend, run.owner_thread_id)))];
+    const ownerTitles = ownerIdentities.length ? this.stateDb.raw.prepare(`
+      SELECT identity_key, title FROM thread_search_documents
+       WHERE identity_key IN (SELECT value FROM json_each(?))
+    `).all(JSON.stringify(ownerIdentities)) as Array<{
+      identity_key: string;
+      title: string;
+    }> : [];
+    const ownerTitleByIdentity = new Map(ownerTitles.map((row) => [row.identity_key, row.title]));
+    const missingOwnerIdentities = ownerIdentities.filter((identity) =>
+      !ownerTitleByIdentity.has(identity));
+    const historicalOwnerTitles = missingOwnerIdentities.length ? this.stateDb.raw.prepare(`
+      SELECT identity_key, title FROM thread_usage_titles
+       WHERE identity_key IN (SELECT value FROM json_each(?))
+    `).all(JSON.stringify(missingOwnerIdentities)) as Array<{
+      identity_key: string;
+      title: string;
+    }> : [];
+    for (const row of historicalOwnerTitles) {
+      ownerTitleByIdentity.set(row.identity_key, row.title);
+    }
+    for (const run of automationRuns) {
+      const executionIdentity = buildLegacyEncodedThreadIdentityKey(
+        run.backend, run.execution_thread_id,
+      );
+      if (!titles.has(executionIdentity)) {
+        titles.set(executionIdentity,
+          ownerTitleByIdentity.get(buildLegacyEncodedThreadIdentityKey(
+            run.backend, run.owner_thread_id,
+          )) ?? run.automation_name);
+      }
+    }
     // Many ledger lines share one turn, and turns completing together often
     // share one reading, so relay each distinct reading once.
     const readings = new Map<string, UsageLimitObservation>();

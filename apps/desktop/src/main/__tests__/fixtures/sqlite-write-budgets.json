@@ -55,6 +55,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "automation-run-usage-title-index": {
+    "commits": 1,
+    "note": "One automation run insert, including indexed owner and execution thread identities, remains one commit",
+    "observedWalBytes": 32960,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "cleanup-expired-gc-pass": {
     "commits": 1,
     "note": "one whole cleanupExpired GC pass doing real work in both composer sweeps: ageing out 20 drafts past 180 days AND collapsing a 30-row journal prefix chain to 1. commits is the assertion that matters (every sweep rides one transaction); statements/rows legitimately move when a sweep is added, so re-record rather than reading it as a composer regression",
@@ -579,6 +586,13 @@
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "prune-usage-thread-search-title": {
+    "commits": 1,
+    "note": "Preserving a last-known usage title shares the existing search-document deletion transaction",
+    "observedWalBytes": 28840,
+    "rowsChanged": 2,
+    "statements": 3
   },
   "queued-scheduled-action-hold": {
     "commits": 1,

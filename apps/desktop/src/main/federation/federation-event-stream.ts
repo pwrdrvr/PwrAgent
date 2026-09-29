@@ -192,6 +192,12 @@ export class FederationAccountingStream {
       }
     }
     if (key && event.stream) this.retain(key, params, event.stream.sequence);
-    return { backend: event.backend, notification: { method: event.notification.method, params } } as AgentEvent;
+    return {
+      backend: event.backend,
+      notification: { method: event.notification.method, params },
+      ...(event.errorNoticeContext
+        ? { errorNoticeContext: event.errorNoticeContext }
+        : {}),
+    } as AgentEvent;
   }
 }

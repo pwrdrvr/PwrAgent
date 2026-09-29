@@ -823,12 +823,21 @@ function equalFederationThreadSelections(
   return federationThreadSelectionKey(left) === federationThreadSelectionKey(right);
 }
 
-function eventMatchesThreadSelection(
+export function eventMatchesThreadSelection(
   event: AgentEvent,
   eventClass: FederationEventClass,
   selection: FederationThreadSelection,
 ): boolean {
   if (selection.kind === "all") return true;
+  // Private execution threads do not appear in navigation. Failure notices
+  // name their visible owner separately, so subscribers of that owner still
+  // need the terminal event while unrelated sparse subscribers do not.
+  const noticeOwner = event.errorNoticeContext;
+  if (noticeOwner && selection.threads.some((thread) =>
+    thread.backend === noticeOwner.backend
+    && thread.threadId === noticeOwner.threadId)) {
+    return true;
+  }
   const params = event.notification.params as Record<string, unknown> | undefined;
   if (eventClass === "navigation" && event.notification.method === "navigation/invalidated"
     && navigationInvalidationMayChangeMembership(params?.sourceMethod)) return true;
@@ -5512,6 +5521,9 @@ export class DesktopFederationRuntime {
         instanceId: sourceInstanceId,
       },
       notification: decoded.notification,
+      ...(decoded.errorNoticeContext
+        ? { errorNoticeContext: decoded.errorNoticeContext }
+        : {}),
     };
     // Match retained demand directly; do not rebuild/sort the entire fleet's
     // aggregate selectors for every streamed item.

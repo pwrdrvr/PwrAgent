@@ -1261,6 +1261,7 @@ export type AgentEvent = {
     threadId: string;
     title?: string;
     taskMonitor?: boolean;
+    automationName?: string;
   };
   /**
    * Optional main-process display model for live protocol notifications whose

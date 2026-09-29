@@ -32680,7 +32680,59 @@ command = "pnpm dev"
       });
 
     await registry.close();
-  });  it("mirrors headless automation turn lifecycle onto the Agent thread", async () => {
+  });
+
+  it("routes headless automation failure notices to the visible Agent thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check email",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Run the scheduled task." }],
+    });
+
+    await codexClient.emit({
+      method: "thread/status/changed",
+      params: { threadId: "thread-1", status: { type: "systemError" } },
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "failed", error: { message: "Spend cap" } },
+      },
+    });
+
+    expect(events.filter((event) =>
+      event.notification.method === "thread/status/changed"
+      || event.notification.method === "turn/failed"
+    )).toEqual([
+      expect.objectContaining({ errorNoticeContext: {
+        backend: "codex", threadId: "agent-thread-1", title: "Check email",
+        automationName: "Check email",
+      } }),
+      expect.objectContaining({ errorNoticeContext: {
+        backend: "codex", threadId: "agent-thread-1", title: "Check email",
+        automationName: "Check email",
+      } }),
+    ]);
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("mirrors headless automation turn lifecycle onto the Agent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });

@@ -115,12 +115,17 @@ export function resolveBackendErrorNotice(
 
   if (signal.kind === "turn-failed") {
     const context = signal.errorNoticeContext;
+    const originLabel = context?.automationName
+      ? `Automation: ${context.automationName}${signal.originLabel ? ` · ${signal.originLabel}` : ""}`
+      : signal.originLabel;
     return {
       autoDismiss: false,
       id: `turn-failed:${signal.backend}:${signal.threadId}:${signal.turnId}`,
-      title: context?.taskMonitor ? "Task monitor failed" : "Turn failed",
-      ...(signal.originLabel
-        ? { status: { label: signal.originLabel, state: "error" as const } }
+      title: context?.automationName
+        ? "Automation failed"
+        : context?.taskMonitor ? "Task monitor failed" : "Turn failed",
+      ...(originLabel
+        ? { status: { label: originLabel, state: "error" as const } }
         : {}),
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
@@ -156,12 +161,16 @@ export function resolveBackendErrorNotice(
     return current;
   }
 
+  const originLabel = signal.errorNoticeContext?.automationName
+    ? `Automation: ${signal.errorNoticeContext.automationName}${signal.originLabel ? ` · ${signal.originLabel}` : ""}`
+    : signal.originLabel;
   return {
     autoDismiss: false,
     id: `system-error:${signal.backend}:${signal.threadId}`,
-    title: "Agent backend error",
-    ...(signal.originLabel
-      ? { status: { label: signal.originLabel, state: "error" as const } }
+    title: signal.errorNoticeContext?.automationName
+      ? "Automation backend error" : "Agent backend error",
+    ...(originLabel
+      ? { status: { label: originLabel, state: "error" as const } }
       : {}),
     message:
       "The agent backend reported a system error. The active turn may have stopped.",

@@ -152,6 +152,33 @@ export class ThreadSearchStore {
       params.threadId,
     );
     const transaction = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO thread_usage_titles (identity_key, title)
+        SELECT identity_key, title FROM thread_search_documents
+         WHERE identity_key = ?
+           AND (
+             EXISTS (
+               SELECT 1 FROM thread_usage_lines
+                WHERE backend = ? AND thread_id = ?
+                LIMIT 1
+             )
+             OR EXISTS (
+               SELECT 1 FROM automation_runs r
+               JOIN thread_usage_lines l
+                 ON l.backend = r.backend
+                AND l.thread_id = json_extract(r.payload, '$.backendThreadId')
+              WHERE r.backend = ? AND r.thread_id = ?
+              LIMIT 1
+             )
+           )
+        ON CONFLICT(identity_key) DO UPDATE SET title = excluded.title
+      `).run(
+        identityKey,
+        params.backend,
+        params.threadId,
+        params.backend,
+        params.threadId,
+      );
       this.db
         .prepare("DELETE FROM thread_search_fts WHERE identity_key = ?")
         .run(identityKey);
