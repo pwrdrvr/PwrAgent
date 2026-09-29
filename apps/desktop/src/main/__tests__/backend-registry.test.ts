@@ -46193,6 +46193,8 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("Do not delegate an already-running parent tool session");
     expect(String(payload.parentAgentGuidance)).toContain("exec_command/write_stdin stdin, stdout, stderr, or exit status");
     expect(String(payload.parentAgentGuidance)).toContain("captures stdout/stderr");
+    expect(String(payload.parentAgentGuidance)).toContain("independent verification checks");
+    expect(String(payload.parentAgentGuidance)).toContain("&&");
     expect(String(payload.parentAgentGuidance)).toContain("about 30 seconds");
     expect(String(payload.parentAgentGuidance)).toContain("repeatable check");
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
@@ -46240,6 +46242,8 @@ script = "printf setup"
     expect(String(payload.prompt)).toContain("Parent-local tool session ids are not portable");
     expect(String(payload.prompt)).toContain("capture stdout/stderr and exit status");
     expect(String(payload.prompt)).toContain("capture stdout and stderr to durable files");
+    expect(String(payload.prompt)).toContain("independent verification checks");
+    expect(String(payload.prompt)).toContain("&&");
     expect(String(payload.prompt)).toContain("durable OS-level process id");
     expect(String(payload.prompt)).toContain("remote or external operation");
     expect(String(payload.prompt)).toContain("<delegated_monitoring_procedure>");
