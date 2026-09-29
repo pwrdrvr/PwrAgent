@@ -1,3 +1,4 @@
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "./federation-file-pull";
 import { app } from "electron";
 import {
@@ -5888,6 +5889,12 @@ function localBackendOperations(): FederationBackendOperations {
           backend, threadId: request.threadId,
         }),
       });
+    },
+    async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
+      return await getDesktopBackendRegistry().readUsageActivity(request);
+    },
+    async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
+      return await getDesktopBackendRegistry().analyzeUsageActivity(request);
     },
     async inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> {
       return await getDesktopBackendRegistry().inspectTokenMiserOutput({

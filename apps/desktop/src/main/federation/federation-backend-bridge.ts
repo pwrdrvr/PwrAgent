@@ -1,3 +1,4 @@
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -414,6 +415,8 @@ export const FEDERATION_BACKEND_METHODS = {
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
+  readUsageActivity: "backend.readUsageActivity",
+  analyzeUsageActivity: "backend.analyzeUsageActivity",
   inspectTokenMiserOutput: "backend.inspectTokenMiserOutput",
   analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
   readTranscriptImage: "backend.readTranscriptImage",
@@ -534,6 +537,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
+  [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
+  // Starts a paid helper turn on the owner; transcript-read permission is insufficient.
+  [FEDERATION_BACKEND_METHODS.analyzeUsageActivity]: "turn_control",
   [FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",
@@ -705,6 +711,8 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
+  analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
   inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory(
     request: AnalyzeThreadToolHistoryRequest,
@@ -1066,6 +1074,10 @@ export function registerFederationBackendHandlers(params: {
       );
     },
   );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.readUsageActivity,
+    async (envelope) => await params.backend.readUsageActivity(envelope.params as ReadUsageActivityRequest));
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.analyzeUsageActivity,
+    async (envelope) => await params.backend.analyzeUsageActivity(envelope.params as AnalyzeUsageActivityRequest));
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput,
     async (envelope) => await params.backend.inspectTokenMiserOutput(
@@ -1996,6 +2008,14 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     finally {
       if (this.pendingThreadReads.get(key) === read) this.pendingThreadReads.delete(key);
     }
+  }
+
+  async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
+    return await this.rpc.request<ReadUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.readUsageActivity, params: request });
+  }
+
+  async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
+    return await this.rpc.request<AnalyzeUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.analyzeUsageActivity, params: request, timeoutMs: 120_000 });
   }
 
   async inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> {

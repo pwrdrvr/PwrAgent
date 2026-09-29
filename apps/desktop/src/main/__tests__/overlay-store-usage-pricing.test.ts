@@ -1,4 +1,5 @@
 import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, usageActivityCoverage } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -46,6 +47,117 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
+  it("keeps unfinished intervals even when their last ledger update predates the window", async () => {
+    const start = PRICING_CATALOG_TIME;
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true,
+      startedAt: start, completedAt: undefined,
+    }) });
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET updated_at = ?").run(start);
+    const window = { from: start + 10_000, to: start + 20_000 };
+    const open = await store.readUsageActivity(window);
+    expect(open.rows).toHaveLength(1);
+    expect(open.rows[0].updatedAt).toBeLessThan(window.from);
+    expect(open.rows[0].line.completedAt).toBeUndefined();
+    expect(usageActivityCoverage(open.rows[0], window.from, window.to)).toBe("boundary");
+
+    // A real end before the window excludes it, including when only the
+    // separate turn record received the terminal event.
+    await store.completeThreadUsageTurn({ backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 5000 });
+    expect((await store.readUsageActivity(window)).rows).toHaveLength(0);
+  });
+
+  it("bounds title hydration and uses the identity index across a large history", async () => {
+    const start = PRICING_CATALOG_TIME;
+    const insertDocument = stateDb.raw.prepare(`
+      INSERT INTO thread_search_documents
+        (identity_key, backend, thread_id, title, linked_directories_json, display_json, indexed_at)
+      VALUES (?, 'acp:qwen', ?, ?, '[]', '{}', ?)
+    `);
+    const insertUsage = stateDb.raw.prepare(`
+      INSERT INTO thread_usage_lines
+        (usage_line_id, backend, thread_id, source, scope, status, created_at, completed_at,
+         turn_usage_attributed, input_tokens, cached_input_tokens, uncached_input_tokens,
+         output_tokens, reasoning_output_tokens, total_tokens, price_status, currency,
+         uncached_input_cost_micros, cached_input_cost_micros, output_cost_micros, total_cost_micros, updated_at)
+      VALUES (?, 'acp:qwen', ?, 'live', 'turn', 'pending', ?, ?, 1, 10, 0, 10, 2, 1, 12,
+              'unpriced', 'USD', 0, 0, 0, 0, ?)
+    `);
+    stateDb.raw.transaction(() => {
+      for (let index = 0; index < 10_000; index += 1) {
+        const id = `large-${index}`;
+        insertDocument.run(buildLegacyEncodedThreadIdentityKey("acp:qwen", id), id, `Title ${id}`, start);
+        if (index < 5001) insertUsage.run(id, id, start, start + 1000, start + index);
+      }
+    })();
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 2000 });
+    const titleQueries = prepare.mock.calls.map(([sql]) => sql).filter((sql) => sql.includes("FROM thread_search_documents"));
+    prepare.mockRestore();
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.rows).toHaveLength(5000);
+    expect(snapshot.rows.every((row) => row.title === `Title ${row.line.threadId}`)).toBe(true);
+    expect(titleQueries).toHaveLength(1);
+    const plan = stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${titleQueries[0]}`).all(
+      JSON.stringify(snapshot.rows.map((row) => buildLegacyEncodedThreadIdentityKey("acp:qwen", row.line.threadId))),
+    ) as Array<{ detail: string }>;
+    expect(plan.some((row) => /SEARCH thread_search_documents USING INDEX.*\(identity_key=\?\)/.test(row.detail))).toBe(true);
+    expect(plan.some((row) => /SCAN thread_search_documents/.test(row.detail))).toBe(false);
+  });
+
+  it("reads usage activity without writes and retains completed pending turn timing", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true, startedAt: start,
+    }) });
+    await store.completeThreadUsageTurn({ backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 4000 });
+    const result = await measureSqliteWrites(async () => await store.readUsageActivity({ from: start, to: start + 5000 }));
+    expect(result.writes.commits).toBe(0);
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 5000 });
+    expect(snapshot.truncated).toBe(false);
+    expect(snapshot.rows).toHaveLength(1);
+    expect(snapshot.rows[0].line).toMatchObject({ status: "pending", startedAt: start, completedAt: start + 4000, turnUsageAttributed: true });
+    // A start-time cutoff must still return an overlapping row for the coverage classifier.
+    expect((await store.readUsageActivity({ from: start + 2000, to: start + 5000 })).rows).toHaveLength(1);
+    await expect(store.readUsageActivity({ from: start, to: start + 32 * 86400000 })).rejects.toThrow("31 days");
+  });
+
+  it("records the owner's account limits in the same completion commit and relays each reading once", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    const reading = { observedAt: start + 3_500, accountKey: "acct", planType: "plus", limits: [
+      { name: "5h limit", windowKey: "primary" as const, usedPercent: 41, resetAt: start + 3_600_000, windowMinutes: 300 },
+      { name: "Weekly limit", windowKey: "secondary" as const, usedPercent: 9, resetAt: start + 7 * 86_400_000, windowMinutes: 10_080 },
+    ] };
+    for (const turnId of ["turn-1", "turn-2"]) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true, startedAt: start, turnId,
+        usageLineId: `line-${turnId}`,
+      }) });
+    }
+    const { result, writes } = await measureSqliteWrites(() => store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 4_000, limitObservation: reading,
+    }));
+    expect(result).toBe(true);
+    expectSqliteWriteBudget({
+      scenario: "completed-turn-usage-limit-reading",
+      writes,
+      note: "One completion carrying the owner's account-limit reading: the reading rides the completion UPDATE, so still one commit per completed turn",
+    });
+    // A second turn completing on the same reading relays it only once.
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-2", completedAt: start + 4_500, limitObservation: reading,
+    });
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 5_000 });
+    expect(snapshot.limitHistory).toEqual([reading]);
+    // A corrupt stored reading is dropped, not thrown.
+    stateDb.raw.prepare("UPDATE thread_usage_turns SET rate_limit_snapshot = ? WHERE turn_id = ?").run("{not json", "turn-2");
+    expect((await store.readUsageActivity({ from: start, to: start + 5_000 })).limitHistory).toEqual([reading]);
+  });
+
   it("uses one commit to record a completed turn after its usage row was flushed", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     useFileStateDb();

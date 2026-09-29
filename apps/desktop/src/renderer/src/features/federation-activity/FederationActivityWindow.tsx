@@ -1,3 +1,4 @@
+import { UsageActivity } from "./UsageActivity";
 import { FederationTrafficCapture } from "./FederationTrafficCapture";
 import { useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
@@ -280,16 +281,23 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
 }
 
 export function FederationActivityWindow() {
+  const [view, setView] = useState<"traffic" | "usage">("traffic");
   const desktopApi = useDesktopApi();
-  useEffect(() => { document.title = "Federation Activity"; }, []);
+  useEffect(() => { document.title = view === "usage" ? "Usage Activity" : "Federation Activity"; }, [view]);
   return <div className="messaging-activity-window"><section aria-label="Federation activity" className="activity-screen">
     <header className="activity-titlebar">
       <p className="activity-titlebar__brand">Pwr<span className="activity-titlebar__brand-accent">Agent</span></p>
       <div className="activity-titlebar__breadcrumb"><span className="activity-titlebar__eyebrow">Federation</span>
         <span aria-hidden="true" className="activity-titlebar__separator">›</span>
-        <span className="activity-titlebar__current">Activity</span></div>
+        <span className="activity-titlebar__current">{view === "usage" ? "Usage Activity" : "Activity"}</span></div>
       <div className="activity-titlebar__spacer" />
     </header>
-    <div className="activity-content federation-activity-content"><FederationActivityScreen desktopApi={desktopApi} /></div>
+    <div className={`activity-content federation-activity-content${view === "usage" ? " federation-activity-content--usage" : ""}`}>
+      <div className="usage-window-tabs" role="group" aria-label="Activity view">
+        <button type="button" aria-pressed={view === "traffic"} onClick={() => setView("traffic")}>Federation traffic</button>
+        <button type="button" aria-pressed={view === "usage"} onClick={() => setView("usage")}>Usage</button>
+      </div>
+      {view === "traffic" ? <FederationActivityScreen desktopApi={desktopApi} /> : <UsageActivity desktopApi={desktopApi} />}
+    </div>
   </section></div>;
 }

@@ -80,3 +80,5 @@ export { isCodexAuthenticationFailure } from "./codex-authentication";
 export * from "./local-model-pricing";
 
 export * from "./thread-search-query";
+
+export * from "./contracts/usage-activity";

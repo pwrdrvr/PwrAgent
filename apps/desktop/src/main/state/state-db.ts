@@ -18,7 +18,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 66;
+export const CURRENT_STATE_DB_USER_VERSION = 67;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -909,6 +909,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
   final_context_tokens         INTEGER,
   peak_context_tokens          INTEGER,
   model_context_window         INTEGER,
+  rate_limit_snapshot          TEXT,
   updated_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
@@ -1849,6 +1850,12 @@ export class StateDb {
           if (tableExists(db, "backends")) db.exec(NAVIGATION_BACKEND_METADATA_SCHEMA);
           db.pragma("user_version = 66");
         }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 67) {
+        db.transaction(() => {
+          ensureThreadUsageTurnRateLimitColumn(db);
+          db.pragma("user_version = 67");
+        })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
@@ -3014,6 +3021,18 @@ function ensureThreadUsageTurnContextColumns(db: BetterSqlite3.Database): void {
     if (!tableColumnExists(db, "thread_usage_turns", column.name)) {
       db.exec(column.sql);
     }
+  }
+}
+
+// The account limits an owner held when a turn completed (JSON). Written by
+// the completion UPDATE the ledger already makes, so it costs no commit.
+function ensureThreadUsageTurnRateLimitColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  if (!tableColumnExists(db, "thread_usage_turns", "rate_limit_snapshot")) {
+    db.exec("ALTER TABLE thread_usage_turns ADD COLUMN rate_limit_snapshot TEXT");
   }
 }
 

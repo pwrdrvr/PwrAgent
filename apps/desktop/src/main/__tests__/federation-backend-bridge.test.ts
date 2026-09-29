@@ -27,6 +27,32 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it.each([true, false])("requires turn control for paid usage analysis while allowing ledger reads (%s)", async (allowed) => {
+    const readUsageActivity = vi.fn(async () => ({ rows: [], truncated: false, readAt: 1, rateLimits: [] }));
+    const analyzeUsageActivity = vi.fn(async () => ({ analysis: "Result" }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); },
+    });
+    router.registerConnection({
+      peerId: "viewer", capabilities: allowed ? ["thread_detail", "turn_control"] : ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: { readUsageActivity, analyzeUsageActivity } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    await expect(client.readUsageActivity({ from: 1, to: 2 })).resolves.toMatchObject({ rows: [] });
+    expect(readUsageActivity).toHaveBeenCalledOnce();
+    const request = { backend: "codex" as const, threadId: "thread", model: "gpt-6-luna", entryLimit: 40, characterLimit: 20000 };
+    if (allowed) {
+      await expect(client.analyzeUsageActivity(request)).resolves.toMatchObject({ analysis: "Result" });
+      expect(analyzeUsageActivity).toHaveBeenCalledExactlyOnceWith(request);
+    } else {
+      await expect(client.analyzeUsageActivity(request)).rejects.toThrow();
+      expect(analyzeUsageActivity).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([FEDERATION_BACKEND_METHODS.removeNavigationDirectory, FEDERATION_BACKEND_METHODS.archiveNavigationDirectory])(
     "prevents navigation-only peers archiving projects through %s", async (method) => {
       const removeNavigationDirectory = vi.fn();
@@ -1205,6 +1231,8 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
+      readUsageActivity: vi.fn(),
+      analyzeUsageActivity: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
       archiveThread: vi.fn(async () => ({
@@ -3205,6 +3233,8 @@ describe("federation backend bridge", () => {
         readThread: vi.fn(),
         analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
+      readUsageActivity: vi.fn(),
+      analyzeUsageActivity: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
         startTurn: vi.fn(),
@@ -3284,6 +3314,8 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
+      readUsageActivity: vi.fn(),
+      analyzeUsageActivity: vi.fn(),
       listSkills: vi.fn(),
       startTurn: vi.fn(async () => ({
         backend: "codex",
@@ -3373,6 +3405,8 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
+      readUsageActivity: vi.fn(),
+      analyzeUsageActivity: vi.fn(),
       listSkills: vi.fn(),
       replaceQueuedMessage: vi.fn(async () => ({
         backend: "codex",
@@ -3525,6 +3559,8 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
+      readUsageActivity: vi.fn(),
+      analyzeUsageActivity: vi.fn(),
       readTranscriptImage: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
@@ -3930,6 +3966,8 @@ describe("federation backend bridge", () => {
         readThread: vi.fn(),
         analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
+      readUsageActivity: vi.fn(),
+      analyzeUsageActivity: vi.fn(),
         readTranscriptImage: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
