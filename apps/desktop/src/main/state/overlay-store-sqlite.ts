@@ -5665,6 +5665,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return begin.immediate();
   }
 
+  /** Observe refill and the durable pause flag without advancing the budget row. */
+  async peekPrAutoDispatchBudgetStatus(params: {
+    config: PrAutoDispatchBudgetConfig;
+    now: number;
+  }): Promise<PrAutoDispatchBudgetStatus> {
+    return this.toPrAutoDispatchBudgetStatus({
+      budget: this.readPrAutoDispatchBudget(params),
+      config: params.config,
+    });
+  }
+
   async getPrAutoDispatchBudgetStatus(params: {
     config: PrAutoDispatchBudgetConfig;
     now: number;
@@ -6156,8 +6167,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const incident = this.readPrAutoDispatchIncident(params);
       if (!incident) return;
       const resolved = new Set(params.resolvedKinds);
-      const activeKinds = parsePrAutoDispatchKinds(incident.active_kinds)
-        .filter((kind) => !resolved.has(kind));
+      const previousKinds = parsePrAutoDispatchKinds(incident.active_kinds);
+      const activeKinds = previousKinds.filter((kind) => !resolved.has(kind));
+      // A fresh check may resolve a different kind than this incident owns.
+      // Repeated lookup/poll observations must not rewrite an unchanged incident.
+      if (activeKinds.length > 0 && activeKinds.length === previousKinds.length) return;
       if (activeKinds.length === 0) {
         this.stateDb.raw
           .prepare(
@@ -8889,6 +8903,7 @@ export type OverlayStoreLike = Pick<
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
   | "getPrAutoDispatchBudgetStatus"
+  | "peekPrAutoDispatchBudgetStatus"
   | "resumePrAutoDispatchBudget"
   | "reserveThreadPrAutoDispatchBudget"
   | "rejectThreadPrAutoDispatchForBudget"

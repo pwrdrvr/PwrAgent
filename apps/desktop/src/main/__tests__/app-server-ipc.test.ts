@@ -19,6 +19,7 @@ import type {
   FederationRemoteTarget,
   FederationCapability,
   FederationPeerSummary,
+  PrActivitySnapshot,
   PrSummary,
   RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
@@ -840,6 +841,7 @@ const addThreadPullRequestReference = vi.fn(async (request: {
   extraLinkedDirectories: [],
   prs: [request.pr],
 }));
+const getCachedThreadSummary = vi.fn((_params: { backend?: string; threadId: string }): AppServerThreadSummary | undefined => undefined);
 const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
@@ -1057,6 +1059,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
     getPrAutoDispatchBudgetStatus,
+    peekPrAutoDispatchBudgetStatus: (...args: Parameters<typeof getPrAutoDispatchBudgetStatus>) => getPrAutoDispatchBudgetStatus(...args),
     resumePrAutoDispatchBudget,
     scheduleThreadPrAutoDispatch,
     beginThreadPrAutoDispatch,
@@ -1112,6 +1115,7 @@ vi.mock("../app-server/backend-registry", () => {
     handoffThreadWorkspace,
     renameThread,
     listThreads,
+    getCachedThreadSummary,
     readThread,
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,
@@ -1238,6 +1242,7 @@ describe("app server ipc", () => {
   });
 
   beforeEach(() => {
+    getCachedThreadSummary.mockReset();
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
@@ -2164,6 +2169,94 @@ describe("app server ipc", () => {
       PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
       expect.objectContaining({ paused: true, pausedAt: 2_000 }),
     );
+  });
+
+  it("resolves activity titles without depending on retained navigation rows or refreshing thread lists", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const { PrActivityJournal } = await import("../pr-status/pr-activity");
+    const journal = new PrActivityJournal();
+    const service = appServerService as unknown as { prActivity: typeof journal };
+    const previous = service.prActivity;
+    service.prActivity = journal;
+    const summary: NavigationThreadSummary = {
+      id: "off-page-parent", source: "codex", title: "Collapsed project parent", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, hasActiveSubAgent: true,
+    };
+    getCachedThreadSummary.mockImplementation(({ threadId }) => threadId === summary.id ? summary : undefined);
+    for (let i = 0; i < 2; i++) journal.record({ category: "budget", source: "background poll",
+      message: "PR check allowed", budget: "polling", delta: -1,
+      threadKeys: ["codex:off-page-parent", "codex:unknown"], prKeys: [],
+    });
+    listThreads.mockClear();
+    try {
+      expect(appServerService.getPrActivity().threadTitles).toEqual({ "codex:off-page-parent": summary.title });
+      expect(getCachedThreadSummary).toHaveBeenCalledTimes(2);
+      expect(getCachedThreadSummary).toHaveBeenCalledWith({ backend: "codex", threadId: summary.id });
+      summary.title = "Renamed parent";
+      summary.hasActiveSubAgent = false;
+      expect(appServerService.getPrActivity().threadTitles).toEqual({ "codex:off-page-parent": "Renamed parent" });
+      expect(listThreads).not.toHaveBeenCalled();
+    } finally {
+      service.prActivity = previous;
+    }
+  });
+
+  it("keeps paused lookup observations read-only, including empty and full-budget lookups", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../ipc/app-server");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("paused-pr-lookups-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      prAutoDispatchBudgetPaused: boolean;
+      prAutoDispatchBudgetConfig: { capacity: number; refillPerMinute: number; pauseWhenEmpty: boolean };
+      handlePrAutoDispatchSnapshots: (prs: PrSummary[], now: number) => Promise<void>;
+    };
+    const previousPaused = service.prAutoDispatchBudgetPaused;
+    const previousConfig = service.prAutoDispatchBudgetConfig;
+    const config = { capacity: 30, refillPerMinute: 1, pauseWhenEmpty: true };
+    service.prAutoDispatchBudgetPaused = true;
+    service.prAutoDispatchBudgetConfig = config;
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const peek = vi.spyOn(store, "peekPrAutoDispatchBudgetStatus");
+    const now = Date.now();
+    const pr: PrSummary = { provider: "github.com", org: "fixture", repo: "repo", number: 1,
+      url: "https://github.com/fixture/repo/pull/1", state: "passing", lifecycleState: "open" };
+    try {
+      // Setup is outside the measured operation. The full bucket remains
+      // explicitly paused until another instance/operator resumes it.
+      db.raw.prepare("INSERT INTO pr_auto_dispatch_budget(scope, tokens, updated_at, paused_at) VALUES ('profile', ?, ?, ?)")
+        .run(config.capacity, now, now);
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let i = 0; i < 100; i++) {
+          await service.handlePrAutoDispatchSnapshots(i % 2 === 0 ? [] : [pr], now + i * 60_000);
+        }
+      });
+      expect(peek).toHaveBeenCalledTimes(100);
+      expect(service.prAutoDispatchBudgetPaused).toBe(true);
+      expect(writes.commits).toBe(0);
+      expect(writes.statements).toBe(0);
+      expect(writes.walBytes).toBe(0);
+      expectSqliteWriteBudget({ scenario: "pr-activity-paused-lookup-observations", writes,
+        note: "100 service-level paused lookup observations (50 empty, 50 with a PR), full bucket: zero commits/writes/WAL; 0 MB/day at one lookup/minute",
+      });
+      await store.resumePrAutoDispatchBudget({ config, now });
+      await service.handlePrAutoDispatchSnapshots([], now);
+      expect(service.prAutoDispatchBudgetPaused).toBe(false);
+    } finally {
+      overlay.mockRestore();
+      service.prAutoDispatchBudgetPaused = previousPaused;
+      service.prAutoDispatchBudgetConfig = previousConfig;
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps thread preferences intact while a durable budget safety stop pauses Auto-fix PR", async () => {
@@ -5342,6 +5435,38 @@ describe("app server ipc", () => {
     });
   });
 
+  it.each(["user", "scheduled", "post-turn"] as const)("evaluates Auto-fix immediately after a %s lookup discovers a conflict", async (trigger) => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, APP_SERVER_GET_PR_ACTIVITY_CHANNEL } = await import("../../shared/ipc");
+    const conflict = githubPr({ number: 2359, org: "pwrdrvr", repo: "PwrAgent", state: "passing",
+      headSha: "a".repeat(40), mergeState: "conflicting", url: "https://github.com/pwrdrvr/PwrAgent/pull/2359" });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-lookup" } as never);
+    detectPullRequestsForThread.mockResolvedValueOnce([conflict]);
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    // Wait for settings initialization, without running a polling tick.
+    const inspect = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0].inspect;
+    await vi.waitFor(async () => expect(await inspect?.({ backend: "codex", threadId: "thread-lookup" }))
+      .toMatchObject({ autoFixAllowed: true, backgroundPollingEnabled: true }));
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, {
+      backend: "codex", threadId: "thread-lookup", trigger, branch: "feature", directoryPaths: ["/repo"],
+    });
+    await vi.waitFor(() => expect(scheduleThreadPrAutoDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "thread-lookup", pending: expect.objectContaining({ eventKinds: ["merge-conflict"] }),
+      allowCancelledRearm: false,
+    })));
+    const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({});
+    expect(activity).toMatchObject({
+      events: expect.arrayContaining([expect.objectContaining({
+        category: "check", source: `thread lookup (${trigger})`, tone: "error",
+        message: "Merge conflict, checks passing",
+      })]),
+      monitoring: {
+        pollingBudget: { capacity: 20, refillPerMinute: 20 },
+        repairBudget: expect.objectContaining({ capacity: expect.any(Number) }),
+      },
+    });
+  });
+
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
@@ -7297,6 +7422,87 @@ describe("app server ipc", () => {
       );
 
       vi.setSystemTime(2_000_000 + 10_000);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the renderer's 60s selected-thread tick through despite timer jitter", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2_000_000);
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, APP_SERVER_GET_PR_ACTIVITY_CHANNEL } = await import("../../shared/ipc");
+      const request = {
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "scheduled",
+        includeStatusFreshness: true,
+        branch: "fix/open",
+        directoryPaths: ["/repo"],
+      } satisfies RefreshThreadPullRequestsRequest;
+      const requestKey = buildThreadPrRequestKey({
+        backend: "codex",
+        threadId: "thread-1",
+        branch: "fix/open",
+        directoryPaths: ["/repo"],
+      });
+      const prs: PrSummary[] = [
+        githubPr({
+          number: 434,
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          state: "passing",
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/434",
+        }),
+      ];
+      getThreadOverlayState.mockResolvedValue({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs,
+        prsFetchedAt: 2_000_000 - 120_000,
+        prsRefreshKey: requestKey,
+      });
+      detectPullRequestsForThread.mockResolvedValue(prs);
+      registerAppServerIpcHandlers();
+
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      // Scheduled lookups intentionally do not emit the user-only debug log.
+      // Wait for the completed check observation before advancing the clock.
+      await vi.waitFor(async () => {
+        const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({}) as PrActivitySnapshot;
+        expect(activity.events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            category: "check",
+            source: "thread lookup (scheduled)",
+            threadKeys: ["codex:thread-1"],
+          }),
+        ]));
+        // A result can be recorded before the in-flight lookup is released.
+        // At this same clock time, false proves the request reached cooldown
+        // rather than coalescing with the still-pending first lookup.
+        expect(await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request))
+          .toMatchObject({ refreshStarted: false });
+      });
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+
+      // Well inside the 60s cooldown: still a flood, still refused.
+      vi.setSystemTime(2_000_000 + 54_000);
+      const cooldownResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      expect(cooldownResponse).toMatchObject({ refreshStarted: false });
+      await Promise.resolve();
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+      // The refusal is a dedupe, not activity worth a row.
+      const activity = await handlers.get(APP_SERVER_GET_PR_ACTIVITY_CHANNEL)?.({}) as PrActivitySnapshot;
+      expect(activity.events.some((event) => event.message.startsWith("Check postponed"))).toBe(false);
+
+      // The next tick landing a few seconds short of 60s is the same tick.
+      vi.setSystemTime(2_000_000 + 56_000);
       await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
       await vi.waitFor(() => {
         expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
