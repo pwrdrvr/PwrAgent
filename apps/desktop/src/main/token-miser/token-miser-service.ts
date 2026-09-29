@@ -1,4 +1,5 @@
 import { TokenMiserFocusedSummaries } from "./token-miser-focused";
+import { gatewayInvocationName } from "../mcp-connections/mcp-gateway-attribution";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
 import { randomUUID } from "node:crypto";
 import {
@@ -256,7 +257,7 @@ export class TokenMiserService {
     }
     members.set(payload.code_mode_tool_call_id, {
       toolCallId: payload.code_mode_tool_call_id,
-      toolName: payload.tool_name,
+      toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
       toolInput,
       output,
     });
@@ -328,7 +329,7 @@ export class TokenMiserService {
         threadId: payload.session_id,
         turnId: payload.turn_id,
         toolUseId: payload.tool_use_id,
-        toolName: payload.tool_name,
+        toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
         output,
         signal: options.signal,
         summary: deterministicPassThrough,
@@ -340,7 +341,7 @@ export class TokenMiserService {
       threadId: payload.session_id,
       turnId: payload.turn_id,
       toolUseId: payload.tool_use_id,
-      toolName: payload.tool_name,
+      toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
       output,
       prompt: buildSummaryPrompt(payload, output),
       signal: options.signal,

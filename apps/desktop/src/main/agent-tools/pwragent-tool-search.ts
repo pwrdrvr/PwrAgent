@@ -14,6 +14,7 @@ Search when the user wants to:
 - Attach, check, or watch a pull request/merge request and CI; request a code review.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
+- Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
 - Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
 - Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
 Use a short query describing the desired action, or an exact tool name. Search separately for unrelated tasks. Returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.

@@ -1,5 +1,6 @@
 import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
 import type { DynamicToolCallResponse } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 export type AgentToolTransport = "codex_dynamic_tool" | "mcp";
 
@@ -9,33 +10,21 @@ export type AgentToolCallContext = {
   callId?: string;
   turnId?: string;
   transport: AgentToolTransport;
+  signal?: AbortSignal;
 };
 
 export type AgentToolCallContentItems = NonNullable<
   DynamicToolCallResponse["contentItems"]
 >;
 
-export type AgentToolMcpContentItem =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "image";
-      data: string;
-      mimeType: string;
-    }
-  | {
-      type: "audio";
-      data: string;
-      mimeType: string;
-    };
+export type AgentToolMcpContentItem = CallToolResult["content"][number];
 
 export type AgentToolDispatchSuccess = {
   ok: true;
   data: unknown;
   contentItems?: AgentToolCallContentItems;
   mcpContentItems?: AgentToolMcpContentItem[];
+  mcpResult?: CallToolResult;
 };
 
 export type AgentToolDispatchFailure = {
@@ -45,6 +34,7 @@ export type AgentToolDispatchFailure = {
   data?: unknown;
   contentItems?: AgentToolCallContentItems;
   mcpContentItems?: AgentToolMcpContentItem[];
+  mcpResult?: CallToolResult;
 };
 
 export type AgentToolDispatchResult =

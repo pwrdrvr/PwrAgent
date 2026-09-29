@@ -34,7 +34,7 @@ import {
   type PwrAgentFederationHandler,
 } from "./pwragent-federation-agent-tools.js";
 import {
-  buildPwrAgentMcpConnectionToolRouter,
+  buildPwrAgentMcpConnectionToolDefinitions,
   type PwrAgentMcpConnectionHandler,
 } from "./pwragent-mcp-connection-agent-tools.js";
 import {
@@ -44,6 +44,8 @@ import {
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
+import { buildMcpGatewayToolDefinitions } from "./pwragent-mcp-gateway-tools.js";
+import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
@@ -57,6 +59,7 @@ export function resolveAgentToolCatalogs(params: {
   automationInspectionHandler?: AutomationInspectionHandler;
   federationHandler?: PwrAgentFederationHandler;
   mcpConnectionHandler?: PwrAgentMcpConnectionHandler;
+  mcpGatewayTools?: McpGatewayToolService;
   messagingHandler?: PwrAgentMessagingHandler;
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
@@ -94,9 +97,10 @@ export function resolveAgentToolCatalogs(params: {
     params.federationHandler,
   );
   const federationDynamicTools = federationRouter.buildDynamicToolSpecs();
-  const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
-    params.mcpConnectionHandler,
-  );
+  const mcpConnectionRouter = new AgentToolRouter([
+    ...buildPwrAgentMcpConnectionToolDefinitions(params.mcpConnectionHandler),
+    ...buildMcpGatewayToolDefinitions(params.mcpGatewayTools, params.tokenMiserStore),
+  ]);
   const mcpConnectionDynamicTools = mcpConnectionRouter.buildDynamicToolSpecs();
   const tokenMiserRouter = new AgentToolRouter(
     buildTokenMiserToolDefinitions(params.tokenMiserStore, params.tokenMiserFocused),

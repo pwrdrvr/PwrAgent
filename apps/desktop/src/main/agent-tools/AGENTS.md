@@ -19,9 +19,11 @@ shape as backwards-compatible API surfaces.
 
 ## Frozen Legacy Dynamic Namespaces
 
-Codex persists dynamic tool definitions when a thread is created. PwrAgent does
-not resend or refresh those definitions when starting later turns on an existing
-thread.
+Codex persists dynamic tool definitions when a thread is created. PwrAgent
+replaces the parent catalog before later turns only when the runtime advertises
+the negotiated `dynamicToolsResumeField` capability. Older clients retain their
+persisted definitions. Returning a new schema from search does not register an
+unknown native tool on those clients.
 
 - New threads receive only the unified `pwragent` dynamic namespace. Add new
   tools there through the agent-tool catalog so both dynamic-tool and MCP
@@ -33,3 +35,16 @@ thread.
   operations: `create_monitor_delegation`, `inject_progress`, and
   `complete_monitoring`. Do not add new operations or schemas to it; retain only
   the dispatch needed for those existing threads.
+
+## Live MCP Gateway Tools
+
+- `search_mcp_tools` and `call_mcp_tool` are fixed contracts. External tool names
+  are arguments to the invocation tool, never dynamically invented host names.
+- Resolve selection from the trusted calling thread on every operation. Never
+  accept a thread, profile, endpoint URL, or credential from tool arguments.
+- Keep source-specific approval, current-schema validation and cancellation in
+  the shared gateway service. Do not cache approval for the generic wrapper.
+- Preserve exact search schemas with authenticated Token Miser delivery. Do not
+  exempt arbitrary upstream output by tool name or marker text alone.
+- Attribute the existing invocation to its original connection and tool. Do not
+  emit a duplicate tool event or add per-call persistence for discovery.

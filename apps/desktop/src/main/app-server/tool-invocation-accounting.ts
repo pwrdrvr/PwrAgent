@@ -16,6 +16,7 @@ import {
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { redactCommandText } from "../util/redact-command-text";
+import { gatewayInvocationName } from "../mcp-connections/mcp-gateway-attribution";
 
 /* Shared with the incident explorer so its meters are drawn against the same
    cap this detector reasons about. */
@@ -229,13 +230,14 @@ export function toolInvocationFromNotification(params: {
 
   const itemId = readString(item, "id") ?? `tool:${now}`;
   const args = readToolArguments(item);
-  const toolName =
+  const registeredToolName =
     readString(item, "toolName") ??
     readString(item, "tool_name") ??
     readString(item, "tool") ??
     readString(item, "name") ??
     readString(item, "type") ??
     "commandExecution";
+  const toolName = gatewayInvocationName(registeredToolName, args) ?? registeredToolName;
   const command =
     readString(item, "command") ??
     readString(args, "cmd") ??

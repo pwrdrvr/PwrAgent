@@ -93,6 +93,7 @@ describe("AgentToolMcpServer", () => {
       {
         backend: "acp:kimi",
         callId: expect.any(String),
+        signal: expect.any(AbortSignal),
         threadId: "thread-1",
         transport: "mcp",
         turnId: "turn-1",

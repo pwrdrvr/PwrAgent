@@ -22,6 +22,19 @@ const ALERTING_TOOL_OUTPUT_POLICY = {
 };
 
 describe("tool invocation accounting", () => {
+  it("attributes a generic gateway call to its original source on the existing invocation", () => {
+    const result = { content: [{ type: "text", text: "fixture" }] };
+    const invocation = toolInvocationFromNotification({
+      backend: "codex", includeSmallTools: true,
+      notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "gateway-1", type: "dynamicToolCall", namespace: "pwragent", tool: "call_mcp_tool", status: "completed",
+          arguments: { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "record" } }, result },
+      } } as AppServerNotification,
+    });
+    expect(invocation).toMatchObject({ itemId: "gateway-1", toolName: 'mcp:["one","lookup"]', category: "mcp", outputChars: JSON.stringify(result).length });
+  });
+
   it("normalizes shell commands into durable command categories", () => {
     expect(
       normalizeToolInvocationCommand({
