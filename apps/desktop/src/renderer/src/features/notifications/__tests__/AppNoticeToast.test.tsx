@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNoticeToast } from "../AppNoticeToast";
 
@@ -133,6 +133,22 @@ describe("AppNoticeToast", () => {
     );
 
     expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
+  });
+
+  it("saves a Skill Questions warning dismissal before closing the toast", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(onSuppressSkillQuestionsWarning).toHaveBeenCalledTimes(1);
   });
 
   it("copies an explicit handoff value without rendering it", () => {

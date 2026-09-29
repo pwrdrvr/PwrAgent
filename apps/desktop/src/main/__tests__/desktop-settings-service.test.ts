@@ -4688,10 +4688,15 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
     expect(service.resolveCodexDefaultModeRequestUserInput()).toBe(false);
+    expect(initial.experimental.codexSkillQuestionsWarningDismissed).toEqual({
+      value: false,
+      source: "default",
+    });
 
     await service.writeConfigPatchTargeted({
       experimental: {
         codexDefaultModeRequestUserInput: true,
+        codexSkillQuestionsWarningDismissed: true,
       },
     });
 
@@ -4701,8 +4706,15 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(service.resolveCodexDefaultModeRequestUserInput()).toBe(true);
+    expect(updated.experimental.codexSkillQuestionsWarningDismissed).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "codex_default_mode_request_user_input = true",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "codex_skill_questions_warning_dismissed = true",
     );
   });
 

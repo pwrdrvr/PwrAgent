@@ -4,8 +4,12 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
 export type CodexStreamSignal = {
   notification: { method: string; params: Record<string, unknown> };
   instanceId?: FederationInstanceId;
+  skillQuestionsWarningDismissed?: boolean;
   threadLabel: string;
 };
+
+const SKILL_QUESTIONS_WARNING_PREFIX =
+  "Under-development features enabled: default_mode_request_user_input.";
 
 const MODEL_PROGRESS_METHODS = new Set([
   "item/agentMessage/delta",
@@ -47,6 +51,9 @@ export function resolveCodexStreamNotice(
       : undefined;
     const message = readText(method === "warning" ? params.message : error?.message);
     if (!message) return undefined;
+    const skillQuestionsWarning = method === "warning"
+      && message.startsWith(SKILL_QUESTIONS_WARNING_PREFIX);
+    if (skillQuestionsWarning && signal.skillQuestionsWarningDismissed) return undefined;
     const details = readText(error?.additionalDetails);
     const retrying = method === "error" && params.willRetry === true;
     return {
@@ -59,6 +66,7 @@ export function resolveCodexStreamNotice(
           ? "Codex warning"
           : retrying ? "Codex is retrying" : "Codex error",
         message: details ? `${message}\n${details}` : message,
+        ...(skillQuestionsWarning ? { skillQuestionsWarning: true } : {}),
         tone: method === "warning" || retrying ? "warning" : "error",
         detail: signal.threadLabel,
         threadLink: {

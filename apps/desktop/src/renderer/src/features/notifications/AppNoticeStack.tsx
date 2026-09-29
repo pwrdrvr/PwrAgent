@@ -10,6 +10,7 @@ export function AppNoticeStack(props: {
   durableNotices: readonly AppNoticeToastNotice[];
   onDismissDurable: (id: string) => void;
   onOpenThread?: (link: ResolvedThreadLink) => void;
+  onSuppressSkillQuestionsWarning?: () => Promise<boolean>;
   transientNotices?: readonly {
     notice?: AppNoticeToastNotice;
     onDismiss: () => void;
@@ -70,6 +71,7 @@ export function AppNoticeStack(props: {
             notice={notice}
             onDismiss={onDismiss}
             onOpenThread={props.onOpenThread}
+            onSuppressSkillQuestionsWarning={props.onSuppressSkillQuestionsWarning}
           />
         ) : null
       )}
@@ -77,6 +79,7 @@ export function AppNoticeStack(props: {
         desktopApi={props.desktopApi}
         notice={activeNotice}
         onOpenThread={props.onOpenThread}
+        onSuppressSkillQuestionsWarning={props.onSuppressSkillQuestionsWarning}
         navigation={activeNotice
           ? {
               current: activeIndex + 1,

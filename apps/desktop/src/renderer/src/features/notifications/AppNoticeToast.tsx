@@ -32,6 +32,8 @@ export type AppNoticeToastNotice = {
   id: string;
   title: string;
   message: string;
+  /** Offers a profile-scoped dismissal for this one Codex development warning. */
+  skillQuestionsWarning?: boolean;
   /** Optional notice-specific dismissal, including any durable disposition. */
   onDismiss?: () => void;
   detail?: string;
@@ -62,8 +64,11 @@ export function AppNoticeToast(props: {
   notice?: AppNoticeToastNotice;
   onDismiss: () => void;
   onOpenThread?: (link: ResolvedThreadLink) => void;
+  onSuppressSkillQuestionsWarning?: () => Promise<boolean>;
 }) {
   const [paused, setPaused] = useState(false);
+  const [suppressionSaving, setSuppressionSaving] = useState(false);
+  const [suppressionError, setSuppressionError] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
   const onDismissRef = useRef(props.onDismiss);
   const noticeId = props.notice?.id;
@@ -80,10 +85,12 @@ export function AppNoticeToast(props: {
       timeoutRef.current = undefined;
     }
     setPaused(false);
+    setSuppressionSaving(false);
+    setSuppressionError(false);
   }, [props.notice?.id]);
 
   useEffect(() => {
-    if (!noticePresent || !autoDismiss || paused) {
+    if (!noticePresent || !autoDismiss || paused || suppressionSaving) {
       return;
     }
 
@@ -98,7 +105,7 @@ export function AppNoticeToast(props: {
         timeoutRef.current = undefined;
       }
     };
-  }, [autoDismiss, noticeId, noticePresent, paused]);
+  }, [autoDismiss, noticeId, noticePresent, paused, suppressionSaving]);
 
   if (!props.notice) {
     return null;
@@ -168,6 +175,38 @@ export function AppNoticeToast(props: {
           </div>
         ) : props.notice.detail ? (
           <p className="app-notice-toast__detail">{props.notice.detail}</p>
+        ) : null}
+        {props.notice.skillQuestionsWarning && props.onSuppressSkillQuestionsWarning ? (
+          <>
+            <label className="composer__checkbox app-notice-toast__suppress">
+              <input
+                type="checkbox"
+                checked={suppressionSaving}
+                disabled={suppressionSaving}
+                onChange={() => {
+                  setSuppressionSaving(true);
+                  setSuppressionError(false);
+                  void props.onSuppressSkillQuestionsWarning?.().then(
+                    (saved) => {
+                      setSuppressionSaving(false);
+                      if (saved) props.onDismiss();
+                      else setSuppressionError(true);
+                    },
+                    () => {
+                      setSuppressionSaving(false);
+                      setSuppressionError(true);
+                    },
+                  );
+                }}
+              />
+              Don't show again
+            </label>
+            {suppressionError ? (
+              <p className="app-notice-toast__suppression-error">
+                Could not save this preference.
+              </p>
+            ) : null}
+          </>
         ) : null}
       </div>
       <div

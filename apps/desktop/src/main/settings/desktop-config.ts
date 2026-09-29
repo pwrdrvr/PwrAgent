@@ -137,6 +137,7 @@ export type DesktopSettingsConfig = {
     tokenMiserFocusedSummariesEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
+    codexSkillQuestionsWarningDismissed?: boolean;
     managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;
@@ -799,6 +800,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "codex_default_mode_request_user_input"],
       patch.experimental.codexDefaultModeRequestUserInput,
+    );
+  }
+  if (patch.experimental?.codexSkillQuestionsWarningDismissed !== undefined) {
+    set(
+      ["experimental", "codex_skill_questions_warning_dismissed"],
+      patch.experimental.codexSkillQuestionsWarningDismissed,
     );
   }
   if (patch.experimental?.managedReview !== undefined) {
@@ -1886,6 +1893,9 @@ function normalizeDesktopConfig(
       threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,
+      ),
+      codexSkillQuestionsWarningDismissed: readBoolean(
+        experimental?.codex_skill_questions_warning_dismissed,
       ),
       managedReview: readBoolean(experimental?.managed_review),
       diffCondensation: {

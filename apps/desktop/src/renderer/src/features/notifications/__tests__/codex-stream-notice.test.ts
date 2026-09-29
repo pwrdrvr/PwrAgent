@@ -28,4 +28,34 @@ describe("Codex stream notices", () => {
       notice: { title: "Codex warning", message: "Model fallback in use.", tone: "warning" },
     });
   });
+
+  it("offers dismissal only for the Skill Questions development warning", () => {
+    const warning = {
+      threadLabel: "Package lookup",
+      notification: {
+        method: "warning",
+        params: {
+          threadId: "thread-1",
+          message: "Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably.",
+        },
+      },
+    };
+    expect(resolveCodexStreamNotice(warning, [])).toMatchObject({
+      notice: { skillQuestionsWarning: true },
+    });
+    expect(resolveCodexStreamNotice({
+      ...warning,
+      skillQuestionsWarningDismissed: true,
+    }, [])).toBeUndefined();
+    expect(resolveCodexStreamNotice({
+      ...warning,
+      skillQuestionsWarningDismissed: true,
+      notification: {
+        ...warning.notification,
+        params: { ...warning.notification.params, message: "A different warning." },
+      },
+    }, [])).toMatchObject({
+      notice: { message: "A different warning." },
+    });
+  });
 });
