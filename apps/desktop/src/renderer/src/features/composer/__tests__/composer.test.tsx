@@ -1793,9 +1793,17 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByText(launchpadError)).toHaveClass("composer__meta-text");
+    // The rail shows the message without Electron's IPC wrapper; copying still
+    // hands over the whole raw string.
+    expect(
+      screen.getByText(
+        "Cannot enable privileged approval modes in an untrusted folder.",
+      ),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy launchpad error" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy error: Couldn't start thread" }),
+    );
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(launchpadError);

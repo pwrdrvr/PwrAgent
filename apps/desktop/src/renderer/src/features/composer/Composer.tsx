@@ -192,6 +192,7 @@ import {
   type ComposerImageFile,
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
@@ -203,7 +204,6 @@ import {
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
-import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
   EnvActionRunEntry,
   EnvActionRunsView,
@@ -2694,25 +2694,6 @@ function ComposerApplicationButton(props: {
   );
 }
 
-function CopyableComposerError(props: {
-  desktopApi?: Pick<DesktopApi, "copyText">;
-  label: string;
-  text: string;
-}) {
-  return (
-    <div className="composer__meta composer__meta--error composer__meta--copyable">
-      <span className="composer__meta-text">{props.text}</span>
-      <TranscriptCopyButton
-        className="transcript-copy-button--composer-error"
-        copiedLabel="Copied error"
-        desktopApi={props.desktopApi}
-        label={props.label}
-        text={props.text}
-      />
-    </div>
-  );
-}
-
 export const Composer = memo(function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
   const pullRequestLinks = usePullRequestLinks();
@@ -2960,8 +2941,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
     props.activeTurnId
   );
-  const [sendError, setSendError] = useState<string>();
+  // Each report is a new occurrence even when the text repeats, so a rail row
+  // the operator dismissed shows again when a synchronous validation failure
+  // ("Choose a project to review.") fires twice: React would otherwise bail
+  // out of `undefined` -> same string inside one handler and never re-render.
+  const [sendErrorState, setSendErrorState] = useState<{
+    message?: string;
+    occurrence: number;
+  }>({ occurrence: 0 });
+  const sendError = sendErrorState.message;
+  const setSendError = useCallback((message?: string) => {
+    setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
+  }, []);
   const [agentThreadError, setAgentThreadError] = useState<string>();
+  const [environmentError, setEnvironmentError] = useState<string>();
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
@@ -3029,6 +3022,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   useEffect(() => {
     setAgentThreadError(undefined);
+    setEnvironmentError(undefined);
     setAgentThreadSaving(false);
   }, [composerScopeKey]);
 
@@ -9429,7 +9423,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const action = selectedThreadCodexAction;
     const startingKey = currentThreadEnvActionStartingKey;
     const cwd = workspaceOpenPath;
-    setSendError(undefined);
+    setEnvironmentError(undefined);
     props.onPendingStatusChange?.(`Starting ${action.name}`);
     showThreadEnvActionStarting(startingKey);
     const startedAt = Date.now();
@@ -9450,7 +9444,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (!actionStarted) {
         clearThreadEnvActionStarting(startingKey);
       }
-      setSendError(error instanceof Error ? error.message : String(error));
+      setEnvironmentError(error instanceof Error ? error.message : String(error));
     } finally {
       props.onPendingStatusChange?.(undefined);
     }
@@ -9467,7 +9461,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    setSendError(undefined);
+    setEnvironmentError(undefined);
     props.onPendingStatusChange?.(
       environmentId ? "Selecting environment" : "Clearing environment",
     );
@@ -9481,7 +9475,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         actionId,
       });
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
+      setEnvironmentError(error instanceof Error ? error.message : String(error));
     } finally {
       props.onPendingStatusChange?.(undefined);
     }
@@ -10776,6 +10770,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         )
       : null;
 
+
+  const composerErrorEntries: readonly ComposerErrorEntry[] = [
+    { id: "skills", label: "Couldn't load skills", message: props.skillError },
+    { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
+    {
+      id: "action",
+      label: "Action failed",
+      message: sendError,
+      occurrence: sendErrorState.occurrence,
+    },
+    { id: "environment", label: "Environment error", message: environmentError },
+    { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
+    {
+      id: "agent-change",
+      label: "Agent change failed",
+      message: props.thread?.agentChange?.error
+        ? formatAgentChangeStatus(props.thread.agentChange)
+        : undefined,
+    },
+    { id: "open-application", label: "Couldn't open application", message: applicationOpenError },
+    { id: "execution-mode", label: "Couldn't change access", message: props.setExecutionModeError },
+    { id: "model-settings", label: "Couldn't change model settings", message: props.threadModelSettingsError },
+    { id: "add-directory", label: "Couldn't add directory", message: props.pickDirectoryError },
+  ];
   return (
     <>
       <form
@@ -10828,6 +10846,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           onStopRun={props.onStopEnvActionRun}
         />
       )}
+
+      <ComposerErrorRail
+        desktopApi={props.desktopApi}
+        entries={composerErrorEntries}
+      />
 
       {pendingSteer ? (
         <div
@@ -11761,11 +11784,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </div>
             ) : null}
 
-            {sendError ? (
-              <p className="composer__meta composer__meta--error" role="alert">
-                {sendError}
-              </p>
-            ) : null}
             <div className="composer__review-actions">
               <button
                 type="button"
@@ -12418,11 +12436,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 <FolderIcon size={14} aria-hidden="true" />
                 <span>{props.pickingDirectory ? "Adding" : "Add directory"}</span>
               </button>
-              {props.pickDirectoryError ? (
-                <span className="composer__inline-error" role="alert">
-                  {props.pickDirectoryError}
-                </span>
-              ) : null}
             </>
           ) : null}
 
@@ -12872,41 +12885,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       {workspaceHandoffDialog}
 
-      {props.skillError ? <p className="composer__meta composer__meta--error">{props.skillError}</p> : null}
       {props.unavailableReason ? (
        <p className="composer__meta composer__meta--error">
          {props.unavailableReason}
        </p>
       ) : null}
-      {props.launchpadError ? (
-        <CopyableComposerError
-          desktopApi={props.desktopApi}
-          label="Copy launchpad error"
-          text={props.launchpadError}
-        />
-      ) : null}
-      {sendError && !isReviewComposerOpen ? <p className="composer__meta composer__meta--error" role="alert">{sendError}</p> : null}
-      {props.thread?.agentChange ? (
-        <p className="composer__meta" role={props.thread.agentChange.error ? "alert" : "status"}>
+      {props.thread?.agentChange && !props.thread.agentChange.error ? (
+        <p className="composer__meta" role="status">
           {formatAgentChangeStatus(props.thread.agentChange)}
-        </p>
-      ) : null}
-      {agentThreadError ? (
-        <p className="composer__meta composer__meta--error" role="alert">
-          {agentThreadError}
-        </p>
-      ) : null}
-      {applicationOpenError ? (
-        <p className="composer__meta composer__meta--error">{applicationOpenError}</p>
-      ) : null}
-      {props.setExecutionModeError ? (
-        <p className="composer__meta composer__meta--error">
-          {props.setExecutionModeError}
-        </p>
-      ) : null}
-      {props.threadModelSettingsError ? (
-        <p className="composer__meta composer__meta--error">
-          {props.threadModelSettingsError}
         </p>
       ) : null}
       {!props.skillError && props.skillLoading ? (

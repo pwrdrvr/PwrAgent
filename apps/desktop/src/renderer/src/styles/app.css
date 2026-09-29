@@ -23846,6 +23846,56 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+.composer-error-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.composer-error-row__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+}
+
+/* The disclosure is a button here, not a <summary>: reset its chrome so it
+   reads as the same row. */
+.composer-error-row__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.composer-error-row__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* An error with nothing more to show keeps the row but not the disclosure. */
+div.composer-error-row__toggle {
+  cursor: default;
+}
+
+.composer-error-row .composer__queued-env-action-chevron[data-inert="true"] {
+  visibility: hidden;
+}
+
+.composer-error-row[data-open="true"] .composer__queued-env-action-chevron {
+  transform: rotate(45deg);
+}
+
+/* Two classes: `.composer__queued-env-action-output` sets `white-space: pre`
+   further down at the same specificity. */
+.composer-error-row .composer-error-row__detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .transcript-activity {
   width: min(100%, 760px);
   /* 2026-08 transcript density pass: the full-width `border-top`
@@ -32219,13 +32269,6 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--text-primary);
 }
 
-.composer__inline-error {
-  max-width: min(320px, 100%);
-  color: var(--danger-text);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
 .composer__action-button--busy {
   min-width: 54px;
 }
@@ -33949,23 +33992,6 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__meta--warning {
   color: var(--status-warning);
-}
-
-.composer__meta--copyable {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.composer__meta-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  -webkit-user-select: text;
-  user-select: text;
 }
 
 .transcript-copy-button--composer-error {
