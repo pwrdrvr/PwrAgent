@@ -385,6 +385,52 @@ describe("DesktopSettingsService", () => {
     expect(discover).toHaveBeenCalledOnce();
   });
 
+  it("flags a Codex older than the newest models need, and clears it after a restart on a newer one", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "", "utf8");
+    // A real Homebrew-shaped layout, so the advisory can name the installer.
+    const cellarBin = path.join(root, "opt", "Cellar", "codex", "0.152.0", "bin");
+    fs.mkdirSync(cellarBin, { recursive: true });
+    const cellarCodex = path.join(cellarBin, "codex");
+    fs.writeFileSync(cellarCodex, "");
+    const shim = path.join(root, "bin-codex");
+    fs.symlinkSync(cellarCodex, shim);
+    const serviceAt = (version: string) => new DesktopSettingsService({
+      configPath, env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: new CodexDiscoveryCoordinator({
+        resolveEnv: async () => ({}),
+        discover: async () => ({
+          candidates: [{
+            command: shim, source: "path", executable: true, selected: true, version,
+          }],
+          selectedCommand: shim,
+          selectedSource: "path",
+        }),
+      }),
+    });
+    const permit = () => issueProviderDiscoveryPermit("settings-user-action");
+
+    const old = serviceAt("0.152.0");
+    await old.refreshCodexDiscovery(permit());
+    expect((await old.readSettingsProjection()).models.codex.versionAdvisory)
+      .toEqual({
+        version: "0.152.0",
+        minimumVersion: "0.155.0",
+        command: shim,
+        installer: "homebrew",
+        upgradeCommand: "brew upgrade codex",
+      });
+
+    // The running process keeps the executable it started with, so an in-place
+    // upgrade is not credited until PwrAgent restarts.
+    const restarted = serviceAt("0.156.0");
+    await restarted.refreshCodexDiscovery(permit());
+    expect((await restarted.readSettingsProjection()).models.codex.versionAdvisory)
+      .toBeUndefined();
+  });
+
   it("refreshes the saved Codex path, version, rejection, and auto selection before returning", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

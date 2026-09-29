@@ -19,6 +19,7 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopCodexDiscoverySnapshot,
+  DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
   DesktopFederationMode,
   DesktopGitDiscoverySnapshot,
@@ -48,10 +49,11 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
 import { retainManagedCodexCommand } from "../codex-managed-runtime";
 import { managedCodexTagForCommand } from "../codex-build-channel";
+import { buildCodexVersionAdvisory } from "./codex-version-advisory";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -606,6 +608,7 @@ export class DesktopSettingsService {
     change: ManagedCodexSelectionChange,
   ) => Promise<unknown> | unknown>();
   private managedCodexUpdateAbortController?: AbortController;
+  private readonly codexRealPathCache = new Map<string, string | undefined>();
   private managedCodexRuntimeSwitchPending = false;
   private managedCodexRuntimeSwitchAttempt?: Promise<void>;
   private startupDiscoveryAttempted = false;
@@ -774,6 +777,9 @@ export class DesktopSettingsService {
       };
     }
     const codexProfiles = this.readCodexProfiles();
+    const codexVersionAdvisory = await this.readCodexVersionAdvisory(
+      codexDiscovery,
+    );
     // Settle discovery that is ALREADY running before reading its result.
     // Never start it: this must not turn a projection read into a probe,
     // and a caller that arrives before startup discovery simply gets the
@@ -1495,6 +1501,7 @@ export class DesktopSettingsService {
             && this.resolveTokenMiserEnabled()
             ? { managedBuildsRequiredBy: "token-miser" as const }
             : {}),
+          ...(codexVersionAdvisory ? { versionAdvisory: codexVersionAdvisory } : {}),
           discovery: codexDiscovery,
           profiles: codexProfiles,
         },
@@ -1924,6 +1931,39 @@ export class DesktopSettingsService {
       this.readGeneralConfig().notificationsEnabled,
       false,
     ).value;
+  }
+
+  /**
+   * Whether the Codex PwrAgent launches is too old for the newest models, and
+   * how its operator would update it. Reads only what discovery and the managed
+   * runtime already hold; the one thing it adds is resolving the command's
+   * symlinks, cached per command because a projection read is frequent and a
+   * Codex install does not move.
+   */
+  private async readCodexVersionAdvisory(
+    discovery: DesktopCodexDiscoverySnapshot,
+  ): Promise<DesktopCodexVersionAdvisory | undefined> {
+    const managed = this.managedCodexRuntime;
+    const selected = discovery.candidates.find((candidate) => candidate.selected);
+    const command = managed?.command ?? discovery.selectedCommand;
+    const version = managed?.metadata.version ?? selected?.version;
+    return await buildCodexVersionAdvisory({
+      command,
+      version,
+      source: managed ? "config" : discovery.selectedSource,
+      managedByPwrAgent:
+        managed !== undefined
+        || (command !== undefined && managedCodexTagForCommand(command) !== undefined),
+      resolvePath: async (target) => {
+        if (!this.codexRealPathCache.has(target)) {
+          this.codexRealPathCache.set(
+            target,
+            await realpath(target).catch(() => undefined),
+          );
+        }
+        return this.codexRealPathCache.get(target);
+      },
+    });
   }
 
   resolveTokenMiserEnabled(): boolean {

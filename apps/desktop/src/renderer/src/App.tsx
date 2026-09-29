@@ -151,6 +151,10 @@ import {
   GROK_UPDATE_NOTICE_ID_PREFIXES,
   GrokCliUpdateNotice,
 } from "./features/notifications/GrokCliUpdateNotice";
+import {
+  CODEX_VERSION_NOTICE_ID_PREFIXES,
+  CodexVersionNotice,
+} from "./features/notifications/CodexVersionNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
@@ -836,6 +840,22 @@ function DesktopAppShell(props: {
       showAppNotice(notice);
     }
   }, [showAppNotice]);
+
+  const syncCodexVersionNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    // A notice whose condition cleared (Codex updated, or the managed build
+    // took over) must leave the screen, so sweep before showing the current one.
+    for (const prefix of CODEX_VERSION_NOTICE_ID_PREFIXES) {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix });
+    }
+    if (notice) {
+      showAppNotice(notice);
+    }
+  }, [showAppNotice]);
+  const openCodexSettings = useCallback(() => {
+    openSettingsSection("models", "codex");
+  }, [openSettingsSection]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
@@ -3344,6 +3364,12 @@ function DesktopAppShell(props: {
         <GrokCliUpdateNotice
           desktopApi={desktopApi}
           onNoticeChanged={syncGrokCliUpdateNotice}
+        />
+        <CodexVersionNotice
+          desktopApi={desktopApi}
+          snapshot={settings.snapshot}
+          onNoticeChanged={syncCodexVersionNotice}
+          onOpenCodexSettings={openCodexSettings}
         />
         <AppNoticeStack
           desktopApi={desktopApi}
