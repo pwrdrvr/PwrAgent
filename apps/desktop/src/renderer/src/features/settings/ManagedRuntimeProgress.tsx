@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import type {
   ManagedRuntimeId,
   ManagedRuntimeProgress,
@@ -31,7 +31,9 @@ export function useManagedRuntimeProgress(
   runtime: ManagedRuntimeId,
 ): ManagedRuntimeProgress | undefined {
   const [progress, setProgress] = useState<ManagedRuntimeProgress>();
-  const [now, setNow] = useState(() => Date.now());
+  // Visibility depends on the clock, so a render is forced when the ready
+  // strip is due to expire; the clock itself is read at render.
+  const [, rerender] = useReducer((tick: number) => tick + 1, 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,12 +42,10 @@ export function useManagedRuntimeProgress(
     const unsubscribe = desktopApi?.onManagedRuntimeProgress?.((event) => {
       if (event.runtime !== runtime) return;
       sawEvent = true;
-      setNow(event.updatedAt);
       setProgress(event.phase === "idle" ? undefined : event);
     });
     void desktopApi?.readManagedRuntimeProgress?.().then((all) => {
       if (cancelled || sawEvent) return;
-      setNow(Date.now());
       setProgress(all.find((entry) => entry.runtime === runtime));
     });
     return () => {
@@ -59,11 +59,11 @@ export function useManagedRuntimeProgress(
     if (progress?.phase !== "ready") return undefined;
     const remaining =
       MANAGED_RUNTIME_READY_LINGER_MS - (Date.now() - progress.updatedAt);
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, remaining) + 1);
+    const timer = setTimeout(rerender, Math.max(0, remaining) + 1);
     return () => clearTimeout(timer);
   }, [progress]);
 
-  return progress && isManagedRuntimeProgressVisible(progress, Math.max(now, Date.now()))
+  return progress && isManagedRuntimeProgressVisible(progress, Date.now())
     ? progress
     : undefined;
 }

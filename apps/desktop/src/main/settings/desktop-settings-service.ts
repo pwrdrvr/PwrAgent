@@ -364,6 +364,18 @@ function providerConfigSection(provider: ProviderProjection): {
   };
 }
 
+/**
+ * PwrAgent's own Codex build is wanted when Token Miser needs it or the
+ * operator asked for it. One rule for every reader, so the write transition
+ * and the startup resolver cannot disagree with the settings projection.
+ */
+function isManagedCodexWanted(
+  tokenMiserEnabled: boolean,
+  managedBuilds: boolean,
+): boolean {
+  return tokenMiserEnabled || managedBuilds;
+}
+
 function codexDiscoveryFromProvider(
   provider: ProviderProjection,
 ): DesktopCodexDiscoverySnapshot {
@@ -608,7 +620,7 @@ export class DesktopSettingsService {
     change: ManagedCodexSelectionChange,
   ) => Promise<unknown> | unknown>();
   private managedCodexUpdateAbortController?: AbortController;
-  private readonly codexRealPathCache = new Map<string, string | undefined>();
+  private readonly codexRealPathCache = new Map<string, string>();
   private managedCodexRuntimeSwitchPending = false;
   private managedCodexRuntimeSwitchAttempt?: Promise<void>;
   private startupDiscoveryAttempted = false;
@@ -1950,18 +1962,20 @@ export class DesktopSettingsService {
     return await buildCodexVersionAdvisory({
       command,
       version,
-      source: managed ? "config" : discovery.selectedSource,
+      source: discovery.selectedSource,
       managedByPwrAgent:
         managed !== undefined
         || (command !== undefined && managedCodexTagForCommand(command) !== undefined),
       resolvePath: async (target) => {
-        if (!this.codexRealPathCache.has(target)) {
-          this.codexRealPathCache.set(
-            target,
-            await realpath(target).catch(() => undefined),
-          );
-        }
-        return this.codexRealPathCache.get(target);
+        // Keyed on the version too, so an upgrade or reinstall at the same
+        // path is looked at again. A failed lookup is not remembered: the
+        // path may only be briefly unreadable.
+        const key = `${target}\0${version}`;
+        const cached = this.codexRealPathCache.get(key);
+        if (cached !== undefined) return cached;
+        const resolved = await realpath(target).catch(() => undefined);
+        if (resolved !== undefined) this.codexRealPathCache.set(key, resolved);
+        return resolved;
       },
     });
   }
@@ -1977,8 +1991,10 @@ export class DesktopSettingsService {
    * Token Miser off hands Codex back to the configured command as before.
    */
   resolveManagedCodexEnabled(): boolean {
-    return this.resolveTokenMiserEnabled()
-      || (this.configStore.read("models").codex?.managedBuilds ?? false);
+    return isManagedCodexWanted(
+      this.resolveTokenMiserEnabled(),
+      this.configStore.read("models").codex?.managedBuilds ?? false,
+    );
   }
 
   resolveTokenMiserFocusedSummariesEnabled(): boolean {
@@ -2077,12 +2093,12 @@ export class DesktopSettingsService {
     // Token Miser off while the operator also asked for the build changes
     // nothing here, and neither does turning the build off under Token Miser.
     const managedCodexBefore = this.resolveManagedCodexEnabled();
-    const managedCodexAfter =
-      (patch.experimental?.tokenMiserEnabled
-        ?? this.resolveTokenMiserEnabled())
-      || (patch.models?.codex?.managedBuilds
+    const managedCodexAfter = isManagedCodexWanted(
+      patch.experimental?.tokenMiserEnabled ?? this.resolveTokenMiserEnabled(),
+      patch.models?.codex?.managedBuilds
         ?? this.configStore.read("models").codex?.managedBuilds
-        ?? false);
+        ?? false,
+    );
     const enablingManagedCodex = managedCodexAfter && !managedCodexBefore;
     const disablingManagedCodex = !managedCodexAfter && managedCodexBefore;
     const managedCodexPatched =
@@ -3068,15 +3084,15 @@ export class DesktopSettingsService {
   ): Promise<ManagedCodexRuntime | undefined> {
     if (
       !this.options.ensureManagedCodexRuntime
-      || !(
+      || !isManagedCodexWanted(
         this.resolveConfigBoolean(
           config.experimental?.tokenMiserEnabled,
           false,
-        ).value
-        || this.resolveConfigBoolean(
+        ).value,
+        this.resolveConfigBoolean(
           config.models?.codex?.managedBuilds,
           false,
-        ).value
+        ).value,
       )
     ) {
       return undefined;
