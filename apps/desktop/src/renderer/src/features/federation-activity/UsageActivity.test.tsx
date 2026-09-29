@@ -49,11 +49,14 @@ it("reads on open, skips offline peers, names outdated ones, and analyzes the se
   expect(screen.getByRole("button", { name: "Offline" })).toBeDisabled();
   expect(screen.getByRole("status")).toHaveTextContent("Not included: Old needs a PwrAgent update to share usage · Offline is offline.");
   expect(analyzeUsageActivity).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+  expect(screen.queryByText(/Not included/)).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Inspect Fixture thread" }));
   expect(screen.getByText(/This is a model call of its own, and it uses your limit/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
   await screen.findByText("A bounded diagnosis.");
+  expect(screen.getByRole("button", { name: "Analyze turn again" })).toBeEnabled();
   expect(analyzeUsageActivity).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread", turnId: "turn",
     federationTarget: { scope: "remote", instanceId: "owner" }, model: "gpt-6-luna", entryLimit: 40, characterLimit: 20000 });
 
@@ -62,6 +65,54 @@ it("reads on open, skips offline peers, names outdated ones, and analyzes the se
   await waitFor(() => expect(analyzeUsageActivity).toHaveBeenCalledTimes(2));
   expect(analyzeUsageActivity).toHaveBeenLastCalledWith({ backend: "codex", threadId: "thread",
     federationTarget: { scope: "remote", instanceId: "owner" }, model: "gpt-6-luna", entryLimit: 40, characterLimit: 20000 });
+});
+
+it("keeps the list usable while an analysis runs, and keeps its answer with the turn it read", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const rows = ["first", "second"].map((id, index) => ({ ...usageFixture({ threadId: id, usageLineId: id, turnId: `${id}-turn`,
+    createdAt: now - 3 * HOUR, startedAt: now - 3 * HOUR, completedAt: now - HOUR, totalCostMicros: (2 - index) * 1_000_000 }), title: `${id} thread` }));
+  let fail!: (cause: Error) => void;
+  const analyzeUsageActivity = vi.fn(() => new Promise<never>((_resolve, reject) => { fail = reject; }));
+  const readUsageActivity = vi.fn(async () => ({ rows, readAt: now, rateLimits: [], truncated: false }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, analyzeUsageActivity }} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Inspect first thread" }));
+  fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
+  expect(screen.getByText(/Reading on This instance and asking GPT-6-Luna · 0 s/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Analyzing…" })).toBeDisabled();
+
+  // Other threads stay open to inspection; only a second analysis waits.
+  fireEvent.click(screen.getByRole("button", { name: "Inspect second thread" }));
+  expect(screen.getByText("Another thread's analysis is still running.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Analyze turn" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+
+  await act(async () => { fail(new Error("Error invoking remote method 'usage-activity:analyzeUsageActivity': Error: turn_control permission required")); });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Analyze turn" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Inspect first thread" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("Analysis failedturn_control permission required");
+});
+
+it("warns when the pace reaches the limit before its reset and draws that ahead of now", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  // Four days into the week at 80%: 100% a day from now, two days before the reset.
+  const observation: UsageLimitObservation = { observedAt: now, accountKey: "acct", planType: "plus",
+    limits: [{ name: "Weekly limit", windowKey: "secondary", usedPercent: 80, resetAt: now + 3 * 24 * HOUR, windowMinutes: 10_080 }] };
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false, limitObservation: observation }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  expect(await screen.findByText(/On pace to reach 100% .*, 2 days before the reset/)).toBeInTheDocument();
+  expect(screen.getByText("At this pace")).toBeInTheDocument();
+  expect(screen.getByText("Now")).toBeInTheDocument();
+  // The reset lies past the 40% cap; the 100% crossing a day out is inside it.
+  expect(screen.getByText(/^100% /)).toBeInTheDocument();
+  expect(screen.queryByText(/^Resets /)).not.toBeInTheDocument();
+
+  // A clock window is history only.
+  choosePeriod("7 days");
+  await waitFor(() => expect(screen.queryByText("Now")).not.toBeInTheDocument());
+  expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
 });
 
 it("rereads when the period or instances change, and on focus once the data is stale", async () => {

@@ -89,8 +89,9 @@ them.
   seen and restarts the window from there.
 - Pace is the current percent divided by the hours since the window began.
   With no known start, it is the slope across readings at least 30 minutes
-  apart. The projection states when the limit would reach 100% at that pace,
-  or the percent expected at the next reset.
+  apart. The projection states the percent expected at the next reset, or,
+  as a warning, when the limit would reach 100% and how long before the reset
+  that is.
 - Pay-per-token accounts report an **Individual limit** of credits used out of
   a limit, resetting at month end, plus a **Credits** row. Both are shown as
   reported.
@@ -102,7 +103,12 @@ time, in 24 buckets. The five costliest threads each keep one color across the
 chart, the ranking's swatch and its **When** strip; everything else is
 **Other**. A legend entry opens its thread in the main window, on the instance
 that owns it, as does **Open thread** in the inspector. The focused account's observed limit is drawn over the bars on its
-own percent axis, broken at each reset, and resets are marked. Bars are not
+own percent axis, broken at each reset, and resets are marked. On **Since
+reset** and **5-hour window** the chart continues past **Now** toward the
+reset with the pace as a dashed line, marking 100% where it gets there first.
+The future takes at most 40% of the width, so the bars stay selectable; an
+outcome beyond that edge is labelled at the edge. Clock periods show history
+only. Bars are not
 estimates of spend rate within a bucket. Selecting a bar filters the ranking
 while the totals keep the full window.
 
@@ -110,7 +116,8 @@ Rows carry signals when the ledger observed them: cold replays (a warning at
 three or more), peak context share (noted at 75%, a warning at 90%), fast mode
 and included helpers. Unavailable instances are summed up in one line: peers running a
 PwrAgent from before usage activity, offline peers, and owners that hit the
-row bound. The raw errors sit under **Details**. Search and cost/token/time sorting operate on the loaded
+row bound. The raw errors sit under **Details**. Dismissing the line hides it
+until a different set of instances is missing. Search and cost/token/time sorting operate on the loaded
 snapshot and do not request more data or invoke analysis.
 
 ## Analysis
@@ -126,7 +133,10 @@ Remote analysis requires `turn_control`; transcript-read permission alone
 cannot start this model call. The owner supplies its available Codex model
 choices. Only text and activity descriptions enter the prompt. Images,
 full-history walks, automatic analysis fanout and Codex storage-file reads are
-excluded. The existing ephemeral structured helper disables execution,
+excluded. While it runs, the inspector shows the owner, the model and the
+elapsed time; the thread list stays usable, and only a second analysis waits.
+The answer, or the failure, stays with the thread and turn it read, and the
+inspector scrolls to it when it arrives. The existing ephemeral structured helper disables execution,
 delegation, web search and configured MCP tools. Analysis consumes model usage
 from the owner's limit, reports unavailable transcripts/providers, and does not
 persist its answer.

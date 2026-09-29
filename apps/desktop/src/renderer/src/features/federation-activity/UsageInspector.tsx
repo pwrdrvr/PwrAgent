@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { AnalyzeUsageActivityResponse, BackendModelOption } from "@pwragent/shared";
 import { Select } from "../../components/Select";
 import { usageClock, usageMoney } from "./usage-activity-presentation";
@@ -11,6 +12,24 @@ const cacheShare = (row: OwnedUsageRow) => {
 };
 
 export type AnalysisScope = "turn" | "recent";
+
+/** An analysis request and where it got to. `key` names the thread and turn it read. */
+export type UsageAnalysis = { key: string; startedAt: number; owner: string; modelLabel: string } & (
+  | { status: "running" }
+  | { status: "done"; result: AnalyzeUsageActivityResponse }
+  | { status: "failed"; error: string });
+
+/** Whole seconds since `from`, ticking while `active`. */
+function useElapsed(from: number | undefined, active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active, from]);
+  return from === undefined ? 0 : Math.max(0, Math.round((now - from) / 1_000));
+}
 
 export function UsageInspector(props: {
   group?: UsageGroup;
@@ -31,12 +50,27 @@ export function UsageInspector(props: {
   onEntryLimit: (value: string) => void;
   characterLimit: string;
   onCharacterLimit: (value: string) => void;
-  analysis?: AnalyzeUsageActivityResponse;
+  /** This target's analysis, running or settled. */
+  analysis?: UsageAnalysis;
+  /** Some analysis is running, perhaps for another thread. */
   analyzing: boolean;
   canAnalyze: boolean;
   onAnalyze: () => void;
 }) {
-  const { group, turn, analyzing } = props;
+  const { group, turn, analyzing, analysis } = props;
+  const running = analysis?.status === "running";
+  const elapsed = useElapsed(analysis?.startedAt, running);
+  const resultRef = useRef<HTMLDivElement>(null);
+  // The answer lands below the turn list; bring it into view when it arrives.
+  const settledKey = analysis && !running ? `${analysis.key}@${analysis.startedAt}` : undefined;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const result = resultRef.current, body = bodyRef.current;
+    if (!settledKey || !result || !body) return;
+    // Scroll the inspector alone; the window stays where the operator left it.
+    const offset = result.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    if (offset > body.clientHeight - 40 || offset < 0) body.scrollTo?.({ top: body.scrollTop + offset - 8, behavior: "smooth" });
+  }, [settledKey]);
   const lead = group?.rows[0] ?? props.row!;
   const turns = group ? [...group.rows].sort((a, b) => (b.line.completedAt ?? 0) - (a.line.completedAt ?? 0)) : [];
   const largest = Math.max(1, ...turns.map((row) => priced(row) ? row.line.totalCostMicros : 0));
@@ -45,9 +79,9 @@ export function UsageInspector(props: {
   const models = [{ value: "gpt-6-luna", label: "GPT-6-Luna" },
     ...props.models.filter((item) => item.id !== "gpt-6-luna").map((item) => ({ value: item.id, label: item.label ?? item.id }))];
   return <aside className="usage-inspector" aria-label="Usage inspection">
-    <div className="usage-inspector__body">
+    <div className="usage-inspector__body" ref={bodyRef}>
       <div className="usage-inspector__heading"><span className="usage-eyebrow">{group ? "Thread" : "Excluded interval"}</span>
-        <button type="button" className="usage-icon-button" aria-label="Close thread detail" disabled={analyzing} onClick={props.onClose}>×</button></div>
+        <button type="button" className="usage-icon-button" aria-label="Close thread detail" onClick={props.onClose}>×</button></div>
       <h2>{group?.title ?? lead.title}</h2>
       {props.onOpenThread ? <button type="button" className="usage-link usage-inspector__open" onClick={props.onOpenThread}>Open thread ↗</button> : null}
       <p className="usage-inspector__owner">{lead.owner}{lead.line.model ? ` · ${lead.line.modelLabel ?? lead.line.model}` : ""}</p>
@@ -61,7 +95,7 @@ export function UsageInspector(props: {
           {turns.slice(0, 40).map((row) => {
             const isHelper = group.helperRows.includes(row);
             const signals = turnSignals(row.line, isHelper ? row.title : undefined, row.rollup);
-            return <button type="button" key={row.line.usageLineId} className="usage-turn" aria-pressed={row === turn} disabled={analyzing}
+            return <button type="button" key={row.line.usageLineId} className="usage-turn" aria-pressed={row === turn}
               aria-label={`Turn ${usageClock(row.line.startedAt ?? row.line.createdAt)} to ${usageClock(row.line.completedAt!)}${isHelper ? `, helper ${row.title}` : ""}`}
               onClick={() => props.onTurn(row)}>
               <time>{usageClock(row.line.startedAt ?? row.line.createdAt)}–{usageClock(row.line.completedAt!)}</time>
@@ -90,18 +124,27 @@ export function UsageInspector(props: {
           ? `Reads the turn from ${usageClock(target.line.startedAt ?? target.line.createdAt)} on ${target.owner}. If it is older than the last 50 turns, the recent entries are read instead.`
           : `Reads the thread's most recent entries on ${target.owner}. They may not include the turns in this window.`}
           {" "}This is a model call of its own, and it uses your limit.</p>
-        {props.analysis ? <div className="usage-analysis__result" role="status">
-          <div className="usage-eyebrow">{props.analysis.model}{props.analysis.scope === "turn" ? " · selected turn" : props.analysis.scope === "recent" ? " · recent entries" : ""}</div>
-          <p>Read {props.analysis.entries} entries · {props.analysis.characters.toLocaleString()} characters{props.analysis.truncated ? " · partial" : ""}
-            {turnScope && props.analysis.scope === "recent" ? " · the turn was out of reach" : ""}</p>
-          <pre>{props.analysis.analysis}</pre>
+        {analysis?.status === "done" ? <div className="usage-analysis__result" ref={resultRef} role="status">
+          <div className="usage-eyebrow">{analysis.result.model}{analysis.result.scope === "turn" ? " · selected turn" : analysis.result.scope === "recent" ? " · recent entries" : ""}</div>
+          <p>Read {analysis.result.entries} entries · {analysis.result.characters.toLocaleString()} characters{analysis.result.truncated ? " · partial" : ""}
+            {turnScope && analysis.result.scope === "recent" ? " · the turn was out of reach" : ""}</p>
+          <pre>{analysis.result.analysis.trim() || "The model returned no text."}</pre>
           <p>Model output. Check it against the transcript. Not saved.</p>
+        </div> : null}
+        {analysis?.status === "failed" ? <div className="usage-analysis__result usage-analysis__result--failed" ref={resultRef} role="alert">
+          <div className="usage-eyebrow">Analysis failed</div>
+          <pre>{analysis.error}</pre>
         </div> : null}
       </section>
     </div>
     <div className="usage-inspector__footer">
+      {running ? <p className="usage-inspector__progress" role="status">
+        <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+        Reading on {analysis.owner} and asking {analysis.modelLabel} · {elapsed} s</p>
+        : analyzing ? <p className="usage-inspector__progress">Another thread's analysis is still running.</p> : null}
       <button type="button" className="usage-button usage-button--primary" disabled={analyzing || !props.canAnalyze} onClick={props.onAnalyze}>
-        {analyzing ? "Analyzing…" : turnScope ? "Analyze turn" : "Analyze thread"}</button>
+        {running ? "Analyzing…" : analysis ? (turnScope ? "Analyze turn again" : "Analyze thread again")
+          : turnScope ? "Analyze turn" : "Analyze thread"}</button>
     </div>
   </aside>;
 }

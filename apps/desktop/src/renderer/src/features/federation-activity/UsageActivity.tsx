@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AnalyzeUsageActivityResponse, AppServerBackendKind, BackendModelOption, FederationTarget, ReadUsageActivityResponse } from "@pwragent/shared";
-import { UsageTimeline } from "./UsageTimeline";
+import type { AppServerBackendKind, BackendModelOption, FederationTarget, ReadUsageActivityResponse } from "@pwragent/shared";
+import { UsageTimeline, type UsageChartForecast } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
-import { UsageInspector, type AnalysisScope } from "./UsageInspector";
+import { UsageInspector, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
 import { USAGE_SERIES, usageCompletionBuckets, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
-import { buildLimitAccounts, fiveHourSeries, limitLabel, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
+import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
@@ -59,6 +59,26 @@ function unavailableKind(error: string): "outdated" | "offline" | "failed" {
   return "failed";
 }
 
+/** One analysis per thread and turn; its answer stays with it while the operator looks elsewhere. */
+const analysisKey = (row: OwnedUsageRow, turnId: string | undefined) =>
+  `${sourceId(row.target)}|${row.line.backend}|${row.line.threadId}|${turnId ?? "recent"}`;
+
+/** The current pace carried to the limit's reset, for a window that ends now. */
+function limitForecast(series: LimitSeries | undefined): UsageChartForecast | undefined {
+  const projection = series ? projectLimit(series) : undefined;
+  const resetAt = series?.latest.resetAt;
+  if (!series || !projection || resetAt === undefined) return undefined;
+  const { latest } = series;
+  return { start: { at: latest.at, percent: latest.usedPercent }, resetAt,
+    ...projection.kind === "full"
+      ? { end: { at: projection.at, percent: 100 }, fullAt: projection.at }
+      : { end: { at: projection.resetAt, percent: projection.percent } } };
+}
+
+/** An IPC failure without the "Error invoking remote method …: Error:" wrapping Electron adds. */
+const plainError = (cause: unknown) =>
+  String(cause).replace(/^(?:Error: |Error invoking remote method '[^']*': )+/, "");
+
 function nameList(names: string[]) {
   return names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
 }
@@ -88,8 +108,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [model, setModel] = useState("gpt-6-luna");
   const [entryLimit, setEntryLimit] = useState("40");
   const [characterLimit, setCharacterLimit] = useState("20000");
-  const [analysis, setAnalysis] = useState<AnalyzeUsageActivityResponse>();
-  const [analyzing, setAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<UsageAnalysis>();
+  const [dismissedCoverage, setDismissedCoverage] = useState<string>();
   const mounted = useRef(true);
   const readSeq = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -112,6 +132,9 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
   const inspected = selectedGroup?.rows[0] ?? selectedExcluded;
   const analysisTarget = scope === "turn" && turn?.line.turnId ? turn : inspected;
+  const analysisTurnId = scope === "turn" ? analysisTarget?.line.turnId : undefined;
+  const currentAnalysisKey = analysisTarget ? analysisKey(analysisTarget, analysisTurnId) : undefined;
+  const analyzing = analysis?.status === "running";
   const modelTarget = analysisTarget?.target;
   const modelTargetKey = modelTarget ? sourceId(modelTarget) : undefined;
   useEffect(() => {
@@ -169,7 +192,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const sameQuery = snapshot?.queryKey === queryKey;
     setPending(true); setError(undefined);
     if (!sameQuery) {
-      setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setAnalysis(undefined); setBucket(undefined);
+      setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined);
     }
     let results = await readAll(enabledSources, start, end);
     if (!mounted.current || seq !== readSeq.current) return;
@@ -259,6 +282,9 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   ].filter(Boolean);
   const focus = snapshot ? focusAccount(snapshot.accounts, focusKey, localLabel) : undefined;
   const lineSeries = snapshot?.preset === "five" ? fiveHourSeries(focus) : sinceResetSeries(focus);
+  // Only a window anchored on the limit ends now and belongs beside its reset.
+  const forecast = snapshot?.preset === "reset" || snapshot?.preset === "five" ? limitForecast(lineSeries) : undefined;
+  const coverageKey = coverage.join("|");
   const openThread = (row: OwnedUsageRow) => desktopApi?.openUsageThreadInMainWindow
     ? () => void desktopApi.openUsageThreadInMainWindow!({
       backend: row.line.backend as AppServerBackendKind, threadId: row.line.threadId,
@@ -267,26 +293,29 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     : undefined;
 
   const inspectGroup = (group: UsageGroup) => {
-    setSelectedExcluded(undefined); setSelectedKey(group.key); setAnalysis(undefined); setError(undefined);
+    setSelectedExcluded(undefined); setSelectedKey(group.key); setError(undefined);
     const turns = group.rows.filter((row) => row.line.priceStatus === "priced" && !row.rollup);
     setTurn([...turns.length ? turns : group.rows].sort((a, b) => b.line.totalCostMicros - a.line.totalCostMicros)[0]);
     setScope("turn");
   };
   const inspectExcluded = (row: OwnedUsageRow) => {
-    setSelectedKey(undefined); setSelectedExcluded(row); setTurn(undefined); setScope("recent"); setAnalysis(undefined); setError(undefined);
+    setSelectedKey(undefined); setSelectedExcluded(row); setTurn(undefined); setScope("recent"); setError(undefined);
   };
-  const closeInspector = () => { setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setAnalysis(undefined); };
+  const closeInspector = () => { setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); };
   const runAnalysis = () => {
     const target = analysisTarget;
-    if (!target || !desktopApi?.analyzeUsageActivity || analyzing) return;
-    setAnalyzing(true); setError(undefined); setAnalysis(undefined);
-    const turnId = scope === "turn" ? target.line.turnId : undefined;
+    const key = currentAnalysisKey;
+    if (!target || !key || !desktopApi?.analyzeUsageActivity || analyzing) return;
+    const turnId = analysisTurnId;
+    const started = { key, startedAt: Date.now(), owner: target.owner,
+      modelLabel: models.find((item) => item.id === model)?.label ?? (model === "gpt-6-luna" ? "GPT-6-Luna" : model) };
+    setAnalysis({ ...started, status: "running" });
+    const settle = (next: UsageAnalysis) => { if (mounted.current) setAnalysis(next); };
     void desktopApi.analyzeUsageActivity({ backend: target.line.backend as AppServerBackendKind, threadId: target.line.threadId,
       ...turnId ? { turnId } : {}, federationTarget: target.target, model,
       entryLimit: Number(entryLimit), characterLimit: Number(characterLimit) })
-      .then((result) => { if (mounted.current) setAnalysis(result); })
-      .catch((cause: unknown) => { if (mounted.current) setError(String(cause)); })
-      .finally(() => { if (mounted.current) setAnalyzing(false); });
+      .then((result) => settle({ ...started, status: "done", result }))
+      .catch((cause: unknown) => settle({ ...started, status: "failed", error: plainError(cause) }));
   };
   const toggleSource = (id: string) => setDisabled((current) => {
     const next = new Set(current);
@@ -314,11 +343,13 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         <label className="usage-date">To <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} /></label></> : null}
       <span className="usage-controls__spacer" />
       <span className="usage-controls__asof">{snapshot ? `Read ${usageClock(snapshot.readAt)}` : Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
-      <button type="button" className="usage-button" disabled={pending || analyzing || !desktopApi?.readUsageActivity} onClick={() => void refresh()}>{pending ? "Reading…" : "Refresh"}</button>
+      <button type="button" className="usage-button" disabled={pending || !desktopApi?.readUsageActivity} onClick={() => void refresh()}>{pending ? "Reading…" : "Refresh"}</button>
     </div>
     {error ? <p role="alert" className="usage-error">{error}</p> : null}
-    {coverage.length ? <div className="usage-coverage" role="status"><span className="usage-status-dot is-partial" aria-hidden="true" />
+    {coverage.length && coverageKey !== dismissedCoverage ? <div className="usage-coverage" role="status"><span className="usage-status-dot is-partial" aria-hidden="true" />
       <span className="usage-coverage__text">Not included: {coverage.join(" · ")}.</span>
+      <button type="button" className="usage-icon-button usage-coverage__dismiss" aria-label="Dismiss notice"
+        title="Hide until a different set of instances is missing" onClick={() => setDismissedCoverage(coverageKey)}>×</button>
       {failures.length ? <details className="usage-coverage__details"><summary>Details</summary>
         <ul>{failures.map((source) => <li key={sourceId(source.target)}><strong>{source.label}</strong> {source.error}</li>)}</ul></details> : null}
     </div> : null}
@@ -328,7 +359,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
         series={summary.groups.slice(0, USAGE_SERIES).map((group) => ({ title: group.title, cost: money(group.cost), onOpen: openThread(group.rows[0]) }))}
-        limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined} /> : null}
+        limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined}
+        forecast={forecast} /> : null}
       <div className={`usage-results${inspected ? " has-inspector" : ""}`}>
         <section className="usage-results__main" aria-label="Usage results">
           <div className="usage-results__toolbar">
@@ -353,7 +385,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
               const signals = groupSignals(group);
               const modelNames = [...new Set(group.rows.filter((item) => !group.helperRows.includes(item) && !item.rollup)
                 .map((item) => item.line.modelLabel ?? item.line.model ?? "Unknown model"))].join(", ");
-              return <button type="button" key={group.key} className={`usage-thread usage-thread--series-${series ?? "other"}`} disabled={analyzing}
+              return <button type="button" key={group.key} className={`usage-thread usage-thread--series-${series ?? "other"}`}
                 aria-label={`Inspect ${group.title}`} aria-pressed={selectedGroup?.key === group.key} onClick={() => inspectGroup(group)}>
                 <span className="usage-thread__identity"><i className={`usage-thread__swatch usage-series--${series ?? "other"}`} aria-hidden="true" />
                   <span><strong>{group.title}</strong><small>{row.owner}{modelNames ? ` · ${modelNames}` : ""}{group.helperThreads ? ` · ${group.helperThreads} ${group.helperThreads === 1 ? "helper" : "helpers"}, ${money(group.helperCost)} included` : ""}</small></span></span>
@@ -363,7 +395,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
                 <span className="usage-thread__tokens">{compact(group.uncached + group.cached)}<small>{Math.round(group.cached / Math.max(1, group.uncached + group.cached) * 100)}% cached</small></span>
                 <span className="usage-thread__cost"><strong>{money(group.cost)}</strong><small>{group.unpriced ? `${group.unpriced} unpriced` : `${total ? Math.round(group.cost / total * 100) : 0}%`}</small></span>
               </button>;
-            }) : excluded.slice(0, 250).map((row) => <button type="button" className="usage-thread usage-thread--excluded" key={`${row.line.backend}:${row.line.usageLineId}`} disabled={analyzing}
+            }) : excluded.slice(0, 250).map((row) => <button type="button" className="usage-thread usage-thread--excluded" key={`${row.line.backend}:${row.line.usageLineId}`}
               aria-label={`Inspect ${row.title}`} aria-pressed={selectedExcluded === row} onClick={() => inspectExcluded(row)}>
               <span className="usage-thread__identity"><span><strong>{row.title}</strong><small>{row.owner} · started {time(row.line.startedAt ?? row.line.createdAt)}</small></span></span>
               <span className="usage-thread__reason">{usageNotCountedReason(row, snapshot.from, snapshot.to)}</span>
@@ -378,12 +410,12 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
               : <span>USD list-price estimate</span>}</div>
         </section>
         {inspected ? <UsageInspector group={selectedGroup} row={selectedExcluded} total={total} turn={turn}
-          onTurn={(row) => { setTurn(row); setScope("turn"); setAnalysis(undefined); }} onClose={closeInspector}
+          onTurn={(row) => { setTurn(row); setScope("turn"); }} onClose={closeInspector}
           onOpenThread={openThread(inspected)}
-          scope={scope} onScope={(next) => { setScope(next); setAnalysis(undefined); }}
+          scope={scope} onScope={setScope}
           models={models} model={model} onModel={setModel}
           entryLimit={entryLimit} onEntryLimit={setEntryLimit} characterLimit={characterLimit} onCharacterLimit={setCharacterLimit}
-          analysis={analysis} analyzing={analyzing} canAnalyze={Boolean(desktopApi?.analyzeUsageActivity)} onAnalyze={runAnalysis} /> : null}
+          analysis={analysis?.key === currentAnalysisKey ? analysis : undefined} analyzing={analyzing} canAnalyze={Boolean(desktopApi?.analyzeUsageActivity)} onAnalyze={runAnalysis} /> : null}
       </div>
     </> : <div className="usage-empty usage-empty--initial" role="status">{pending || !peersReady
       ? <><span className="usage-eyebrow">Reading usage</span><p>Collecting limits and spend from your instances…</p></>
