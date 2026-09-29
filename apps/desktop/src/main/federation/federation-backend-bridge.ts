@@ -2047,6 +2047,9 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<ArchiveThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.archiveThread,
       params: request,
+      // The owner gathers active and archived thread inventories before
+      // archiving, then performs worktree and messaging cleanup.
+      timeoutMs: 120_000,
     });
   }
 

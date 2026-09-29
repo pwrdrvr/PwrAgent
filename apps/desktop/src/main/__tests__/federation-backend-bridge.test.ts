@@ -2627,6 +2627,7 @@ describe("federation backend bridge", () => {
       kind: "request",
       method: FEDERATION_BACKEND_METHODS.archiveThread,
       params: { backend: "codex", threadId: "thread-1" },
+      deadlineAt: 121_000,
     });
     rpc.receiveEnvelope({
       id: "response-2",
