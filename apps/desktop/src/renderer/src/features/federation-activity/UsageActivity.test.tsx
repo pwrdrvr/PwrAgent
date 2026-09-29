@@ -159,7 +159,9 @@ it("filters and ranks threads without rereading or launching analysis", async ()
   expect(screen.queryByRole("button", { name: "Inspect Fixture thread" })).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Find a thread"), { target: { value: "" } });
   const plot = screen.getByRole("group", { name: "Filter threads by completion time" });
-  fireEvent.click(within(plot).getAllByRole("button")[8]);
+  // Three hours draw as quarter-hour bars on the clock.
+  expect(within(plot).getAllByRole("button")).toHaveLength(12);
+  fireEvent.click(within(plot).getByRole("button", { name: /^10\sAM–10:15\sAM:/ }));
   expect(screen.queryByRole("button", { name: "Inspect Later thread" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /Clear time filter/ }));

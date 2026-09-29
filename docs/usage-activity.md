@@ -57,8 +57,10 @@ them.
 - Background helpers (Token Miser, title generation) write one monitor line
   per run: thousands a week, each worth a fraction of a cent. The owner sums
   the ones contained in the window into one line per parent thread, helper
-  kind, model and chart bucket, so they count toward the thread they worked
-  for and cannot spend the row bound. The line id is derived from the window,
+  kind, model and rollup step, so they count toward the thread they worked
+  for and cannot spend the row bound. The rollup step is the chart's bar
+  width capped at an hour, on epoch boundaries, so a rollup never straddles a
+  bar in any whole-hour time zone. The line id is derived from the window,
   so two owners sharing one ledger return the same rollup and it counts once.
 - Each owner reads its own PwrAgent SQLite ledger. The read returns at most
   5,000 recent candidate rows for windows up to 31 days. Four owner reads may
@@ -99,7 +101,11 @@ them.
 ## Chart and ranking
 
 The chart stacks each completed turn's API-equivalent cost at its completion
-time, in 24 buckets. The five costliest threads each keep one color across the
+time. Bars are clock steps (15 or 30 minutes, 1, 2, 3, 6 or 12 hours, or a
+day), the finest that keeps the window within 40 bars, starting on local
+quarter hours, hours or midnight; only the first and last bar can be partial,
+and a bar's width is its span. The readout and time filter name a bar by its
+hours ("3 PM–4 PM"), with the day when it is not today. The five costliest threads each keep one color across the
 chart, the ranking's swatch and its **When** strip; everything else is
 **Other**. A legend entry opens its thread in the main window, on the instance
 that owns it, as does **Open thread** in the inspector. The focused account's observed limit is drawn over the bars on its

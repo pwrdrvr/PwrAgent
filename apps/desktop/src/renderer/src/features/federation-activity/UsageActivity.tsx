@@ -4,7 +4,7 @@ import { UsageTimeline, type UsageChartForecast } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
-import { USAGE_SERIES, usageCompletionBuckets, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
+import { USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -372,7 +372,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
               { value: "cost", label: "Highest cost" }, { value: "tokens", label: "Most tokens" }, { value: "recent", label: "Latest completion" },
             ]} /></label> : null}
           </div>
-          {selectedInterval && lens === "threads" ? <div className="usage-filter-note">Completed {usageClock(selectedInterval.from)}–{usageClock(selectedInterval.to)}<button type="button" onClick={() => setBucket(undefined)}>Clear time filter ×</button></div> : null}
+          {selectedInterval && lens === "threads" ? <div className="usage-filter-note">Completed {usageBucketLabel(selectedInterval, snapshot.to)}<button type="button" onClick={() => setBucket(undefined)}>Clear time filter ×</button></div> : null}
           {lens === "excluded" ? <p className="usage-list-note">Only work that both started and finished in this period counts toward the total.
             These did not, or were never tied to a turn. Their prices are shown for context and are not part of any total above.</p> : null}
           {lens === "threads" ? <div className="usage-list-head"><span>Thread / instance</span><span>When</span><span>Signals</span><span>Input · cached</span><span>API-eq.</span></div> : null}

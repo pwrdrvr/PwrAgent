@@ -1,4 +1,4 @@
-import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
@@ -8740,12 +8740,10 @@ function toThreadToolInvocationAlertRowParams(
   };
 }
 
-/** Chart resolution the Usage Activity view draws at; rollups never span a bar. */
-const USAGE_ROLLUP_BUCKETS = 24;
-
 /**
  * Sum background-helper monitor lines contained in a window into one line per
- * parent thread, helper kind, model, price status and chart bucket. The parent
+ * parent thread, helper kind, model, price status and rollup step (see
+ * `usageRollupStep`), so no rollup straddles a chart bar. The parent
  * is the thread the helper worked for, so the rollup is that thread's spend.
  * The line id is derived from the window, so two owners sharing one ledger
  * produce the same rollup and the viewer counts it once.
@@ -8754,14 +8752,14 @@ function rollUpBackgroundHelperRows(
   rows: Array<ThreadUsageLineRow & { activity_started_at: number | null; activity_completed_at: number | null }>,
   window: { from: number; to: number },
 ): Array<{ line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }> {
-  const width = (window.to - window.from) / USAGE_ROLLUP_BUCKETS;
+  const step = usageRollupStep(window.from, window.to);
   const groups = new Map<string, { line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }>();
   for (const row of rows) {
     const started = row.activity_started_at ?? row.created_at;
     const completed = row.activity_completed_at ?? row.created_at;
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
-    const bucket = Math.min(USAGE_ROLLUP_BUCKETS - 1, Math.floor((completed - window.from) / width));
+    const bucket = Math.floor(completed / step) * step;
     const usageLineId = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
       row.price_status, row.currency, window.from, window.to, bucket].join(":");
     const line = threadUsageLineFromRow(row);

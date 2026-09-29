@@ -38417,7 +38417,8 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__axis-y--right { text-align: left; }
 .usage-timeline__plot { position: relative; height: 110px; border-bottom: 1px solid var(--border-subtle); }
 .usage-timeline__bars { display: flex; align-items: flex-end; gap: 3px; height: 100%; }
-.usage-timeline__bar { display: flex; align-items: flex-end; flex: 1; height: 100%; min-width: 0; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; }
+/* Each bar's flex-grow is its span, so a partial first or last bar is narrower. */
+.usage-timeline__bar { display: flex; align-items: flex-end; flex: 1 1 0; height: 100%; min-width: 0; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; }
 .usage-timeline__bar:hover { background: var(--bg-panel-hover); }
 .usage-timeline__bar.is-selected { border-bottom-color: var(--text-primary); background: var(--bg-row-active); }
 .usage-timeline__stack { display: flex; flex-direction: column-reverse; width: 100%; min-height: 0; opacity: 0.85; }
@@ -38440,8 +38441,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__axis { padding: 5px 44px 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
 .usage-timeline__ticks { position: relative; height: 12px; }
 .usage-timeline__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
-.usage-timeline__ticks span:first-child { transform: none; }
-.usage-timeline__ticks span:last-child { transform: translateX(-100%); }
+.usage-timeline__ticks span.is-end { transform: translateX(-100%); }
 .usage-timeline__legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--text-secondary); font-size: 10px; }
 .usage-timeline__legend-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 300px; padding: 1px 3px; margin-left: -3px; border: 0; border-radius: 3px; background: transparent; color: inherit; font-size: 10px; white-space: nowrap; }
 .usage-timeline__legend-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { usageClock, usageMoney, type UsageBucket } from "./usage-activity-presentation";
+import { usageBucketLabel, usageMoney, type UsageBucket } from "./usage-activity-presentation";
 import type { LimitPoint, LimitReset } from "./usage-limits";
 
 export type UsageChartLimit = { label: string; points: LimitPoint[]; resets: LimitReset[] };
@@ -17,6 +17,35 @@ export type UsageChartForecast = {
   /** When the limit reaches 100% before the reset. */
   fullAt?: number;
 };
+
+const HOUR = 3_600_000;
+
+/**
+ * Axis labels on clock boundaries between `from` and `end`: midnights for a
+ * window of days, every 1–12 hours otherwise, at most about seven.
+ */
+function clockTicks(from: number, end: number): Array<{ at: number; text: string }> {
+  const span = end - from;
+  const ticks: Array<{ at: number; text: string }> = [];
+  const cursor = new Date(from);
+  if (span > 36 * HOUR) {
+    const every = Math.max(1, Math.ceil(span / (24 * HOUR) / 7));
+    cursor.setHours(0, 0, 0, 0);
+    for (cursor.setDate(cursor.getDate() + 1); cursor.getTime() < end; cursor.setDate(cursor.getDate() + every)) {
+      ticks.push({ at: cursor.getTime(), text: cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" }) });
+    }
+    return ticks;
+  }
+  const every = [1, 2, 3, 6, 12].find((hours) => span / (hours * HOUR) <= 7) ?? 12;
+  cursor.setMinutes(0, 0, 0);
+  cursor.setHours(Math.ceil((cursor.getHours() + (cursor.getTime() < from ? 1 : 0)) / every) * every);
+  for (; cursor.getTime() < end; cursor.setHours(cursor.getHours() + every)) {
+    ticks.push({ at: cursor.getTime(), text: cursor.getHours() === 0
+      ? cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : cursor.toLocaleTimeString(undefined, { hour: "numeric" }) });
+  }
+  return ticks;
+}
 
 /**
  * Split observed readings at resets so the line never draws a fall that was
@@ -45,10 +74,8 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
   const to = buckets.at(-1)!.to;
   const max = Math.max(1, ...buckets.map((bucket) => bucket.cost));
   const active = buckets[hovered ?? selected ?? -1];
-  const label = (at: number) => to - from > 86_400_000
-    ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : usageClock(at);
-  const moment = (at: number) => new Date(at).toDateString() === new Date(to).toDateString()
-    ? usageClock(at) : new Date(at).toLocaleString(undefined, { weekday: "short", hour: "numeric" });
+  const moment = (at: number) => new Date(at).toLocaleString(undefined,
+    new Date(at).toDateString() === new Date(to).toDateString() ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric" });
   const segments = limit ? limitSegments(limit, from, to) : [];
   const ahead = forecast && forecast.resetAt > to ? forecast : undefined;
   // The future takes at most 40% of the width, so the bars stay wide enough
@@ -63,9 +90,14 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
   const x = (at: number) => (at - from) / (end - from) * 100;
   const y = (value: number) => 100 - value / scale * 100;
   const resets = limit?.resets.filter((reset) => reset.at >= from && reset.at <= to) ?? [];
-  const ticks = ahead
-    ? [{ at: from, text: label(from) }, { at: to, text: "Now" }, { at: end, text: end === ahead.resetAt ? `Resets ${label(end)}` : label(end) }]
-    : [{ at: from, text: label(from) }, { at: buckets[12].from, text: label(buckets[12].from) }, { at: to, text: label(to) }];
+  // Clock ticks, clear of Now and the reset so their labels never collide.
+  const near = (a: number, b: number) => Math.abs(x(a) - x(b)) < 7;
+  const ticks = [
+    ...clockTicks(from, end).filter((tick) => !near(tick.at, from) && !(ahead && (near(tick.at, to) || near(tick.at, end))) && !near(tick.at, end))
+      .map((tick) => ({ ...tick, edge: false })),
+    ...ahead ? [{ at: to, text: "Now", edge: false }] : [],
+    ...ahead && end === ahead.resetAt ? [{ at: end, text: `Resets ${moment(end)}`, edge: true }] : [],
+  ];
   return <figure className="usage-timeline">
     <figcaption className="usage-timeline__head">
       <span className="usage-eyebrow">Spend by thread</span>
@@ -80,8 +112,8 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
         <div className="usage-timeline__bars" role="group" aria-label="Filter threads by completion time"
           style={ahead ? { width: `${x(to)}%` } : undefined}>
           {buckets.map((bucket, index) => <button key={index} type="button" aria-pressed={selected === index}
-            aria-label={`${new Date(bucket.from).toLocaleString()} to ${new Date(bucket.to).toLocaleString()}: ${usageMoney(bucket.cost)}, ${bucket.rows} completed turns`}
-            className={`usage-timeline__bar${selected === index ? " is-selected" : ""}`}
+            aria-label={`${usageBucketLabel(bucket, to)}: ${usageMoney(bucket.cost)}, ${bucket.rows} completed turns`}
+            className={`usage-timeline__bar${selected === index ? " is-selected" : ""}`} style={{ flexGrow: bucket.to - bucket.from }}
             onMouseEnter={() => setHovered(index)} onMouseLeave={() => setHovered(undefined)}
             onFocus={() => setHovered(index)} onBlur={() => setHovered(undefined)}
             onClick={() => onSelect(selected === index ? undefined : index)}>
@@ -111,7 +143,7 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
         {segments.length ? <><span>{scale}%</span><span>0%</span></> : null}</div>
     </div>
     <div className="usage-timeline__axis"><div className="usage-timeline__ticks">
-      {ticks.map((tick) => <span key={tick.at} style={{ left: `${x(tick.at)}%` }}>{tick.text}</span>)}</div></div>
+      {ticks.map((tick) => <span key={tick.at} className={tick.edge ? "is-end" : undefined} style={{ left: `${x(tick.at)}%` }}>{tick.text}</span>)}</div></div>
     <div className="usage-timeline__legend">
       {series.map((item, index) => item.onOpen
         ? <button type="button" key={index} className="usage-timeline__legend-item" title={`Open ${item.title}`}
@@ -120,7 +152,7 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
       {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other threads</span> : null}
     </div>
     <p className="usage-timeline__readout">{active
-      ? `${usageMoney(active.cost)} · ${active.rows} completed turns · ${usageClock(active.from)}–${usageClock(active.to)}`
+      ? `${usageBucketLabel(active, to)} · ${usageMoney(active.cost)} · ${active.rows} completed ${active.rows === 1 ? "turn" : "turns"}`
       : "Select a bar to list the threads that completed turns in it"}</p>
   </figure>;
 }
