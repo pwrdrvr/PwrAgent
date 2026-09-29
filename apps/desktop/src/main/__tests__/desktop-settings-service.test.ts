@@ -1546,6 +1546,166 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  describe("PwrAgent Codex build setting", () => {
+    function managedRuntime() {
+      return {
+        appServerCommand: "/managed/codex-app-server",
+        codeModeHostCommand: "/managed/codex-code-mode-host",
+        command: "/managed/codex",
+        metadata: {
+          asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+          checkedAt: 1,
+          installedAt: 1,
+          repository: "pwrdrvr/codex",
+          schemaVersion: 1,
+          sha256: "a".repeat(64),
+          tag: "pwragent-v0.200.0-pwragent.1",
+          version: "0.200.0-pwragent.1",
+        },
+      };
+    }
+
+    function buildService(configPath: string, ensureManaged = vi.fn(async () => managedRuntime())) {
+      const service = new DesktopSettingsService({
+        codexDiscoveryCoordinator: {
+          discover: vi.fn(async () => ({ candidates: [] })),
+          invalidate: vi.fn(),
+          resolve: vi.fn(async () => ({
+            command: "/path/codex",
+            source: "path" as const,
+            version: "0.999.0",
+          })),
+        },
+        configPath,
+        ensureManagedCodexRuntime: ensureManaged,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      return { ensureManaged, service };
+    }
+
+    it("downloads and selects the build without Token Miser", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      const { ensureManaged, service } = buildService(configPath);
+
+      await service.writeConfigPatchTargeted(
+        { models: { codex: { managedBuilds: true } } },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+
+      expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+        command: "/managed/codex",
+      });
+      const codex = (await service.readSettingsProjection()).models.codex;
+      expect(codex.managedBuilds?.value).toBe(true);
+      // Token Miser is off, so nothing but the operator's choice holds it.
+      expect(codex.managedBuildsRequiredBy).toBeUndefined();
+      expect(service.resolveTokenMiserEnabled()).toBe(false);
+      expect(fs.readFileSync(configPath, "utf8")).toContain("managed_builds = true");
+    });
+
+    it("checks for the build on a later launch only while it is wanted", async () => {
+      const root = createTempRoot();
+      const configPath = path.join(root, "config.toml");
+      const first = buildService(configPath);
+      await first.service.refreshCodexDiscovery(
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      // Not wanted, so discovery never reaches for a download.
+      expect(first.ensureManaged).not.toHaveBeenCalled();
+
+      fs.writeFileSync(configPath, "[models.codex]\nmanaged_builds = true\n");
+      const second = buildService(configPath);
+      await second.service.refreshCodexDiscovery(
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect(second.ensureManaged).toHaveBeenCalledOnce();
+      await expect(second.service.resolveCodexCommand()).resolves.toMatchObject({
+        command: "/managed/codex",
+      });
+    });
+
+    it("leaves the setting off when the first install fails", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      const { service } = buildService(
+        configPath,
+        vi.fn(async () => {
+          throw new Error("offline");
+        }),
+      );
+
+      await expect(service.writeConfigPatchTargeted(
+        { models: { codex: { managedBuilds: true } } },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      )).rejects.toThrow("offline");
+
+      expect(
+        (await service.readSettingsProjection()).models.codex.managedBuilds?.value,
+      ).toBe(false);
+    });
+
+    it("is required while Token Miser is on, and hands Codex back when both are off", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      const { ensureManaged, service } = buildService(configPath);
+      const permit = issueProviderDiscoveryPermit("settings-user-action");
+
+      await service.writeConfigPatchTargeted(
+        { experimental: { tokenMiserEnabled: true } },
+        permit,
+      );
+      expect(
+        (await service.readSettingsProjection()).models.codex.managedBuildsRequiredBy,
+      ).toBe("token-miser");
+      ensureManaged.mockClear();
+
+      // The saved choice can still be written; it just cannot take the build
+      // away from a feature that needs it.
+      await service.writeConfigPatchTargeted(
+        { models: { codex: { managedBuilds: false } } },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect(service.resolveManagedCodexEnabled()).toBe(true);
+      expect(ensureManaged).not.toHaveBeenCalled();
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+        command: "/managed/codex",
+      });
+
+      await service.writeConfigPatchTargeted(
+        { experimental: { tokenMiserEnabled: false } },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect(service.resolveManagedCodexEnabled()).toBe(false);
+      expect(
+        (await service.readSettingsProjection()).models.codex.managedBuildsRequiredBy,
+      ).toBeUndefined();
+    });
+
+    it("keeps the build when Token Miser goes off but the operator asked for it", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      const { service } = buildService(configPath);
+      const permit = () => issueProviderDiscoveryPermit("settings-user-action");
+
+      await service.writeConfigPatchTargeted(
+        { models: { codex: { managedBuilds: true } } },
+        permit(),
+      );
+      await service.writeConfigPatchTargeted(
+        { experimental: { tokenMiserEnabled: true } },
+        permit(),
+      );
+      await service.writeConfigPatchTargeted(
+        { experimental: { tokenMiserEnabled: false } },
+        permit(),
+      );
+
+      expect(service.resolveManagedCodexEnabled()).toBe(true);
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+        command: "/managed/codex",
+      });
+    });
+  });
+
   it("leaves Token Miser off when the first managed Codex install fails", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

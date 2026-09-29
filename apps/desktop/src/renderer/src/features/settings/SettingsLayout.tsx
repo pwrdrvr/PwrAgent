@@ -799,9 +799,17 @@ export function ToggleField(props: {
   actions?: ReactNode;
   /** Overrides the pending indicator's "Saving…" wording. */
   pendingLabel?: string;
+  /** Holds the switch where it is and says why, printed under it. Not
+   *  `disabled`: a disabled control takes no focus, so its reason would be
+   *  unreachable from the keyboard. */
+  lockedReason?: ReactNode;
+  /** A way to the thing holding the lock, beside the reason. */
+  lockedAction?: ReactNode;
   onChange: (value: boolean) => Promise<unknown>;
 }) {
   const { pending, track } = useSettingsFieldPending();
+  const lockReasonId = useId();
+  const locked = props.lockedReason !== undefined;
 
   return (
     <SettingsField
@@ -809,13 +817,30 @@ export function ToggleField(props: {
       sub={props.sub}
       help={props.help}
       source={props.source}
-      actions={props.actions}
+      actions={
+        locked || props.actions ? (
+          <>
+            {locked ? (
+              <p className="settings-lock" id={lockReasonId}>
+                <span aria-hidden="true" className="settings-lock__mark">
+                  Locked
+                </span>
+                <span>{props.lockedReason}</span>
+              </p>
+            ) : null}
+            {locked ? props.lockedAction : null}
+            {props.actions}
+          </>
+        ) : undefined
+      }
       pending={pending}
       pendingLabel={props.pendingLabel}
       control={
         <SettingsSwitch
           checked={props.checked}
+          describedBy={locked ? lockReasonId : undefined}
           disabled={props.disabled}
+          locked={locked}
           label={
             props.switchQualifier
               ? `${props.label} — ${props.switchQualifier}`

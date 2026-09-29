@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   AcpAgentSettingsEntry,
   AcpManagedBuildStatus,
@@ -15,6 +15,10 @@ import {
   SettingsSection,
   ToggleField,
 } from "./SettingsLayout";
+import {
+  ManagedRuntimeProgressStrip,
+  useManagedRuntimeProgress,
+} from "./ManagedRuntimeProgress";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
@@ -178,6 +182,7 @@ export function AcpAgentsSettings(props: {
           ) : null}
           <AcpAgentSection
             entry={entry}
+            desktopApi={props.desktopApi}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             enabled={acpAgentEnabledInSnapshot(props.snapshot, entry.registryId)}
             managedGrokBuilds={managedGrokBuildsSnapshot(props.snapshot)}
@@ -324,6 +329,7 @@ function LegacyKimiCompatibilityCard(props: {
 function AcpAgentSection(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
+  desktopApi?: DesktopApi;
   enabled: boolean;
   managedGrokBuilds: boolean;
   /** Track the config holds, which the control follows. */
@@ -473,26 +479,32 @@ function AcpAgentSection(props: {
             sub="PwrAgent downloads, verifies and installs Grok builds from pwrdrvr/grok-build. New threads use the newest verified build. Packaged macOS and Windows apps require platform signing; manual paths still win."
             actions={
               props.managedGrokBuilds && entry.managedBuild ? (
-                <ManagedBuildStatus
-                  managedBuild={entry.managedBuild}
-                  // Deliberately not `pathControlsDisabled`: that folds in
-                  // `envForced`, which says the CLI *path* comes from the
-                  // environment. A release check has nothing to do with which
-                  // path is in effect, so an env override must not disable it.
-                  busy={props.saving === true || pathUpdating}
-                  refreshing={props.refreshing === true}
-                  onCheckForUpdates={() => void refreshPathStatus()}
-                  onUseNewestBuild={
-                    // Clearing the config override cannot dislodge an
-                    // environment one, so the button is absent rather than
-                    // disabled when it could not do what it says.
-                    props.onCliPathChange && !envForced
-                      ? () => {
-                          void commitPath("");
-                        }
-                      : undefined
-                  }
-                />
+                <ManagedGrokBuildProgress
+                  desktopApi={props.desktopApi}
+                  onInstalled={() => void props.onRefresh()}
+                  onRetry={() => void refreshPathStatus()}
+                >
+                  <ManagedBuildStatus
+                    managedBuild={entry.managedBuild}
+                    // Deliberately not `pathControlsDisabled`: that folds in
+                    // `envForced`, which says the CLI *path* comes from the
+                    // environment. A release check has nothing to do with which
+                    // path is in effect, so an env override must not disable it.
+                    busy={props.saving === true || pathUpdating}
+                    refreshing={props.refreshing === true}
+                    onCheckForUpdates={() => void refreshPathStatus()}
+                    onUseNewestBuild={
+                      // Clearing the config override cannot dislodge an
+                      // environment one, so the button is absent rather than
+                      // disabled when it could not do what it says.
+                      props.onCliPathChange && !envForced
+                        ? () => {
+                            void commitPath("");
+                          }
+                        : undefined
+                    }
+                  />
+                </ManagedGrokBuildProgress>
               ) : null
             }
             onChange={(next) => {
@@ -775,6 +787,35 @@ function managedBuildTrackVersion(
  * one state that needs a person is a manual path pinning an older build, which
  * never resolves on its own.
  */
+/**
+ * While a managed Grok download runs, its progress strip stands in for the
+ * status line and its buttons, so two readouts never fight. The status line
+ * comes back once the strip settles.
+ */
+function ManagedGrokBuildProgress(props: {
+  children: ReactNode;
+  desktopApi?: DesktopApi;
+  onInstalled: () => void;
+  onRetry: () => void;
+}) {
+  const progress = useManagedRuntimeProgress(props.desktopApi, "grok");
+  const installedAt = progress?.phase === "ready" ? progress.updatedAt : undefined;
+  // Read through a ref: the caller's callback is a fresh closure every render,
+  // and an effect keyed on it would refresh, re-render, and refresh again.
+  const onInstalledRef = useRef(props.onInstalled);
+  onInstalledRef.current = props.onInstalled;
+  useEffect(() => {
+    // A background check finished an install; the snapshot behind the status
+    // line still names the old build.
+    if (installedAt !== undefined) onInstalledRef.current();
+  }, [installedAt]);
+  return progress ? (
+    <ManagedRuntimeProgressStrip progress={progress} onRetry={props.onRetry} />
+  ) : (
+    <>{props.children}</>
+  );
+}
+
 function ManagedBuildStatus(props: {
   busy: boolean;
   managedBuild: AcpManagedBuildStatus;

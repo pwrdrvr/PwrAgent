@@ -23,6 +23,7 @@ import {
   SettingsPendingIndicator,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
   useSettingsFieldPending,
 } from "./SettingsLayout";
 import {
@@ -36,6 +37,10 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
+import {
+  ManagedRuntimeProgressStrip,
+  useManagedRuntimeProgress,
+} from "./ManagedRuntimeProgress";
 import {
   ProviderCatalogRefreshControl,
   useProviderCatalogRefresh,
@@ -123,6 +128,10 @@ export function ModelsSettings(props: {
     migrations: Record<string, DesktopProviderThreadModelMigration>,
   ) => Promise<boolean>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
+  /** Persist whether PwrAgent downloads and prefers its own Codex build. */
+  onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  /** Jump to Experimental, where Token Miser is switched. */
+  onOpenTokenMiser?: () => void;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
   onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<boolean>;
   /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
@@ -143,6 +152,23 @@ export function ModelsSettings(props: {
   const catalogBusy = refreshingCatalog || catalogRefresh.running;
   const codex = props.snapshot.models.codex;
   const envForced = codex.path.source === "env";
+  const managedCodexProgress = useManagedRuntimeProgress(props.desktopApi, "codex");
+  const managedCodexRuntime = props.snapshot.runtime.tokenMiser?.managedCodex;
+  const managedCodexRequiredBy = codex.managedBuildsRequiredBy;
+  const managedCodexOn =
+    managedCodexRequiredBy !== undefined
+    || (codex.managedBuilds?.value ?? false);
+  const managedCodexInstalledAt =
+    managedCodexProgress?.phase === "ready"
+      ? managedCodexProgress.updatedAt
+      : undefined;
+  const onRefreshRef = useRef(props.onRefresh);
+  onRefreshRef.current = props.onRefresh;
+  useEffect(() => {
+    // A background check finished an install; the snapshot still names the
+    // old build. Keyed on the event, not the callback, so it cannot loop.
+    if (managedCodexInstalledAt !== undefined) void onRefreshRef.current();
+  }, [managedCodexInstalledAt]);
   // Automatic sources, plus any fixed candidate that failed. An operator who
   // pins a path needs to see why it was rejected — filtering config/env rows
   // out unconditionally hid the failure reason from the only person who could
@@ -254,6 +280,65 @@ export function ModelsSettings(props: {
   const codexSection = (
       <SettingsSection eyebrow="Models" title="Codex">
         <div className="settings-fields">
+          {props.onManagedCodexBuildsChange ? (
+            <ToggleField
+              checked={managedCodexOn}
+              disabled={props.saving || catalogBusy}
+              label="PwrAgent build"
+              switchQualifier="Codex"
+              // The write holds until the verified download finishes, so
+              // "Saving…" alone would name only the shortest part of the wait.
+              pendingLabel="Downloading and installing…"
+              source={managedCodexOn ? "pwrdrvr/codex" : undefined}
+              sub="PwrAgent downloads, verifies and installs its own Codex build from pwrdrvr/codex and uses it for new threads."
+              lockedReason={
+                managedCodexRequiredBy === "token-miser" ? (
+                  <>
+                    <strong>Can't be turned off while Token Miser is on.</strong>{" "}
+                    Token Miser only works on PwrAgent's Codex build. Turn
+                    Token Miser off to change this.
+                  </>
+                ) : undefined
+              }
+              lockedAction={
+                managedCodexRequiredBy === "token-miser"
+                && props.onOpenTokenMiser ? (
+                  <div className="settings-inline-actions">
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      onClick={props.onOpenTokenMiser}
+                    >
+                      Open Token Miser
+                    </button>
+                  </div>
+                ) : undefined
+              }
+              actions={
+                managedCodexProgress ? (
+                  <ManagedRuntimeProgressStrip
+                    progress={managedCodexProgress}
+                    waitingForIdle={managedCodexRuntime?.state === "pending-switch"}
+                    onRetry={() => void refreshCatalog("codex")}
+                  />
+                ) : managedCodexOn ? (
+                  <ManagedCodexStatus
+                    busy={props.saving === true || catalogBusy}
+                    refreshing={refreshingCatalog}
+                    runtime={managedCodexRuntime}
+                    onCheckForUpdates={() => void refreshCatalog("codex")}
+                  />
+                ) : null
+              }
+              onChange={(next) => {
+                return props.onManagedCodexBuildsChange?.(next).then((saved) => {
+                  if (saved) {
+                    return props.onRefresh();
+                  }
+                }) ?? Promise.resolve();
+              }}
+            />
+          ) : null}
           <SettingsField
             label="Codex path"
             sub="Absolute path to the Codex binary. Leave blank to use auto discovery."
@@ -1669,5 +1754,62 @@ function CodexCandidateRow(props: {
       disabled={props.disabled || !usable}
       onUse={usable ? () => props.onUse(candidate.command) : undefined}
     />
+  );
+}
+
+/**
+ * Where PwrAgent's own Codex build stands once nothing is downloading. Shaped
+ * like the Grok build status beside it, so the two providers read the same.
+ */
+function ManagedCodexStatus(props: {
+  busy: boolean;
+  refreshing: boolean;
+  runtime: NonNullable<DesktopSettingsSnapshot["runtime"]["tokenMiser"]>["managedCodex"];
+  onCheckForUpdates: () => void;
+}) {
+  const { runtime } = props;
+  const waiting = runtime?.state === "pending-switch";
+  const failed = runtime?.state === "unavailable";
+  return (
+    <div className="acp-build">
+      <p className="acp-build__line">
+        {runtime?.version ? (
+          <>
+            <span
+              className={`status-dot${waiting ? " status-dot--warning" : " status-dot--ok"}`}
+              aria-hidden="true"
+            />
+            <span className="acp-build__tag">{runtime.version}</span>
+            <span className="acp-build__state">
+              {waiting
+                ? "installed and verified · takes over after active turns finish"
+                : "installed · newest verified build"}
+            </span>
+          </>
+        ) : (
+          <>
+            <span
+              className={`status-dot${failed ? " status-dot--error" : ""}`}
+              aria-hidden="true"
+            />
+            <span className="acp-build__state">
+              {failed
+                ? runtime?.reason ?? "The build could not be installed."
+                : "No verified build downloaded yet."}
+            </span>
+          </>
+        )}
+      </p>
+      <div className="settings-inline-actions">
+        <button
+          className="button button--secondary"
+          disabled={props.busy}
+          type="button"
+          onClick={props.onCheckForUpdates}
+        >
+          {props.refreshing ? "Checking…" : "Check for updates"}
+        </button>
+      </div>
+    </div>
   );
 }

@@ -2,6 +2,10 @@ import type { DesktopSettingsSnapshot, DesktopTokenMiserUsage } from "@pwragent/
 import { useEffect, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  ManagedRuntimeProgressStrip,
+  useManagedRuntimeProgress,
+} from "./ManagedRuntimeProgress";
+import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -97,6 +101,7 @@ export function ExperimentalSettings(props: {
   }, [props.desktopApi]);
   const tokenMiserActivation = props.snapshot.runtime.tokenMiser?.activation;
   const managedCodex = props.snapshot.runtime.tokenMiser?.managedCodex;
+  const managedCodexProgress = useManagedRuntimeProgress(props.desktopApi, "codex");
   const tokenMiserSwitchPending =
     tokenMiserEnabled.value
     && managedCodex?.state === "pending-switch";
@@ -187,6 +192,14 @@ export function ExperimentalSettings(props: {
             sub="Download and activate PwrAgent's verified Codex build, then expose per-thread controls."
             help="Off by default. PwrAgent downloads, verifies, and durably selects its Token Miser-compatible Codex build; no path selection or hook approval is required. Update checks run only while this switch is on, and a new build takes over after active Codex turns finish. If activation or summarization is unavailable, the original result passes through unchanged."
             source={sourceBadge(tokenMiserEnabled)}
+            actions={
+              managedCodexProgress ? (
+                <ManagedRuntimeProgressStrip
+                  progress={managedCodexProgress}
+                  waitingForIdle={managedCodex?.state === "pending-switch"}
+                />
+              ) : undefined
+            }
             onChange={(enabled) => {
               setTokenMiserWriteTarget(enabled);
               return props.onTokenMiserEnabledChange(enabled).finally(() => {

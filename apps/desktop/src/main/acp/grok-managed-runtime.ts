@@ -30,6 +30,10 @@ import { promisify } from "node:util";
 import type { ManagedGrokSignatureRejectedEvent } from "../../shared/managed-grok-signature.js";
 import { managedGrokRoot } from "./grok-build-channel.js";
 import { getMainLogger } from "../log.js";
+import {
+  createManagedRuntimeProgressReporter,
+  type ManagedRuntimeProgressReporter,
+} from "../managed-runtime-progress.js";
 import { verifyMatchingPlatformSignature } from "../managed-runtime-signature.js";
 
 export {
@@ -357,6 +361,8 @@ async function ensureManagedGrokRuntimeInner(
   }
 
   processChecks.add(rootDir);
+  const progress = createManagedRuntimeProgressReporter("grok");
+  progress.checking();
   try {
     const slots = await fetchCompatibleReleaseSlots(options, channel);
     const release = slots[channel];
@@ -381,6 +387,8 @@ async function ensureManagedGrokRuntimeInner(
     if (cached?.metadata.tag === release.tag) {
       const metadata = { ...cached.metadata, ...observed, checkedAt: now };
       await writeMetadata(rootDir, metadata);
+      // Nothing new to fetch: end the check quietly.
+      progress.idle();
       return await activateRuntime(
         rootDir,
         { command: cached.command, metadata },
@@ -393,13 +401,16 @@ async function ensureManagedGrokRuntimeInner(
       now,
       options,
       observed,
+      progress,
     );
     managedGrokLog.info("managed_grok_runtime_installed", {
       asset: runtime.metadata.asset,
       command: runtime.command,
       tag: runtime.metadata.tag,
     });
-    return await activateRuntime(rootDir, runtime, options);
+    const active = await activateRuntime(rootDir, runtime, options);
+    progress.ready(runtime.metadata.tag);
+    return active;
   } catch (error) {
     if (error instanceof ManagedGrokSignatureRejectedError) {
       // installRelease removes its staging directory in a finally block, so the
@@ -410,6 +421,9 @@ async function ensureManagedGrokRuntimeInner(
       channel,
       error: error instanceof Error ? error.message : String(error),
       usingCachedTag: cached?.metadata.tag,
+    });
+    progress.failed(error, {
+      ...(cached ? { fallbackTag: cached.metadata.tag } : {}),
     });
     return cached
       ? await activateRuntime(rootDir, cached, options)
@@ -734,6 +748,7 @@ async function installRelease(
     ManagedGrokMetadata,
     "channel" | "latestTag" | "prereleaseTag"
   >,
+  progress: ManagedRuntimeProgressReporter,
 ): Promise<ManagedGrokRuntime> {
   await mkdir(rootDir, { recursive: true });
   const stagingRoot = await mkdtemp(path.join(rootDir, ".install-"));
@@ -743,8 +758,19 @@ async function installRelease(
     // Fetch the tiny publication marker first. An in-progress release can
     // expose its tag before every asset is ready; do not start a 50–130 MB
     // archive download until SHA256SUMS proves the release is complete.
+    // Only the archive is metered; see the Codex runtime for why.
+    const onArchiveBytes = progress.downloading(
+      release.tag,
+      release.archive.size,
+    );
     await downloadFile(release.checksum.url, checksumPath, options.fetch);
-    await downloadFile(release.archive.url, archivePath, options.fetch);
+    await downloadFile(
+      release.archive.url,
+      archivePath,
+      options.fetch,
+      onArchiveBytes,
+    );
+    progress.verifying(release.tag);
     const checksumText = await readFile(checksumPath, "utf8");
     const expected = expectedChecksum(checksumText, release.archive.name);
     if (release.archive.digest && release.archive.digest !== expected) {
@@ -759,6 +785,7 @@ async function installRelease(
       );
     }
 
+    progress.unpacking(release.tag);
     const extractedRoot = path.join(stagingRoot, "extracted");
     await mkdir(extractedRoot);
     await (options.extractArchive ?? extractArchive)(archivePath, extractedRoot);
@@ -770,6 +797,7 @@ async function installRelease(
       extractedRoot,
       validationOptions,
     );
+    progress.activating(release.tag);
     const versionRoot = path.join(rootDir, "versions", release.tag);
     await mkdir(path.dirname(versionRoot), { recursive: true });
     const installedCommand = await activateExtractedVersion(
@@ -850,6 +878,7 @@ async function downloadFile(
   url: string,
   targetPath: string,
   fetchOverride: typeof globalThis.fetch | undefined,
+  onBytes?: (chunkBytes: number) => void,
 ): Promise<void> {
   const response = await (fetchOverride ?? globalThis.fetch)(url, {
     headers: { "User-Agent": "PwrAgent-managed-grok-runtime" },
@@ -874,6 +903,7 @@ async function downloadFile(
         callback(new Error(`Download exceeds the managed Grok size limit: ${url}`));
         return;
       }
+      onBytes?.(chunk.length);
       callback(null, chunk);
     },
   });

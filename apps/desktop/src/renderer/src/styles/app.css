@@ -12120,6 +12120,12 @@ a.button {
   opacity: 0.55;
 }
 
+/* Locked is not disabled: it stays in the tab order so its reason is
+   reachable, and it reads as fixed rather than dimmed. */
+.settings-switch.is-locked {
+  cursor: not-allowed;
+}
+
 .settings-switch__track {
   position: relative;
   flex: 0 0 auto;
@@ -12306,6 +12312,208 @@ a.button {
   color: var(--text-secondary);
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+/* ------------------------------------------------------------------
+   Managed build progress strip (Codex + Grok). One layout for every phase:
+   state line, track, byte meter, four-step rail. The track copies
+   `.app-update-banner__track`, so the app keeps one bar language.
+   ------------------------------------------------------------------ */
+
+.managed-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 520px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
+}
+
+.managed-progress--ok {
+  border-color: var(--success-border);
+  background: var(--bg-panel-elevated);
+}
+
+.managed-progress--error {
+  border-color: var(--danger-border);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-error) 8%);
+}
+
+.managed-progress--notice {
+  border-color: var(--info-border);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--info-text) 6%);
+}
+
+.managed-progress__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.managed-progress__eyebrow {
+  margin: 0;
+  color: var(--accent-bright);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.managed-progress--ok .managed-progress__eyebrow {
+  color: var(--success-text);
+}
+
+.managed-progress--error .managed-progress__eyebrow {
+  color: var(--danger-text);
+}
+
+.managed-progress--notice .managed-progress__eyebrow {
+  color: var(--info-text);
+}
+
+.managed-progress__tag {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.managed-progress__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.managed-progress__track {
+  display: block;
+  overflow: hidden;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.managed-progress__track i {
+  display: block;
+  width: 0;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.managed-progress__track--full i {
+  width: 100%;
+  background: var(--status-ok);
+}
+
+.managed-progress__track--indeterminate i {
+  width: 35%;
+  animation: app-update-banner-sweep 1.1s ease-in-out infinite;
+  transition: none;
+}
+
+/* Fill the track, dimmed, rather than park a 35% bar that reads as a download
+   stuck at 35%: "working, extent unknown". */
+@media (prefers-reduced-motion: reduce) {
+  .managed-progress__track i {
+    transition: none;
+  }
+
+  .managed-progress__track--indeterminate i {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+.managed-progress__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.managed-progress__meter {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.managed-progress__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+.managed-progress__steps li {
+  white-space: nowrap;
+}
+
+.managed-progress__steps .is-done {
+  color: var(--success-text);
+}
+
+.managed-progress__steps .is-now {
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+
+.managed-progress__steps .is-failed {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+/* The reason a switch cannot be turned off, printed under it. A disabled
+   control takes no focus, so this text - not a tooltip - is what a keyboard
+   user reads. */
+.settings-lock {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 62ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.settings-lock__mark {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-lock strong {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .settings-provider-defaults__fast {

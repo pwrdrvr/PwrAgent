@@ -186,6 +186,7 @@ import {
 import type { AutoVacuumConversion } from "./state/state-db";
 import { createMainWindow, stopWindowDiagnostics } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
+import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progress-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
@@ -1342,6 +1343,7 @@ export function bootstrapApp(): void {
     recordStartupProfileEvent({ type: "app-when-ready" });
     installDevelopmentDockIcon();
     registerManagedGrokSignatureRejectionBroadcast();
+    registerManagedRuntimeProgressBroadcast();
     // Boot decision — resolves which profile (if any) this Electron
     // instance should open into. When the decision is `open` we run
     // the today-style flow into an existing profile dir. Anything

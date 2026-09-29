@@ -1285,6 +1285,13 @@ export type DesktopSettingsSnapshot = {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
       allowFast?: DesktopSettingsValue<boolean>;
+      /**
+       * The saved choice to use PwrAgent's own Codex build. It is not the whole
+       * answer: `managedBuildsRequiredBy` names a feature that forces the build
+       * on whatever this says.
+       */
+      managedBuilds?: DesktopSettingsValue<boolean>;
+      managedBuildsRequiredBy?: "token-miser";
       configOverrides?: DesktopSettingsValue<string[]>;
       localModelIds?: DesktopSettingsValue<string[]>;
       discovery: DesktopCodexDiscoverySnapshot;
@@ -1570,6 +1577,7 @@ export type DesktopSettingsConfigPatch = {
       path?: string;
       profile?: string;
       allowFast?: boolean;
+      managedBuilds?: boolean;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
       /** Exact model IDs explicitly declared to have zero local API cost. */

@@ -21,6 +21,7 @@ import type {
 } from "../../../shared/codex-protocol-capture";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
+import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import type { BundledGitLfsAdvisoryEvent } from "../../../shared/bundled-git-lfs";
 import type {
   GithubPrAuthenticationFailureEvent,
@@ -1426,6 +1427,12 @@ export type DesktopApi = {
   onManagedGrokSignatureRejected?: (
     callback: (event: ManagedGrokSignatureRejectedEvent) => void,
   ) => () => void;
+  /** Progress of a PwrAgent-managed Codex or Grok download, as it happens. */
+  onManagedRuntimeProgress?: (
+    callback: (event: ManagedRuntimeProgress) => void,
+  ) => () => void;
+  /** The current progress of each running managed download, for a window that opened mid-download. */
+  readManagedRuntimeProgress?: () => Promise<ManagedRuntimeProgress[]>;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired
    * whenever the user changes theme or density in Settings → the

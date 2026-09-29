@@ -17,18 +17,29 @@ export function SettingsSwitch(props: {
    *  affordance is the sibling `SettingsPendingIndicator`; this only marks
    *  the control itself busy. */
   pending?: boolean;
+  /** Held in its state by something else. Unlike `disabled` it stays
+   *  focusable, so `describedBy` can tell a keyboard user why. */
+  locked?: boolean;
+  describedBy?: string;
   onChange: (next: boolean) => void;
 }) {
   return (
     <button
       aria-busy={props.pending ? true : undefined}
       aria-checked={props.checked}
+      aria-describedby={props.describedBy}
+      aria-disabled={props.locked ? true : undefined}
       aria-label={props.label}
-      className={`settings-switch${props.checked ? " is-on" : ""}`}
+      className={`settings-switch${props.checked ? " is-on" : ""}${
+        props.locked ? " is-locked" : ""
+      }`}
       disabled={props.disabled}
       role="switch"
       type="button"
-      onClick={() => props.onChange(!props.checked)}
+      onClick={() => {
+        if (props.locked) return;
+        props.onChange(!props.checked);
+      }}
     >
       <span aria-hidden="true" className="settings-switch__track">
         <span className="settings-switch__thumb" />

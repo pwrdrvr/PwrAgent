@@ -24,6 +24,8 @@ import {
   selectManagedGrokReleaseSlots,
   setManagedGrokSignatureRejectionReporter,
 } from "../acp/grok-managed-runtime";
+import { subscribeManagedRuntimeProgress } from "../managed-runtime-progress";
+import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 
 const cleanupPaths: string[] = [];
 
@@ -172,6 +174,62 @@ describe("managed Grok release selection", () => {
       "linux-x86_64",
       "prerelease",
     )).toBeUndefined();
+  });
+});
+
+describe("managed Grok progress", () => {
+  it("meters the archive and reports each install phase in order", async () => {
+    const rootDir = await temporaryRoot();
+    const archiveName = "pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("verified archive bytes");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const releasePayload = [release("pwragent-v2.0.0-pwragent.1", [
+      asset("SHA256SUMS"),
+      asset(archiveName, digest, archive.length),
+    ])];
+    const events: ManagedRuntimeProgress[] = [];
+    const unsubscribe = subscribeManagedRuntimeProgress((event) => {
+      if (event.runtime === "grok") events.push(event);
+    });
+
+    try {
+      await ensureManagedGrokRuntime({
+        arch: "x64",
+        checkMode: "force",
+        extractArchive: async (_archivePath, targetDir) => {
+          await writeFakeBundle(targetDir);
+        },
+        fetch: (async (input: string | URL | Request) => {
+          const url = String(input);
+          if (url === MANAGED_GROK_RELEASES_URL) return Response.json(releasePayload);
+          if (url.endsWith("/SHA256SUMS")) {
+            return new Response(`${digest}  ${archiveName}\n`);
+          }
+          if (url.endsWith(`/${archiveName}`)) return new Response(archive);
+          return new Response("missing", { status: 404 });
+        }) as typeof globalThis.fetch,
+        now: () => 1_000,
+        platform: "linux",
+        probeVersion: async () => "grok 2.0.0-test",
+        rootDir,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const phases = events.map((event) => event.phase);
+    expect(phases.filter((phase, index) => phase !== phases[index - 1])).toEqual([
+      "checking",
+      "downloading",
+      "verifying",
+      "unpacking",
+      "activating",
+      "ready",
+    ]);
+    // The advertised archive size rides along so the strip can draw a percent.
+    expect(events.find((event) => event.phase === "downloading")).toMatchObject({
+      totalBytes: archive.length,
+    });
   });
 });
 

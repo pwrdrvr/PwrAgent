@@ -1487,6 +1487,14 @@ export class DesktopSettingsService {
             config.models?.codex?.allowFast,
             true,
           ),
+          managedBuilds: this.resolveConfigBoolean(
+            config.models?.codex?.managedBuilds,
+            false,
+          ),
+          ...(this.options.ensureManagedCodexRuntime
+            && this.resolveTokenMiserEnabled()
+            ? { managedBuildsRequiredBy: "token-miser" as const }
+            : {}),
           discovery: codexDiscovery,
           profiles: codexProfiles,
         },
@@ -1922,6 +1930,17 @@ export class DesktopSettingsService {
     return this.configStore.read("experimental").tokenMiserEnabled ?? false;
   }
 
+  /**
+   * Whether PwrAgent's own Codex build is downloaded and preferred: the
+   * operator's saved choice, or Token Miser, which only works on that build.
+   * Token Miser alone forces it without rewriting the saved choice, so turning
+   * Token Miser off hands Codex back to the configured command as before.
+   */
+  resolveManagedCodexEnabled(): boolean {
+    return this.resolveTokenMiserEnabled()
+      || (this.configStore.read("models").codex?.managedBuilds ?? false);
+  }
+
   resolveTokenMiserFocusedSummariesEnabled(): boolean {
     return this.configStore.read("experimental").tokenMiserFocusedSummariesEnabled
       ?? false;
@@ -2013,31 +2032,39 @@ export class DesktopSettingsService {
         `Cannot save settings because ${this.configPath} could not be parsed: ${fileStatus.error}`,
       );
     }
-    const tokenMiserEnabled =
-      this.configStore.read("experimental").tokenMiserEnabled ?? false;
-    const enablingTokenMiser =
-      patch.experimental?.tokenMiserEnabled === true
-      && !tokenMiserEnabled;
-    const disablingTokenMiser =
-      patch.experimental?.tokenMiserEnabled === false
-      && tokenMiserEnabled;
+    // What matters is whether PwrAgent's Codex build is wanted before and
+    // after this write, from either of the two things that want it. Turning
+    // Token Miser off while the operator also asked for the build changes
+    // nothing here, and neither does turning the build off under Token Miser.
+    const managedCodexBefore = this.resolveManagedCodexEnabled();
+    const managedCodexAfter =
+      (patch.experimental?.tokenMiserEnabled
+        ?? this.resolveTokenMiserEnabled())
+      || (patch.models?.codex?.managedBuilds
+        ?? this.configStore.read("models").codex?.managedBuilds
+        ?? false);
+    const enablingManagedCodex = managedCodexAfter && !managedCodexBefore;
+    const disablingManagedCodex = !managedCodexAfter && managedCodexBefore;
+    const managedCodexPatched =
+      patch.experimental?.tokenMiserEnabled !== undefined
+      || patch.models?.codex?.managedBuilds !== undefined;
     // The switch is a transaction from the operator's perspective: acquire a
     // usable managed Codex first, then persist availability. A failed first
     // install leaves the feature off instead of selecting an arbitrary Codex.
-    if (enablingTokenMiser && this.options.ensureManagedCodexRuntime) {
+    if (enablingManagedCodex && this.options.ensureManagedCodexRuntime) {
       assertProviderDiscoveryPermit(discoveryPermit, [
         "settings-user-action",
         "setup-user-action",
       ]);
       await this.ensureManagedCodexRuntime("force");
     }
-    if (disablingTokenMiser) {
+    if (disablingManagedCodex) {
       this.abortManagedCodexUpdate();
     }
     const update = await this.configStore.write(patch, CONFIG_DOMAIN_KEYS);
     if (
       patch.models?.codex?.path !== undefined
-      || patch.experimental?.tokenMiserEnabled !== undefined
+      || managedCodexPatched
     ) {
       this.codexDiscoveryCoordinator.invalidate();
     }
@@ -2075,17 +2102,17 @@ export class DesktopSettingsService {
         // Listeners are best-effort side effects; never fail a settings write.
       }
     }
-    if (patch.experimental?.tokenMiserEnabled !== undefined) {
+    if (managedCodexPatched) {
       await this.managedCodexRuntimeSwitchAttempt;
     }
     if (
       discoveryPermit
-      && (patch.models?.codex?.path !== undefined || disablingTokenMiser)
+      && (patch.models?.codex?.path !== undefined || disablingManagedCodex)
     ) {
       // Saving a path (including auto discovery) changes the executable.
       // Validate and publish its selection before returning the write snapshot,
       // and release the previous session pin through the explicit refresh path.
-      if (disablingTokenMiser) this.managedCodexRuntime = undefined;
+      if (disablingManagedCodex) this.managedCodexRuntime = undefined;
       await this.refreshCodexDiscovery(discoveryPermit);
     }
     return update;
@@ -2520,7 +2547,7 @@ export class DesktopSettingsService {
     }
     if (
       this.managedCodexRuntime
-      && this.resolveTokenMiserEnabled()
+      && this.resolveManagedCodexEnabled()
       && this.managedCodexRuntime.command !== previousManagedCommand
       && !this.sessionCodexCommand
     ) {
@@ -2641,13 +2668,13 @@ export class DesktopSettingsService {
     if (
       !selected
       || (
-        !this.resolveTokenMiserEnabled()
+        !this.resolveManagedCodexEnabled()
         && managedCodexTagForCommand(selected.command) !== undefined
         && selected.command !== configuredCommand
       )
     ) {
       // A durable discovery result is not authorization to keep the managed
-      // build after Token Miser is disabled. Explicit operator paths still win.
+      // build after it is switched off. Explicit operator paths still win.
       return undefined;
     }
     return {
@@ -2736,10 +2763,10 @@ export class DesktopSettingsService {
     ) => Promise<unknown> | unknown,
     _options: { intervalMs?: number } = {},
   ): () => void {
-    let enabled = this.resolveTokenMiserEnabled();
+    let enabled = this.resolveManagedCodexEnabled();
     this.managedCodexSelectionListeners.add(listener);
     const onExperimentalChanged = () => {
-      const nextEnabled = this.resolveTokenMiserEnabled();
+      const nextEnabled = this.resolveManagedCodexEnabled();
       if (nextEnabled === enabled) return;
       enabled = nextEnabled;
       // Availability changes are explicit operator actions. Drop the startup
@@ -2762,7 +2789,7 @@ export class DesktopSettingsService {
       });
     };
     const unsubscribe = this.configStore.subscribe(
-      ["experimental"],
+      ["experimental", "models"],
       onExperimentalChanged,
     );
 
@@ -3001,10 +3028,16 @@ export class DesktopSettingsService {
   ): Promise<ManagedCodexRuntime | undefined> {
     if (
       !this.options.ensureManagedCodexRuntime
-      || !this.resolveConfigBoolean(
-        config.experimental?.tokenMiserEnabled,
-        false,
-      ).value
+      || !(
+        this.resolveConfigBoolean(
+          config.experimental?.tokenMiserEnabled,
+          false,
+        ).value
+        || this.resolveConfigBoolean(
+          config.models?.codex?.managedBuilds,
+          false,
+        ).value
+      )
     ) {
       return undefined;
     }
