@@ -141,6 +141,80 @@ describe("tool invocation accounting", () => {
       .toContain("tools.write_stdin");
   });
 
+  it("treats omitted Code Mode write_stdin chars as a small polling read", () => {
+    const invocation = toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "code-mode-omitted-chars",
+            type: "functionCall",
+            name: "exec",
+            status: "completed",
+            arguments: {
+              input:
+                "const r = await tools.write_stdin({session_id:27324, yield_time_ms:30000}); text(r.output);",
+            },
+            functionCallOutput: "",
+          },
+        },
+      } as AppServerNotification,
+    });
+
+    expect(invocation).toMatchObject({
+      category: "polling",
+      normalizedCommand: "poll session 27324",
+      sessionId: "27324",
+      toolName: "exec",
+    });
+  });
+
+  it.each([
+    ["nonempty", "chars:\"q\""],
+    ["dynamic", "chars:nextInput"],
+  ])("does not treat %s Code Mode write_stdin input as a polling read", (
+    _label,
+    chars,
+  ) => {
+    expect(normalizeToolInvocationCommand({
+      args: {
+        input:
+          `const r = await tools.write_stdin({session_id:27324, ${chars}}); text(r.output);`,
+      },
+      toolName: "exec",
+    })).toEqual({
+      category: "unknown",
+      normalizedCommand: "exec",
+    });
+  });
+
+  it("recognizes only a pure nested sleep command as Code Mode polling", () => {
+    expect(normalizeToolInvocationCommand({
+      args: {
+        input:
+          "const r = await tools.exec_command({cmd:`sleep 30`}); text(r.output);",
+      },
+      toolName: "exec",
+    })).toEqual({
+      category: "polling",
+      normalizedCommand: "sleep 30",
+    });
+    expect(normalizeToolInvocationCommand({
+      args: {
+        input:
+          "const r = await tools.exec_command({cmd:\"sleep 30; run-build\"}); text(r.output);",
+      },
+      toolName: "exec",
+    })).toEqual({
+      category: "unknown",
+      normalizedCommand: "exec",
+    });
+  });
+
   it("counts output volume and sbt-style warning/error/info/debug lines", () => {
     const metrics = buildToolOutputMetrics(
       [

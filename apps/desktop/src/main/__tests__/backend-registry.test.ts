@@ -77,6 +77,7 @@ import type {
   ThreadOverlayState,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
+  ThreadToolInvocationRecord,
   ThreadSpendAlert,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
@@ -25038,6 +25039,81 @@ command = "pnpm dev"
       expect(claim).toHaveBeenCalledTimes(expectedSteers);
     } finally {
       vi.restoreAllMocks();
+      await registry.close();
+    }
+  });
+
+  it("keeps small Code Mode polls volatile while aggregating a noisy-poll alert", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: ThreadToolInvocationRecord }) => params.invocation,
+    );
+    const upsertThreadToolInvocationAlert = vi.fn(
+      async (params: { alert: ThreadToolInvocationAlert }) => params.alert,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readRecentThreadToolInvocations: vi.fn(() => []),
+      upsertThreadToolInvocation,
+      upsertThreadToolInvocationAlert,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+      resolveToolOutputAlertPolicy: () => ({
+        outputCapHitsEnabled: false,
+        repeatedLargeOutputsEnabled: false,
+        repeatedLargeOutputMinimumCalls: 5,
+        repeatedLargeOutputMinimumPercent: 50,
+        repeatedQueuedChecksEnabled: true,
+        monitorJobSuggestionsEnabled: false,
+      }),
+    });
+    const record = (registry as unknown as {
+      recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
+    }).recordToolInvocationAccounting.bind(registry);
+    const now = vi.spyOn(Date, "now");
+
+    try {
+      for (let index = 0; index < 5; index++) {
+        now.mockReturnValue(1_000_000 + index * 30_000);
+        await record({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                id: `code-poll-${index}`,
+                type: "functionCall",
+                name: "exec",
+                status: "completed",
+                arguments: {
+                  input:
+                    "const r = await tools.write_stdin({session_id:27324, yield_time_ms:30000}); text(r.output);",
+                },
+                functionCallOutput: "",
+              },
+            },
+          },
+        } as AgentEvent);
+      }
+
+      expect(upsertThreadToolInvocation).not.toHaveBeenCalled();
+      expect(upsertThreadToolInvocationAlert).toHaveBeenCalledTimes(1);
+      expect(upsertThreadToolInvocationAlert).toHaveBeenCalledWith({
+        alert: expect.objectContaining({
+          invocationCount: 5,
+          kind: "noisy-polling",
+          sessionId: "27324",
+          toolName: "exec",
+        }),
+      });
+    } finally {
+      now.mockRestore();
       await registry.close();
     }
   });
