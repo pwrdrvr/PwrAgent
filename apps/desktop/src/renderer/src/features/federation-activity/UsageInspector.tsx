@@ -20,6 +20,8 @@ export function UsageInspector(props: {
   turn?: OwnedUsageRow;
   onTurn: (row: OwnedUsageRow) => void;
   onClose: () => void;
+  /** Focus the main window on this thread; absent where no window can show it. */
+  onOpenThread?: () => void;
   scope: AnalysisScope;
   onScope: (scope: AnalysisScope) => void;
   models: BackendModelOption[];
@@ -39,7 +41,7 @@ export function UsageInspector(props: {
   const turns = group ? [...group.rows].sort((a, b) => (b.line.completedAt ?? 0) - (a.line.completedAt ?? 0)) : [];
   const largest = Math.max(1, ...turns.map((row) => priced(row) ? row.line.totalCostMicros : 0));
   const target = turn ?? lead;
-  const turnScope = props.scope === "turn" && target.line.turnId !== undefined;
+  const turnScope = props.scope === "turn" && target.line.turnId !== undefined && !target.rollup;
   const models = [{ value: "gpt-6-luna", label: "GPT-6-Luna" },
     ...props.models.filter((item) => item.id !== "gpt-6-luna").map((item) => ({ value: item.id, label: item.label ?? item.id }))];
   return <aside className="usage-inspector" aria-label="Usage inspection">
@@ -47,6 +49,7 @@ export function UsageInspector(props: {
       <div className="usage-inspector__heading"><span className="usage-eyebrow">{group ? "Thread" : "Excluded interval"}</span>
         <button type="button" className="usage-icon-button" aria-label="Close thread detail" disabled={analyzing} onClick={props.onClose}>×</button></div>
       <h2>{group?.title ?? lead.title}</h2>
+      {props.onOpenThread ? <button type="button" className="usage-link usage-inspector__open" onClick={props.onOpenThread}>Open thread ↗</button> : null}
       <p className="usage-inspector__owner">{lead.owner}{lead.line.model ? ` · ${lead.line.modelLabel ?? lead.line.model}` : ""}</p>
       <div className="usage-inspector__cost"><strong>{group ? usageMoney(group.cost) : "Excluded"}</strong>
         <span>{group
@@ -57,7 +60,7 @@ export function UsageInspector(props: {
         <div className="usage-turns__list" role="group" aria-label="Turns in window">
           {turns.slice(0, 40).map((row) => {
             const isHelper = group.helperRows.includes(row);
-            const signals = turnSignals(row.line, isHelper ? row.title : undefined);
+            const signals = turnSignals(row.line, isHelper ? row.title : undefined, row.rollup);
             return <button type="button" key={row.line.usageLineId} className="usage-turn" aria-pressed={row === turn} disabled={analyzing}
               aria-label={`Turn ${usageClock(row.line.startedAt ?? row.line.createdAt)} to ${usageClock(row.line.completedAt!)}${isHelper ? `, helper ${row.title}` : ""}`}
               onClick={() => props.onTurn(row)}>
@@ -75,7 +78,7 @@ export function UsageInspector(props: {
         <div className="usage-eyebrow">Analyze</div>
         <div className="usage-analysis__row"><span>Read</span>
           <div className="usage-segmented" role="group" aria-label="Analysis scope">
-            <button type="button" aria-pressed={props.scope === "turn"} disabled={analyzing || target.line.turnId === undefined} onClick={() => props.onScope("turn")}>Selected turn</button>
+            <button type="button" aria-pressed={props.scope === "turn"} disabled={analyzing || target.line.turnId === undefined || target.rollup !== undefined} onClick={() => props.onScope("turn")}>Selected turn</button>
             <button type="button" aria-pressed={props.scope === "recent"} disabled={analyzing} onClick={() => props.onScope("recent")}>Recent entries</button>
           </div></div>
         <label className="usage-analysis__row"><span>Model</span><Select value={props.model} onChange={props.onModel} disabled={analyzing} options={models} /></label>

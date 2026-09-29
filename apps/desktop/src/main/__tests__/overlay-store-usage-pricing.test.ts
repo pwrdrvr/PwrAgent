@@ -49,24 +49,61 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
-  it("keeps unfinished intervals even when their last ledger update predates the window", async () => {
+  it("keeps an unfinished interval only while its ledger row can hold usage in the window", async () => {
     const start = PRICING_CATALOG_TIME;
     await store.upsertThreadUsageLine({ line: buildUsageLine({
       source: "live", status: "pending", turnUsageAttributed: true,
       startedAt: start, completedAt: undefined,
     }) });
-    stateDb.raw.prepare("UPDATE thread_usage_lines SET updated_at = ?").run(start);
-    const window = { from: start + 10_000, to: start + 20_000 };
-    const open = await store.readUsageActivity(window);
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET updated_at = ?").run(start + 5000);
+    const overlapping = { from: start + 1000, to: start + 20_000 };
+    const open = await store.readUsageActivity(overlapping);
     expect(open.rows).toHaveLength(1);
-    expect(open.rows[0].updatedAt).toBeLessThan(window.from);
     expect(open.rows[0].line.completedAt).toBeUndefined();
-    expect(usageActivityCoverage(open.rows[0], window.from, window.to)).toBe("boundary");
+    expect(usageActivityCoverage(open.rows[0], overlapping.from, overlapping.to)).toBe("boundary");
+
+    // A turn whose completion was never observed recorded nothing after its
+    // last update, so it does not match every later window.
+    expect((await store.readUsageActivity({ from: start + 10_000, to: start + 20_000 })).rows).toHaveLength(0);
 
     // A real end before the window excludes it, including when only the
     // separate turn record received the terminal event.
-    await store.completeThreadUsageTurn({ backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 5000 });
-    expect((await store.readUsageActivity(window)).rows).toHaveLength(0);
+    await store.completeThreadUsageTurn({ backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: start + 500 });
+    expect((await store.readUsageActivity(overlapping)).rows).toHaveLength(0);
+  });
+
+  it("completes monitor lines when written and rolls background helpers up per parent thread", async () => {
+    const start = PRICING_CATALOG_TIME;
+    // The store reprices each line on write, so every line here costs 16,100 micros.
+    const monitor = (id: string, sourceItemId: string, createdAt: number) => buildUsageLine({
+      usageLineId: `monitor-${id}`, scope: "monitor", source: "live", status: "finalized", sourceItemId,
+      threadId: `helper-${id}`, turnId: `helper-turn-${id}`, parentThreadId: "thread-1", createdAt,
+    });
+    for (const line of [
+      monitor("a", "system:token-miser:a", start + 1000),
+      monitor("b", "system:token-miser:b", start + 2000),
+      monitor("c", "system:title-helper:c", start + 3000),
+      monitor("old", "system:token-miser:old", start - 60_000),
+      monitor("review", "review:r", start + 4000),
+    ]) await store.upsertThreadUsageLine({ line });
+    // One chart bucket is ten seconds wide, so both Token Miser runs share one.
+    const window = { from: start, to: start + 240_000 };
+    const { rows, truncated } = await store.readUsageActivity(window);
+    expect(truncated).toBe(false);
+    const rollups = rows.filter((row) => row.rollup).sort((a, b) => a.rollup!.kind.localeCompare(b.rollup!.kind));
+    expect(rollups.map((row) => [row.rollup, row.line.threadId, row.line.totalCostMicros])).toEqual([
+      [{ kind: "title-helper", count: 1 }, "thread-1", 16_100],
+      [{ kind: "token-miser", count: 2 }, "thread-1", 32_200],
+    ]);
+    expect(rollups[1].line).toMatchObject({ scope: "monitor", startedAt: start + 1000, completedAt: start + 2000, totalTokens: 2600 });
+    // A helper outside the window is not read; any other monitor stays its own line.
+    const review = rows.find((row) => row.line.usageLineId === "monitor-review")!;
+    expect(review.line.completedAt).toBe(start + 4000);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => usageActivityCoverage(row, window.from, window.to) === "contained")).toBe(true);
+    // Owners sharing one ledger derive the same rollup id, so a viewer counts it once.
+    expect((await store.readUsageActivity(window)).rows.filter((row) => row.rollup).map((row) => row.line.usageLineId))
+      .toEqual(rows.filter((row) => row.rollup).map((row) => row.line.usageLineId));
   });
 
   it("bounds title hydration and uses the identity index across a large history", async () => {

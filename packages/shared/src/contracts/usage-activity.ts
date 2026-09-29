@@ -28,10 +28,18 @@ export type UsageLimitObservation = {
   limits: UsageLimitReading[];
 };
 
+/**
+ * Several background-helper runs (Token Miser, title generation) summed into
+ * one line for the thread they worked for. Absent from older peers, which
+ * return each run as its own monitor line.
+ */
+export type UsageActivityRollup = { kind: string; count: number };
+
 export type UsageActivityRow = {
   line: ThreadUsageLineRecord;
   title: string;
   updatedAt: number;
+  rollup?: UsageActivityRollup;
 };
 
 export type ReadUsageActivityResponse = {

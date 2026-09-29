@@ -1,9 +1,17 @@
 # Usage Activity
 
-Open **Federation Activity → Usage**, select instances and a period, then
-choose **Load activity** (or **Refresh**). This is an on-demand view of
-PwrAgent's pricing ledger beside the account limits Codex reports. It is not a
-billing report, and it never converts spend into a share of a quota.
+Usage Activity is its own window. Open it from **PwrAgent → Usage Activity**
+(Help → Usage Activity on Windows and Linux), the profile menu at the bottom
+of the sidebar, **Usage Activity** in a thread's Pricing panel, or by clicking
+the context moon beside the composer. It shows PwrAgent's pricing ledger beside
+the account limits Codex reports. It is not a billing report, and it never
+converts spend into a share of a quota.
+
+The window reads as soon as it opens, again whenever the period or the
+selected instances change, and again when it regains focus with data more than
+a minute old. **Refresh** rereads at any time. A custom range reads once typing
+pauses. Offline peers are shown but not selectable, so a read never waits on
+them.
 
 ## Periods
 
@@ -19,7 +27,7 @@ billing report, and it never converts spend into a share of a quota.
   days, or 5 hours) and narrow it on the client. When the start lies earlier
   than what was read, the view reads once more from the start. Every read is
   bounded to 31 days. Turns that finished before a narrowed start are outside
-  the window and are dropped, not listed as excluded.
+  the window and are dropped, not listed as not counted.
 
 ## Totals
 
@@ -29,10 +37,14 @@ billing report, and it never converts spend into a share of a quota.
   turn. Cumulative counters, fork baselines, historical summaries and
   superseded rows do not contribute.
 - Boundary-crossing, unfinished and unattributed rows remain inspectable
-  through the **excluded intervals** link. Their whole-row prices are never
-  assigned to the window or prorated. A missing completion remains an open
-  interval even when its last ledger update predates the window. Missing
-  records do not imply zero usage.
+  through the **not counted** link, each with its reason. Their whole-row
+  prices are never assigned to the window or prorated.
+- A row with no recorded completion is read only while its last ledger update
+  falls inside the window. A turn whose end was never observed (an interrupted
+  turn, or an ACP turn that never reported one) recorded nothing after that
+  update, so it no longer matches every later window.
+- Monitor lines are written already finalized and carry no completion time;
+  their write time is their completion.
 - Cached input remains separate from uncached input. Cache-write tokens are
   a subset of uncached input; reasoning tokens are a subset of output.
   Unpriced rows contribute tokens, but not a fabricated dollar estimate.
@@ -42,6 +54,12 @@ billing report, and it never converts spend into a share of a quota.
 - A helper thread's turns roll up into the root thread present in the window,
   following `parentThreadId` transitively. The row states how many helpers it
   includes and what they cost; the inspector marks each helper turn.
+- Background helpers (Token Miser, title generation) write one monitor line
+  per run: thousands a week, each worth a fraction of a cent. The owner sums
+  the ones contained in the window into one line per parent thread, helper
+  kind, model and chart bucket, so they count toward the thread they worked
+  for and cannot spend the row bound. The line id is derived from the window,
+  so two owners sharing one ledger return the same rollup and it counts once.
 - Each owner reads its own PwrAgent SQLite ledger. The read returns at most
   5,000 recent candidate rows for windows up to 31 days. Four owner reads may
   run concurrently. Capped results, unavailable peers and older peers lacking
@@ -82,14 +100,17 @@ billing report, and it never converts spend into a share of a quota.
 The chart stacks each completed turn's API-equivalent cost at its completion
 time, in 24 buckets. The five costliest threads each keep one color across the
 chart, the ranking's swatch and its **When** strip; everything else is
-**Other**. The focused account's observed limit is drawn over the bars on its
+**Other**. A legend entry opens its thread in the main window, on the instance
+that owns it, as does **Open thread** in the inspector. The focused account's observed limit is drawn over the bars on its
 own percent axis, broken at each reset, and resets are marked. Bars are not
 estimates of spend rate within a bucket. Selecting a bar filters the ranking
 while the totals keep the full window.
 
 Rows carry signals when the ledger observed them: cold replays (a warning at
 three or more), peak context share (noted at 75%, a warning at 90%), fast mode
-and included helpers. Search and cost/token/time sorting operate on the loaded
+and included helpers. Unavailable instances are summed up in one line: peers running a
+PwrAgent from before usage activity, offline peers, and owners that hit the
+row bound. The raw errors sit under **Details**. Search and cost/token/time sorting operate on the loaded
 snapshot and do not request more data or invoke analysis.
 
 ## Analysis

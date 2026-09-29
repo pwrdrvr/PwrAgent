@@ -1,4 +1,5 @@
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { ThreadUsageLineRecord, UsageActivityRollup } from "@pwragent/shared";
+import { usageRollupLabel } from "./usage-activity-presentation";
 import type { UsageGroup } from "./usage-activity-summary";
 
 export type UsageSignal = { label: string; title: string; warning: boolean };
@@ -31,8 +32,9 @@ export function groupSignals(group: UsageGroup): UsageSignal[] {
   ].filter((signal): signal is UsageSignal => signal !== undefined);
 }
 
-export function turnSignals(line: ThreadUsageLineRecord, helper?: string): UsageSignal[] {
+export function turnSignals(line: ThreadUsageLineRecord, helper?: string, rollup?: UsageActivityRollup): UsageSignal[] {
   return [
+    rollup ? { label: usageRollupLabel(rollup), warning: false, title: "Background helper runs for this thread, summed" } : undefined,
     helper ? { label: `Helper · ${helper}`, warning: false, title: "A helper thread's turn, counted in this thread" } : undefined,
     coldSignal(line.observedColdReplayCount),
     contextSignal(line.peakContextTokens !== undefined && line.modelContextWindow

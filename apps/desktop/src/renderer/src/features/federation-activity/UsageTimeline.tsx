@@ -3,6 +3,8 @@ import { usageClock, usageMoney, type UsageBucket } from "./usage-activity-prese
 import type { LimitPoint, LimitReset } from "./usage-limits";
 
 export type UsageChartLimit = { label: string; points: LimitPoint[]; resets: LimitReset[] };
+/** A stacked thread: its title, its cost label, and how to open it, when it can be. */
+export type UsageChartSeries = { title: string; cost: string; onOpen?: () => void };
 
 /**
  * Split observed readings at resets so the line never draws a fall that was
@@ -19,8 +21,8 @@ function limitSegments(limit: UsageChartLimit, from: number, to: number) {
 
 export function UsageTimeline({ buckets, series, limit, selected, onSelect }: {
   buckets: UsageBucket[];
-  /** Titles of the stacked threads, in series order. */
-  series: string[];
+  /** The stacked threads, in series order. */
+  series: UsageChartSeries[];
   limit?: UsageChartLimit;
   selected?: number;
   onSelect: (index: number | undefined) => void;
@@ -75,7 +77,10 @@ export function UsageTimeline({ buckets, series, limit, selected, onSelect }: {
     </div>
     <div className="usage-timeline__axis"><span>{label(from)}</span><span>{label(buckets[12].from)}</span><span>{label(to)}</span></div>
     <div className="usage-timeline__legend">
-      {series.map((title, index) => <span key={index} className="usage-timeline__legend-item"><i className={`usage-series--${index}`} />{title}</span>)}
+      {series.map((item, index) => item.onOpen
+        ? <button type="button" key={index} className="usage-timeline__legend-item" title={`Open ${item.title}`}
+          aria-label={`Open ${item.title}`} onClick={item.onOpen}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
+        : <span key={index} className="usage-timeline__legend-item" title={item.title}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</span>)}
       {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other threads</span> : null}
     </div>
     <p className="usage-timeline__readout">{active

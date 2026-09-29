@@ -443,7 +443,8 @@ test("renders the context window moon from token usage notifications", async () 
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "token-usage-1" });
 
-    const moon = app.window.getByRole("img", {
+    // The moon opens Usage Activity, so in the app it is a button.
+    const moon = app.window.getByRole("button", {
       name: /Context window 0% full, 1\.2k\/258\.4k tokens, new/,
     });
     await expect(moon).toBeVisible();

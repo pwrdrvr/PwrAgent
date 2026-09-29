@@ -32,7 +32,7 @@ import {
   type ChipContextMenuItem,
   type ChipContextMenuPosition,
 } from "../../chrome/ChipContextMenu";
-import { MoreVerticalIcon } from "../../../icons";
+import { MoreVerticalIcon, PopoutIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
@@ -291,6 +291,19 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
         </>
       ) : model.totalRows === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
+      ) : null}
+
+      {/* This thread's bill; the account's limits and every thread's spend
+          across instances are one window away. */}
+      {props.desktopApi?.openUsageActivity ? (
+        <button
+          className="context-panel__section-action pricing-panel__usage-action"
+          onClick={() => void props.desktopApi?.openUsageActivity?.()}
+          type="button"
+        >
+          <PopoutIcon size={11} aria-hidden="true" />
+          Usage Activity
+        </button>
       ) : null}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is

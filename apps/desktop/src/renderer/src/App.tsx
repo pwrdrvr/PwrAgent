@@ -3009,6 +3009,9 @@ function DesktopAppShell(props: {
             openSettingsSection(undefined);
           }}
           onOpenProfile={profiles.openProfile}
+          onOpenUsageActivity={desktopApi?.openUsageActivity
+            ? () => void desktopApi.openUsageActivity?.()
+            : undefined}
           onSelectThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);

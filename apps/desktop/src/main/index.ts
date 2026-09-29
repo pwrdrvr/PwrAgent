@@ -50,6 +50,7 @@ import {
 } from "./auto-updater";
 import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
+import { showUsageActivityWindow } from "./usage-activity-window";
 import {
   showLicenseWindow,
   showThirdPartyNoticesWindow,
@@ -1171,6 +1172,9 @@ function installApplicationMenu(): void {
       showLicenseWindow,
       showLogsWindow: showAppLogWindow,
       showThirdPartyNoticesWindow,
+      showUsageActivityWindow: () => {
+        showUsageActivityWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
+      },
     },
   });
 

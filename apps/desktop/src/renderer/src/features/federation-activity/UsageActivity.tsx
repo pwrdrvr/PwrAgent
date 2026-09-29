@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AnalyzeUsageActivityResponse, AppServerBackendKind, BackendModelOption, FederationTarget, ReadUsageActivityResponse } from "@pwragent/shared";
 import { UsageTimeline } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, type AnalysisScope } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
-import { USAGE_SERIES, usageCompletionBuckets, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
+import { USAGE_SERIES, usageCompletionBuckets, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -12,6 +12,8 @@ import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./u
 
 const DAY = 86_400_000;
 const MAX_WINDOW = 31 * DAY;
+/** A focused window rereads when its data is older than this. */
+const STALE_AFTER = 60_000;
 const time = (value: number) => new Date(value).toLocaleString();
 const localDate = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 const sourceId = (target: FederationTarget) => target.scope === "local" ? "local" : target.instanceId;
@@ -19,7 +21,10 @@ const sourceId = (target: FederationTarget) => target.scope === "local" ? "local
 type Source = { label: string; target: FederationTarget; status?: string };
 type Preset = "reset" | "five" | "today" | "day" | "week" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
-type Snapshot = { queryKey: string; from: number; to: number; preset: Preset; rows: OwnedUsageRow[]; sources: SourceResult[]; accounts: LimitAccount[] };
+type Snapshot = {
+  queryKey: string; from: number; to: number; preset: Preset; readAt: number;
+  rows: OwnedUsageRow[]; sources: SourceResult[]; accounts: LimitAccount[];
+};
 
 const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
   { value: "reset", label: "Since reset", title: "Since the account's longest limit last reset" },
@@ -29,6 +34,8 @@ const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
   { value: "week", label: "7 days", title: "The last 7 days" },
   { value: "custom", label: "Custom", title: "Choose a start and end" },
 ];
+
+const isOnline = (source: Source) => source.target.scope === "local" || source.status === undefined || source.status === "connected";
 
 /** The account whose limits drive the reset presets and the chart's line. */
 function focusAccount(accounts: LimitAccount[], preferred: string | undefined, localLabel: string) {
@@ -42,8 +49,25 @@ function limitStart(preset: Preset, account: LimitAccount | undefined) {
     : preset === "five" ? seriesStart(fiveHourSeries(account)) : undefined;
 }
 
+/**
+ * A peer that answers "no handler" runs a PwrAgent from before usage activity;
+ * one that answers "not connected" dropped between discovery and the read.
+ */
+function unavailableKind(error: string): "outdated" | "offline" | "failed" {
+  if (/method_not_found|No federation handler/i.test(error)) return "outdated";
+  if (/target_unavailable|not connected/i.test(error)) return "offline";
+  return "failed";
+}
+
+function nameList(names: string[]) {
+  return names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+}
+
 export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [sources, setSources] = useState<Source[]>([{ label: "This instance", target: { scope: "local" } }]);
+  // Until discovery settles, a read would miss every peer and immediately be
+  // replaced; the first read waits for it.
+  const [peersReady, setPeersReady] = useState(() => !desktopApi?.readFederationActivity);
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set());
   const [preset, setPreset] = useState<Preset>("reset");
   const [lens, setLens] = useState<"threads" | "excluded">("threads");
@@ -67,19 +91,22 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [analysis, setAnalysis] = useState<AnalyzeUsageActivityResponse>();
   const [analyzing, setAnalyzing] = useState(false);
   const mounted = useRef(true);
+  const readSeq = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => {
-    let disposed = false;
-    void desktopApi?.readFederationActivity?.({ includeHistory: false }).then((value) => {
-      if (disposed) return;
+
+  const discoverPeers = useCallback(() => {
+    if (!desktopApi?.readFederationActivity) return;
+    void desktopApi.readFederationActivity({ includeHistory: false }).then((value) => {
+      if (!mounted.current) return;
       setSources([{ label: value.health.localLabel ?? "This instance", target: { scope: "local" } },
         ...value.health.peers.filter((peer) => peer.id !== value.health.instanceId).map((peer) => ({
           label: `${peer.label}${peer.profileName ? ` (${peer.profileName})` : ""}`, status: peer.status,
           target: { scope: "remote" as const, instanceId: peer.id },
         }))]);
-    }).catch((cause: unknown) => { if (!disposed) setError(`Peer discovery unavailable: ${String(cause)}`); });
-    return () => { disposed = true; };
+    }).catch(() => { /* Reads still cover this instance. */ })
+      .finally(() => { if (mounted.current) setPeersReady(true); });
   }, [desktopApi]);
+  useEffect(() => { discoverPeers(); }, [discoverPeers]);
 
   const summary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
@@ -98,8 +125,11 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopApi, modelTargetKey]);
 
-  const enabledSources = sources.filter((source) => !disabled.has(sourceId(source.target)));
-  const queryKey = JSON.stringify([enabledSources.map((source) => sourceId(source.target)), preset, preset === "custom" ? [from, to] : null]);
+  const enabledSources = sources.filter((source) => isOnline(source) && !disabled.has(sourceId(source.target)));
+  const offlineSources = sources.filter((source) => !isOnline(source));
+  const limitPreset = preset === "reset" || preset === "five";
+  const queryKey = JSON.stringify([enabledSources.map((source) => sourceId(source.target)), preset,
+    preset === "custom" ? [from, to] : null, limitPreset ? focusKey ?? null : null]);
   const localLabel = sources[0].label;
 
   const readAll = async (targets: Source[], start: number, end: number) => {
@@ -118,7 +148,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   })));
 
   const refresh = async () => {
-    if (!desktopApi?.readUsageActivity || pending) return;
+    if (!desktopApi?.readUsageActivity) return;
+    const seq = ++readSeq.current;
     const now = Date.now();
     const end = preset === "custom" ? new Date(to).getTime() : now;
     const today = new Date(end); today.setHours(0, 0, 0, 0);
@@ -130,14 +161,18 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       : preset === "day" ? end - DAY
       : preset === "week" ? end - 7 * DAY
       : known ?? end - (preset === "five" ? 5 * 3_600_000 : 8 * DAY);
-    start = Math.max(start, end - MAX_WINDOW);
+    if (preset !== "custom") start = Math.max(start, end - MAX_WINDOW);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end - start > MAX_WINDOW) {
       setError("Choose a start before the end, within 31 days."); return;
     }
-    setPending(true); setError(undefined); setSelectedKey(undefined); setSelectedExcluded(undefined);
-    setTurn(undefined); setAnalysis(undefined); setBucket(undefined);
+    // A refresh of the same selection keeps what the operator was looking at.
+    const sameQuery = snapshot?.queryKey === queryKey;
+    setPending(true); setError(undefined);
+    if (!sameQuery) {
+      setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setAnalysis(undefined); setBucket(undefined);
+    }
     let results = await readAll(enabledSources, start, end);
-    if (!mounted.current) return;
+    if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
     const resolved = limitStart(preset, focusAccount(accounts, focusKey, localLabel));
     if (resolved !== undefined && resolved < end) {
@@ -145,12 +180,12 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       if (bounded < start - 60_000) {
         // The window began before what was read: read once more from its start.
         results = await readAll(enabledSources, bounded, end);
-        if (!mounted.current) return;
+        if (!mounted.current || seq !== readSeq.current) return;
         accounts = accountsOf(results);
       }
       start = bounded;
     }
-    setSnapshot({ queryKey, from: start, to: end, preset, sources: results, accounts,
+    setSnapshot({ queryKey, from: start, to: end, preset, readAt: Date.now(), sources: results, accounts,
       // A narrowed window drops turns that finished before it began; they are
       // outside the window, not intervals that straddle its start.
       rows: results.flatMap((source) => (source.data?.rows ?? [])
@@ -158,6 +193,30 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         .map((row) => ({ ...row, owner: source.label, target: source.target }))) });
     setPending(false);
   };
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+
+  // Every selection change reads at once; a custom range waits for typing to
+  // pause so each keystroke in a date field is not a read.
+  useEffect(() => {
+    if (!peersReady || !desktopApi?.readUsageActivity) return;
+    const timer = window.setTimeout(() => void refreshRef.current(), preset === "custom" ? 400 : 0);
+    return () => window.clearTimeout(timer);
+  }, [queryKey, peersReady, desktopApi, preset]);
+  // Coming back to the window rereads data that has gone stale, and picks up
+  // peers that connected meanwhile.
+  useEffect(() => {
+    const onFocus = () => {
+      const current = snapshotRef.current;
+      if (!current || Date.now() - current.readAt < STALE_AFTER) return;
+      discoverPeers();
+      void refreshRef.current();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [discoverPeers]);
 
   const included = summary?.groups.flatMap((group) => group.rows) ?? [];
   // The five most expensive threads get chart colors; each keeps its color in
@@ -185,14 +244,31 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   }), { uncached: 0, cached: 0, output: 0 });
   const cacheShare = totals.cached + totals.uncached ? totals.cached / (totals.cached + totals.uncached) : 0;
   const available = snapshot?.sources.filter((source) => source.data).length ?? 0;
-  const missing = snapshot?.sources.filter((source) => source.error) ?? [];
-  const capped = snapshot?.sources.filter((source) => source.data?.truncated) ?? [];
+  const failures = (snapshot?.sources ?? []).filter((source) => source.error)
+    .map((source) => ({ ...source, kind: unavailableKind(source.error!) }));
+  const outdated = failures.filter((source) => source.kind === "outdated").map((source) => source.label);
+  const offline = [...offlineSources.map((source) => source.label),
+    ...failures.filter((source) => source.kind === "offline").map((source) => source.label)];
+  const failed = failures.filter((source) => source.kind === "failed");
+  const capped = (snapshot?.sources ?? []).filter((source) => source.data?.truncated).map((source) => source.label);
+  const coverage = [
+    outdated.length ? `${nameList(outdated)} ${outdated.length === 1 ? "needs" : "need"} a PwrAgent update to share usage` : "",
+    offline.length ? `${nameList(offline)} ${offline.length === 1 ? "is" : "are"} offline` : "",
+    failed.length ? `${nameList(failed.map((source) => source.label))} could not be read` : "",
+    capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
+  ].filter(Boolean);
   const focus = snapshot ? focusAccount(snapshot.accounts, focusKey, localLabel) : undefined;
   const lineSeries = snapshot?.preset === "five" ? fiveHourSeries(focus) : sinceResetSeries(focus);
+  const openThread = (row: OwnedUsageRow) => desktopApi?.openUsageThreadInMainWindow
+    ? () => void desktopApi.openUsageThreadInMainWindow!({
+      backend: row.line.backend as AppServerBackendKind, threadId: row.line.threadId,
+      ...row.target.scope === "remote" ? { federationTarget: row.target } : {},
+    }).catch((cause: unknown) => { if (mounted.current) setError(`Could not open the thread: ${String(cause)}`); })
+    : undefined;
 
   const inspectGroup = (group: UsageGroup) => {
     setSelectedExcluded(undefined); setSelectedKey(group.key); setAnalysis(undefined); setError(undefined);
-    const turns = group.rows.filter((row) => row.line.priceStatus === "priced");
+    const turns = group.rows.filter((row) => row.line.priceStatus === "priced" && !row.rollup);
     setTurn([...turns.length ? turns : group.rows].sort((a, b) => b.line.totalCostMicros - a.line.totalCostMicros)[0]);
     setScope("turn");
   };
@@ -215,7 +291,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const toggleSource = (id: string) => setDisabled((current) => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id);
-    else if (sources.length - next.size > 1) next.add(id);
+    else if (enabledSources.length > 1) next.add(id);
     return next;
   });
 
@@ -224,10 +300,10 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       <div className="usage-instances" role="group" aria-label="Instances">
         {sources.map((source) => {
           const id = sourceId(source.target);
-          const offline = source.status !== undefined && source.status !== "connected";
-          return <button type="button" key={id} className={`usage-instance${offline ? " is-offline" : ""}`}
-            aria-pressed={!disabled.has(id)} onClick={() => toggleSource(id)}
-            title={offline ? `${source.label} is ${source.status}` : source.label}><i aria-hidden="true" />{source.label}</button>;
+          const online = isOnline(source);
+          return <button type="button" key={id} className={`usage-instance${online ? "" : " is-offline"}`}
+            aria-pressed={online && !disabled.has(id)} disabled={!online} onClick={() => toggleSource(id)}
+            title={online ? source.label : `${source.label} is offline`}><i aria-hidden="true" />{source.label}</button>;
         })}
       </div>
       <div className="usage-segmented" role="group" aria-label="Period">
@@ -237,19 +313,21 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       {preset === "custom" ? <><label className="usage-date">From <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
         <label className="usage-date">To <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} /></label></> : null}
       <span className="usage-controls__spacer" />
-      <span className="usage-controls__asof">{snapshot ? snapshot.queryKey !== queryKey ? "Selection changed" : available ? `Read ${usageClock(Math.max(...snapshot.sources.map((source) => source.data?.readAt ?? 0)))}` : "No instances available" : Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
-      <button type="button" className="usage-button" disabled={pending || analyzing || !desktopApi?.readUsageActivity} onClick={() => void refresh()}>{pending ? "Reading…" : snapshot ? snapshot.queryKey !== queryKey ? "Apply selection" : "Refresh" : "Load activity"}</button>
+      <span className="usage-controls__asof">{snapshot ? `Read ${usageClock(snapshot.readAt)}` : Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
+      <button type="button" className="usage-button" disabled={pending || analyzing || !desktopApi?.readUsageActivity} onClick={() => void refresh()}>{pending ? "Reading…" : "Refresh"}</button>
     </div>
     {error ? <p role="alert" className="usage-error">{error}</p> : null}
-    {missing.length || capped.length ? <div className="usage-coverage" role="status"><span className="usage-status-dot is-partial" />
-      <span>{missing.map((source) => <span key={sourceId(source.target)}><strong>{source.label} is unavailable.</strong> Its threads are not listed; the limits still count its usage. <span className="usage-subtle">{source.error}</span> </span>)}
-        {capped.map((source) => <span key={sourceId(source.target)}><strong>{source.label}</strong> returned its newest 5,000 rows. Narrow the window for the rest. </span>)}</span></div> : null}
+    {coverage.length ? <div className="usage-coverage" role="status"><span className="usage-status-dot is-partial" aria-hidden="true" />
+      <span className="usage-coverage__text">Not included: {coverage.join(" · ")}.</span>
+      {failures.length ? <details className="usage-coverage__details"><summary>Details</summary>
+        <ul>{failures.map((source) => <li key={sourceId(source.target)}><strong>{source.label}</strong> {source.error}</li>)}</ul></details> : null}
+    </div> : null}
     {snapshot && summary ? <>
       <UsageLimitsBand accounts={snapshot.accounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
         cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
         cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
-        series={(summary.groups).slice(0, USAGE_SERIES).map((group) => `${group.title} · ${money(group.cost)}`)}
+        series={summary.groups.slice(0, USAGE_SERIES).map((group) => ({ title: group.title, cost: money(group.cost), onOpen: openThread(group.rows[0]) }))}
         limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined} /> : null}
       <div className={`usage-results${inspected ? " has-inspector" : ""}`}>
         <section className="usage-results__main" aria-label="Usage results">
@@ -263,7 +341,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
             ]} /></label> : null}
           </div>
           {selectedInterval && lens === "threads" ? <div className="usage-filter-note">Completed {usageClock(selectedInterval.from)}–{usageClock(selectedInterval.to)}<button type="button" onClick={() => setBucket(undefined)}>Clear time filter ×</button></div> : null}
-          {lens === "excluded" ? <p className="usage-list-note">These intervals start before the window, run past it, or were never attributed to a turn. Their whole-row prices are shown for context; none counts toward the total.</p> : null}
+          {lens === "excluded" ? <p className="usage-list-note">Only work that both started and finished in this period counts toward the total.
+            These did not, or were never tied to a turn. Their prices are shown for context and are not part of any total above.</p> : null}
           {lens === "threads" ? <div className="usage-list-head"><span>Thread / instance</span><span>When</span><span>Signals</span><span>Input · cached</span><span>API-eq.</span></div> : null}
           <div className="usage-thread-list">
             {lens === "threads" ? groups.slice(0, 250).map((group) => {
@@ -272,12 +351,12 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
               const strip = usageSpendStrip(group.rows, snapshot.from, snapshot.to);
               const stripMax = Math.max(1, ...strip);
               const signals = groupSignals(group);
-              const modelNames = [...new Set(group.rows.filter((item) => !group.helperRows.includes(item))
+              const modelNames = [...new Set(group.rows.filter((item) => !group.helperRows.includes(item) && !item.rollup)
                 .map((item) => item.line.modelLabel ?? item.line.model ?? "Unknown model"))].join(", ");
               return <button type="button" key={group.key} className={`usage-thread usage-thread--series-${series ?? "other"}`} disabled={analyzing}
                 aria-label={`Inspect ${group.title}`} aria-pressed={selectedGroup?.key === group.key} onClick={() => inspectGroup(group)}>
                 <span className="usage-thread__identity"><i className={`usage-thread__swatch usage-series--${series ?? "other"}`} aria-hidden="true" />
-                  <span><strong>{group.title}</strong><small>{row.owner} · {modelNames}{group.helperThreads ? ` · ${group.helperThreads} ${group.helperThreads === 1 ? "helper" : "helpers"}, ${money(group.helperCost)} included` : ""}</small></span></span>
+                  <span><strong>{group.title}</strong><small>{row.owner}{modelNames ? ` · ${modelNames}` : ""}{group.helperThreads ? ` · ${group.helperThreads} ${group.helperThreads === 1 ? "helper" : "helpers"}, ${money(group.helperCost)} included` : ""}</small></span></span>
                 <span className="usage-thread__strip" aria-hidden="true">{strip.map((cost, index) =>
                   <i key={index} style={cost > 0 ? { opacity: 0.3 + 0.7 * cost / stripMax } : undefined} className={cost > 0 ? `usage-series--${series ?? "other"}` : undefined} />)}</span>
                 <UsageSignals signals={signals} />
@@ -286,25 +365,28 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
               </button>;
             }) : excluded.slice(0, 250).map((row) => <button type="button" className="usage-thread usage-thread--excluded" key={`${row.line.backend}:${row.line.usageLineId}`} disabled={analyzing}
               aria-label={`Inspect ${row.title}`} aria-pressed={selectedExcluded === row} onClick={() => inspectExcluded(row)}>
-              <span className="usage-thread__identity"><span><strong>{row.title}</strong><small>{row.owner} · {time(row.line.startedAt ?? row.line.createdAt)}</small></span></span>
-              <span className="usage-thread__tokens">{row.line.scope}<small>{row.line.source} · {row.line.completedAt === undefined ? "unfinished" : "outside total"}</small></span>
-              <span className="usage-thread__cost"><strong>{row.line.priceStatus === "priced" && row.line.currency === "USD" ? money(row.line.totalCostMicros) : "Unpriced"}</strong><small>excluded</small></span>
+              <span className="usage-thread__identity"><span><strong>{row.title}</strong><small>{row.owner} · started {time(row.line.startedAt ?? row.line.createdAt)}</small></span></span>
+              <span className="usage-thread__reason">{usageNotCountedReason(row, snapshot.from, snapshot.to)}</span>
+              <span className="usage-thread__cost"><strong>{row.line.priceStatus === "priced" && row.line.currency === "USD" ? money(row.line.totalCostMicros) : "Unpriced"}</strong><small>not counted</small></span>
             </button>)}
-            {(lens === "threads" ? groups : excluded).length === 0 ? <div className="usage-empty"><strong>{search ? "No matching threads" : "No usage in this view"}</strong><p>{search ? "Try a thread title or instance name." : "Choose a wider window, or check the excluded intervals."}</p></div> : null}
-            {(lens === "threads" ? groups : excluded).length > 250 ? <p className="usage-list-note">Showing 250 results. Filter by thread name or narrow the time window.</p> : null}
+            {(lens === "threads" ? groups : excluded).length === 0 ? <div className="usage-empty"><strong>{search ? "No matching threads" : "No usage in this period"}</strong><p>{search ? "Try a thread title or instance name." : "Choose a longer period."}</p></div> : null}
+            {(lens === "threads" ? groups : excluded).length > 250 ? <p className="usage-list-note">Showing 250 results. Filter by thread name or choose a shorter period.</p> : null}
           </div>
-          <div className="usage-list-footer"><span>{summary.groups.length} threads · {summary.contained} turns contained in the window</span>
-            {lens === "threads" && summary.excluded.length ? <button type="button" className="usage-link" onClick={() => setLens("excluded")}>{summary.excluded.length} excluded {summary.excluded.length === 1 ? "interval" : "intervals"}</button>
+          <div className="usage-list-footer"><span>{summary.groups.length} threads · {summary.contained} turns in the total</span>
+            {lens === "threads" && summary.excluded.length ? <button type="button" className="usage-link" title="Work that started before this period, finished after it, or never recorded an end"
+              onClick={() => setLens("excluded")}>{summary.excluded.length} not counted</button>
               : <span>USD list-price estimate</span>}</div>
         </section>
         {inspected ? <UsageInspector group={selectedGroup} row={selectedExcluded} total={total} turn={turn}
           onTurn={(row) => { setTurn(row); setScope("turn"); setAnalysis(undefined); }} onClose={closeInspector}
+          onOpenThread={openThread(inspected)}
           scope={scope} onScope={(next) => { setScope(next); setAnalysis(undefined); }}
           models={models} model={model} onModel={setModel}
           entryLimit={entryLimit} onEntryLimit={setEntryLimit} characterLimit={characterLimit} onCharacterLimit={setCharacterLimit}
           analysis={analysis} analyzing={analyzing} canAnalyze={Boolean(desktopApi?.analyzeUsageActivity)} onAnalyze={runAnalysis} /> : null}
       </div>
-    </> : <div className="usage-empty usage-empty--initial"><span className="usage-eyebrow">Across your instances</span><h2>See where your usage goes.</h2>
-      <p>Compare your account limits with the threads that spent them, then analyze the turns behind the spend.</p><span>Choose instances and a period, then load activity.</span></div>}
+    </> : <div className="usage-empty usage-empty--initial" role="status">{pending || !peersReady
+      ? <><span className="usage-eyebrow">Reading usage</span><p>Collecting limits and spend from your instances…</p></>
+      : <><span className="usage-eyebrow">No usage read</span><p>Refresh to read usage from your instances.</p></>}</div>}
   </div>;
 }

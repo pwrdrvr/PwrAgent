@@ -1,3 +1,4 @@
+import { usageActivityCoverage, type UsageActivityRollup } from "@pwragent/shared";
 import type { OwnedUsageRow } from "./usage-activity-summary";
 
 export const usageMoney = (micros: number) => new Intl.NumberFormat(undefined, {
@@ -8,6 +9,21 @@ export const usageCount = (value: number) => new Intl.NumberFormat(undefined, {
   notation: "compact", maximumFractionDigits: 1,
 }).format(value);
 export const usageClock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+/** Why a row sits outside the window's total, in the words the list shows. */
+export function usageNotCountedReason(row: OwnedUsageRow, from: number, to: number): string {
+  if (usageActivityCoverage(row, from, to) === "unattributed") return "Not attributed to a turn";
+  const start = row.line.startedAt ?? row.line.createdAt;
+  if (row.line.completedAt === undefined) return "Still running, or its end was never recorded";
+  if (start < from) return "Started before this period";
+  return "Finished after this period";
+}
+
+const ROLLUP_LABELS: Record<string, string> = { "token-miser": "Token Miser", "title-helper": "Title helper" };
+/** "Token Miser · 42 runs" for a summed background-helper line. */
+export function usageRollupLabel(rollup: UsageActivityRollup): string {
+  return `${ROLLUP_LABELS[rollup.kind] ?? rollup.kind} · ${rollup.count} ${rollup.count === 1 ? "run" : "runs"}`;
+}
 
 export const USAGE_BUCKETS = 24;
 /** Threads beyond this many share the chart's "Other" series. */
