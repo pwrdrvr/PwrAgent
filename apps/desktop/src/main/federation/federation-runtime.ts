@@ -666,6 +666,17 @@ export function federationEventClassForMethod(
   return "transcript";
 }
 
+/** Older peers receive full events without stream sequencing or patches. */
+export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent {
+  return {
+    backend: event.backend,
+    notification: event.notification,
+    ...(event.errorNoticeContext
+      ? { errorNoticeContext: event.errorNoticeContext }
+      : {}),
+  };
+}
+
 function eventSubscriptionKey(params: {
   sourceInstanceId: FederationInstanceId;
   subscriberInstanceId: FederationInstanceId;
@@ -5413,7 +5424,7 @@ export class DesktopFederationRuntime {
               epoch: subscription.stream.epoch,
               sequence: ++subscription.stream.sequence,
             })
-          : { backend: federatedEvent.backend, notification: federatedEvent.notification };
+          : unsequencedFederationEventPayload(federatedEvent);
         this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-event:${randomUUID()}`,
           kind: "notification",

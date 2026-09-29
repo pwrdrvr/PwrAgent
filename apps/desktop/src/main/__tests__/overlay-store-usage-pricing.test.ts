@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { AutomationStore } from "../automations/automation-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
@@ -156,6 +157,53 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
     const archived = await store.readUsageActivity({ from: start, to: start + 5000 });
     expect(archived.rows[0].title).toBe("Search/Signals Agent");
+  });
+
+  it("retains a headless usage title after automation run history is pruned", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    const automations = new AutomationStore(stateDb, { runHistoryLimit: 1 });
+    automations.createAutomation({
+      id: "automation-1", backend: "codex", threadId: "agent-thread",
+      name: "Search Bots", taskPrompt: "Search", now: start,
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+    });
+    stateDb.raw.prepare(`
+      INSERT INTO thread_search_documents
+        (identity_key, backend, thread_id, title,
+         linked_directories_json, display_json, indexed_at)
+      VALUES (?, 'codex', 'agent-thread', 'Search/Signals Agent', '[]', '{}', ?)
+    `).run(buildLegacyEncodedThreadIdentityKey("codex", "agent-thread"), start);
+    automations.createRun({
+      id: "run-1", automationId: "automation-1", trigger: "scheduled", now: start,
+    });
+    automations.markRunStarted({
+      runId: "run-1", backendThreadId: "headless-thread",
+      backendTurnId: "turn-1", now: start + 1,
+    });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", startedAt: start,
+      threadId: "headless-thread",
+    }) });
+    expect(automations.getRun("run-1")?.backendThreadId).toBe("headless-thread");
+    const { writes } = await measureSqliteWrites(() => automations.createRun({
+      id: "run-2", automationId: "automation-1", trigger: "scheduled", now: start + 2,
+    }));
+    expectSqliteWriteBudget({
+      scenario: "automation-run-prune-retain-usage-title",
+      writes,
+      note: "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
+    });
+
+    expect(automations.getRun("run-1")).toBeUndefined();
+    expect(stateDb.raw.prepare(
+      "SELECT identity_key, title FROM thread_usage_titles",
+    ).all()).toEqual([{ identity_key: buildLegacyEncodedThreadIdentityKey(
+      "codex", "headless-thread",
+    ), title: "Search/Signals Agent" }]);
+    expect((await store.readUsageActivity({ from: start, to: start + 5000 })).rows[0].title)
+      .toBe("Search/Signals Agent");
   });
 
   it("keeps the last indexed title for usage after navigation prunes the thread", async () => {

@@ -1,7 +1,10 @@
 import type { AgentEvent } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
-import { eventMatchesThreadSelection } from "../federation/federation-runtime";
+import {
+  eventMatchesThreadSelection,
+  unsequencedFederationEventPayload,
+} from "../federation/federation-runtime";
 
 describe("federation error notice selection", () => {
   it("delivers a headless failure to subscribers of its visible owner thread", () => {
@@ -37,5 +40,13 @@ describe("federation error notice selection", () => {
       JSON.parse(JSON.stringify(encoded)),
     );
     expect(relayed?.errorNoticeContext).toEqual(event.errorNoticeContext);
+    const unsequenced = JSON.parse(JSON.stringify(
+      unsequencedFederationEventPayload(event),
+    )) as AgentEvent;
+    expect(unsequenced.errorNoticeContext).toEqual(event.errorNoticeContext);
+    expect(eventMatchesThreadSelection(unsequenced, "transcript", {
+      kind: "threads",
+      threads: [{ backend: "codex", threadId: "agent-thread" }],
+    })).toBe(true);
   });
 });

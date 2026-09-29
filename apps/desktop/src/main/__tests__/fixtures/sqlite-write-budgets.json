@@ -41,6 +41,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "automation-run-prune-retain-usage-title": {
+    "commits": 2,
+    "note": "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
+    "observedWalBytes": 78280,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
