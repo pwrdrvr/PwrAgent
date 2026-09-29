@@ -1049,7 +1049,7 @@ function DesktopAppShell(props: {
           notification: { method: event.notification.method, params },
           ...(instanceId ? { instanceId } : {}),
           skillQuestionsWarningDismissed:
-            props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed.value,
+            props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
           threadLabel: labelForThread(
             "codex",
             typeof params.threadId === "string" ? params.threadId : undefined,
@@ -1404,7 +1404,7 @@ function DesktopAppShell(props: {
     acknowledgeThreadSpendAlert,
     desktopApi,
     openCodexLogin,
-    props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed.value,
+    props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
   ]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
   // a smooth scroll is animated over several frames, and hiding the sidebar
