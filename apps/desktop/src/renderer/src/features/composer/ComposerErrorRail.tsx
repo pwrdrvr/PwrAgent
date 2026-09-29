@@ -9,6 +9,8 @@ export type ComposerErrorEntry = {
   /** What failed, in the operator's terms. */
   label: string;
   message: string | undefined;
+  /** Changes on every report, so an identical repeat is a new error to dismiss. */
+  occurrence?: number;
 };
 
 /**
@@ -28,7 +30,8 @@ export function ComposerErrorRail(props: {
     setDismissed((current) => {
       const next = new Map(current);
       for (const [id, message] of current) {
-        if (props.entries.find((entry) => entry.id === id)?.message !== message) {
+        const entry = props.entries.find((candidate) => candidate.id === id);
+        if (!entry || dismissalKey(entry) !== message) {
           next.delete(id);
         }
       }
@@ -38,7 +41,7 @@ export function ComposerErrorRail(props: {
 
   const visible = props.entries.filter(
     (entry): entry is ComposerErrorEntry & { message: string } =>
-      Boolean(entry.message) && dismissed.get(entry.id) !== entry.message,
+      Boolean(entry.message) && dismissed.get(entry.id) !== dismissalKey(entry),
   );
   if (visible.length === 0) return null;
 
@@ -51,12 +54,16 @@ export function ComposerErrorRail(props: {
           label={entry.label}
           message={entry.message}
           onDismiss={() => {
-            setDismissed((current) => new Map(current).set(entry.id, entry.message));
+            setDismissed((current) => new Map(current).set(entry.id, dismissalKey(entry)));
           }}
         />
       ))}
     </div>
   );
+}
+
+function dismissalKey(entry: ComposerErrorEntry): string {
+  return JSON.stringify([entry.occurrence ?? 0, entry.message]);
 }
 
 function ComposerErrorRow(props: {

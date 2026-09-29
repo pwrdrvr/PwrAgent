@@ -121,3 +121,16 @@ describe("ComposerErrorRail", () => {
     expect(screen.getByText(/npm ERR! network timeout/)).toBeInTheDocument();
   });
 });
+
+describe("ComposerErrorRail occurrences", () => {
+  it("shows an identical message again when its occurrence changes", () => {
+    const at = (occurrence: number) => [
+      { id: "action", label: "Action failed", message: "Choose a project.", occurrence },
+    ];
+    const { rerender } = render(<ComposerErrorRail entries={at(1)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    rerender(<ComposerErrorRail entries={at(3)} />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+});

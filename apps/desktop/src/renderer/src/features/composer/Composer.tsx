@@ -2941,7 +2941,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
     props.activeTurnId
   );
-  const [sendError, setSendError] = useState<string>();
+  // Each report is a new occurrence even when the text repeats, so a rail row
+  // the operator dismissed shows again when a synchronous validation failure
+  // ("Choose a project to review.") fires twice: React would otherwise bail
+  // out of `undefined` -> same string inside one handler and never re-render.
+  const [sendErrorState, setSendErrorState] = useState<{
+    message?: string;
+    occurrence: number;
+  }>({ occurrence: 0 });
+  const sendError = sendErrorState.message;
+  const setSendError = useCallback((message?: string) => {
+    setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
+  }, []);
   const [agentThreadError, setAgentThreadError] = useState<string>();
   const [environmentError, setEnvironmentError] = useState<string>();
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
@@ -10763,7 +10774,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const composerErrorEntries: readonly ComposerErrorEntry[] = [
     { id: "skills", label: "Couldn't load skills", message: props.skillError },
     { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
-    { id: "action", label: "Action failed", message: sendError },
+    {
+      id: "action",
+      label: "Action failed",
+      message: sendError,
+      occurrence: sendErrorState.occurrence,
+    },
     { id: "environment", label: "Environment error", message: environmentError },
     { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
     {
