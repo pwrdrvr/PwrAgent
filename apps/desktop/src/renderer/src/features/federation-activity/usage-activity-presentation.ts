@@ -28,6 +28,20 @@ export function usageRollupLabel(rollup: UsageActivityRollup): string {
 /** Threads beyond this many share the chart's "Other" series. */
 export const USAGE_SERIES = 5;
 
+/** What the chart stacks spend by. */
+export type UsageDimension = "thread" | "model" | "provider" | "instance";
+
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: "OpenAI", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
+};
+
+/** A row's model, provider or owning instance, as the legend names it. */
+export function usageDimensionValue(row: OwnedUsageRow, dimension: Exclude<UsageDimension, "thread">): string {
+  if (dimension === "instance") return row.owner;
+  if (dimension === "provider") return PROVIDER_LABELS[row.line.provider] ?? row.line.provider;
+  return row.line.modelLabel ?? row.line.model ?? "Unknown model";
+}
+
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 

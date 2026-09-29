@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { AppServerBackendKind, BackendModelOption, FederationTarget, ReadUsageActivityResponse } from "@pwragent/shared";
 import { UsageTimeline, type UsageChartForecast } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
-import { USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
+import { USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
+import { USAGE_RESULTS_MAX_HEIGHT, USAGE_RESULTS_MIN_HEIGHT, clampUsageResultsHeight, readStoredUsageResultsHeight,
+  writeStoredUsageResultsHeight } from "./usage-activity-layout";
 
 const DAY = 86_400_000;
 const MAX_WINDOW = 31 * DAY;
@@ -59,6 +61,8 @@ function unavailableKind(error: string): "outdated" | "offline" | "failed" {
   return "failed";
 }
 
+const DIMENSION_LABELS: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", instance: "Instance" };
+
 /** One analysis per thread and turn; its answer stays with it while the operator looks elsewhere. */
 const analysisKey = (row: OwnedUsageRow, turnId: string | undefined) =>
   `${sourceId(row.target)}|${row.line.backend}|${row.line.threadId}|${turnId ?? "recent"}`;
@@ -94,6 +98,9 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("cost");
   const [bucket, setBucket] = useState<number>();
+  const [dimension, setDimension] = useState<UsageDimension>("thread");
+  // One model, provider or instance the thread list is narrowed to.
+  const [facet, setFacet] = useState<string>();
   const [from, setFrom] = useState(() => { const day = new Date(); day.setHours(0, 0, 0, 0); return localDate(day); });
   const [to, setTo] = useState(() => localDate(new Date()));
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -110,6 +117,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [characterLimit, setCharacterLimit] = useState("20000");
   const [analysis, setAnalysis] = useState<UsageAnalysis>();
   const [dismissedCoverage, setDismissedCoverage] = useState<string>();
+  const [resultsHeight, setResultsHeight] = useState(readStoredUsageResultsHeight);
+  const resultsRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
   const readSeq = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -192,7 +201,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const sameQuery = snapshot?.queryKey === queryKey;
     setPending(true); setError(undefined);
     if (!sameQuery) {
-      setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined);
+      setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
     }
     let results = await readAll(enabledSources, start, end);
     if (!mounted.current || seq !== readSeq.current) return;
@@ -242,18 +251,40 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   }, [discoverPeers]);
 
   const included = summary?.groups.flatMap((group) => group.rows) ?? [];
-  // The five most expensive threads get chart colors; each keeps its color in
-  // every row, strip, and legend entry.
-  const seriesIndex = new Map((summary?.groups ?? []).slice(0, USAGE_SERIES).map((group, index) => [group.key, index]));
+  const instances = (snapshot?.sources ?? []).filter((source) => source.data).length;
+  const shownDimension: UsageDimension = dimension === "instance" && instances < 2 ? "thread" : dimension;
+  // The five most expensive threads (or models, providers, instances) get
+  // chart colors; a thread keeps its color in every row, strip, and legend entry.
+  const seriesIndex = new Map(shownDimension === "thread"
+    ? (summary?.groups ?? []).slice(0, USAGE_SERIES).map((group, index) => [group.key, index]) : []);
   const rowSeries = new Map<OwnedUsageRow, number>();
-  for (const group of summary?.groups ?? []) {
-    const index = seriesIndex.get(group.key);
-    if (index !== undefined) for (const row of group.rows) rowSeries.set(row, index);
+  let facets: Array<{ value: string; cost: number }> = [];
+  if (shownDimension === "thread") {
+    for (const group of summary?.groups ?? []) {
+      const index = seriesIndex.get(group.key);
+      if (index !== undefined) for (const row of group.rows) rowSeries.set(row, index);
+    }
+  } else {
+    const costs = new Map<string, number>();
+    for (const row of included) {
+      const value = usageDimensionValue(row, shownDimension);
+      costs.set(value, (costs.get(value) ?? 0) + (row.line.priceStatus === "priced" && row.line.currency === "USD" ? row.line.totalCostMicros : 0));
+    }
+    facets = [...costs].map(([value, cost]) => ({ value, cost })).sort((a, b) => b.cost - a.cost);
+    const index = new Map(facets.slice(0, USAGE_SERIES).map((item, position) => [item.value, position]));
+    for (const row of included) {
+      const position = index.get(usageDimensionValue(row, shownDimension));
+      if (position !== undefined) rowSeries.set(row, position);
+    }
   }
+  const activeFacet = shownDimension !== "thread" && facet !== undefined && facets.some((item) => item.value === facet) ? facet : undefined;
   const buckets = snapshot ? usageCompletionBuckets(included, snapshot.from, snapshot.to, (row) => rowSeries.get(row)) : undefined;
   const selectedInterval = bucket === undefined ? undefined : buckets?.[bucket];
-  const filteredSummary = snapshot && selectedInterval
-    ? summarizeUsageActivity(included.filter((row) => row.line.completedAt! >= selectedInterval.from && row.line.completedAt! < selectedInterval.to), snapshot.from, snapshot.to)
+  const filteredSummary = snapshot && (selectedInterval || activeFacet !== undefined)
+    ? summarizeUsageActivity(included.filter((row) => (!selectedInterval
+      || (row.line.completedAt! >= selectedInterval.from && row.line.completedAt! < selectedInterval.to))
+      && (activeFacet === undefined || usageDimensionValue(row, shownDimension as Exclude<UsageDimension, "thread">) === activeFacet)),
+    snapshot.from, snapshot.to)
     : summary;
   const matches = (text: string) => text.toLocaleLowerCase().includes(search.toLocaleLowerCase());
   const groups = [...(filteredSummary?.groups ?? [])].filter((group) => matches(`${group.title} ${group.rows[0].owner} ${group.rows[0].line.threadId}`))
@@ -317,6 +348,29 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       .then((result) => settle({ ...started, status: "done", result }))
       .catch((cause: unknown) => settle({ ...started, status: "failed", error: plainError(cause) }));
   };
+  // The grip under the thread list sets its height; double-click returns it to filling the window.
+  const resizeResults = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const grip = event.currentTarget;
+    const startY = event.clientY;
+    const startHeight = resultsRef.current?.getBoundingClientRect().height ?? USAGE_RESULTS_MIN_HEIGHT;
+    let latest = startHeight;
+    grip.setPointerCapture?.(event.pointerId);
+    const move = (next: PointerEvent) => { latest = clampUsageResultsHeight(startHeight + next.clientY - startY); setResultsHeight(latest); };
+    const end = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", end);
+      grip.removeEventListener("pointercancel", end);
+      writeStoredUsageResultsHeight(latest);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  };
+  const nudgeResults = (delta: number) => {
+    const next = clampUsageResultsHeight((resultsHeight ?? resultsRef.current?.getBoundingClientRect().height ?? USAGE_RESULTS_MIN_HEIGHT) + delta);
+    setResultsHeight(next);
+    writeStoredUsageResultsHeight(next);
+  };
   const toggleSource = (id: string) => setDisabled((current) => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id);
@@ -358,10 +412,16 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
         cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
-        series={summary.groups.slice(0, USAGE_SERIES).map((group) => ({ title: group.title, cost: money(group.cost), onOpen: openThread(group.rows[0]) }))}
+        dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
+        dimensions={instances > 1 ? ["thread", "model", "provider", "instance"] : ["thread", "model", "provider"]}
+        series={shownDimension === "thread"
+          ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ title: group.title, cost: money(group.cost), onOpen: openThread(group.rows[0]) }))
+          : facets.slice(0, USAGE_SERIES).map((item) => ({ title: item.value, cost: money(item.cost), filtered: activeFacet === item.value,
+            onFilter: () => setFacet((current) => current === item.value ? undefined : item.value) }))}
         limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined}
         forecast={forecast} /> : null}
-      <div className={`usage-results${inspected ? " has-inspector" : ""}`}>
+      <div className={`usage-results${inspected ? " has-inspector" : ""}`} ref={resultsRef}
+        style={resultsHeight === undefined ? undefined : { flex: "none", height: resultsHeight }}>
         <section className="usage-results__main" aria-label="Usage results">
           <div className="usage-results__toolbar">
             {lens === "threads" ? <span className="usage-results__title"><span className="usage-eyebrow">Threads</span> <span className="usage-subtle">{filteredSummary?.groups.length ?? 0}</span></span>
@@ -373,6 +433,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
             ]} /></label> : null}
           </div>
           {selectedInterval && lens === "threads" ? <div className="usage-filter-note">Completed {usageBucketLabel(selectedInterval, snapshot.to)}<button type="button" onClick={() => setBucket(undefined)}>Clear time filter ×</button></div> : null}
+          {activeFacet !== undefined && lens === "threads" ? <div className="usage-filter-note">{DIMENSION_LABELS[shownDimension]}: {activeFacet}<button type="button" onClick={() => setFacet(undefined)}>Clear {DIMENSION_LABELS[shownDimension].toLocaleLowerCase()} filter ×</button></div> : null}
           {lens === "excluded" ? <p className="usage-list-note">Only work that both started and finished in this period counts toward the total.
             These did not, or were never tied to a turn. Their prices are shown for context and are not part of any total above.</p> : null}
           {lens === "threads" ? <div className="usage-list-head"><span>Thread / instance</span><span>When</span><span>Signals</span><span>Input · cached</span><span>API-eq.</span></div> : null}
@@ -417,6 +478,17 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
           entryLimit={entryLimit} onEntryLimit={setEntryLimit} characterLimit={characterLimit} onCharacterLimit={setCharacterLimit}
           analysis={analysis?.key === currentAnalysisKey ? analysis : undefined} analyzing={analyzing} canAnalyze={Boolean(desktopApi?.analyzeUsageActivity)} onAnalyze={runAnalysis} /> : null}
       </div>
+      <div className="usage-results-grip" role="separator" aria-orientation="horizontal" aria-label="Resize thread list"
+        aria-valuenow={Math.round(resultsHeight ?? resultsRef.current?.getBoundingClientRect().height ?? USAGE_RESULTS_MIN_HEIGHT)}
+        aria-valuemin={USAGE_RESULTS_MIN_HEIGHT} aria-valuemax={USAGE_RESULTS_MAX_HEIGHT} tabIndex={0}
+        title="Drag to resize. Double-click to fit the window."
+        onPointerDown={resizeResults}
+        onDoubleClick={() => { setResultsHeight(undefined); writeStoredUsageResultsHeight(undefined); }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+          event.preventDefault();
+          nudgeResults(event.key === "ArrowDown" ? 24 : -24);
+        }}><span aria-hidden="true" /></div>
     </> : <div className="usage-empty usage-empty--initial" role="status">{pending || !peersReady
       ? <><span className="usage-eyebrow">Reading usage</span><p>Collecting limits and spend from your instances…</p></>
       : <><span className="usage-eyebrow">No usage read</span><p>Refresh to read usage from your instances.</p></>}</div>}

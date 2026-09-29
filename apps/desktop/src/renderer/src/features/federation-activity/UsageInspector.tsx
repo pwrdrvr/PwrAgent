@@ -60,17 +60,15 @@ export function UsageInspector(props: {
   const { group, turn, analyzing, analysis } = props;
   const running = analysis?.status === "running";
   const elapsed = useElapsed(analysis?.startedAt, running);
-  const resultRef = useRef<HTMLDivElement>(null);
-  // The answer lands below the turn list; bring it into view when it arrives.
-  const settledKey = analysis && !running ? `${analysis.key}@${analysis.startedAt}` : undefined;
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Once this turn has an analysis the inspector splits into Details and
+  // Analysis, and moves to Analysis when it starts and again when it lands.
+  const [tab, setTab] = useState<"details" | "analysis">("details");
+  const analysisMark = analysis ? `${analysis.key}@${analysis.startedAt}:${analysis.status}` : undefined;
   useEffect(() => {
-    const result = resultRef.current, body = bodyRef.current;
-    if (!settledKey || !result || !body) return;
-    // Scroll the inspector alone; the window stays where the operator left it.
-    const offset = result.getBoundingClientRect().top - body.getBoundingClientRect().top;
-    if (offset > body.clientHeight - 40 || offset < 0) body.scrollTo?.({ top: body.scrollTop + offset - 8, behavior: "smooth" });
-  }, [settledKey]);
+    setTab(analysisMark ? "analysis" : "details");
+    bodyRef.current?.scrollTo?.({ top: 0 });
+  }, [analysisMark]);
   const lead = group?.rows[0] ?? props.row!;
   const turns = group ? [...group.rows].sort((a, b) => (b.line.completedAt ?? 0) - (a.line.completedAt ?? 0)) : [];
   const largest = Math.max(1, ...turns.map((row) => priced(row) ? row.line.totalCostMicros : 0));
@@ -78,6 +76,57 @@ export function UsageInspector(props: {
   const turnScope = props.scope === "turn" && target.line.turnId !== undefined && !target.rollup;
   const models = [{ value: "gpt-6-luna", label: "GPT-6-Luna" },
     ...props.models.filter((item) => item.id !== "gpt-6-luna").map((item) => ({ value: item.id, label: item.label ?? item.id }))];
+
+  const turnList = group ? <div className="usage-turns">
+    <div className="usage-eyebrow">Turns in window <span className="usage-subtle">· cached · cost</span></div>
+    <div className="usage-turns__list" role="group" aria-label="Turns in window">
+      {turns.slice(0, 40).map((row) => {
+        const isHelper = group.helperRows.includes(row);
+        const signals = turnSignals(row.line, isHelper ? row.title : undefined, row.rollup);
+        return <button type="button" key={row.line.usageLineId} className="usage-turn" aria-pressed={row === turn}
+          aria-label={`Turn ${usageClock(row.line.startedAt ?? row.line.createdAt)} to ${usageClock(row.line.completedAt!)}${isHelper ? `, helper ${row.title}` : ""}`}
+          onClick={() => props.onTurn(row)}>
+          <time>{usageClock(row.line.startedAt ?? row.line.createdAt)}–{usageClock(row.line.completedAt!)}</time>
+          <span className="usage-turn__cache">{cacheShare(row)}%</span>
+          <span className="usage-turn__meter"><i style={{ width: `${priced(row) ? row.line.totalCostMicros / largest * 100 : 0}%` }} /></span>
+          <strong>{priced(row) ? usageMoney(row.line.totalCostMicros) : "—"}</strong>
+          {signals.length ? <UsageSignals signals={signals} /> : null}
+        </button>;
+      })}
+    </div>
+    {turns.length > 40 ? <p className="usage-list-note">Showing the 40 latest turns.</p> : null}
+  </div> : null;
+
+  const settings = <section className="usage-analysis" aria-label="Analyze usage">
+    <div className="usage-eyebrow">{analysis ? "Analyze again" : "Analyze"}</div>
+    <div className="usage-analysis__row"><span>Read</span>
+      <div className="usage-segmented" role="group" aria-label="Analysis scope">
+        <button type="button" aria-pressed={props.scope === "turn"} disabled={analyzing || target.line.turnId === undefined || target.rollup !== undefined} onClick={() => props.onScope("turn")}>Selected turn</button>
+        <button type="button" aria-pressed={props.scope === "recent"} disabled={analyzing} onClick={() => props.onScope("recent")}>Recent entries</button>
+      </div></div>
+    <label className="usage-analysis__row"><span>Model</span><Select value={props.model} onChange={props.onModel} disabled={analyzing} options={models} /></label>
+    <details className="usage-analysis__limits"><summary>Limits · {props.entryLimit} entries, {Number(props.characterLimit).toLocaleString()} characters</summary>
+      <div><label>Entries <Select value={props.entryLimit} onChange={props.onEntryLimit} disabled={analyzing} options={["20", "40", "100"].map((value) => ({ value, label: value }))} /></label>
+        <label>Characters <Select value={props.characterLimit} onChange={props.onCharacterLimit} disabled={analyzing} options={["10000", "20000", "40000"].map((value) => ({ value, label: Number(value).toLocaleString() }))} /></label></div>
+    </details>
+    <p className="usage-analysis__scope">{turnScope
+      ? `Reads the turn from ${usageClock(target.line.startedAt ?? target.line.createdAt)} on ${target.owner}. If it is older than the last 50 turns, the recent entries are read instead.`
+      : `Reads the thread's most recent entries on ${target.owner}. They may not include the turns in this window.`}
+      {" "}This is a model call of its own, and it uses your limit. Analysis runs on Codex models.</p>
+  </section>;
+
+  const outcome = analysis?.status === "done" ? <div className="usage-analysis__result" role="status">
+    <div className="usage-eyebrow">{analysis.result.model}{analysis.result.scope === "turn" ? " · selected turn" : analysis.result.scope === "recent" ? " · recent entries" : ""}</div>
+    <p>Read {analysis.result.entries} entries · {analysis.result.characters.toLocaleString()} characters{analysis.result.truncated ? " · partial" : ""}
+      {turnScope && analysis.result.scope === "recent" ? " · the turn was out of reach" : ""}</p>
+    <pre>{analysis.result.analysis.trim() || "The model returned no text."}</pre>
+    <p>Model output. Check it against the transcript. Not saved.</p>
+  </div> : analysis?.status === "failed" ? <div className="usage-analysis__result usage-analysis__result--failed" role="alert">
+    <div className="usage-eyebrow">Analysis failed</div>
+    <pre>{analysis.error}</pre>
+  </div> : running ? <p className="usage-analysis__waiting">Waiting for {analysis.modelLabel}. The answer appears here.</p> : null;
+
+  const selectTab = (next: "details" | "analysis") => { setTab(next); bodyRef.current?.scrollTo?.({ top: 0 }); };
   return <aside className="usage-inspector" aria-label="Usage inspection">
     <div className="usage-inspector__body" ref={bodyRef}>
       <div className="usage-inspector__heading"><span className="usage-eyebrow">{group ? "Thread" : "Excluded interval"}</span>
@@ -89,53 +138,23 @@ export function UsageInspector(props: {
         <span>{group
           ? `${props.total ? Math.round(group.cost / props.total * 100) : 0}% of the window · ${group.rows.length} ${group.rows.length === 1 ? "turn" : "turns"}${group.helperThreads ? `, ${usageMoney(group.helperCost)} from helpers` : ""}`
           : "from the window total"}</span></div>
-      {group ? <div className="usage-turns">
-        <div className="usage-eyebrow">Turns in window <span className="usage-subtle">· cached · cost</span></div>
-        <div className="usage-turns__list" role="group" aria-label="Turns in window">
-          {turns.slice(0, 40).map((row) => {
-            const isHelper = group.helperRows.includes(row);
-            const signals = turnSignals(row.line, isHelper ? row.title : undefined, row.rollup);
-            return <button type="button" key={row.line.usageLineId} className="usage-turn" aria-pressed={row === turn}
-              aria-label={`Turn ${usageClock(row.line.startedAt ?? row.line.createdAt)} to ${usageClock(row.line.completedAt!)}${isHelper ? `, helper ${row.title}` : ""}`}
-              onClick={() => props.onTurn(row)}>
-              <time>{usageClock(row.line.startedAt ?? row.line.createdAt)}–{usageClock(row.line.completedAt!)}</time>
-              <span className="usage-turn__cache">{cacheShare(row)}%</span>
-              <span className="usage-turn__meter"><i style={{ width: `${priced(row) ? row.line.totalCostMicros / largest * 100 : 0}%` }} /></span>
-              <strong>{priced(row) ? usageMoney(row.line.totalCostMicros) : "—"}</strong>
-              {signals.length ? <UsageSignals signals={signals} /> : null}
-            </button>;
-          })}
+      {analysis && group ? <>
+        <div className="usage-inspector__tabs" role="tablist" aria-label="Inspection"
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const next = tab === "details" ? "analysis" : "details";
+            selectTab(next);
+            event.currentTarget.querySelector<HTMLElement>(`#usage-inspector-tab-${next}`)?.focus();
+          }}>
+          {(["details", "analysis"] as const).map((key) => <button type="button" role="tab" key={key} id={`usage-inspector-tab-${key}`}
+            aria-selected={tab === key} aria-controls="usage-inspector-panel" tabIndex={tab === key ? 0 : -1}
+            onClick={() => selectTab(key)}>{key === "details" ? "Details" : "Analysis"}{key === "analysis" && running ? <span className="pending-spinner pending-spinner--sm" aria-hidden="true" /> : null}</button>)}
         </div>
-        {turns.length > 40 ? <p className="usage-list-note">Showing the 40 latest turns.</p> : null}
-      </div> : null}
-      <section className="usage-analysis" aria-label="Analyze usage">
-        <div className="usage-eyebrow">Analyze</div>
-        <div className="usage-analysis__row"><span>Read</span>
-          <div className="usage-segmented" role="group" aria-label="Analysis scope">
-            <button type="button" aria-pressed={props.scope === "turn"} disabled={analyzing || target.line.turnId === undefined || target.rollup !== undefined} onClick={() => props.onScope("turn")}>Selected turn</button>
-            <button type="button" aria-pressed={props.scope === "recent"} disabled={analyzing} onClick={() => props.onScope("recent")}>Recent entries</button>
-          </div></div>
-        <label className="usage-analysis__row"><span>Model</span><Select value={props.model} onChange={props.onModel} disabled={analyzing} options={models} /></label>
-        <details className="usage-analysis__limits"><summary>Limits · {props.entryLimit} entries, {Number(props.characterLimit).toLocaleString()} characters</summary>
-          <div><label>Entries <Select value={props.entryLimit} onChange={props.onEntryLimit} disabled={analyzing} options={["20", "40", "100"].map((value) => ({ value, label: value }))} /></label>
-            <label>Characters <Select value={props.characterLimit} onChange={props.onCharacterLimit} disabled={analyzing} options={["10000", "20000", "40000"].map((value) => ({ value, label: Number(value).toLocaleString() }))} /></label></div>
-        </details>
-        <p className="usage-analysis__scope">{turnScope
-          ? `Reads the turn from ${usageClock(target.line.startedAt ?? target.line.createdAt)} on ${target.owner}. If it is older than the last 50 turns, the recent entries are read instead.`
-          : `Reads the thread's most recent entries on ${target.owner}. They may not include the turns in this window.`}
-          {" "}This is a model call of its own, and it uses your limit.</p>
-        {analysis?.status === "done" ? <div className="usage-analysis__result" ref={resultRef} role="status">
-          <div className="usage-eyebrow">{analysis.result.model}{analysis.result.scope === "turn" ? " · selected turn" : analysis.result.scope === "recent" ? " · recent entries" : ""}</div>
-          <p>Read {analysis.result.entries} entries · {analysis.result.characters.toLocaleString()} characters{analysis.result.truncated ? " · partial" : ""}
-            {turnScope && analysis.result.scope === "recent" ? " · the turn was out of reach" : ""}</p>
-          <pre>{analysis.result.analysis.trim() || "The model returned no text."}</pre>
-          <p>Model output. Check it against the transcript. Not saved.</p>
-        </div> : null}
-        {analysis?.status === "failed" ? <div className="usage-analysis__result usage-analysis__result--failed" ref={resultRef} role="alert">
-          <div className="usage-eyebrow">Analysis failed</div>
-          <pre>{analysis.error}</pre>
-        </div> : null}
-      </section>
+        <div id="usage-inspector-panel" role="tabpanel" aria-labelledby={`usage-inspector-tab-${tab}`}>
+          {tab === "details" ? turnList : <>{outcome}{settings}</>}
+        </div>
+      </> : <>{turnList}{outcome}{settings}</>}
     </div>
     <div className="usage-inspector__footer">
       {running ? <p className="usage-inspector__progress" role="status">

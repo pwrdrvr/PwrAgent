@@ -57,6 +57,12 @@ it("reads on open, skips offline peers, names outdated ones, and analyzes the se
   fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
   await screen.findByText("A bounded diagnosis.");
   expect(screen.getByRole("button", { name: "Analyze turn again" })).toBeEnabled();
+  // An analyzed turn splits the inspector, landing on its answer.
+  expect(screen.getByRole("tab", { name: "Analysis" })).toHaveAttribute("aria-selected", "true");
+  fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+  expect(screen.getByRole("group", { name: "Turns in window" })).toBeInTheDocument();
+  expect(screen.queryByText("A bounded diagnosis.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Analysis" }));
   expect(analyzeUsageActivity).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread", turnId: "turn",
     federationTarget: { scope: "remote", instanceId: "owner" }, model: "gpt-6-luna", entryLimit: 40, characterLimit: 20000 });
 
@@ -113,6 +119,59 @@ it("warns when the pace reaches the limit before its reset and draws that ahead 
   choosePeriod("7 days");
   await waitFor(() => expect(screen.queryByText("Now")).not.toBeInTheDocument());
   expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
+});
+
+it("stacks spend by model, provider or instance, and narrows the threads to one", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const turn = (id: string, extra: Record<string, unknown>) => ({ ...usageFixture({ threadId: id, usageLineId: id,
+    createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR, ...extra }), title: `${id} thread` });
+  const readUsageActivity = vi.fn(async (request) => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: request.federationTarget?.scope === "local"
+      ? [turn("codex", { model: "gpt-6", modelLabel: "GPT-6", totalCostMicros: 2_000_000 })]
+      : [turn("grok", { backend: "acp:grok", provider: "xai", model: "grok-5", modelLabel: "Grok 5", totalCostMicros: 1_000_000 })] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "owner", label: "Owner", status: "connected" }]) }} />);
+  await screen.findByRole("button", { name: "Inspect grok thread" });
+  const spendBy = screen.getByRole("group", { name: "Spend by" });
+  expect(within(spendBy).getAllByRole("button").map((button) => button.textContent)).toEqual(["Thread", "Model", "Provider", "Instance"]);
+
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
+  expect(screen.getByRole("button", { name: /^OpenAI · \$2\.00$/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^xAI · \$1\.00$/ }));
+  expect(screen.getByText("Provider: xAI")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect codex thread" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect grok thread" })).toBeInTheDocument();
+
+  // Another dimension drops the filter.
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Instance" }));
+  expect(screen.getByRole("button", { name: "Inspect codex thread" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Owner · \$1\.00$/ })).toBeInTheDocument();
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Model" }));
+  expect(screen.getByRole("button", { name: /^Grok 5 · \$1\.00$/ })).toBeInTheDocument();
+});
+
+it("keeps the thread list at the height its grip was set to", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  window.localStorage.removeItem("pwragent.usageActivity.layout");
+  const readUsageActivity = vi.fn(async () => ({ rows: [usageFixture({ createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR })],
+    readAt: now, rateLimits: [], truncated: false }));
+  const first = render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const grip = await screen.findByRole("separator", { name: "Resize thread list" });
+  expect(document.querySelector(".usage-results")).not.toHaveAttribute("style");
+  // jsdom measures nothing, so the first step lands on the floor and the next adds to it.
+  fireEvent.keyDown(grip, { key: "ArrowDown" });
+  expect(document.querySelector(".usage-results")).toHaveStyle({ height: "220px" });
+  fireEvent.keyDown(grip, { key: "ArrowDown" });
+  expect(document.querySelector(".usage-results")).toHaveStyle({ height: "244px" });
+  first.unmount();
+
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const again = await screen.findByRole("separator", { name: "Resize thread list" });
+  expect(document.querySelector(".usage-results")).toHaveStyle({ height: "244px" });
+  fireEvent.doubleClick(again);
+  expect((document.querySelector(".usage-results") as HTMLElement).style.height).toBe("");
+  expect(window.localStorage.getItem("pwragent.usageActivity.layout")).toBeNull();
 });
 
 it("rereads when the period or instances change, and on focus once the data is stale", async () => {

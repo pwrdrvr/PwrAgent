@@ -101,7 +101,8 @@ them.
 ## Chart and ranking
 
 The chart stacks each completed turn's API-equivalent cost at its completion
-time. Bars are clock steps (15 or 30 minutes, 1, 2, 3, 6 or 12 hours, or a
+time, by **Thread**, **Model**, **Provider** (OpenAI, xAI, …) or, with more
+than one instance read, **Instance**. Bars are clock steps (15 or 30 minutes, 1, 2, 3, 6 or 12 hours, or a
 day), the finest that keeps the window within 40 bars, starting on local
 quarter hours, hours or midnight; only the first and last bar can be partial,
 and a bar's width is its span. The readout and time filter name a bar by its
@@ -116,7 +117,11 @@ The future takes at most 40% of the width, so the bars stay selectable; an
 outcome beyond that edge is labelled at the edge. Clock periods show history
 only. Bars are not
 estimates of spend rate within a bucket. Selecting a bar filters the ranking
-while the totals keep the full window.
+while the totals keep the full window. With Model, Provider or Instance chosen,
+a legend entry narrows the ranking to that model, provider or instance's spend
+instead of opening a thread. The grip under the ranking drags it taller or
+shorter; the height is kept in this machine's local storage, never synced, and
+a double-click returns it to filling the window.
 
 Rows carry signals when the ledger observed them: cold replays (a warning at
 three or more), peak context share (noted at 75%, a warning at 90%), fast mode
@@ -128,7 +133,10 @@ snapshot and do not request more data or invoke analysis.
 
 ## Analysis
 
-Selecting a thread opens its turns in the window. **Analyze turn** makes one
+Selecting a thread opens its turns in the window. Once a turn has been
+analyzed, the inspector splits into **Details** (the turns) and **Analysis**
+(the answer, then the settings to run it again), and moves to Analysis when
+the answer lands. **Analyze turn** makes one
 explicit model call on the turn's owner, defaulting to GPT-6-Luna. It pages
 back through thread history for that turn, at most five pages of ten turns.
 If the turn is out of reach it reads the recent entries instead, and the
@@ -137,7 +145,9 @@ trimmed to the operator's 1–100 entry and 1,000–40,000 character bounds.
 
 Remote analysis requires `turn_control`; transcript-read permission alone
 cannot start this model call. The owner supplies its available Codex model
-choices. Only text and activity descriptions enter the prompt. Images,
+choices. Analysis runs on Codex only: ACP agents such as Grok have no one-shot
+structured call yet, though a Grok thread's transcript can be analyzed by a
+Codex model. Only text and activity descriptions enter the prompt. Images,
 full-history walks, automatic analysis fanout and Codex storage-file reads are
 excluded. While it runs, the inspector shows the owner, the model and the
 elapsed time; the thread list stays usable, and only a second analysis waits.

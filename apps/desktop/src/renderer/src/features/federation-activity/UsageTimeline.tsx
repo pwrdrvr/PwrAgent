@@ -1,10 +1,15 @@
 import { useState } from "react";
-import { usageBucketLabel, usageMoney, type UsageBucket } from "./usage-activity-presentation";
+import { usageBucketLabel, usageMoney, type UsageBucket, type UsageDimension } from "./usage-activity-presentation";
 import type { LimitPoint, LimitReset } from "./usage-limits";
 
 export type UsageChartLimit = { label: string; points: LimitPoint[]; resets: LimitReset[] };
-/** A stacked thread: its title, its cost label, and how to open it, when it can be. */
-export type UsageChartSeries = { title: string; cost: string; onOpen?: () => void };
+/**
+ * A stacked series: a thread, which can open in the main window, or a model,
+ * provider or instance, which narrows the thread list to itself.
+ */
+export type UsageChartSeries = { title: string; cost: string; onOpen?: () => void; onFilter?: () => void; filtered?: boolean };
+
+const DIMENSION_NAMES: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", instance: "Instance" };
 /**
  * The current pace carried forward from the newest reading to the limit's
  * reset, or to 100% when it gets there first. The chart extends past now to
@@ -60,7 +65,7 @@ function limitSegments(limit: UsageChartLimit, from: number, to: number) {
   return segments.filter((segment) => segment.length > 0);
 }
 
-export function UsageTimeline({ buckets, series, limit, forecast, selected, onSelect }: {
+export function UsageTimeline({ buckets, series, limit, forecast, selected, onSelect, dimension, dimensions, onDimension }: {
   buckets: UsageBucket[];
   /** The stacked threads, in series order. */
   series: UsageChartSeries[];
@@ -68,6 +73,9 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
   forecast?: UsageChartForecast;
   selected?: number;
   onSelect: (index: number | undefined) => void;
+  dimension: UsageDimension;
+  dimensions: UsageDimension[];
+  onDimension: (dimension: UsageDimension) => void;
 }) {
   const [hovered, setHovered] = useState<number>();
   const from = buckets[0].from;
@@ -100,7 +108,10 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
   ];
   return <figure className="usage-timeline">
     <figcaption className="usage-timeline__head">
-      <span className="usage-eyebrow">Spend by thread</span>
+      <span className="usage-eyebrow">Spend by</span>
+      <span className="usage-segmented usage-timeline__dimension" role="group" aria-label="Spend by">
+        {dimensions.map((item) => <button type="button" key={item} aria-pressed={dimension === item}
+          onClick={() => onDimension(item)}>{DIMENSION_NAMES[item]}</button>)}</span>
       <span>API-equivalent, each turn placed at its completion</span>
       <span className="usage-timeline__spacer" />
       {segments.length ? <span className="usage-timeline__key"><i className="usage-timeline__key-line" />{limit!.label} used, observed</span> : null}
@@ -145,11 +156,15 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
     <div className="usage-timeline__axis"><div className="usage-timeline__ticks">
       {ticks.map((tick) => <span key={tick.at} className={tick.edge ? "is-end" : undefined} style={{ left: `${x(tick.at)}%` }}>{tick.text}</span>)}</div></div>
     <div className="usage-timeline__legend">
-      {series.map((item, index) => item.onOpen
+      {series.map((item, index) => item.onFilter
+        ? <button type="button" key={index} className="usage-timeline__legend-item" aria-pressed={item.filtered ?? false}
+          title={item.filtered ? "Show every thread" : `Show only ${item.title}`} onClick={item.onFilter}>
+          <i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
+        : item.onOpen
         ? <button type="button" key={index} className="usage-timeline__legend-item" title={`Open ${item.title}`}
           aria-label={`Open ${item.title}`} onClick={item.onOpen}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
         : <span key={index} className="usage-timeline__legend-item" title={item.title}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</span>)}
-      {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other threads</span> : null}
+      {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other {dimension === "thread" ? "threads" : dimension === "model" ? "models" : dimension === "provider" ? "providers" : "instances"}</span> : null}
     </div>
     <p className="usage-timeline__readout">{active
       ? `${usageBucketLabel(active, to)} · ${usageMoney(active.cost)} · ${active.rows} completed ${active.rows === 1 ? "turn" : "turns"}`

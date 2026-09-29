@@ -38448,11 +38448,18 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__legend-item i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
 button.usage-timeline__legend-item:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
 button.usage-timeline__legend-item:hover > span { text-decoration: underline; }
+button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-row-active); color: var(--text-primary); }
+.usage-timeline__dimension button { padding: 2px 8px; font-size: 10px; }
 .usage-timeline__readout { min-height: 16px; margin: 6px 0 0; color: var(--text-secondary); font: 10px var(--font-mono); }
 
 /* Thread list */
 .usage-results { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1 0 280px; min-height: 280px; margin: 8px 18px 0; }
 .usage-results.has-inspector { grid-template-columns: minmax(0, 1fr) 330px; }
+/* Pulls the thread list taller or shorter; the height persists per machine. */
+.usage-results-grip { position: relative; flex: none; height: 14px; margin: 0 18px 10px; border-top: 1px solid var(--border-subtle); cursor: row-resize; touch-action: none; }
+.usage-results-grip span { position: absolute; top: 5px; left: 50%; width: 36px; height: 3px; margin-left: -18px; border-radius: 999px; background: var(--border-strong); }
+.usage-results-grip:hover span, .usage-results-grip:focus-visible span { background: var(--accent); }
+.usage-results-grip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .usage-results__main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .usage-results__toolbar { display: flex; flex: none; align-items: center; gap: 10px; min-height: 36px; }
 .usage-results__title { font-size: 11px; }
@@ -38492,6 +38499,11 @@ button.usage-timeline__legend-item:hover > span { text-decoration: underline; }
 .usage-inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; margin-left: 16px; padding-left: 16px; border-left: 1px solid var(--border-subtle); }
 .usage-inspector__body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 14px; }
 .usage-inspector__footer { flex: none; padding: 10px 0; border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
+.usage-inspector__tabs { display: flex; gap: 16px; margin: 12px 0 10px; border-bottom: 1px solid var(--border-subtle); }
+.usage-inspector__tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; margin-bottom: -1px; padding: 6px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.usage-inspector__tabs [role="tab"]:hover { color: var(--text-primary); }
+.usage-inspector__tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text-primary); }
+.usage-analysis__waiting { margin: 0 0 12px; color: var(--text-secondary); font-size: 12px; }
 .usage-inspector__progress { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: var(--text-secondary); font-size: 11px; }
 .usage-inspector__heading { display: flex; justify-content: space-between; align-items: center; }
 .usage-icon-button { padding: 2px 6px; border: 0; background: transparent; color: var(--text-muted); font-size: 20px !important; line-height: 1; }
@@ -38520,6 +38532,9 @@ button.usage-timeline__legend-item:hover > span { text-decoration: underline; }
 .usage-analysis__limits label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: 10px; }
 .usage-analysis__scope { margin: 0; color: var(--text-muted); font-size: 10px; }
 .usage-analysis__result { padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+/* On the Analysis tab the answer leads and the settings to run it again follow. */
+.usage-inspector [role="tabpanel"] > .usage-analysis__result:first-child { padding-top: 0; border-top: 0; }
+.usage-analysis__result + .usage-analysis { margin-top: 14px; border-top: 1px solid var(--border-subtle); }
 .usage-analysis__result > p { color: var(--text-muted); font: 10px var(--font-mono); }
 .usage-analysis__result pre { font: inherit; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .usage-analysis__result--failed .usage-eyebrow, .usage-analysis__result--failed pre { color: var(--status-error); }
