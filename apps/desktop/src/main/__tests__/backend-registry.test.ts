@@ -114,6 +114,7 @@ import {
 } from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
+import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -16488,6 +16489,77 @@ script = "echo setup"
     });
 
     await registry.close();
+  });
+
+  it("shares an in-flight enriched navigation listing with a summary-only title lookup", async () => {
+    const budget = navigationListingBudgets["concurrent-enriched-navigation-and-title-lookup"];
+    let release!: () => void;
+    const listingGate = new Promise<void>((resolve) => { release = resolve; });
+    const codexClient = new MockBackendClient({
+      listThreadsDelay: listingGate,
+      threads: [{
+        id: "thread-1",
+        title: "Current title",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      const navigation = registry.listThreads({
+        backend: "codex",
+        callerReason: "renderer-navigation-query",
+        enrichDirectories: true,
+      });
+      await vi.waitFor(() => expect(codexClient.listThreadsCallCount).toBe(1));
+      const title = registry.listThreads({
+        backend: "codex",
+        callerReason: "title-generation",
+        enrichDirectories: false,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      release();
+
+      const [navigationRows, titleRows] = await Promise.all([navigation, title]);
+      expect(navigationRows[0]?.title).toBe("Current title");
+      expect(titleRows[0]?.title).toBe("Current title");
+      expect([navigation, title]).toHaveLength(budget.logicalRequests);
+      expect(codexClient.listThreadsCallCount).toBe(budget.providerListings);
+      expect(codexClient.lastListThreadsParams).toMatchObject({ enrichDirectories: true });
+
+      await expect(registry.listThreads({
+        backend: "codex",
+        callerReason: "title-generation",
+        enrichDirectories: false,
+      })).resolves.toMatchObject([{ title: "Current title" }]);
+      expect(codexClient.listThreadsCallCount).toBe(budget.providerListings);
+
+      codexClient.setThreads([{
+        id: "thread-1",
+        title: "Later title",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }]);
+      await codexClient.emit({
+        method: "thread/status/changed",
+        params: { threadId: "thread-1", status: { type: "idle" } },
+      });
+      await expect(registry.listThreads({
+        backend: "codex",
+        callerReason: "title-generation",
+        enrichDirectories: false,
+      })).resolves.toMatchObject([{ title: "Later title" }]);
+      expect(codexClient.listThreadsCallCount).toBe(budget.providerListings + 1);
+    } finally {
+      release();
+      await registry.close();
+    }
   });
 
   it("keeps the startup prewarm bounded to summary-only active pages", async () => {

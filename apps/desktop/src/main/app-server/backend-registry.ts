@@ -25637,14 +25637,14 @@ export class DesktopBackendRegistry {
       return undefined;
     }
 
-    const backfillCapableKey = this.buildThreadListCacheKey({
+    // Directory-enriched rows include the summary data requested by cheap
+    // consumers. Reuse the same pending or completed provider observation;
+    // the reverse direction cannot supply missing directory relationships.
+    const enrichedKey = this.buildThreadListCacheKey({
       ...params,
-      callerReason: "navigation-snapshot",
+      enrichDirectories: true,
     });
-    if (backfillCapableKey === cacheKey) {
-      return undefined;
-    }
-    return this.readFreshThreadListCache(backfillCapableKey, now, "navigation-shared");
+    return this.readFreshThreadListCache(enrichedKey, now, "navigation-shared");
   }
 
   private readFreshThreadListCache(
