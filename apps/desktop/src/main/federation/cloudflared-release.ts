@@ -1,3 +1,5 @@
+import { fetchGitHubReleaseMetadata } from "../github-release-cache";
+
 /**
  * Whether a newer cloudflared exists than the one installed.
  *
@@ -31,7 +33,8 @@ export function createCloudflaredReleaseCheck(options: {
   fetch?: typeof fetch;
   now?: () => number;
 } = {}): () => Promise<string | undefined> {
-  const fetcher = options.fetch ?? fetch;
+  const fetcher = options.fetch ?? ((url: string, init: RequestInit) =>
+    fetchGitHubReleaseMetadata(url, init, { ttlMs: CHECK_TTL_MS }));
   const now = options.now ?? Date.now;
   let cached: { at: number; ttl: number; version?: string } | undefined;
   let pending: Promise<string | undefined> | undefined;

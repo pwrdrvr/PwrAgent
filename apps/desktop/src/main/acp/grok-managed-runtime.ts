@@ -1,3 +1,4 @@
+import { fetchGitHubReleaseMetadata } from "../github-release-cache.js";
 import type { DesktopUpdateChannel } from "@pwragent/shared";
 import {
   MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
@@ -443,7 +444,9 @@ async function fetchCompatibleReleaseSlots(
     return {};
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  const response = await fetchImpl(MANAGED_GROK_RELEASES_URL, {
+  const response = await (options.fetch ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
+    manual: options.checkMode === "force", ttlMs: 24 * 60 * 60_000,
+  })))(MANAGED_GROK_RELEASES_URL, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "PwrAgent-managed-grok-runtime",

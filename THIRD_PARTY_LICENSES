@@ -663,6 +663,7 @@ ISC
 - semver@7.7.4 | https://github.com/npm/node-semver
 - semver@7.8.5 | https://github.com/npm/node-semver
 - setprototypeof@1.2.0 | https://github.com/wesleytodd/setprototypeof
+- signal-exit@3.0.7 | https://github.com/tapjs/signal-exit
 - ssri@14.0.0 | https://github.com/npm/ssri
 - universal-user-agent@7.0.3 | github:gr2m/universal-user-agent
 - which@2.0.2 | https://github.com/isaacs/node-which
@@ -1065,6 +1066,7 @@ MIT
 - points-on-path@0.2.1 | https://github.com/pshihn/points-on-path
 - prebuild-install@7.1.3 | https://github.com/prebuild/prebuild-install
 - progress@2.0.3 | https://github.com/visionmedia/node-progress
+- proper-lockfile@4.1.2 | https://github.com/moxystudio/node-proper-lockfile
 - property-information@7.1.0 | wooorm/property-information
 - prosemirror-changeset@2.4.2 | https://code.haverbeke.berlin/prosemirror/prosemirror-changeset
 - prosemirror-commands@1.7.2 | https://code.haverbeke.berlin/prosemirror/prosemirror-commands
@@ -1100,6 +1102,7 @@ MIT
 - remark-rehype@11.1.2 | remarkjs/remark-rehype
 - remark-stringify@11.0.0 | https://github.com/remarkjs/remark/tree/main/packages/remark-stringify
 - require-from-string@2.0.2 | floatdrop/require-from-string
+- retry@0.12.0 | https://github.com/tim-kos/node-retry
 - retry@0.13.1 | https://github.com/tim-kos/node-retry
 - rope-sequence@1.3.4 | https://github.com/marijnh/rope-sequence
 - roughjs@4.6.6 | https://github.com/pshihn/rough
@@ -5850,6 +5853,7 @@ cross-spawn@7.0.6 (MIT)
 
 Applies to:
 - cross-spawn@7.0.6 (MIT)
+- proper-lockfile@4.1.2 (MIT)
 
 Representative file: cross-spawn@7.0.6/LICENSE
 
@@ -11600,13 +11604,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-retry@0.13.1 (MIT)
+retry@0.12.0 (MIT)
 ------------------
 
 Applies to:
+- retry@0.12.0 (MIT)
 - retry@0.13.1 (MIT)
 
-Representative file: retry@0.13.1/License
+Representative file: retry@0.12.0/License
 
 Copyright (c) 2011:
 Tim Koschützki (tim@debuggable.com)
@@ -11984,6 +11989,31 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+signal-exit@3.0.7 (ISC)
+-----------------------
+
+Applies to:
+- signal-exit@3.0.7 (ISC)
+
+Representative file: signal-exit@3.0.7/LICENSE.txt
+
+The ISC License
+
+Copyright (c) 2015, Contributors
+
+Permission to use, copy, modify, and/or distribute this software
+for any purpose with or without fee is hereby granted, provided
+that the above copyright notice and this permission notice
+appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE
+LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 simple-concat@1.0.1 (MIT)
 -------------------------

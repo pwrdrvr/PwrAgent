@@ -1,3 +1,4 @@
+import { fetchGitHubReleaseMetadata } from "./github-release-cache.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import {
@@ -377,7 +378,9 @@ async function fetchLatestCompatibleRelease(
     return undefined;
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  const response = await fetchImpl(MANAGED_CODEX_RELEASES_URL, {
+  const response = await (options.fetch ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
+    manual: options.checkMode === "force", ttlMs: 24 * 60 * 60_000,
+  })))(MANAGED_CODEX_RELEASES_URL, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "PwrAgent-managed-codex-runtime",
