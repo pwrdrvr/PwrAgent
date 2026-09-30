@@ -51,6 +51,7 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
   existing: true,
   get: vi.fn(),
 }));
+const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
     setThreadAgent: vi.fn(),
@@ -1042,7 +1043,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 vi.mock("../app-server/desktop-overlay-store", () => ({
-  getDesktopOverlayStore: () => ({
+  getDesktopOverlayStore: () => overlayStoreFixture.stable ?? ({
     reconcileNavigationSnapshot,
     readNavigationQueryIndex,
     initializeNavigationUnreadBaseline: vi.fn(() => false),
@@ -1418,6 +1419,7 @@ describe("app server ipc", () => {
 
   afterEach(async () => {
     await disposeAppServerIpcHandlers();
+    overlayStoreFixture.stable = undefined;
   });
 
   it("does not construct a backend registry during disposal", async () => {
@@ -1952,6 +1954,10 @@ describe("app server ipc", () => {
 
   it("reconciles a newer canonical PR event instead of applying an older startup inventory", async () => {
     const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../app-server/desktop-overlay-store");
+    // The production store is a singleton. Keep this test's owner identity
+    // stable so the service loop can reuse the fresh replacement index.
+    overlayStoreFixture.stable = getDesktopOverlayStore();
     const { buildPullRequestStatusKey } = await import("@pwragent/shared");
     const pr = githubPr({ number: 93, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Detached PR",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/93" });

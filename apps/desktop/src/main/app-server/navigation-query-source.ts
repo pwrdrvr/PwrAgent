@@ -35,16 +35,20 @@ export async function loadLocalNavigationQueryIndex(params: {
   const backend = params.backend ?? "all";
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     overlayStore.readNavigationSourceVersion?.()]);
+  let subscribed = false;
   return indexReads.read(key, async (signal) => {
-    // Canonical events invalidate joinability, not another consumer's read.
-    // A later query must not inherit work begun before a canonical event.
-    // Transcript deltas must not multiply the same pending owner scan.
-    const unsubscribe = registry.onEvent?.((event) => {
-      if (navigationQueryEventRequiresRefresh(event.notification.method)) indexReads.invalidate(key);
-    });
-    // The pool owns this listener through its bounded completed reuse window.
-    // Eviction/expiry/cancellation aborts the lifetime and releases it.
-    signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
+    // An event during a scan makes its result stale. The read pool shares one
+    // replacement with all consumers admitted in the meantime. Own one event
+    // listener for the whole read, including any replacement attempt.
+    if (!subscribed) {
+      subscribed = true;
+      const unsubscribe = registry.onEvent?.((event) => {
+        if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
+      });
+      // The pool owns this listener through its bounded completed reuse window.
+      // Eviction/expiry/cancellation aborts the lifetime and releases it.
+      signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
+    }
     return await buildLocalNavigationQueryIndex({ ...params, registry, signal });
   }, params.signal);
 }
