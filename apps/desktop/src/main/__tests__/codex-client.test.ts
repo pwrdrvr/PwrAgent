@@ -206,6 +206,8 @@ class MockTransport implements JsonRpcTransport {
   static threadListNextCursor: string | undefined;
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
   static turnInterruptResponseMode: "success" | "timeout" = "success";
+  static threadStatusByThreadId = new Map<string, { type: string }>();
+  static threadLoadedListUnsupported = false;
   static threadResumeError:
     | { code?: number; message: string }
     | undefined = undefined;
@@ -906,6 +908,24 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/loaded/list") {
+      this.messageHandler(JSON.stringify(MockTransport.threadLoadedListUnsupported
+        ? { jsonrpc: "2.0", id: payload.id, error: { code: -32601, message: "Method not found" } }
+        : { jsonrpc: "2.0", id: payload.id, result: { data: [...this.loadedThreads], nextCursor: null } }));
+      return;
+    }
+
+    if (payload.method === "thread/read"
+      && MockTransport.threadStatusByThreadId.has(String(payload.params?.threadId))) {
+      const threadId = String(payload.params?.threadId);
+      this.messageHandler(JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        result: { thread: { id: threadId, status: MockTransport.threadStatusByThreadId.get(threadId) } },
+      }));
+      return;
+    }
+
     if (payload.method === "thread/read") {
       const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
       const transientErrors = threadId
@@ -1473,6 +1493,8 @@ describe("CodexAppServerClient", () => {
     MockTransport.instances.length = 0;
     MockTransport.serverVersion = "1.0.0";
     MockTransport.requireLoadedThreads = false;
+    MockTransport.threadStatusByThreadId.clear();
+    MockTransport.threadLoadedListUnsupported = false;
     MockTransport.codexHome = "/Users/fixture-user/.codex";
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadTransientErrorsByThreadId.clear();
@@ -3687,8 +3709,120 @@ describe("CodexAppServerClient", () => {
       await Promise.all([first, second, read]);
       expect(repair).toHaveBeenCalledTimes(2);
       expect(methods().filter((method) => method === "initialize")).toHaveLength(3);
-      expect(methods().indexOf("thread/read")).toBeGreaterThan(methods().lastIndexOf("thread/resume"));
+      // Each recovery reads loaded-thread status first; the ordinary read is last.
+      expect(methods().lastIndexOf("thread/read")).toBeGreaterThan(methods().lastIndexOf("thread/resume"));
       await client.close();
+    });
+
+    describe("turns running on other threads", () => {
+      async function startBusyFixture() {
+        const context = await fixture();
+        await context.client.getInitializeResult();
+        const notifications: AppServerNotification[] = [];
+        context.client.onNotification((notification) => { notifications.push(notification); });
+        const waits: Array<Array<{ threadId: string; turnId?: string }>> = [];
+        const recover = () => context.client.recoverInvalidPersistedResponseMessageIds({
+          ...recoveryParams,
+          onWaitingForTurns: (turns) => { waits.push(turns); },
+        });
+        return { ...context, notifications, recover, waits };
+      }
+
+      it("waits for a live turn to finish instead of stopping Codex under it", async () => {
+        const { client, transport, repair, notifications, recover, waits } = await startBusyFixture();
+        transport.loadedThreads.add("thread-busy");
+        transport.emitInbound({ method: "turn/started", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+        } });
+        const recovery = recover();
+        await vi.waitFor(() => expect(waits).toHaveLength(1));
+        await flush();
+        expect(waits[0]).toEqual([{ threadId: "thread-busy", turnId: "turn-busy" }]);
+        expect(transport.closeCount).toBe(0);
+        expect(repair).not.toHaveBeenCalled();
+        // The wait holds no lifecycle barrier: the busy thread keeps working.
+        await client.readThread({ threadId: "thread-2", includeTurns: false });
+
+        transport.emitInbound({ method: "turn/completed", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "completed" },
+        } });
+        await recovery;
+        expect(repair).toHaveBeenCalledOnce();
+        expect(transport.closeCount).toBe(1);
+        // The busy turn ended on its own terms and its terminal reached listeners.
+        expect(notifications).toContainEqual(expect.objectContaining({
+          method: "turn/completed",
+          params: expect.objectContaining({ threadId: "thread-busy" }),
+        }));
+        expect(waits).toHaveLength(1);
+        await client.close();
+      });
+
+      it("trusts Codex's report of a running turn this client never saw start", async () => {
+        const { client, transport, repair, recover, waits } = await startBusyFixture();
+        transport.loadedThreads.add("thread-quiet");
+        MockTransport.threadStatusByThreadId.set("thread-quiet", {
+          type: "active", activeFlags: ["waitingOnApproval"],
+        } as { type: string });
+        const recovery = recover();
+        await vi.waitFor(() => expect(waits).toEqual([[{ threadId: "thread-quiet" }]]));
+        await flush();
+        expect(transport.closeCount).toBe(0);
+        expect(repair).not.toHaveBeenCalled();
+
+        MockTransport.threadStatusByThreadId.set("thread-quiet", { type: "idle" });
+        transport.emitInbound({ method: "thread/status/changed", params: {
+          threadId: "thread-quiet", status: { type: "idle" },
+        } });
+        await recovery;
+        expect(repair).toHaveBeenCalledOnce();
+        expect(transport.closeCount).toBe(1);
+        await client.close();
+      });
+
+      it("ignores a tracked turn whose thread this process no longer has loaded", async () => {
+        const { client, transport, repair, recover, waits } = await startBusyFixture();
+        transport.emitInbound({ method: "turn/started", params: {
+          threadId: "thread-from-dead-process", turn: { id: "turn-lost", status: "inProgress" },
+        } });
+        await recover();
+        expect(waits).toEqual([]);
+        expect(repair).toHaveBeenCalledOnce();
+        expect(transport.closeCount).toBe(1);
+        await client.close();
+      });
+
+      it("falls back to tracked turns when Codex cannot list loaded threads", async () => {
+        const { client, transport, repair, recover, waits } = await startBusyFixture();
+        MockTransport.threadLoadedListUnsupported = true;
+        transport.emitInbound({ method: "turn/started", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+        } });
+        const recovery = recover();
+        await vi.waitFor(() => expect(waits).toHaveLength(1));
+        expect(transport.closeCount).toBe(0);
+        transport.emitInbound({ method: "turn/completed", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "interrupted" },
+        } });
+        await recovery;
+        expect(repair).toHaveBeenCalledOnce();
+        await client.close();
+      });
+
+      it("close while waiting cancels the repair without stopping Codex for it", async () => {
+        const { client, transport, repair, recover, waits } = await startBusyFixture();
+        transport.loadedThreads.add("thread-busy");
+        transport.emitInbound({ method: "turn/started", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+        } });
+        const recovery = recover().catch((error: unknown) => error);
+        await vi.waitFor(() => expect(waits).toHaveLength(1));
+        await client.close();
+        expect(await recovery).toBeInstanceOf(Error);
+        expect(repair).not.toHaveBeenCalled();
+        expect(transport.sentMessages.map((message) => JSON.parse(message).method))
+          .not.toContain("thread/list");
+      });
     });
 
     it.each(["repair", "restart", "both", "resume", "lookup", "shutdown"])(

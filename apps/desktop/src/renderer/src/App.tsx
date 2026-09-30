@@ -1382,9 +1382,10 @@ function DesktopAppShell(props: {
         const params = event.notification.params as {
           threadId: string;
           turnId?: string;
-          status: "repairing" | "succeeded" | "failed";
+          status: "waiting" | "repairing" | "succeeded" | "failed";
           failureMessage: string;
           recoveryError?: string;
+          waitingForThreadIds?: string[];
         };
         dispatchAppNotice({
           type: "backend-error",
@@ -1394,6 +1395,9 @@ function DesktopAppShell(props: {
             ...(instanceId ? { instanceId } : {}),
             recoveryError: params.recoveryError,
             status: params.status,
+            ...(params.waitingForThreadIds
+              ? { waitingForThreadCount: params.waitingForThreadIds.length }
+              : {}),
             threadId: params.threadId,
             threadLabel: labelForThread("codex", params.threadId),
             turnId: params.turnId ?? "unknown",

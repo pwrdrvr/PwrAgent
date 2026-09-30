@@ -1733,11 +1733,17 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
-        status: "repairing" | "succeeded" | "failed";
+        /**
+         * `waiting`: the repair must stop the Codex app-server, so it waits
+         * for the turns running on other threads (`waitingForThreadIds`)
+         * to finish rather than killing them.
+         */
+        status: "waiting" | "repairing" | "succeeded" | "failed";
         failureMessage: string;
         recoveryError?: string;
         removedMessageIdCount?: number;
         backupPath?: string;
+        waitingForThreadIds?: string[];
       };
     }
   | {
