@@ -1067,6 +1067,7 @@ export type DesktopSettingsSnapshot = {
         state: "pending-switch" | "ready" | "unavailable";
         reason?: string;
         version?: string;
+        checkedAt?: number;
       };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails

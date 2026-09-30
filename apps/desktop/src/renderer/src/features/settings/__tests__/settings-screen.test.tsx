@@ -3658,6 +3658,112 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText("Default on")).not.toBeInTheDocument();
   });
 
+  it("checks managed Codex releases from its update button and shows the last check", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.155.0-pwragent.1",
+        checkedAt: Date.now() - 2 * 60 * 60_000,
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    let finishCheck!: () => void;
+    const refreshCodexDiscovery = vi.fn(() => new Promise<{ snapshot: DesktopSettingsSnapshot }>((resolve) => {
+      finishCheck = () => resolve({ snapshot });
+    }));
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: Date.now(),
+      backends: [],
+    }));
+    const desktopApi = { listBackends, refreshCodexDiscovery } as unknown as DesktopApi;
+
+    const view = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText(/checked 2h ago/)).toBeInTheDocument();
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Check for updates" }),
+    ).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    expect(refreshCodexDiscovery).toHaveBeenCalledWith({
+      discoveryIntent: "settings-user-action",
+    });
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
+    expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+      refreshModels: "codex",
+    }));
+
+    finishCheck();
+    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    view.rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={{
+          ...settings,
+          snapshot: {
+            ...snapshot,
+            runtime: {
+              ...snapshot.runtime,
+              tokenMiser: {
+                managedCodex: {
+                  state: "ready",
+                  version: "0.155.0-pwragent.1",
+                  checkedAt: Date.now(),
+                },
+              },
+            },
+          },
+        }}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByText(/checked just now/)).toBeInTheDocument();
+  });
+
+  it("shows a managed Codex check error beside the update button", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: { state: "ready", version: "0.155.0-pwragent.1" },
+    };
+    const refreshCodexDiscovery = vi.fn(async () => {
+      throw new Error("Release check could not connect to GitHub.");
+    });
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: Date.now(),
+      backends: [],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends, refreshCodexDiscovery } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Check for updates" }),
+    ).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText("Release check could not connect to GitHub."))
+      .toHaveAttribute("role", "alert");
+  });
+
   it("keeps stale activation failures hidden while a managed switch is pending", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
