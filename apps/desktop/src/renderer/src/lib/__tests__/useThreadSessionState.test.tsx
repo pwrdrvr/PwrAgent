@@ -15142,7 +15142,7 @@ describe("useThreadSessionState", () => {
     });
   });
 
-  it("settles unfinished tools and ignores a late start acknowledgement for a completed turn", async () => {
+  it("keeps a live tool and ignores a late start acknowledgement for a completed turn", async () => {
     let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
     const logRendererDiagnostic = vi.fn(async () => undefined);
     const desktopApi: DesktopApi = {
@@ -15181,7 +15181,7 @@ describe("useThreadSessionState", () => {
       result.current.setActiveTurnId("turn-1");
     });
     expect(result.current.activeTurnId).toBeUndefined();
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
     expect(logRendererDiagnostic).toHaveBeenCalledWith({
       level: "info",
       message: "renderer received terminal turn notification",
@@ -15193,13 +15193,13 @@ describe("useThreadSessionState", () => {
       },
     });
     expect(result.current.entries).toEqual([expect.objectContaining({
-      type: "activity", status: "cancelled",
-      details: [expect.objectContaining({ status: "cancelled" })],
+      type: "activity", status: "in_progress",
+      details: [expect.objectContaining({ status: "in_progress" })],
       turn: expect.objectContaining({ id: "turn-1", status: "completed" }),
     })]);
     act(() => { result.current.setActiveTurnId("turn-1"); });
     expect(result.current.activeTurnId).toBeUndefined();
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
     act(() => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turnId: "turn-1",
@@ -15207,6 +15207,13 @@ describe("useThreadSessionState", () => {
       } } });
     });
     expect(result.current.activeTurnId).toBeUndefined();
+    act(() => {
+      emit({ backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "completed", command: "fixture" },
+      } } });
+    });
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
     act(() => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turnId: "turn-2",
@@ -16196,6 +16203,170 @@ describe("useThreadSessionState", () => {
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
     expect(result.current.pendingStatusText).toBeUndefined();
     expect(result.current.threadBusy).toBe(false);
+  });
+
+  it("keeps a Codex command thinking after its turn completes until the command finishes", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ threadId }) => readThreadResponse({
+        threadId,
+        entries: [],
+        hasPreviousPage: false,
+        threadStatus: "idle",
+      }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id: "tool-1", type: "commandExecution", command: "pnpm test", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId: "thread-1", status: { type: "idle" } },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
+      .find((detail) => detail.id === "tool-1")?.status).toBe("in_progress");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id: "tool-1", type: "commandExecution", command: "pnpm test", status: "completed" },
+          },
+        },
+      });
+    });
+
+    expect(result.current.threadBusy).toBe(false);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
+      .find((detail) => detail.id === "tool-1")?.status).toBe("completed");
+  });
+
+  it("clears a tracked command when it finishes after its thread loses focus", async () => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => { emit = callback; return () => undefined; },
+      readThread: async ({ threadId }) => readThreadResponse({
+        threadId,
+        entries: [],
+        hasPreviousPage: false,
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string }) => useThreadSessionState({
+        desktopApi,
+        liveTranscriptEventFiltering: true,
+        thread: buildThread({ id: threadId, updatedAt: 1_000 }),
+      }),
+      { initialProps: { threadId: "thread-1" } },
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" },
+      } } });
+      emit({ backend: "codex", notification: { method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "inProgress", command: "pnpm test" },
+      } } });
+      emit({ backend: "codex", notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      } } });
+    });
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    act(() => { rerender({ threadId: "thread-2" }); });
+    act(() => {
+      emit({ backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "completed", command: "pnpm test" },
+      } } });
+    });
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
+  it("clears a tracked command when its Codex app server exits", async () => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => { emit = callback; return () => undefined; },
+      readThread: async ({ threadId }) => readThreadResponse({
+        threadId,
+        entries: [],
+        hasPreviousPage: false,
+      }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+
+    act(() => {
+      emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" },
+      } } });
+      emit({ backend: "codex", notification: { method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "inProgress", command: "pnpm test" },
+      } } });
+      emit({ backend: "codex", notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      } } });
+      emit({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: "notLoaded" },
+      } } });
+    });
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
   it("renders item/fileChange/outputDelta as a Changed file activity entry", async () => {

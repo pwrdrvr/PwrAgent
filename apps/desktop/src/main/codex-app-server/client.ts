@@ -7533,6 +7533,7 @@ export class CodexAppServerClient {
   private readonly restartStatusListeners = new Set<
     (status: CodexAppServerRestartStatus) => void
   >();
+  private readonly unexpectedExitListeners = new Set<() => void>();
   private cancelRestartBackoff?: () => void;
   private readonly lastDirectoryEnrichment = new Map<string, ThreadDirectoryEnrichment>();
   private readonly threadDirectoryEnricher: (
@@ -7866,6 +7867,17 @@ export class CodexAppServerClient {
         lastExit: { code: exit.code, signal: exit.signal },
       });
     }
+    // A completed turn can still have a running command. Its owner needs the
+    // transport boundary too; failRunningTurns only covers active turns.
+    for (const listener of this.unexpectedExitListeners) {
+      try {
+        listener();
+      } catch (error) {
+        codexClientLog.warn("Codex app server exit listener failed", {
+          error: String(error),
+        });
+      }
+    }
     void this.failRunningTurns(runningTurns, CODEX_APP_SERVER_EXITED_MID_TURN)
       .catch((error) => codexClientLog.warn("Codex exit turn failure delivery failed", { error: String(error) }));
   }
@@ -7880,6 +7892,13 @@ export class CodexAppServerClient {
     this.restartStatusListeners.add(listener);
     return () => {
       this.restartStatusListeners.delete(listener);
+    };
+  }
+
+  onAppServerUnexpectedExit(listener: () => void): () => void {
+    this.unexpectedExitListeners.add(listener);
+    return () => {
+      this.unexpectedExitListeners.delete(listener);
     };
   }
 

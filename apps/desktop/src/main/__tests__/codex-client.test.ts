@@ -1477,6 +1477,8 @@ describe("CodexAppServerClient", () => {
   it("restarts the app server after an unexpected exit once the backoff passes", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
+    const unexpectedExit = vi.fn();
+    const stopWatchingUnexpectedExit = client.onAppServerUnexpectedExit(unexpectedExit);
     const notifications: AppServerNotification[] = [];
     client.onNotification((notification) => { notifications.push(notification); });
     await client.readRateLimits();
@@ -1489,6 +1491,7 @@ describe("CodexAppServerClient", () => {
     vi.useFakeTimers();
     try {
       transport.exitUnexpectedly({ code: null, signal: "SIGSEGV" });
+      expect(unexpectedExit).toHaveBeenCalledOnce();
       expect(codexClientLogWarn).toHaveBeenCalledWith(
         "Codex app server exited unexpectedly",
         expect.objectContaining({ signal: "SIGSEGV", restartAttempt: 1, restartDelayMs: 1_000 }),
@@ -1506,7 +1509,9 @@ describe("CodexAppServerClient", () => {
       expect(initializeCount()).toBe(2);
 
       // The new process runs no turn, so nothing fails a second time.
+      stopWatchingUnexpectedExit();
       transport.exitUnexpectedly();
+      expect(unexpectedExit).toHaveBeenCalledOnce();
       const second = client.readRateLimits();
       await vi.advanceTimersByTimeAsync(2_000);
       await expect(second).resolves.toBeDefined();

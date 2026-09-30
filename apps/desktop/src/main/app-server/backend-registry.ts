@@ -994,6 +994,7 @@ type BackendClient = {
   onAppServerRestartStatusChanged?(
     listener: (status: CodexAppServerRestartStatus) => void,
   ): () => void;
+  onAppServerUnexpectedExit?(listener: () => void): () => void;
   restartAppServer?(): Promise<void>;
   resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
@@ -8559,6 +8560,8 @@ export class DesktopBackendRegistry {
    * original `turn/started` notification.
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
+  /** Started Codex tool items can keep running after their parent turn ends. */
+  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, string>>();
   /**
    * Live lifecycle notifications and thread reads can be newer than Codex's
    * cached thread/list status. Preserve that observation until thread/list
@@ -9533,6 +9536,17 @@ export class DesktopBackendRegistry {
         // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    if (this.codexClient.onAppServerUnexpectedExit) {
+      this.unsubscribers.push(
+        this.codexClient.onAppServerUnexpectedExit(() => {
+          void this.handleCodexAppServerUnexpectedExit().catch((error) => {
+            backendRegistryLog.warn("Codex app server exit cleanup failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }),
+      );
+    }
     const watchManagedCodexRuntime =
       options?.watchManagedCodexRuntime
       ?? (typeof settingsService?.watchManagedCodexRuntime === "function"
@@ -17073,6 +17087,9 @@ export class DesktopBackendRegistry {
       }
     };
     for (const threadId of this.backendActiveCodexThreadIds) {
+      addThread("codex", threadId);
+    }
+    for (const threadId of this.liveCodexToolItemsByThread.keys()) {
       addThread("codex", threadId);
     }
     for (const key of this.activeTurnKeys) {
@@ -30447,6 +30464,7 @@ export class DesktopBackendRegistry {
     if (
       this.reservedCodexStartThreadIds.size > 0
       || this.backendActiveCodexThreadIds.size > 0
+      || this.liveCodexToolItemsByThread.size > 0
       || this.activeCodexTurnModes.size > 0
     ) {
       return true;
@@ -41033,7 +41051,69 @@ export class DesktopBackendRegistry {
     return emitted;
   }
 
+  private trackLiveCodexToolItem(event: AgentEvent): void {
+    if (event.backend !== "codex") return;
+    const notification = event.notification;
+    if (notification.method === "turn/failed" || notification.method === "turn/cancelled") {
+      const threadId = notification.params.threadId;
+      const turnId = turnIdFromTerminalNotification(notification);
+      const items = this.liveCodexToolItemsByThread.get(threadId);
+      if (!items) return;
+      if (!turnId) {
+        this.liveCodexToolItemsByThread.delete(threadId);
+        return;
+      }
+      for (const [itemId, itemTurnId] of items) {
+        if (itemTurnId === turnId) items.delete(itemId);
+      }
+      if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+      return;
+    }
+    if (notification.method !== "item/started" && notification.method !== "item/completed") {
+      return;
+    }
+    const threadId = notification.params.threadId;
+    const itemType = readNotificationItemType(notification)
+      ?.replace(/[-_\s]/g, "").toLowerCase();
+    if (!itemType || ![
+      "commandexecution", "functioncall", "dynamictoolcall", "mcptoolcall",
+      "collabagenttoolcall", "websearch",
+    ].includes(itemType)) return;
+    const item = readRecord(readRecord(notification.params)?.item);
+    const itemId = readOptionalString(item, ["id", "itemId", "item_id", "callId", "call_id"]);
+    if (!itemId) return;
+    if (notification.method === "item/started") {
+      if (item?.status !== "inProgress" && item?.status !== "in_progress") return;
+      const turnId = readOptionalString(readRecord(notification.params), ["turnId", "turn_id"]);
+      if (!turnId) return;
+      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, string>();
+      items.set(itemId, turnId);
+      this.liveCodexToolItemsByThread.set(threadId, items);
+      return;
+    }
+    const items = this.liveCodexToolItemsByThread.get(threadId);
+    items?.delete(itemId);
+    if (items?.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+  }
+
+  private async handleCodexAppServerUnexpectedExit(): Promise<void> {
+    const threadIds = [...this.liveCodexToolItemsByThread.keys()];
+    this.liveCodexToolItemsByThread.clear();
+    try {
+      await Promise.all(threadIds.map((threadId) => this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId, status: { type: "notLoaded" } },
+        },
+      })));
+    } finally {
+      await this.maybeRestartCodexForManagedRuntimeChange();
+    }
+  }
+
   private emitEvent(event: AgentEvent): Promise<void> {
+    this.trackLiveCodexToolItem(event);
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {
         params: { threadId: string; turnId?: string; turn: { id: string } };
