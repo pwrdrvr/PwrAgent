@@ -38112,8 +38112,9 @@ button.pricing-token-miser__folded:focus-visible {
 
 .sidebar-pending-thread {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   width: 100%;
   padding: 10px 12px;
   border: 0;
@@ -38129,6 +38130,13 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-row-active);
 }
 
+.sidebar-pending-thread__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .sidebar-pending-thread__title {
   flex: 1;
   min-width: 0;
@@ -38136,6 +38144,24 @@ button.pricing-token-miser__folded:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
+}
+
+.sidebar-pending-thread__status {
+  flex: 0 0 auto;
+}
+
+/* Same 20px pill as a thread row's chip flow, indented under the title so
+   the project reads as this row's, not a heading for the rows below. */
+.sidebar-pending-thread__chips {
+  display: flex;
+  min-width: 0;
+  padding-left: 22px;
+}
+
+.sidebar-pending-thread__chips .thread-row__chip {
+  height: 20px;
+  gap: 5px;
+  font-size: 11px;
 }
 
 details.launchpad-pending__output {

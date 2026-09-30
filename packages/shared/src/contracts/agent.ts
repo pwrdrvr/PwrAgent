@@ -976,6 +976,18 @@ export type MaterializeDirectoryLaunchpadRequest = {
    * first turn or review until this wall-clock time.
    */
   scheduledFor?: number;
+  /**
+   * Clear the saved launchpad draft when the request is accepted instead of
+   * after the workspace and environment setup finish, so the directory can
+   * compose another thread while this one starts. A failure puts the
+   * submitted draft back unless the launchpad has changed since.
+   */
+  releaseLaunchpadOnSubmit?: boolean;
+  /**
+   * Renderer-owned key reported as setup progress `directoryKey`, so two
+   * threads starting in one directory do not share one progress stream.
+   */
+  codexEnvironmentSetupProgressKey?: string;
 };
 
 export type MaterializedDirectoryLaunchpadThread = {

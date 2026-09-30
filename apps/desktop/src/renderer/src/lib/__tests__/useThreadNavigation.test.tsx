@@ -5422,6 +5422,8 @@ describe("useThreadNavigation", () => {
     expect(result.current.pendingLaunchpadCreations).toEqual([]);
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      releaseLaunchpadOnSubmit: true,
+      codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
       directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
       launchpad: expect.objectContaining({
         directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
@@ -5615,6 +5617,8 @@ describe("useThreadNavigation", () => {
     });
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      releaseLaunchpadOnSubmit: true,
+      codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
       directoryKey,
       launchpad: expect.objectContaining({
         prompt: "/review main",
@@ -6504,6 +6508,8 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        releaseLaunchpadOnSubmit: true,
+        codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
         directoryKey,
         launchpad: expect.objectContaining({
           directoryKey,
@@ -6533,6 +6539,187 @@ describe("useThreadNavigation", () => {
 
     expect(result.current.threads.map((thread) => thread.id)).toContain("thread-new");
     expect(result.current.selectedThread?.id).toBe("thread-stay-put");
+  });
+
+  describe("a launchpad whose thread is starting", () => {
+    const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
+    const defaults: NavigationLaunchpadDefaults = {
+      backend: "codex",
+      executionMode: "default",
+    };
+    const buildLaunchpad = (prompt: string): NavigationLaunchpadDraft => ({
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/fixture-user/github/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      prompt,
+      workMode: "worktree",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    type MaterializeResponse = {
+      backend: "codex";
+      threadId: string;
+      executionMode: "default";
+      workMode: "worktree";
+    };
+    const renderStartingLaunchpad = () => {
+      const snapshot: NavigationSnapshot = {
+        backend: "all",
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-existing",
+            title: "Existing thread",
+            titleSource: "explicit",
+            summary: "Existing thread summary",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            updatedAt: 1_000,
+          },
+        ],
+        directories: [
+          {
+            key: directoryKey,
+            kind: "directory",
+            label: "PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
+            threadKeys: ["codex:thread-existing"],
+            needsAttentionCount: 0,
+          },
+        ],
+        launchpadDefaults: defaults,
+      };
+      const prompts = ["Set up the first thread", "Set up the second thread"];
+      const ensureDirectoryLaunchpad = vi.fn(async () => ({
+        launchpad: buildLaunchpad(prompts.shift() ?? "Another thread"),
+        defaults,
+      }));
+      const materializations: Array<ReturnType<typeof createDeferred<MaterializeResponse>>> = [];
+      const materializeDirectoryLaunchpad = vi.fn(async () => {
+        const deferred = createDeferred<MaterializeResponse>();
+        materializations.push(deferred);
+        return await deferred.promise;
+      });
+      const desktopApi: DesktopApi = {
+        ensureDirectoryLaunchpad,
+        readPopulation: vi.fn(async () => snapshot),
+        materializeDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      };
+      const rendered = renderHook(() => useThreadNavigation(desktopApi));
+      return { ...rendered, materializations, materializeDirectoryLaunchpad };
+    };
+
+    it("frees the directory's launchpad for another thread", async () => {
+      const { result, materializations, materializeDirectoryLaunchpad } =
+        renderStartingLaunchpad();
+      await waitFor(() => {
+        expect(result.current.selectedThread?.id).toBe("thread-existing");
+      });
+      await act(async () => {
+        await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      });
+
+      let firstStart: Promise<void> | undefined;
+      act(() => {
+        firstStart = result.current.materializeDirectoryLaunchpad(directoryKey);
+      });
+      await waitFor(() => expect(materializations).toHaveLength(1));
+
+      const [first] = result.current.pendingLaunchpadCreations;
+      expect(first).toMatchObject({
+        directoryKey,
+        directoryLabel: "PwrAgent",
+        composerScopeKey: expect.stringMatching(/^launchpad:starting:.+:directory:/),
+      });
+      expect(first!.selectionKey).toMatch(/^starting-launchpad:/);
+      // The submitted message is what the operator is looking at…
+      expect(result.current.selectedItemKey).toBe(first!.selectionKey);
+      expect(result.current.selectedLaunchpad?.prompt).toBe("Set up the first thread");
+      expect(result.current.selectedThread).toBeUndefined();
+      // …and the directory holds no draft, so its launchpad button is not marked.
+      expect(result.current.directories[0]!.launchpad?.prompt ?? "").toBe("");
+
+      await act(async () => {
+        await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      });
+      expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+      expect(result.current.pendingLaunchpadCreations).toHaveLength(1);
+
+      let secondStart: Promise<void> | undefined;
+      act(() => {
+        secondStart = result.current.materializeDirectoryLaunchpad(directoryKey);
+      });
+      await waitFor(() => expect(materializations).toHaveLength(2));
+      const [, second] = result.current.pendingLaunchpadCreations;
+      expect(second!.selectionKey).not.toBe(first!.selectionKey);
+      expect(second!.composerScopeKey).not.toBe(first!.composerScopeKey);
+      expect(second!.setupProgressKey).not.toBe(first!.setupProgressKey);
+      expect(materializeDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({
+        releaseLaunchpadOnSubmit: true,
+        codexEnvironmentSetupProgressKey: second!.setupProgressKey,
+      }));
+
+      await act(async () => {
+        materializations[0]!.resolve({
+          backend: "codex",
+          threadId: "thread-first",
+          executionMode: "default",
+          workMode: "worktree",
+        });
+        await firstStart;
+      });
+      // The first thread lands in the list without pulling the operator off
+      // the second one, which is still starting.
+      expect(result.current.threads.map((thread) => thread.id)).toContain("thread-first");
+      expect(result.current.selectedItemKey).toBe(second!.selectionKey);
+      expect(result.current.pendingLaunchpadCreations.map((creation) => creation.selectionKey))
+        .toEqual([second!.selectionKey]);
+
+      await act(async () => {
+        materializations[1]!.resolve({
+          backend: "codex",
+          threadId: "thread-second",
+          executionMode: "default",
+          workMode: "worktree",
+        });
+        await secondStart;
+      });
+      expect(result.current.selectedThread?.id).toBe("thread-second");
+      expect(result.current.pendingLaunchpadCreations).toEqual([]);
+    });
+
+    it("returns to the directory's launchpad when no thread could be created", async () => {
+      const { result, materializations } = renderStartingLaunchpad();
+      await waitFor(() => {
+        expect(result.current.selectedThread?.id).toBe("thread-existing");
+      });
+      await act(async () => {
+        await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      });
+
+      let start: Promise<void> | undefined;
+      act(() => {
+        start = result.current.materializeDirectoryLaunchpad(directoryKey);
+      });
+      await waitFor(() => expect(materializations).toHaveLength(1));
+      expect(result.current.selectedItemKey).toMatch(/^starting-launchpad:/);
+
+      await act(async () => {
+        materializations[0]!.reject(new Error("branch already exists"));
+        await expect(start).rejects.toThrow("branch already exists");
+      });
+      expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+      expect(result.current.pendingLaunchpadCreations).toEqual([]);
+      expect(result.current.launchpadError).toBe("branch already exists");
+    });
   });
 
   it("does not let an older launchpad completion replace a newer optimistic selection", async () => {
@@ -6647,6 +6834,8 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        releaseLaunchpadOnSubmit: true,
+        codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
         directoryKey: firstDirectoryKey,
         launchpad: expect.objectContaining({
           directoryKey: firstDirectoryKey,
@@ -10240,7 +10429,7 @@ describe("useThreadNavigation", () => {
     expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({
       id: "thread-child",
       gitBranch: currentBranch,
-    }));
+    }), expect.stringMatching(/^launchpad:starting:/));
 
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
       federationTarget: undefined,

@@ -12821,6 +12821,130 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  describe("releasing a launchpad draft on submit", () => {
+    const directoryKey = "directory:/repo/project";
+    const submitted = {
+      directoryKey,
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "Fix bug",
+      workMode: "local" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+    const createRegistry = (
+      prepareLaunchpadWorkspace: (
+        overlayStore: ReturnType<typeof createOverlayStoreMock>,
+      ) => Promise<{ cwd: string; workMode: "local" }>,
+    ) => {
+      const overlayStore = createOverlayStoreMock();
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [] }),
+        overlayStore,
+        gitDirectoryService: {
+          prepareLaunchpadWorkspace: vi.fn(() => prepareLaunchpadWorkspace(overlayStore)),
+        } as never,
+      });
+      return { overlayStore, registry };
+    };
+    const readPrompt = async (
+      overlayStore: ReturnType<typeof createOverlayStoreMock>,
+    ) => (await overlayStore.getDirectoryLaunchpad({ directoryKey }))?.prompt ?? "";
+
+    it("clears the draft before the workspace is prepared", async () => {
+      let promptDuringSetup: string | undefined;
+      const { overlayStore, registry } = createRegistry(async (store) => {
+        promptDuringSetup = await readPrompt(store);
+        return { cwd: "/repo/project", workMode: "local" };
+      });
+      await overlayStore.upsertDirectoryLaunchpad(submitted);
+
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey,
+        launchpad: submitted,
+        input: [{ type: "text", text: "Fix bug" }],
+        releaseLaunchpadOnSubmit: true,
+      });
+
+      expect(promptDuringSetup).toBe("");
+      expect(await readPrompt(overlayStore)).toBe("");
+      await registry.close();
+    });
+
+    it("keeps a new draft started while the thread starts", async () => {
+      const { overlayStore, registry } = createRegistry(async (store) => {
+        await store.upsertDirectoryLaunchpad({ ...submitted, prompt: "Next task", updatedAt: 3000 });
+        return { cwd: "/repo/project", workMode: "local" };
+      });
+      await overlayStore.upsertDirectoryLaunchpad(submitted);
+
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey,
+        launchpad: submitted,
+        input: [{ type: "text", text: "Fix bug" }],
+        releaseLaunchpadOnSubmit: true,
+      });
+
+      expect(await readPrompt(overlayStore)).toBe("Next task");
+      await registry.close();
+    });
+
+    it("clears the submitted prompt again when a late draft save restores it", async () => {
+      const { overlayStore, registry } = createRegistry(async (store) => {
+        await store.upsertDirectoryLaunchpad(submitted);
+        return { cwd: "/repo/project", workMode: "local" };
+      });
+
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey,
+        launchpad: submitted,
+        input: [{ type: "text", text: "Fix bug" }],
+        releaseLaunchpadOnSubmit: true,
+      });
+
+      expect(await readPrompt(overlayStore)).toBe("");
+      await registry.close();
+    });
+
+    it("puts the draft back when no thread could be created", async () => {
+      const { overlayStore, registry } = createRegistry(async () => {
+        throw new Error("branch already exists");
+      });
+      await overlayStore.upsertDirectoryLaunchpad(submitted);
+
+      await expect(registry.materializeDirectoryLaunchpad({
+        directoryKey,
+        launchpad: submitted,
+        input: [{ type: "text", text: "Fix bug" }],
+        releaseLaunchpadOnSubmit: true,
+      })).rejects.toThrow("branch already exists");
+
+      expect(await readPrompt(overlayStore)).toBe("Fix bug");
+      await registry.close();
+    });
+
+    it("does not put the draft back over one started meanwhile", async () => {
+      const { overlayStore, registry } = createRegistry(async (store) => {
+        await store.upsertDirectoryLaunchpad({ ...submitted, prompt: "Next task", updatedAt: 3000 });
+        throw new Error("branch already exists");
+      });
+      await overlayStore.upsertDirectoryLaunchpad(submitted);
+
+      await expect(registry.materializeDirectoryLaunchpad({
+        directoryKey,
+        launchpad: submitted,
+        input: [{ type: "text", text: "Fix bug" }],
+        releaseLaunchpadOnSubmit: true,
+      })).rejects.toThrow("branch already exists");
+
+      expect(await readPrompt(overlayStore)).toBe("Next task");
+      await registry.close();
+    });
+  });
+
   it("notifies when a launchpad thread is materialized before starting input", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({

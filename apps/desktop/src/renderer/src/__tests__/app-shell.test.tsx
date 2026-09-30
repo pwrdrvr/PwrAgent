@@ -3022,6 +3022,8 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        releaseLaunchpadOnSubmit: true,
+        codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
         directoryKey: "workspace:new-thread",
         launchpad: expect.objectContaining({
           directoryKey: "workspace:new-thread",
@@ -4815,6 +4817,8 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        releaseLaunchpadOnSubmit: true,
+        codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
         directoryKey: "workspace:new-thread",
         launchpad: expect.objectContaining({
           directoryKey: "workspace:new-thread",
@@ -5105,6 +5109,8 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        releaseLaunchpadOnSubmit: true,
+        codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
         directoryKey: "workspace:new-thread",
         launchpad: expect.objectContaining({
           directoryKey: "workspace:new-thread",

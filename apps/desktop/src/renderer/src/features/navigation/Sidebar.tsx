@@ -2131,12 +2131,23 @@ export function Sidebar(props: SidebarProps) {
               key={creation.selectionKey}
               className="sidebar-pending-thread"
               aria-current={props.selectedItemKey === creation.selectionKey ? "true" : undefined}
+              aria-label={`${creation.title || "New thread"}, starting in ${creation.directoryLabel}`}
               onClick={() => props.onSelectPendingLaunchpad?.(creation)}
               type="button"
             >
-              <span className="pending-spinner" aria-hidden="true" />
-              <span className="sidebar-pending-thread__title">{creation.title || "New thread"}</span>
-              <span>Starting</span>
+              <span className="sidebar-pending-thread__heading">
+                <span className="pending-spinner" aria-hidden="true" />
+                <span className="sidebar-pending-thread__title">{creation.title || "New thread"}</span>
+                <span className="sidebar-pending-thread__status">Starting</span>
+              </span>
+              <span className="sidebar-pending-thread__chips" aria-hidden="true">
+                <span className="thread-row__chip">
+                  <span className="thread-row__chip-icon">
+                    <FolderIcon size={12} />
+                  </span>
+                  <span className="thread-row__chip-label">{creation.directoryLabel}</span>
+                </span>
+              </span>
             </button>
           ))}
           {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (

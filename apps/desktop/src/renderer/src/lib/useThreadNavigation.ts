@@ -5,6 +5,7 @@ import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navi
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
+import { buildStartingLaunchpadComposerScopeKey } from "../features/composer/launchpad-composer-scope";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
 import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
@@ -119,6 +120,12 @@ export type CreatingThreadState = {
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const FEDERATED_LAUNCHPAD_SELECTION_PREFIX = "federated-launchpad:";
+/**
+ * A submitted launchpad whose thread is still starting. It has its own
+ * selection so the directory's launchpad (`launchpad:<directoryKey>`) is free
+ * to compose the next thread meanwhile.
+ */
+const STARTING_LAUNCHPAD_SELECTION_PREFIX = "starting-launchpad:";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
 const NAVIGATION_ACTIVITY_EVENTS = [
@@ -214,6 +221,12 @@ function buildFederatedLaunchpadSelectionKey(
 function isFederatedLaunchpadSelectionKey(selectionKey?: string): boolean {
   return selectionKey?.startsWith(FEDERATED_LAUNCHPAD_SELECTION_PREFIX) === true;
 }
+
+function isStartingLaunchpadSelectionKey(selectionKey?: string): boolean {
+  return selectionKey?.startsWith(STARTING_LAUNCHPAD_SELECTION_PREFIX) === true;
+}
+
+let startingLaunchpadSequence = 0;
 
 function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | undefined {
   if (!selectionKey?.startsWith("launchpad:")) {
@@ -2668,6 +2681,16 @@ export type PendingLaunchpadCreation = {
   setupProgress?: LaunchpadEnvironmentSetupProgress;
   selectionKey: string;
   directoryKey: string;
+  directoryLabel: string;
+  /** The submitted draft, which the starting view renders from. */
+  launchpad: NavigationLaunchpadDraft;
+  /**
+   * Draft scope for follow-ups typed while the thread starts. Absent when the
+   * creation still occupies the directory's own launchpad (federated).
+   */
+  composerScopeKey?: string;
+  /** Matches this creation's setup progress events. */
+  setupProgressKey: string;
   title: string;
   input: AppServerTurnInputItem[];
 };
@@ -2743,7 +2766,10 @@ export function useThreadNavigation(
     parentThreadId?: string,
     extraDirectoryPaths?: string[],
     scheduledFor?: number,
-    onMaterialized?: (thread: NavigationThreadSummary) => void,
+    onMaterialized?: (
+      thread: NavigationThreadSummary,
+      composerScopeKey: string,
+    ) => void,
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
@@ -2993,10 +3019,20 @@ export function useThreadNavigation(
   const pendingLaunchpadCreationsRef = useRef(new Map<string, PendingLaunchpadCreation>());
   const [pendingLaunchpadCreations, setPendingLaunchpadCreations] =
     useState<PendingLaunchpadCreation[]>([]);
+  // The directory whose launchpad a selection shows, including a thread that
+  // is still starting from one.
+  const getLaunchpadSelectionDirectoryKey = useCallback(
+    (selectionKey?: string): string | undefined =>
+      getDirectoryKeyFromLaunchpadSelection(selectionKey)
+      ?? (isStartingLaunchpadSelectionKey(selectionKey)
+        ? pendingLaunchpadCreationsRef.current.get(selectionKey!)?.directoryKey
+        : undefined),
+    [],
+  );
   useEffect(() => desktopApi?.onCodexEnvironmentSetupProgress?.((event) => {
     let changed = false;
     for (const [key, creation] of pendingLaunchpadCreationsRef.current) {
-      if (creation.directoryKey !== event.directoryKey) continue;
+      if (creation.setupProgressKey !== event.directoryKey) continue;
       pendingLaunchpadCreationsRef.current.set(key, {
         ...creation,
         setupProgress: applyLaunchpadEnvironmentSetupProgress(creation.setupProgress, event),
@@ -3188,7 +3224,7 @@ export function useThreadNavigation(
       : undefined,
   });
   const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewVisible,
-    directoryKey: getDirectoryKeyFromLaunchpadSelection(selectedItemKey), federationTarget: rendererFederationTarget,
+    directoryKey: getLaunchpadSelectionDirectoryKey(selectedItemKey), federationTarget: rendererFederationTarget,
   });
   const draftStore = options.composerDraftStore;
   const draftVersion = useSyncExternalStore(
@@ -3203,7 +3239,7 @@ export function useThreadNavigation(
   }), [draftStore, draftVersion, rendererFederationTarget]);
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
   const selectedDirectoryKeys = selectedConfiguration ? directoryKeysForThread(selectedConfiguration)
-    : (getDirectoryKeyFromLaunchpadSelection(selectedItemKey) ? [getDirectoryKeyFromLaunchpadSelection(selectedItemKey)!] : []);
+    : (getLaunchpadSelectionDirectoryKey(selectedItemKey) ? [getLaunchpadSelectionDirectoryKey(selectedItemKey)!] : []);
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
@@ -3290,7 +3326,7 @@ export function useThreadNavigation(
         }
         for (const key of suppressedArchivedThreadKeysRef.current) threadRows.delete(key);
         const nextDirectoryRows = new Map(directoryRows);
-        const selectedDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKeyRef.current);
+        const selectedDirectoryKey = getLaunchpadSelectionDirectoryKey(selectedItemKeyRef.current);
         const previousOwner = current.rows?.federationTarget?.scope === "remote" ? current.rows.federationTarget.instanceId : undefined;
         const currentOwner = rendererFederationTarget?.scope === "remote" ? rendererFederationTarget.instanceId : undefined;
         if (selectedDirectoryKey && previousOwner === currentOwner && !removedDirectoryKeysRef.current.has(selectedDirectoryKey)) {
@@ -4690,6 +4726,7 @@ export function useThreadNavigation(
       displaySelectionKey
       && !getDirectoryKeyFromLaunchpadSelection(displaySelectionKey)
       && !isFederatedLaunchpadSelectionKey(displaySelectionKey)
+      && !isStartingLaunchpadSelectionKey(displaySelectionKey)
     ) {
       return displaySelectionKey;
     }
@@ -4747,7 +4784,9 @@ export function useThreadNavigation(
 
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(
       displaySelectionKey,
-    );
+    ) ?? pendingLaunchpadCreations.find(
+      (creation) => creation.selectionKey === displaySelectionKey,
+    )?.directoryKey;
     if (launchpadDirectoryKey) {
       return directories.find((directory) => directory.key === launchpadDirectoryKey);
     }
@@ -4768,6 +4807,7 @@ export function useThreadNavigation(
     activeFederatedLaunchpad,
     directories,
     displaySelectionKey,
+    pendingLaunchpadCreations,
     selectedThreadKey,
     selectedDetail.state?.detail?.thread,
     selectedDetail.state?.detail?.workspaceDirectories,
@@ -4775,6 +4815,13 @@ export function useThreadNavigation(
   const selectedLaunchpad = useMemo(() => {
     if (activeFederatedLaunchpad) {
       return activeFederatedLaunchpad.launchpad;
+    }
+
+    const startingCreation = pendingLaunchpadCreations.find(
+      (creation) => creation.selectionKey === displaySelectionKey,
+    );
+    if (startingCreation) {
+      return startingCreation.launchpad;
     }
 
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(
@@ -4786,7 +4833,7 @@ export function useThreadNavigation(
 
     return directories.find((directory) => directory.key === launchpadDirectoryKey)
       ?.launchpad;
-  }, [activeFederatedLaunchpad, directories, displaySelectionKey]);
+  }, [activeFederatedLaunchpad, directories, displaySelectionKey, pendingLaunchpadCreations]);
 
   // The directory label the New Thread button would resolve to with its
   // default (context-aware) behavior, or undefined when that resolves to the
@@ -6584,14 +6631,17 @@ export function useThreadNavigation(
       parentThreadId?: string,
       extraDirectoryPaths?: string[],
       scheduledFor?: number,
-      onMaterialized?: (thread: NavigationThreadSummary) => void,
+      onMaterialized?: (
+        thread: NavigationThreadSummary,
+        composerScopeKey: string,
+      ) => void,
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
         return;
       }
 
-      const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
+      let selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
       const federatedSelection =
         activeFederatedLaunchpad
         && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
@@ -6624,25 +6674,77 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
 
-      // The draft carries the parent the launchpad was opened from; prefer it
-      // over the key-parsed source so the new thread links to the card the
-      // operator actually clicked.
+      const editableSelectionKey = buildLaunchpadSelectionKey(directoryKey);
+      const submittedFederationTarget =
+        launchpad.federationTarget ?? readRendererFederationTarget();
+      // A local launchpad hands its draft slot back as soon as it is
+      // submitted, so the operator can start another thread in this directory
+      // while this one sets up. A federated launchpad is one session per
+      // peer and keeps its slot until the owner answers.
+      const releasesLaunchpad = !federatedSelection
+        && !(submittedFederationTarget
+          && isRemoteFederationTarget(submittedFederationTarget));
+      const creationId = `${Date.now().toString(36)}${(++startingLaunchpadSequence).toString(36)}`;
       const launchpadSelectionKey = federatedSelection
         ? buildFederatedLaunchpadSelectionKey(federatedSelection.target)
-        : buildLaunchpadSelectionKey(directoryKey);
+        : releasesLaunchpad
+          ? `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${creationId}`
+          : editableSelectionKey;
       if (pendingLaunchpadCreationsRef.current.has(launchpadSelectionKey)) {
         throw new Error("This thread is already starting.");
       }
+      const composerScopeKey = releasesLaunchpad
+        ? buildStartingLaunchpadComposerScopeKey(creationId, directoryKey)
+        : undefined;
+      const setupProgressKey = releasesLaunchpad
+        ? `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${creationId}`
+        : directoryKey;
       const pendingCreation: PendingLaunchpadCreation = {
         federatedSession: federatedSelection,
         selectionKey: launchpadSelectionKey,
         directoryKey,
+        directoryLabel: directory?.label ?? launchpad.directoryLabel,
+        launchpad,
+        composerScopeKey,
+        setupProgressKey,
         title: input?.find((item) => item.type === "text")?.text
           ?? launchpad.prompt ?? "New thread",
         input: input ?? [],
       };
       pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, pendingCreation);
       setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+      if (releasesLaunchpad) {
+        // Follow the submitted message to its starting row, and show the
+        // directory's launchpad as empty again — main clears the saved draft
+        // when it accepts the request.
+        if (selectedItemKeyRef.current === editableSelectionKey) {
+          selectionKeyAtMaterializationStart = launchpadSelectionKey;
+          // The ref normally follows render. Advance it now: materialization
+          // can settle before the next render, and its "is the operator
+          // still here?" check must see this move, not the launchpad.
+          selectedItemKeyRef.current = launchpadSelectionKey;
+          setSelectedItemKey(launchpadSelectionKey);
+        }
+        setLocalLaunchpads((current) => {
+          if (!current[directoryKey]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
+        setState((current) => ({
+          ...current,
+          rows: current.rows
+            ? applyLaunchpadReset(
+                current.rows,
+                directoryKey,
+                current.rows.launchpadDefaults
+              )
+            : current.rows,
+        }));
+      }
+      let materialized = false;
       try {
         const materializeParentThreadId =
           parentThreadId ??
@@ -6652,8 +6754,7 @@ export function useThreadNavigation(
           launchpad.parentThreadBackend ?? launchpad.backend;
         const materializeParentThreadInstanceId =
           launchpad.parentThreadInstanceId;
-        const federationTarget =
-          launchpad.federationTarget ?? readRendererFederationTarget();
+        const federationTarget = submittedFederationTarget;
         if (!desktopApi.getNavigationLaunchpadConfig) throw new Error("Upgrade this instance to load launchpad configuration before sending.");
         const configuration = initialConfiguration ?? await desktopApi.getNavigationLaunchpadConfig({ protocol: 2, directoryKey, federationTarget });
         if (configuration.protocol !== 2 || configuration.unchanged || !configuration.defaults || configuration.directoryKey !== directoryKey) {
@@ -6669,6 +6770,12 @@ export function useThreadNavigation(
             collaborationMode,
             reviewTarget,
             scheduledFor,
+            ...(releasesLaunchpad
+              ? {
+                  releaseLaunchpadOnSubmit: true,
+                  codexEnvironmentSetupProgressKey: setupProgressKey,
+                }
+              : {}),
             ...(materializeParentThreadId
               ? {
                   parentThreadId: materializeParentThreadId,
@@ -6816,7 +6923,7 @@ export function useThreadNavigation(
               ? undefined
               : current,
           );
-        } else {
+        } else if (!releasesLaunchpad) {
           setLocalLaunchpads((current) => {
             if (!current[directoryKey]) {
               return current;
@@ -6835,7 +6942,11 @@ export function useThreadNavigation(
             },
           }));
         }
-        onMaterialized?.(namedOptimisticMaterializedThread);
+        materialized = true;
+        onMaterialized?.(
+          namedOptimisticMaterializedThread,
+          composerScopeKey ?? `launchpad:${directoryKey}`,
+        );
         const shouldSelectMaterializedThread =
           selectedItemKeyRef.current === selectionKeyAtMaterializationStart;
         const shouldProjectOptimisticThread =
@@ -6882,7 +6993,7 @@ export function useThreadNavigation(
             }
           }
         }
-        if (!federatedSelection) {
+        if (!federatedSelection && !releasesLaunchpad) {
           setState((current) => ({
             ...current,
             rows: current.rows
@@ -6907,9 +7018,19 @@ export function useThreadNavigation(
       } finally {
         pendingLaunchpadCreationsRef.current.delete(launchpadSelectionKey);
         setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+        if (releasesLaunchpad && !materialized) {
+          // No thread exists. Return the operator to the directory's
+          // launchpad, where main has put the draft back unless they had
+          // already started another one, and reload that draft.
+          setSelectedItemKey((current) =>
+            current === launchpadSelectionKey ? editableSelectionKey : current,
+          );
+          void refreshNavigation().catch(() => undefined);
+        }
       }
     },
     [draftStore, rendererFederationTarget,
+      refreshNavigation,
       activeFederatedLaunchpad,
       desktopApi,
       directories,

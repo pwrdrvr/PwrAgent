@@ -23318,6 +23318,57 @@ export class DesktopBackendRegistry {
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    if (!request.releaseLaunchpadOnSubmit) {
+      return await this.materializeLaunchpadDraft(request, options);
+    }
+    const launchpad =
+      request.launchpad ??
+      (await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+      }));
+    if (!launchpad) {
+      throw new Error(`No launchpad found for ${request.directoryKey}`);
+    }
+    // Release the draft before the slow part (worktree, environment setup,
+    // thread start) so the operator can compose the next thread in this
+    // directory while this one starts.
+    await this.resetLaunchpadDraft(launchpad);
+    const released = await this.overlayStore.getDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+    });
+    try {
+      return await this.materializeLaunchpadDraft({ ...request, launchpad }, options);
+    } catch (error) {
+      // No thread exists, so the draft is still the operator's only copy of
+      // the message. Put it back, unless they have already started another.
+      const current = await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: launchpad.directoryKey,
+      });
+      if (JSON.stringify(current) === JSON.stringify(released)) {
+        await this.overlayStore.upsertDirectoryLaunchpad(launchpad);
+      }
+      throw error;
+    }
+  }
+
+  private async resetLaunchpadDraft(
+    launchpad: NavigationLaunchpadDraft,
+  ): Promise<void> {
+    await resetLaunchpadAfterMaterialize({
+      defaultPrAutoDispatchEnabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
+      defaults: await this.resolveLaunchpadDefaults(
+        await this.overlayStore.getLaunchpadDefaults(),
+        launchpad.backend,
+      ),
+      launchpad,
+      overlayStore: this.overlayStore,
+    });
+  }
+
+  private async materializeLaunchpadDraft(
+    request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const launchpad =
       request.launchpad ??
       (await this.overlayStore.getDirectoryLaunchpad({
@@ -23413,7 +23464,8 @@ export class DesktopBackendRegistry {
         onSetupProgress: options?.onCodexEnvironmentSetupProgress
           ? (event) => {
               options.onCodexEnvironmentSetupProgress?.({
-                directoryKey: launchpad.directoryKey,
+                directoryKey:
+                  request.codexEnvironmentSetupProgressKey ?? launchpad.directoryKey,
                 ...event,
               });
             }
@@ -23689,15 +23741,20 @@ export class DesktopBackendRegistry {
       }
     }
 
-    await resetLaunchpadAfterMaterialize({
-      defaultPrAutoDispatchEnabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
-      defaults: await this.resolveLaunchpadDefaults(
-        await this.overlayStore.getLaunchpadDefaults(),
-        launchpad.backend,
-      ),
-      launchpad,
-      overlayStore: this.overlayStore,
-    });
+    if (!request.releaseLaunchpadOnSubmit) {
+      await this.resetLaunchpadDraft(launchpad);
+    } else if (launchpad.prompt.trim()) {
+      // Released at submit. A draft save the renderer sent just before
+      // submitting can still land after that release and bring the sent
+      // prompt back. Clear it again only if it is still that prompt, so a
+      // new draft the operator started meanwhile survives.
+      const current = await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: launchpad.directoryKey,
+      });
+      if (current?.prompt === launchpad.prompt) {
+        await this.resetLaunchpadDraft(launchpad);
+      }
+    }
 
     return {
       ...materializedThread,
