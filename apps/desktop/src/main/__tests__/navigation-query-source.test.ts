@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerBackendScope } from "@pwragent/shared";
+import type { AgentEvent, AppServerBackendScope, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
+import budgets from "./fixtures/navigation-listing-budgets.json";
 
 const mocks = vi.hoisted(() => ({
   store: {
     readNavigationSourceVersion: vi.fn(() => "unchanged"),
-    readNavigationQueryIndex: vi.fn(() => ({ threads: [], directories: [] })),
+    readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
     readDirectoryGitStatusCache: async () => ({}),
   },
 }));
@@ -13,6 +15,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: 
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { NavigationQueryPool } from "../app-server/navigation-query-pool";
+import { NavigationQueryStore } from "../app-server/navigation-query-store";
 
 function createSource() {
   let finish!: () => void;
@@ -60,6 +64,20 @@ describe("owner index source event admission", () => {
     expect(source.listeners.size).toBe(0);
   });
 
+  it("does not restart an index for a subagent event with unchanged navigation", async () => {
+    const source = createSource();
+    const first = source.read();
+    await Promise.resolve();
+    const event = { backend: "codex", notification: { method: "thread/subAgents/updated",
+      params: { threadId: "thread", navigationChanged: false } } } as AgentEvent;
+    for (const listener of source.listeners) listener(event);
+    const second = source.read();
+    source.finish();
+    expect(await second).toBe(await first);
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+    source.emit("thread/name/updated");
+  });
+
   it("keeps repeated unchanged reads stable, but refreshes after a durable source version change", async () => {
     const source = createSource();
     source.finish();
@@ -104,9 +122,118 @@ describe("owner index source event admission", () => {
     source.finish();
     const [a, b] = await Promise.all([first, second]);
     expect(source.listThreads).toHaveBeenCalledTimes(2);
-    expect(a).not.toBe(b);
+    expect(a).toBe(b);
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
   });
+
+  it("shares one replacement scan across consumers admitted between related events", async () => {
+    const source = createSource();
+    const reads = [source.read()];
+    await Promise.resolve();
+    for (const method of ["turn/started", "thread/status/changed", "thread/subAgents/updated", "navigation/thread/seen"]) {
+      source.emit(method);
+      reads.push(source.read());
+      await Promise.resolve();
+    }
+    source.finish();
+    const results = await Promise.all(reads);
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
+    expect(results.every((result) => result === results[0])).toBe(true);
+    expect(source.listeners.size).toBe(1);
+    source.emit("thread/name/updated");
+    expect(source.listeners.size).toBe(0);
+  });
+});
+
+it("bounds physical listing work for a turn start across directory, children and exact consumers", async () => {
+  const originalProjection = mocks.store.readNavigationQueryIndex.getMockImplementation();
+  mocks.store.readNavigationQueryIndex.mockClear();
+  const parent: NavigationThreadSummary = { id: "parent", source: "codex", title: "before", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: false } };
+  let current = parent;
+  let releaseFirst!: () => void;
+  let firstStarted!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStart = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const rpc = vi.fn();
+  const listThreads = vi.fn(async () => {
+    const snapshot = current;
+    for (let page = 1; page <= 3; page++) {
+      rpc(page);
+      if (listThreads.mock.calls.length === 1 && page === 1) {
+        firstStarted();
+        await firstGate;
+      }
+    }
+    return [snapshot];
+  });
+  const registry = {
+    listThreads,
+    onEvent: (listener: (event: AgentEvent) => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+    hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
+    withNavigationSubAgentActivity: (threads: NavigationThreadSummary[]) => threads,
+    getNavigationInputRequestThreadKeys: () => new Set<string>(),
+  } as unknown as DesktopBackendRegistry;
+  mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+  const pool = new NavigationQueryPool();
+  const store = new NavigationQueryStore();
+  const requests: NavigationQueryRequest[] = [
+    { protocol: 2, consumer: "main-sidebar", query: { kind: "directory", directoryKey: "project" } },
+    { protocol: 2, consumer: "main-sidebar", query: { kind: "children", parent: { backend: "codex", threadId: "parent" } } },
+    { protocol: 2, consumer: "main-sidebar", query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent" }] } },
+    { protocol: 2, consumer: "main-sidebar", query: { kind: "directory", directoryKey: "project" } },
+  ];
+  const read = (index: number) => pool.read({
+    consumerId: `sidebar-${index}`,
+    request: requests[index]!,
+    load: ({ signal }) => store.readPage({
+      request: requests[index]!, scopeKey: "renderer-local",
+      loadIndex: () => loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", signal }),
+    }),
+  });
+  const emit = (method: string) => {
+    const event = { backend: "codex", notification: { method, params: { threadId: "parent" } } } as AgentEvent;
+    for (const listener of listeners) listener(event);
+    store.observeAttentionEvent(event);
+    pool.invalidateQueryOwner();
+  };
+  try {
+    const pending = [read(0)];
+    await firstStart;
+    current = { ...parent, title: "after", threadStatus: "active" };
+    for (const [index, method] of ["turn/started", "thread/status/changed", "thread/subAgents/updated"].entries()) {
+      emit(method);
+      pending.push(read(index + 1));
+      await Promise.resolve();
+    }
+    releaseFirst();
+    const pages = await Promise.all(pending);
+    expect(pages[2]!.entries[0]?.row.title).toBe("after");
+    expect({ logicalRequests: pending.length, indexConstructions: mocks.store.readNavigationQueryIndex.mock.calls.length,
+      providerListings: listThreads.mock.calls.length, paginatedRpcs: rpc.mock.calls.length, pagesPerListing: 3 })
+      .toEqual(budgets["turn-start-with-related-notifications"]);
+    const rerender = await Promise.all(requests.map((_, index) => read(index)));
+    expect(rerender[2]!.entries[0]?.row.title).toBe("after");
+    expect({ logicalRequests: rerender.length, indexConstructions: mocks.store.readNavigationQueryIndex.mock.calls.length,
+      providerListings: listThreads.mock.calls.length, paginatedRpcs: rpc.mock.calls.length, pagesPerListing: 3 })
+      .toEqual(budgets["unchanged-rerender"]);
+    current = { ...current, title: "later" };
+    emit("thread/name/updated");
+    const later = await read(2);
+    expect(later.entries[0]?.row.title).toBe("later");
+    expect({ logicalRequests: 1, indexConstructions: mocks.store.readNavigationQueryIndex.mock.calls.length,
+      providerListings: listThreads.mock.calls.length, paginatedRpcs: rpc.mock.calls.length, pagesPerListing: 3 })
+      .toEqual(budgets["later-mutation"]);
+  } finally {
+    releaseFirst();
+    for (let index = 0; index < requests.length; index++) pool.release(`sidebar-${index}`);
+    mocks.store.readNavigationQueryIndex.mockImplementation(originalProjection!);
+  }
 });

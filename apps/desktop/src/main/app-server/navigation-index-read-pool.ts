@@ -1,7 +1,10 @@
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
+import { NavigationQueryError } from "./navigation-query-store";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
+// One initial scan plus two fresh attempts for mutations during replacement.
+const MAX_INVALIDATED_RETRIES = 2;
 
 /** Measure only enough of a snapshot to admit it. Native JSON serialization
  * runs on bounded row batches, avoiding one full temporary snapshot string.
@@ -23,7 +26,7 @@ function retainedIndexBytes(index: NavigationQueryIndex): number {
   return bytes;
 }
 
-type Pending = { controller: AbortController; readers: number; promise: Promise<NavigationQueryIndex> };
+type Pending = { controller: AbortController; readers: number; revision: number; done: boolean; promise: Promise<NavigationQueryIndex> };
 
 /** Shared physical reads with optional short, version-keyed, byte-bounded reuse. */
 export class NavigationIndexReadPool {
@@ -58,7 +61,12 @@ export class NavigationIndexReadPool {
 
   retainedUsage(): { entries: number; bytes: number } { return { entries: this.retained.size, bytes: this.retainedBytes }; }
 
-  invalidate(key: string): void { this.joinable.delete(key); this.evict(key); }
+  invalidate(key: string): void {
+    const pending = this.joinable.get(key);
+    if (pending?.done) this.joinable.delete(key);
+    else if (pending) pending.revision += 1;
+    this.evict(key);
+  }
 
   read(key: string, load: (signal: AbortSignal) => Promise<NavigationQueryIndex>, signal?: AbortSignal): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
@@ -74,17 +82,49 @@ export class NavigationIndexReadPool {
     if (!pending) {
       if (this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
       const controller = new AbortController();
-      pending = { controller, readers: 0, promise: Promise.resolve(undefined as unknown as NavigationQueryIndex) };
+      pending = { controller, readers: 0, revision: 0, done: false,
+        promise: Promise.resolve(undefined as unknown as NavigationQueryIndex) };
       const owned = pending;
       this.physical.add(owned);
       this.joinable.set(key, owned);
-      owned.promise = listingDiagnostics.trace("index", {}, () => Promise.resolve().then(() => {
-        controller.signal.throwIfAborted();
-        return load(controller.signal);
-      }).then((index) => { this.retain(key, index, owned); return index; }).finally(() => {
-        this.physical.delete(owned);
-        if (this.joinable.get(key) === owned) this.joinable.delete(key);
-      }));
+      owned.promise = listingDiagnostics.trace("index", {}, async () => {
+        let invalidatedRetries = 0;
+        const retryInvalidated = (): void => {
+          if (invalidatedRetries >= MAX_INVALIDATED_RETRIES) {
+            throw new NavigationQueryError("navigation_busy", "Navigation changed repeatedly during its owner index read. Retry the operation.");
+          }
+          invalidatedRetries += 1;
+          listingDiagnostics.record("index", "retry", { reason: "owner-invalidated" });
+        };
+        try {
+          for (;;) {
+            controller.signal.throwIfAborted();
+            const revision = owned.revision;
+            let index: NavigationQueryIndex;
+            try {
+              index = await load(controller.signal);
+            } catch (error) {
+              controller.signal.throwIfAborted();
+              if (revision !== owned.revision) {
+                retryInvalidated();
+                continue;
+              }
+              throw error;
+            }
+            controller.signal.throwIfAborted();
+            if (revision !== owned.revision) {
+              retryInvalidated();
+              continue;
+            }
+            owned.done = true;
+            this.retain(key, index, owned);
+            return index;
+          }
+        } finally {
+          this.physical.delete(owned);
+          if (this.joinable.get(key) === owned) this.joinable.delete(key);
+        }
+      });
     }
     const owned = pending;
     owned.readers += 1;
