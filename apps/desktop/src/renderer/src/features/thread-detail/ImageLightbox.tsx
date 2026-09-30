@@ -109,6 +109,9 @@ export function ImageLightbox({
       // The focused image viewport owns arrows for panning; the rest of
       // the dialog retains gallery navigation.
       if (event.target instanceof HTMLElement && event.target.matches(".image-lightbox__viewport")) return;
+      // A text field (the SVG search) owns its arrows for the caret.
+      if (event.target instanceof HTMLElement
+        && (event.target.matches("input, textarea, select") || event.target.isContentEditable)) return;
       if (event.key === "ArrowLeft" && onPrevious) {
         event.stopPropagation();
         event.preventDefault();

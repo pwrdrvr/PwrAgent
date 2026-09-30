@@ -284,6 +284,30 @@ describe("ImageLightbox", () => {
     expect(onNext).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves the Left/Right Arrow keys to a focused text field", () => {
+    const onNext = vi.fn();
+    const onPrevious = vi.fn();
+    render(
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        position={2}
+        total={3}
+        actions={<input aria-label="Search SVG frames" />}
+        onClose={() => {}}
+        onNext={onNext}
+        onPrevious={onPrevious}
+      />,
+    );
+
+    const field = screen.getByRole("textbox", { name: "Search SVG frames" });
+    expect(fireEvent.keyDown(field, { key: "ArrowLeft" })).toBe(true);
+    expect(fireEvent.keyDown(field, { key: "ArrowRight" })).toBe(true);
+
+    expect(onPrevious).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
   it("shows disabled gallery controls at the first and last image", () => {
     const { rerender } = render(
       <ImageLightbox
