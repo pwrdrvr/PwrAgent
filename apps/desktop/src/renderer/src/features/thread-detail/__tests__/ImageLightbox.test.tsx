@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "../ImageLightbox";
 import { addTabSentinels, pressTab, walkTab } from "../../../test/tab-walk";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("ImageLightbox", () => {
@@ -26,6 +27,43 @@ describe("ImageLightbox", () => {
 
     const image = screen.getByRole("img", { name: "A cat" });
     expect(image).toHaveAttribute("src", "https://example.test/cat.png");
+  });
+
+  it("opens SVG interaction in a sandboxed frame while keeping the image preview", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" onload="init()"><script>function init() {}</script></svg>';
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([svg], { type: "image/svg+xml" }),
+    }));
+    render(<ImageLightbox src="pwragent-image://file/graph.svg"
+      alt="Flamegraph" interactiveSvg onClose={() => {}} />);
+
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+    expect(await screen.findByText("This SVG has interactive controls")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    const frame = await screen.findByTitle("Interactive SVG: Flamegraph");
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(frame).toHaveAttribute("srcdoc", expect.stringContaining("default-src 'none'"));
+    expect(screen.queryByRole("img", { name: "Flamegraph" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show image preview" }));
+    await waitFor(() => expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument());
+  });
+
+  it("does not offer interaction for an inert SVG", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"/>';
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([svg], { type: "image/svg+xml" }),
+    }));
+    render(<ImageLightbox src="data:image/svg+xml,static"
+      alt="Static SVG" interactiveSvg onClose={() => {}} />);
+
+    await act(async () => {});
+    expect(screen.getByRole("img", { name: "Static SVG" })).toBeInTheDocument();
+    expect(screen.queryByText("This SVG has interactive controls")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Interact with SVG" })).toBeNull();
   });
 
   it("closes via the accent cookie button", () => {
@@ -244,6 +282,30 @@ describe("ImageLightbox", () => {
 
     expect(onPrevious).toHaveBeenCalledTimes(2);
     expect(onNext).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the Left/Right Arrow keys to a focused text field", () => {
+    const onNext = vi.fn();
+    const onPrevious = vi.fn();
+    render(
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        position={2}
+        total={3}
+        actions={<input aria-label="Search SVG frames" />}
+        onClose={() => {}}
+        onNext={onNext}
+        onPrevious={onPrevious}
+      />,
+    );
+
+    const field = screen.getByRole("textbox", { name: "Search SVG frames" });
+    expect(fireEvent.keyDown(field, { key: "ArrowLeft" })).toBe(true);
+    expect(fireEvent.keyDown(field, { key: "ArrowRight" })).toBe(true);
+
+    expect(onPrevious).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
   });
 
   it("shows disabled gallery controls at the first and last image", () => {

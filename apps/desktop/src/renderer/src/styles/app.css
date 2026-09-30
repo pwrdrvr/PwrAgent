@@ -31687,6 +31687,108 @@ button.pricing-token-miser__folded:focus-visible {
   user-select: none;
 }
 
+.image-lightbox__viewport--interactive {
+  overflow: hidden;
+  touch-action: auto;
+  user-select: auto;
+}
+
+/* Transparent, so the frame is the size of the viewport without painting a
+   panel beyond the picture: the SVG centres itself inside the frame at the
+   same no-upscale fit the preview uses, and the rest reads as scrim. That
+   holds only while the frame document's `color-scheme` equals this element's:
+   Chromium paints an opaque canvas behind a frame whose scheme differs from
+   its owner's, which was a white slab in the dark theme. The lightbox writes
+   the app's scheme into the document and pins it here inline. */
+.image-lightbox__interactive-svg {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* The search field floats as a second pill in the toolbar's own vocabulary:
+   the same plate, 32px controls, and 12px type. `button { font: inherit }`
+   would otherwise pull every control here up to the body's 16px. */
+.image-lightbox__svg-search {
+  position: absolute;
+  z-index: 2;
+  top: 16px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 32px);
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
+  transform: translateX(-50%);
+}
+
+.image-lightbox__svg-search input {
+  min-width: 0;
+  width: min(280px, 40vw);
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.image-lightbox__svg-search input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+.image-lightbox__svg-search button {
+  flex: none;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-lightbox__svg-search button:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  color: var(--accent);
+}
+
+/* Find is the field's one primary action. */
+.image-lightbox__svg-search button[type="submit"] {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.image-lightbox__svg-search button[type="submit"]:hover {
+  background: var(--accent-strong);
+  color: var(--button-text);
+}
+
+.image-lightbox__svg-search button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-lightbox__svg-search [role="alert"] {
+  flex: none;
+  padding: 0 10px 0 4px;
+  color: var(--danger-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .image-lightbox__image {
   flex: none;
   max-width: 100%;
@@ -31823,6 +31925,25 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+.image-lightbox__interactive-label {
+  padding: 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.image-lightbox__interactive-hint {
+  padding: 0 6px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .image-lightbox__interactive-hint {
+    display: none;
+  }
+}
+
 .image-lightbox__tool {
   display: inline-flex;
   align-items: center;
@@ -31858,6 +31979,16 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
+/* After the base rule and its hover, which it would otherwise lose to on
+   source order at equal specificity: the offer to interact is the one tinted
+   control in the pill until the operator takes it. Its hover is the base
+   rule's, which is declared first but outranks this one. */
+.image-lightbox__tool--interactive-available {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
 /* `aria-disabled`, not `disabled`, for the zoom and fit controls: a disabled
    button fires no pointer events, so it could not raise the tooltip that says
    what it does — which is exactly what an operator hovers a greyed-out glyph
@@ -31879,6 +32010,10 @@ button.pricing-token-miser__folded:focus-visible {
 
 .image-lightbox__tool[data-status="copied"] {
   color: var(--success-text);
+}
+
+.image-lightbox__tool[data-status="failed"] {
+  color: var(--danger-text);
 }
 
 .image-lightbox__tool-divider {
@@ -38511,6 +38646,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 .image-viewer__button--labelled[data-status="copied"] { color: var(--success-text); }
+.image-viewer__button--labelled[data-status="failed"] { color: var(--danger-text); }
 
 .image-viewer__button:hover:not(:disabled),
 .mermaid-diagram__toggle:hover { background: var(--bg-panel-hover); }
@@ -38534,6 +38670,16 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.image-viewer__status--error {
+  position: static;
+  width: auto;
+  height: auto;
+  clip-path: none;
+  padding: 0 8px;
+  color: var(--danger-text);
+  font-size: 12px;
 }
 
 /* ---- Messaging surface picker specifics ----

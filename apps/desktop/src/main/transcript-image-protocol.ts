@@ -10,7 +10,8 @@ import type {
   FederationInstanceId,
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -27,6 +28,7 @@ const IMAGE_MIME_TYPES = new Map<string, string>([
   [".jpeg", "image/jpeg"],
   [".jpg", "image/jpeg"],
   [".png", "image/png"],
+  [".svg", "image/svg+xml"],
   [".webp", "image/webp"],
 ]);
 
@@ -37,6 +39,7 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
   ["image/jpeg", "jpg"],
   ["image/jpg", "jpg"],
   ["image/png", "png"],
+  ["image/svg+xml", "svg"],
   ["image/webp", "webp"],
 ]);
 
@@ -1166,6 +1169,9 @@ function transcriptImageResponse(
     headers: {
       "cache-control": "public, max-age=31536000, immutable",
       "content-type": mimeType,
+      ...(mimeType === "image/svg+xml"
+        ? { "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" }
+        : {}),
     },
   });
 }
@@ -1252,6 +1258,36 @@ export async function readTranscriptImageProtocolRequest(
     dataBase64: bytes.toString("base64"),
     mimeType: resolution.mimeType,
   };
+}
+
+/** Match the image protocol's approved local roots before exposing bytes. */
+export async function readTranscriptImageForRenderer(
+  requestUrl: string,
+  options?: TranscriptImageProtocolOptions,
+): Promise<FederatedTranscriptImageResponse> {
+  if (!requestUrl.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`)) {
+    throw new Error("Only local transcript images can be read");
+  }
+  const resolution = await resolveTranscriptImageProtocolRequest(requestUrl, options);
+  if (!resolution.ok) throw new Error(resolution.message);
+
+  const file = await open(resolution.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const fileStat = await file.stat();
+    if (
+      !fileStat.isFile()
+      || fileStat.size === 0
+      || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    ) {
+      throw new Error("Transcript image size is not supported");
+    }
+    return {
+      dataBase64: (await file.readFile()).toString("base64"),
+      mimeType: resolution.mimeType,
+    };
+  } finally {
+    await file.close();
+  }
 }
 
 function decodeTranscriptImageProtocolRequest(requestUrl: string): string | undefined {

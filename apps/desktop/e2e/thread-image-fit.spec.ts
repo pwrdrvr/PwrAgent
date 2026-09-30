@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -284,6 +284,148 @@ test("fits wide, small, and tiny pasted transcript images", async () => {
       expect(metrics.renderedHeight).toBeCloseTo(8, 0);
       expect(metrics.buttonWidth).toBeGreaterThanOrEqual(44);
       expect(metrics.buttonHeight).toBeGreaterThanOrEqual(44);
+    });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("copies a transcript SVG as PNG for the composer", async () => {
+  const fixture = await createThreadImageFitFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+    await app.window.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          write: async (items: ClipboardItem[]) => {
+            const blob = await items[0].getType("image/png");
+            (window as Window & { testCopiedImage?: Blob }).testCopiedImage = blob;
+          },
+        },
+      });
+    });
+
+    await app.window.getByAltText("Small intrinsic screenshot").click();
+    await app.window.getByRole("button", { name: "Copy image" }).click();
+    await expect(app.window.getByText("Copy image succeeded")).toBeAttached();
+    const image = await app.window.evaluate(async () => {
+      const blob = (window as Window & { testCopiedImage?: Blob }).testCopiedImage;
+      return blob ? { type: blob.type, size: blob.size } : undefined;
+    });
+    expect(image?.type).toBe("image/png");
+    expect(image?.size).toBeGreaterThan(0);
+
+    await app.window.getByRole("dialog", { name: "Expanded image" })
+      .getByRole("button", { name: "Close" }).click();
+    await app.window.evaluate(() => {
+      const blob = (window as Window & { testCopiedImage?: Blob }).testCopiedImage;
+      const composer = document.querySelector("#thread-composer");
+      if (!blob || !composer) throw new Error("Copied image or composer unavailable");
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([blob], "copied-flamegraph.png", { type: "image/png" }));
+      composer.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      }));
+    });
+    await expect(app.window.getByAltText("copied-flamegraph.png")).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
+  const fixture = await createThreadImageFitFixture();
+  const homeRoot = path.join(path.dirname(fixture.fixturePath), "home");
+  const codexHome = path.join(homeRoot, ".codex");
+  const svgPath = path.join(codexHome, "worktrees", "flamegraph.svg");
+  const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
+  const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160" onload="init(evt)">
+    <script><![CDATA[
+      function init() { document.getElementById("state").textContent = "Ready"; }
+      window.addEventListener("mouseover", function(event) {
+        if (event.target.id === "frame") document.getElementById("details").textContent = "Function: frame";
+      });
+      window.addEventListener("click", function(event) {
+        if (event.target.id === "frame") {
+          document.getElementById("state").textContent = "Zoomed";
+          history.replaceState(null, null, "?x=1");
+        }
+        if (event.target.id === "search") search_prompt();
+      });
+      function search_prompt() { prompt("Search", ""); }
+      function search(term) {
+        history.replaceState(null, null, "?s=" + term);
+        document.getElementById("matched").textContent = term;
+      }
+    ]]></script>
+    <rect id="frame" x="20" y="30" width="180" height="60" fill="orange"/>
+    <text id="state" x="20" y="115">Loading</text>
+    <text id="details" x="20" y="135"> </text>
+    <text id="search" x="230" y="35">Search</text>
+    <text id="matched" x="230" y="55"> </text>
+  </svg>`;
+  await mkdir(path.dirname(svgPath), { recursive: true });
+  await writeFile(svgPath, svg);
+  const image = {
+    type: "image",
+    url: pathToFileURL(svgPath).toString(),
+    alt: "Interactive flamegraph",
+  };
+  for (const message of [...read.result.entries, ...read.result.messages]) {
+    if (message.id === "message-image-fit-2") message.parts[2] = image;
+  }
+  await writeFile(fixture.fixturePath, JSON.stringify(replay));
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    homeRoot,
+    env: { CODEX_HOME: codexHome },
+  });
+
+  try {
+    await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+    await app.window.getByAltText("Interactive flamegraph").click();
+    await expect(app.window.getByText("This SVG has interactive controls")).toBeVisible();
+    await app.window.getByRole("button", { name: "Interact with SVG" }).click();
+    const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
+    await expect(frame.locator("#state")).toHaveText("Ready");
+    await frame.locator("#frame").hover();
+    await expect(frame.locator("#details")).toHaveText("Function: frame");
+    await frame.locator("#frame").click();
+    await expect(frame.locator("#state")).toHaveText("Zoomed");
+
+    await frame.locator("#search").click();
+    await app.window.getByRole("textbox", { name: "Search SVG frames" }).press("Escape");
+    await expect(app.window.getByRole("dialog", { name: "Expanded image" })).toBeVisible();
+    await expect(app.window.getByRole("textbox", { name: "Search SVG frames" })).toBeHidden();
+    await frame.locator("#search").click();
+    await app.window.getByRole("textbox", { name: "Search SVG frames" }).fill("frame");
+    await app.window.getByRole("button", { name: "Find" }).click();
+    await expect(frame.locator("#matched")).toHaveText("frame");
+    const isolation = await frame.locator("html").evaluate(async () => {
+      let parentDomAccessible = true;
+      try {
+        void window.parent.document.body;
+      } catch {
+        parentDomAccessible = false;
+      }
+      const popupOpened = window.open("about:blank") !== null;
+      const fetchAllowed = await fetch("data:text/plain,probe")
+        .then(() => true, () => false);
+      return { origin: location.origin, parentDomAccessible, popupOpened, fetchAllowed };
+    });
+    expect(isolation).toEqual({
+      origin: "null",
+      parentDomAccessible: false,
+      popupOpened: false,
+      fetchAllowed: false,
     });
   } finally {
     await app.close();

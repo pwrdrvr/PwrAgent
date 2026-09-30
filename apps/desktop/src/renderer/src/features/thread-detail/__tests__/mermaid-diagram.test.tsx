@@ -129,7 +129,7 @@ describe("Mermaid clipboard actions", () => {
     write.mockRejectedValueOnce(new Error("denied"));
     await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Copy image" })));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Copy image failed");
-    expect(within(dialog).getByRole("button", { name: "Copy image" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("alert")).toBeVisible();
     expect(write.mock.calls[1][0][0].data["image/png"]).toBe(png);
     delete (navigator as { clipboard?: unknown }).clipboard;
   });

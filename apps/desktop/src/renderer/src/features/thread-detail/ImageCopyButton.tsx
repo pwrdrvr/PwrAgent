@@ -68,8 +68,9 @@ export function ClipboardActionButton({ label, text, copy, appearance }: {
         : <CopyIcon size={appearance === "pill" ? 16 : 14} aria-hidden="true" />}
       <span>{text}</span>
     </button>
-    <span className="image-viewer__status" role={status === "failed" ? "alert" : "status"}>
-      {status === "failed" ? `${label} failed. Try again or use the context menu.` : status === "copied" ? `${label} succeeded` : ""}
+    <span className={status === "failed" ? "image-viewer__status image-viewer__status--error" : "image-viewer__status"}
+      role={status === "failed" ? "alert" : "status"}>
+      {status === "failed" ? `${label} failed` : status === "copied" ? `${label} succeeded` : ""}
     </span>
     {inherited ? null : ownTooltip.tooltipNode}
   </>;

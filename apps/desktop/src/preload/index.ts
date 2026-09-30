@@ -626,6 +626,7 @@ import {
   APP_UPDATE_STATUS_READ_CHANNEL,
   CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
   CLIPBOARD_WRITE_TEXT_CHANNEL,
+  TRANSCRIPT_IMAGE_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_GET_PR_ACTIVITY_CHANNEL,
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
@@ -1037,6 +1038,8 @@ const desktopApi = Object.freeze({
   copyRichText: async (payload: { text: string; html: string }): Promise<void> => {
     await ipcRenderer.invoke(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL, payload);
   },
+  readTranscriptImage: async (url: string): Promise<{ dataBase64: string; mimeType: string }> =>
+    await ipcRenderer.invoke(TRANSCRIPT_IMAGE_READ_CHANNEL, url),
   listMcpConnections: async (): Promise<ListMcpConnectionsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL),
   createMcpConnection: async (

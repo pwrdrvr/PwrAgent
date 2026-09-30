@@ -538,6 +538,7 @@ export type DesktopApi = {
   replayFixtureActive?: boolean;
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
+  readTranscriptImage?: (url: string) => Promise<{ dataBase64: string; mimeType: string }>;
   listMcpConnections?: () => Promise<ListMcpConnectionsResponse>;
   createMcpConnection?: (
     request: CreateMcpConnectionRequest,

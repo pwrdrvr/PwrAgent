@@ -39,9 +39,42 @@ describe("copyImage", () => {
     });
     const write = clipboard();
     await copyImage("original.jpg");
-    expect(draw).toHaveBeenCalledWith(bitmap, 0, 0);
+    expect(draw).toHaveBeenCalledWith(bitmap, 0, 0, 2400, 1600);
     expect(encode).toHaveBeenCalledWith(expect.any(Function), "image/png");
     expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(write.mock.calls[0][0][0].data["image/png"]).toBe(png);
+  });
+
+  it("rasterizes SVG through an image element before copying PNG", async () => {
+    const svg = new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"/>'], { type: "image/svg+xml" });
+    const png = new Blob(["converted SVG"], { type: "image/png" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: async () => svg }));
+    const decode = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("Image", class {
+      naturalWidth = 120;
+      naturalHeight = 60;
+      src = "";
+      decode = decode;
+    });
+    const createObjectURL = vi.fn().mockReturnValue("blob:svg");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const createBitmap = vi.fn();
+    vi.stubGlobal("createImageBitmap", createBitmap);
+    const draw = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ drawImage: draw } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
+      callback(png);
+    });
+    const write = clipboard();
+
+    await copyImage("pwragent-image://file/example.svg");
+
+    expect(createObjectURL).toHaveBeenCalledWith(svg);
+    expect(decode).toHaveBeenCalledOnce();
+    expect(createBitmap).not.toHaveBeenCalled();
+    expect(draw).toHaveBeenCalledWith(expect.anything(), 0, 0, 120, 60);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:svg");
     expect(write.mock.calls[0][0][0].data["image/png"]).toBe(png);
   });
 
