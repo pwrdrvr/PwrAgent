@@ -46,7 +46,7 @@ import {
   useProviderCatalogRefresh,
   type ProviderCatalogRefreshController,
 } from "./ProviderCatalogRefresh";
-import { acpStatusLabel } from "./acp-agent-copy";
+import { acpRelativeTime, acpStatusLabel } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
   displayOrderedAcpEntries,
@@ -148,6 +148,9 @@ export function ModelsSettings(props: {
   );
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const [checkingManagedCodex, setCheckingManagedCodex] = useState(false);
+  const [managedCodexCheckError, setManagedCodexCheckError] =
+    useState<string | undefined>();
   const catalogRefresh = useProviderCatalogRefresh(props.desktopApi);
   const catalogBusy = refreshingCatalog || catalogRefresh.running;
   const codex = props.snapshot.models.codex;
@@ -212,10 +215,10 @@ export function ModelsSettings(props: {
   // reads the catalog cache, or refreshes Codex alone from its own screen.
   const refreshCatalog = async (
     refreshModels: "codex" | false = false,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!props.desktopApi?.listBackends) {
       setCatalogError("Provider model discovery is unavailable in this build.");
-      return;
+      return false;
     }
     setRefreshingCatalog(true);
     try {
@@ -230,10 +233,43 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      return true;
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setRefreshingCatalog(false);
+    }
+  };
+
+  const checkManagedCodexUpdates = async (): Promise<void> => {
+    if (!props.desktopApi?.refreshCodexDiscovery) {
+      setManagedCodexCheckError(
+        "Managed Codex release checks are unavailable in this build.",
+      );
+      return;
+    }
+    setManagedCodexCheckError(undefined);
+    setCheckingManagedCodex(true);
+    try {
+      const { snapshot } = await props.desktopApi.refreshCodexDiscovery({
+        discoveryIntent: "settings-user-action",
+      });
+      await props.onRefresh();
+      const updatedVersion = snapshot.runtime.tokenMiser?.managedCodex?.version;
+      if (
+        !updatedVersion
+        || updatedVersion === managedCodexRuntime?.version
+        || await refreshCatalog("codex")
+      ) {
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      }
+    } catch (error) {
+      setManagedCodexCheckError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setCheckingManagedCodex(false);
     }
   };
 
@@ -319,14 +355,15 @@ export function ModelsSettings(props: {
                   <ManagedRuntimeProgressStrip
                     progress={managedCodexProgress}
                     waitingForIdle={managedCodexRuntime?.state === "pending-switch"}
-                    onRetry={() => void refreshCatalog("codex")}
+                    onRetry={() => void checkManagedCodexUpdates()}
                   />
                 ) : managedCodexOn ? (
                   <ManagedCodexStatus
-                    busy={props.saving === true || catalogBusy}
-                    refreshing={refreshingCatalog}
+                    busy={props.saving === true || catalogBusy || checkingManagedCodex}
+                    refreshing={checkingManagedCodex}
                     runtime={managedCodexRuntime}
-                    onCheckForUpdates={() => void refreshCatalog("codex")}
+                    error={managedCodexCheckError}
+                    onCheckForUpdates={() => void checkManagedCodexUpdates()}
                   />
                 ) : null
               }
@@ -1763,6 +1800,7 @@ function CodexCandidateRow(props: {
  */
 function ManagedCodexStatus(props: {
   busy: boolean;
+  error?: string;
   refreshing: boolean;
   runtime: NonNullable<DesktopSettingsSnapshot["runtime"]["tokenMiser"]>["managedCodex"];
   onCheckForUpdates: () => void;
@@ -1784,6 +1822,9 @@ function ManagedCodexStatus(props: {
               {waiting
                 ? "installed and verified · takes over after active turns finish"
                 : "installed · newest verified build"}
+              {runtime.checkedAt !== undefined
+                ? ` · checked ${acpRelativeTime(runtime.checkedAt)}`
+                : ""}
             </span>
           </>
         ) : (
@@ -1810,6 +1851,9 @@ function ManagedCodexStatus(props: {
           {props.refreshing ? "Checking…" : "Check for updates"}
         </button>
       </div>
+      {props.error ? (
+        <p className="settings-row__error" role="alert">{props.error}</p>
+      ) : null}
     </div>
   );
 }

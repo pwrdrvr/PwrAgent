@@ -863,6 +863,7 @@ export class DesktopSettingsService {
                         ? "pending-switch" as const
                         : "ready" as const,
                       version: managedCodexRuntime.metadata.version,
+                      checkedAt: managedCodexRuntime.metadata.checkedAt,
                     },
                   }
                 : managedCodexError
@@ -882,6 +883,7 @@ export class DesktopSettingsService {
                         ? "pending-switch" as const
                         : "ready" as const,
                       version: managedCodexRuntime.metadata.version,
+                      checkedAt: managedCodexRuntime.metadata.checkedAt,
                     },
                   }
                 : managedCodexError

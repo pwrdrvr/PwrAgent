@@ -1670,6 +1670,12 @@ describe("DesktopSettingsService", () => {
       await expect(second.service.resolveCodexCommand()).resolves.toMatchObject({
         command: "/managed/codex",
       });
+      await second.service.refreshCodexDiscovery(
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect(second.ensureManaged).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        checkMode: "force",
+      }));
     });
 
     it("leaves the setting off when the first install fails", async () => {
@@ -2563,6 +2569,7 @@ describe("DesktopSettingsService", () => {
           managedCodex: {
             state: "ready",
             version: "0.200.0-pwragent.1",
+            checkedAt: 1,
           },
         },
       },
