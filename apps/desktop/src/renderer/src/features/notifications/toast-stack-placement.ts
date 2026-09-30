@@ -93,6 +93,18 @@ function cssPixels(style: CSSStyleDeclaration, property: string): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+/**
+ * Where the widest card ends. A notice fits its content, so the stack's own
+ * box runs past a narrow card, over controls nothing covers.
+ */
+function cardsRight(stack: HTMLElement, box: DOMRect): number {
+  let right = box.left;
+  for (const card of Array.from(stack.children)) {
+    right = Math.max(right, card.getBoundingClientRect().right);
+  }
+  return right > box.left ? right : box.right;
+}
+
 const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
 
 /**
@@ -139,7 +151,11 @@ export function useToastStackPlacement(
       commit(placeToastStack({
         current,
         focused: target.getBoundingClientRect(),
-        stack: { left: box.left, right: box.right, height: box.height },
+        stack: {
+          left: box.left,
+          right: cardsRight(stack, box),
+          height: box.height,
+        },
         viewportHeight: window.innerHeight,
         edge: cssPixels(style, "--app-toast-stack-edge"),
         chromeBand: cssPixels(style, "--chrome-band-h"),

@@ -11,7 +11,7 @@ describe("buildBundledGitLfsNotice", () => {
 
     expect(notice).toMatchObject({
       autoDismiss: false,
-      detail: "/Users/alice/code/assets",
+      facts: [{ label: "Repository", value: "/Users/alice/code/assets" }],
       id: "bundled-git-lfs-advisory",
       title: "Git LFS set up in this repository",
       // An advisory about the operator's own terminal, not a failure of ours.

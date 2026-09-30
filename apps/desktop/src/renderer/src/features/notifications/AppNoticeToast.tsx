@@ -37,6 +37,11 @@ export type AppNoticeToastNotice = {
   /** Optional notice-specific dismissal, including any durable disposition. */
   onDismiss?: () => void;
   detail?: string;
+  /**
+   * Machine state (a path, a host, a session id) as label/value rows, set in
+   * mono. `detail` stays prose: the card cannot tell a path from a sentence.
+   */
+  facts?: readonly { label: string; value: string }[];
   threadLink?: ResolvedThreadLink;
   copyText?: string;
   tone?: "neutral" | "warning" | "success" | "error";
@@ -118,18 +123,31 @@ export function AppNoticeToast(props: {
       props.notice.status?.label,
       props.notice.message,
       props.notice.detail,
+      ...(props.notice.facts ?? []).map(
+        (fact) => `${fact.label}: ${fact.value}`,
+      ),
     ]
       .filter(Boolean)
       .join("\n");
   const customActions = props.notice.actions ?? [];
   const hasFooterActions = customActions.length > 0
     || props.navigation?.dismissAll !== undefined;
-  const statusDotClass =
-    props.notice.status?.state === "progress"
-      ? "status-dot status-dot--warning status-dot--blink"
-      : props.notice.status?.state === "success"
-        ? "status-dot status-dot--ok"
-        : "status-dot status-dot--error";
+  // One dot carries the state: a status when the notice reports one, the
+  // tone otherwise. The card itself stays neutral.
+  const dotState = props.notice.status?.state === "progress"
+    ? "warning status-dot--blink"
+    : props.notice.status?.state === "success"
+      ? "ok"
+      : props.notice.status?.state === "error"
+        ? "error"
+        : props.notice.tone === "warning"
+          ? "warning"
+          : props.notice.tone === "success"
+            ? "ok"
+            : props.notice.tone === "error"
+              ? "error"
+              : "neutral";
+  const facts = props.notice.facts ?? [];
 
   return (
     <aside
@@ -152,15 +170,42 @@ export function AppNoticeToast(props: {
         }
       }}
     >
+      <div className="app-notice-toast__head">
+        <span
+          className={`status-dot status-dot--${dotState} app-notice-toast__dot`}
+          aria-hidden="true"
+        />
+        <p className="app-notice-toast__title">{props.notice.title}</p>
+        <div className="app-notice-toast__actions">
+          <button
+            className="app-notice-toast__icon-button"
+            type="button"
+            aria-label="Copy notice"
+            title="Copy notice"
+            onClick={() => {
+              void copyText(copyValue, props.desktopApi);
+            }}
+          >
+            <CopyIcon size={13} aria-hidden="true" />
+          </button>
+          <button
+            className="app-notice-toast__icon-button"
+            type="button"
+            aria-label="Dismiss notice"
+            title="Dismiss notice"
+            onClick={props.notice.onDismiss ?? props.onDismiss}
+          >
+            <CloseIcon size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
       <div className="app-notice-toast__content">
-        <p className="app-notice-toast__eyebrow">{props.notice.title}</p>
         {props.notice.status ? (
           <p
             className="app-notice-toast__status"
             data-state={props.notice.status.state}
           >
-            <span className={statusDotClass} aria-hidden="true" />
-            <span>{props.notice.status.label}</span>
+            {props.notice.status.label}
           </p>
         ) : null}
         <p className="app-notice-toast__message">{props.notice.message}</p>
@@ -175,6 +220,16 @@ export function AppNoticeToast(props: {
           </div>
         ) : props.notice.detail ? (
           <p className="app-notice-toast__detail">{props.notice.detail}</p>
+        ) : null}
+        {facts.length > 0 ? (
+          <dl className="app-notice-toast__facts">
+            {facts.map((fact) => (
+              <div key={fact.label} className="app-notice-toast__fact">
+                <dt>{fact.label}</dt>
+                <dd>{fact.value}</dd>
+              </div>
+            ))}
+          </dl>
         ) : null}
         {props.notice.skillQuestionsWarning && props.onSuppressSkillQuestionsWarning ? (
           <>
@@ -209,67 +264,54 @@ export function AppNoticeToast(props: {
           </>
         ) : null}
       </div>
-      <div
-        className="app-notice-toast__actions"
-      >
-        <button
-          className="app-notice-toast__icon-button"
-          type="button"
-          aria-label="Copy notice"
-          title="Copy notice"
-          onClick={() => {
-            void copyText(copyValue, props.desktopApi);
-          }}
-        >
-          <CopyIcon size={14} aria-hidden="true" />
-        </button>
-        <button
-          className="app-notice-toast__icon-button"
-          type="button"
-          aria-label="Dismiss notice"
-          title="Dismiss notice"
-          onClick={props.notice.onDismiss ?? props.onDismiss}
-        >
-          <CloseIcon size={14} aria-hidden="true" />
-        </button>
-      </div>
       {props.children ? (
         <div className="app-notice-toast__body">{props.children}</div>
       ) : null}
-      {customActions.length > 0 && !props.navigation ? (
-        <div className="app-notice-toast__custom-actions">
-          {customActions.map((action) => (
-            <button
-              key={action.label}
-              className={`button button--${action.tone ?? "secondary"}`}
-              type="button"
-              onClick={action.onClick}
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {props.navigation ? (
+      {props.navigation || customActions.length > 0 ? (
         <div className="app-notice-toast__footer">
-          <span className="app-notice-toast__position">
-            {props.navigation.current} of {props.navigation.total}
-          </span>
+          {props.navigation ? (
+            <nav
+              className="app-notice-toast__navigation"
+              aria-label="Durable notices"
+            >
+              <button
+                className="app-notice-toast__icon-button"
+                type="button"
+                aria-label="Previous notice"
+                disabled={!props.navigation.onPrevious}
+                onClick={props.navigation.onPrevious}
+              >
+                <ChevronLeftIcon size={13} aria-hidden="true" />
+              </button>
+              <span className="app-notice-toast__position">
+                {props.navigation.current} of {props.navigation.total}
+              </span>
+              <button
+                className="app-notice-toast__icon-button"
+                type="button"
+                aria-label="Next notice"
+                disabled={!props.navigation.onNext}
+                onClick={props.navigation.onNext}
+              >
+                <ChevronRightIcon size={13} aria-hidden="true" />
+              </button>
+            </nav>
+          ) : null}
           {hasFooterActions ? (
             <div className="app-notice-toast__custom-actions">
               {customActions.map((action) => (
                 <button
                   key={action.label}
-                  className={`button button--${action.tone ?? "secondary"}`}
+                  className={`button button--${action.tone ?? "secondary"} app-notice-toast__button`}
                   type="button"
                   onClick={action.onClick}
                 >
                   {action.label}
                 </button>
               ))}
-              {props.navigation.dismissAll ? (
+              {props.navigation?.dismissAll ? (
                 <button
-                  className="button button--secondary app-notice-toast__dismiss-all"
+                  className="button app-notice-toast__button app-notice-toast__dismiss-all"
                   type="button"
                   aria-label={`Dismiss all ${props.navigation.dismissAll.label}`}
                   title={`Dismiss all ${props.navigation.dismissAll.label}`}
@@ -280,29 +322,6 @@ export function AppNoticeToast(props: {
               ) : null}
             </div>
           ) : null}
-          <nav
-            className="app-notice-toast__navigation"
-            aria-label="Durable notices"
-          >
-            <button
-              className="app-notice-toast__icon-button"
-              type="button"
-              aria-label="Previous notice"
-              disabled={!props.navigation.onPrevious}
-              onClick={props.navigation.onPrevious}
-            >
-              <ChevronLeftIcon size={14} aria-hidden="true" />
-            </button>
-            <button
-              className="app-notice-toast__icon-button"
-              type="button"
-              aria-label="Next notice"
-              disabled={!props.navigation.onNext}
-              onClick={props.navigation.onNext}
-            >
-              <ChevronRightIcon size={14} aria-hidden="true" />
-            </button>
-          </nav>
         </div>
       ) : null}
       {autoDismiss ? (

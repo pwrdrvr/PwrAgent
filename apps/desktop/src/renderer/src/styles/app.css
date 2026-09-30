@@ -7717,11 +7717,11 @@ a.button {
   left: var(--app-toast-stack-edge);
   bottom: var(--app-toast-stack-edge);
   display: flex;
-  width: min(420px, calc(100vw - 32px));
-  max-width: min(420px, calc(100vw - 32px));
+  width: min(380px, calc(100vw - 32px));
+  max-width: min(380px, calc(100vw - 32px));
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   pointer-events: none;
 }
 
@@ -7737,72 +7737,33 @@ a.button {
   pointer-events: auto;
 }
 
-.app-notice-toast,
+/* Full stack width in every phase, the same as the notices it hands off to.
+   A `max-content` card changed size at each step of one check: 266px while
+   checking, 420px while downloading, 303px once the update was ready. */
 .app-update-banner {
   position: relative;
   display: grid;
-  width: max-content;
+  width: 100%;
   max-width: 100%;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
+  border: 1px solid var(--accent-border);
   border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
   box-shadow: var(--shadow-popover);
   animation: app-update-banner-enter 160ms ease-out;
   -webkit-app-region: no-drag;
 }
 
-.app-notice-toast {
-  overflow: hidden;
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto;
-  border: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-panel-elevated) 96%, var(--text-muted) 4%);
-}
-
-.app-notice-toast[data-navigable="true"] {
-  height: min(208px, calc(100vh - 32px));
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-
-.app-notice-toast[data-navigable="true"] .app-notice-toast__content {
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.app-notice-toast[data-tone="warning"] {
-  border-color: color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
-}
-
-.app-notice-toast[data-tone="success"] {
-  border-color: color-mix(in srgb, var(--status-ok) 52%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--status-ok) 6%);
-}
-
-.app-notice-toast[data-tone="error"] {
-  border-color: color-mix(in srgb, var(--status-error) 52%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--status-error) 6%);
-}
-
-/* Full stack width in every phase, the same as the notices it hands off to.
-   A `max-content` card changed size at each step of one check: 266px while
-   checking, 420px while downloading, 303px once the update was ready. */
-.app-update-banner {
-  width: 100%;
-  border: 1px solid var(--accent-border);
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
-}
-
-.app-notice-toast__content,
 .app-update-banner__content {
   min-width: 0;
   user-select: text;
 }
 
-.app-notice-toast__eyebrow,
 .app-update-banner__eyebrow {
   margin: 0 0 4px;
+  color: var(--accent-bright);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -7810,28 +7771,6 @@ a.button {
   text-transform: uppercase;
 }
 
-.app-notice-toast__eyebrow {
-  color: var(--text-secondary);
-}
-
-.app-notice-toast[data-tone="warning"] .app-notice-toast__eyebrow {
-  color: var(--status-warning);
-}
-
-.app-notice-toast[data-tone="success"] .app-notice-toast__eyebrow {
-  color: var(--status-ok);
-}
-
-.app-notice-toast[data-tone="error"] .app-notice-toast__eyebrow {
-  color: var(--status-error);
-}
-
-.app-update-banner__eyebrow {
-  color: var(--accent-bright);
-}
-
-.app-notice-toast__message,
-.app-notice-toast__detail,
 .app-update-banner__message,
 .app-update-banner__error {
   margin: 0;
@@ -7841,20 +7780,133 @@ a.button {
   line-height: 1.35;
 }
 
-.app-notice-toast__message,
 .app-update-banner__message {
   color: var(--text-primary);
 }
 
-.app-notice-toast__detail {
-  margin-top: 8px;
+/* A notice fits its content, up to the stack's width, and grows with it: a
+   paged notice used to be a fixed 208px that clipped a long one mid-line.
+   The card stays neutral and the dot in the title row carries the tone —
+   state by emphasis and badges, not colored panels (desktop style guide).
+   Only the content scrolls, past `max-height`. */
+.app-notice-toast {
+  position: relative;
+  display: flex;
+  width: fit-content;
+  min-width: min(288px, 100%);
+  max-width: 100%;
+  max-height: min(360px, calc(100vh - 96px));
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  padding: 7px 6px 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: app-update-banner-enter 160ms ease-out;
+  -webkit-app-region: no-drag;
+}
+
+/* Copy and Dismiss sit in the title row. As a column beside the text they
+   cost 80px of its width for the card's whole height. */
+.app-notice-toast__head {
+  display: flex;
+  flex: none;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-notice-toast__dot {
+  width: 7px;
+  height: 7px;
+}
+
+.app-notice-toast__dot.status-dot--neutral {
+  background: var(--text-muted);
+}
+
+.app-notice-toast__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.app-notice-toast__actions {
+  display: flex;
+  flex: none;
+  margin-left: 8px;
+}
+
+/* Indented past the dot, so the text lines up under the title. */
+.app-notice-toast__content {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 0 15px;
+  user-select: text;
+}
+
+.app-notice-toast__status {
+  margin: 0 0 2px;
   color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.app-notice-toast__message,
+.app-notice-toast__detail {
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
+.app-notice-toast__detail {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Machine state is mono, as paths and ids are everywhere else. */
+.app-notice-toast__facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.app-notice-toast__fact {
+  display: contents;
+}
+
+.app-notice-toast__fact dt {
+  color: var(--text-muted);
+}
+
+.app-notice-toast__fact dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .app-notice-toast__thread-link {
   display: flex;
   min-width: 0;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .app-notice-toast__thread-menu {
@@ -7864,7 +7916,7 @@ a.button {
 /* Two classes: `.composer__checkbox` is declared far below this rule and
    would otherwise win the equal-specificity tie on `font-size`. */
 .app-notice-toast .app-notice-toast__suppress {
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -7877,8 +7929,10 @@ a.button {
 }
 
 .app-notice-toast__body {
+  flex: none;
   min-width: 0;
-  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding-right: 6px;
 }
 
 .quit-blocker-queue__list {
@@ -7974,92 +8028,90 @@ a.button {
   margin: 0;
 }
 
-.app-notice-toast__status {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.app-notice-toast__status .status-dot {
-  margin-top: 4px;
-}
-
 .app-update-banner__error {
   margin-top: 8px;
   color: var(--danger-text);
 }
 
-.app-notice-toast__actions,
-.app-notice-toast__custom-actions,
 .app-update-banner__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.app-notice-toast__actions {
-  align-self: start;
-}
-
-.app-notice-toast > .app-notice-toast__custom-actions {
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-}
-
+/* One row: the pager leads, the actions trail, and the way out stays last.
+   No rule above it; the gap separates it from the text. */
 .app-notice-toast__footer {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.app-notice-toast__footer .app-notice-toast__custom-actions {
-  grid-column: 2;
-  min-width: 0;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.app-notice-toast__footer .app-notice-toast__custom-actions .button {
-  white-space: nowrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 2px 0 8px;
 }
 
 .app-notice-toast__navigation {
   display: flex;
-  grid-column: 3;
   align-items: center;
-  justify-self: end;
-  gap: 6px;
+  margin-left: -6px;
 }
 
 .app-notice-toast__position {
+  min-width: 44px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   line-height: 1.2;
+  text-align: center;
 }
 
-.app-notice-toast__icon-button {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+.app-notice-toast__custom-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* `.button` sets no font size, so its label inherits the 16px document
+   default, three sizes above the message. */
+.app-notice-toast__button {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.app-notice-toast__dismiss-all {
   background: transparent;
   color: var(--text-secondary);
 }
 
-.app-notice-toast__icon-button:hover,
+.app-notice-toast__dismiss-all:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
+   checks; Copy and Dismiss sit edge to edge, so neither can be smaller. */
+.app-notice-toast__icon-button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.app-notice-toast__icon-button:hover:not(:disabled),
 .app-notice-toast__icon-button:focus-visible {
-  border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
@@ -8070,11 +8122,8 @@ a.button {
 }
 
 .app-notice-toast__icon-button:disabled {
-  border-color: var(--border-subtle);
-  background: transparent;
-  color: var(--text-muted);
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
 .app-notice-toast__timer {

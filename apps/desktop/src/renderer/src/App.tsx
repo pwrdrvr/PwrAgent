@@ -931,26 +931,31 @@ function DesktopAppShell(props: {
       showAppNotice({
         autoDismiss: false,
         copyText: buildHotCpuProfileHandoffMessage(event),
-        detail: [
-          `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
-          `Captured: ${new Date(event.capturedAt).toLocaleString(undefined, {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-            second: "2-digit",
-            timeZoneName: "short",
-          })}`,
-          `Session: ${event.sessionDirectoryName}`,
-        ].join("\n"),
+        facts: [
+          {
+            label: "Source",
+            value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
+          },
+          {
+            label: "Captured",
+            value: new Date(event.capturedAt).toLocaleString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+              second: "2-digit",
+              timeZoneName: "short",
+            }),
+          },
+          { label: "Session", value: event.sessionDirectoryName },
+        ],
         dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
         title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
         message: [
           `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
           heapSnapshotSummary,
-          " Copy this notice to hand off the profile path.",
         ].join(""),
       });
     });
@@ -980,7 +985,9 @@ function DesktopAppShell(props: {
       showAppNotice({
         autoDismiss: false,
         copyText: buildHeapSnapshotHandoffMessage(result),
-        detail: failed ? undefined : `Session: ${result.sessionDirectoryName}`,
+        facts: failed
+          ? undefined
+          : [{ label: "Session", value: result.sessionDirectoryName }],
         id: `heap-snapshot:${result.capturedAt}`,
         title,
         message,
