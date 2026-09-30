@@ -498,6 +498,16 @@ describe("Activity report controls", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it("closes the Activity window's menu when the pointer goes down outside it", async () => {
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "More Federation Activity actions" }));
+    expect(await screen.findByRole("menu", { name: "Federation Activity actions" })).toBeInTheDocument();
+    fireEvent.pointerDown(within(screen.getByRole("menu")).getAllByRole("menuitem")[0]);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "1h" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("opens Settings at Federation from the popover's menu and closes the popover", async () => {
     const onOpenSettings = vi.fn();
     render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => fixture() }}

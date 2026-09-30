@@ -1,10 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { CopyIcon } from "../../icons/CopyIcon";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";
 import { StarMapIcon } from "../../icons/StarMapIcon";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
 import { FederationInstanceChips, federationInstanceChips } from "./FederationInstanceChips";
@@ -42,7 +43,10 @@ export function FederationStatusControl(props: {
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [open]);
   useEffect(() => { if (!open) setMenuOpen(false); }, [open]);
-  useMenuNavigation({ open: menuOpen, menuRef: menu, triggerRef: menuButton, onClose: () => setMenuOpen(false) });
+  const menuAnchor = useRef<HTMLDivElement>(null);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useMenuNavigation({ open: menuOpen, menuRef: menu, triggerRef: menuButton, onClose: closeMenu });
+  useDismissOnOutsidePointer(menuOpen, menuAnchor, closeMenu);
   const enabled = Boolean(snapshot?.running);
   // The runtime clears the deadline once a capture ends, so no clock read here.
   const capturing = Boolean(snapshot?.detailedLoggingUntil);
@@ -118,7 +122,7 @@ export function FederationStatusControl(props: {
                   <span className="settings-switch__track" aria-hidden="true"><span className="settings-switch__thumb" /></span>
                   <span>{enabled ? "On" : "Off"}</span>
                 </button>
-                <div className="federation-status-control__menu-anchor">
+                <div ref={menuAnchor} className="federation-status-control__menu-anchor">
                   <button ref={menuButton} type="button" className="messaging-status-popover__settings"
                     aria-label="More Federation actions" aria-haspopup="menu" aria-expanded={menuOpen}
                     aria-controls={menuOpen ? menuId : undefined}

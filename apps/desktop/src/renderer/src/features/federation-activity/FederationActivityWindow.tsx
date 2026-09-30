@@ -1,5 +1,5 @@
 import { FEDERATION_CAPTURE_DESCRIPTION, FederationCaptureTag } from "./FederationTrafficCapture";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
@@ -7,6 +7,7 @@ import { formatActivityReport } from "./format-activity-report";
 import type { FederationActivitySeries } from "@pwragent/shared";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";
 import { PinIcon } from "../../icons";
 import { FederationPeerFilter, federationPeerFilterChips } from "./FederationPeerFilter";
 import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
@@ -214,7 +215,10 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   const menuButton = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  useMenuNavigation({ open: menuOpen, menuRef: menu, triggerRef: menuButton, onClose: () => setMenuOpen(false) });
+  const menuAnchor = useRef<HTMLDivElement>(null);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useMenuNavigation({ open: menuOpen, menuRef: menu, triggerRef: menuButton, onClose: closeMenu });
+  useDismissOnOutsidePointer(menuOpen, menuAnchor, closeMenu);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 2_000);
@@ -272,7 +276,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
           }}>
           <PinIcon size={14} aria-hidden="true" />
         </button>
-        <div className="federation-status-control__menu-anchor">
+        <div ref={menuAnchor} className="federation-status-control__menu-anchor">
           <button ref={menuButton} type="button" className="messaging-status-popover__settings"
             aria-label="More Federation Activity actions" aria-haspopup="menu" aria-expanded={menuOpen}
             aria-controls={menuOpen ? menuId : undefined}
