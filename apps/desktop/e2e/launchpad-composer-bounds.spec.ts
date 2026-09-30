@@ -42,11 +42,13 @@ import { launchElectronApp } from "./fixtures/electron-app";
 // every assertion here pass while proving nothing.
 //
 // The cards became 68px tiles that sit side by side in a wide thread area,
-// and 1280x600 stopped crowding them. At 900px wide the sidebar leaves the
-// thread area under the stacking width, so the tiles stack. At 460px tall
-// the composer (its attachment strip is capped at 24vh) plus two stacked
-// tiles is about 500px of content.
-const WINDOW = { width: 900, height: 460 };
+// so 900px wide keeps the thread area under the stacking width. The height
+// has a floor as well as a ceiling. The header plus the composer must fit,
+// or nothing could keep the send row on screen. The CI lanes measured that
+// pair at about 517px (macOS), 570px (Windows) and 592px (Linux) — 460px
+// failed on all three by 43-100px. 640px is the app's own minimum window
+// height, and two stacked tiles still overfill it.
+const WINDOW = { width: 900, height: 640 };
 
 // Sub-pixel rounding on HiDPI. A real regression moves the send row by
 // tens of pixels (56 and 142 above), so this is nowhere near it.
@@ -238,6 +240,7 @@ test("launchpad send controls stay on screen under two connection cards and past
         startRect.top + startRect.height / 2,
       );
       const list = document.querySelector(".thread-view__connections");
+      const primary = clip.querySelector(".thread-view__primary");
       return {
         // Natural, unclipped height of each card — the cards themselves
         // keep their content height in both the broken and fixed layouts,
@@ -246,6 +249,11 @@ test("launchpad send controls stay on screen under two connection cards and past
           (card) => card.scrollHeight,
         ),
         listOverflowPx: list ? list.scrollHeight - list.clientHeight : null,
+        // What sits above the primary column (the launchpad header). It
+        // never shrinks, and the fix does not move it.
+        aboveColumnHeight: primary
+          ? primary.getBoundingClientRect().top - clip.getBoundingClientRect().top
+          : 0,
         clipBottom: clip.getBoundingClientRect().bottom,
         clipHeight: clip.getBoundingClientRect().height,
         composerHeight: composer.getBoundingClientRect().height,
@@ -256,6 +264,7 @@ test("launchpad send controls stay on screen under two connection cards and past
 
     expect(measured, "expected the launchpad, composer and send button to render").not.toBeNull();
     const {
+      aboveColumnHeight,
       cardHeights,
       clipBottom,
       clipHeight,
@@ -268,13 +277,25 @@ test("launchpad send controls stay on screen under two connection cards and past
     // Precondition: the scenario really is over-full. Everything the pane
     // has to hold, measured at its natural height, exceeds the pane.
     const naturalContentHeight =
-      cardHeights.reduce((total, height) => total + height, 0) + composerHeight;
+      aboveColumnHeight
+      + cardHeights.reduce((total, height) => total + height, 0)
+      + composerHeight;
     expect(
       naturalContentHeight,
       `this window (${WINDOW.width}x${WINDOW.height}) is not tight enough to test anything: `
         + `${Math.round(naturalContentHeight)}px of content in a ${Math.round(clipHeight)}px pane. `
         + "Shrink the window rather than relaxing the assertions below.",
     ).toBeGreaterThan(clipHeight);
+
+    // And the other side: the header and the composer, which may not
+    // shrink, fit on their own. Otherwise no layout could pass the gate
+    // below, and a failure there would say nothing about the card list.
+    expect(
+      aboveColumnHeight + composerHeight,
+      `this window (${WINDOW.width}x${WINDOW.height}) is too short to test anything: `
+        + `the header and composer alone are ${Math.round(aboveColumnHeight + composerHeight)}px `
+        + `in a ${Math.round(clipHeight)}px pane. Grow the window.`,
+    ).toBeLessThanOrEqual(clipHeight + BOUNDS_TOLERANCE_PX);
 
     // The gate. `.thread-view` clips with `overflow: hidden`, so anything
     // past its bottom edge is simply gone.
