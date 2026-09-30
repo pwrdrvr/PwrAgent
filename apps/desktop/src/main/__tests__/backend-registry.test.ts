@@ -1658,6 +1658,7 @@ class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  private readonly unexpectedExitListeners = new Set<() => void>();
   private readonly requestListeners = new Set<
     (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
   >();
@@ -2066,6 +2067,17 @@ class MockBackendClient {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  onAppServerUnexpectedExit(listener: () => void): () => void {
+    this.unexpectedExitListeners.add(listener);
+    return () => {
+      this.unexpectedExitListeners.delete(listener);
+    };
+  }
+
+  emitUnexpectedExit(): void {
+    for (const listener of this.unexpectedExitListeners) listener();
   }
 
   onRequest(
@@ -23576,6 +23588,56 @@ command = "pnpm dev"
       count: 0,
       threadIds: [],
     });
+    await registry.close();
+  });
+
+  it("clears continued commands on Codex transport exit and releases a pending runtime switch", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const resetAppServerRestarts = vi.fn();
+    Object.assign(codexClient, { resetAppServerRestarts });
+    let selectionListener:
+      | ((change: ManagedCodexSelectionChange) => Promise<unknown> | unknown)
+      | undefined;
+    const markSwitchComplete = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
+      overlayStore: createOverlayStoreMock(),
+      watchManagedCodexRuntime: (listener) => {
+        selectionListener = listener;
+        return () => undefined;
+      },
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+
+    await codexClient.emit({ method: "item/started", params: {
+      threadId: "thread-1", turnId: "turn-1",
+      item: { id: "tool-1", type: "commandExecution", status: "inProgress", command: "pnpm test" },
+    } });
+    await codexClient.emit({ method: "turn/completed", params: {
+      threadId: "thread-1", turnId: "turn-1",
+      turn: { id: "turn-1", status: "completed", output: [] },
+    } });
+    await selectionListener?.({ enabled: true, reason: "availability" });
+    expect(codexClient.closeCallCount).toBe(0);
+    expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(1);
+
+    codexClient.emitUnexpectedExit();
+    await vi.waitFor(() => expect(markSwitchComplete).toHaveBeenCalledOnce());
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+    expect(codexClient.closeCallCount).toBe(1);
+    expect(resetAppServerRestarts).toHaveBeenCalledExactlyOnceWith("Codex runtime changed");
+    expect(events).toContainEqual(expect.objectContaining({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: { threadId: "thread-1", status: { type: "notLoaded" } },
+      },
+    }));
     await registry.close();
   });
 

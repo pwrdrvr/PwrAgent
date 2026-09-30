@@ -994,6 +994,7 @@ type BackendClient = {
   onAppServerRestartStatusChanged?(
     listener: (status: CodexAppServerRestartStatus) => void,
   ): () => void;
+  onAppServerUnexpectedExit?(listener: () => void): () => void;
   restartAppServer?(): Promise<void>;
   resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
@@ -9526,6 +9527,17 @@ export class DesktopBackendRegistry {
         // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    if (this.codexClient.onAppServerUnexpectedExit) {
+      this.unsubscribers.push(
+        this.codexClient.onAppServerUnexpectedExit(() => {
+          void this.handleCodexAppServerUnexpectedExit().catch((error) => {
+            backendRegistryLog.warn("Codex app server exit cleanup failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }),
+      );
+    }
     const watchManagedCodexRuntime =
       options?.watchManagedCodexRuntime
       ?? (typeof settingsService?.watchManagedCodexRuntime === "function"
@@ -41073,6 +41085,19 @@ export class DesktopBackendRegistry {
     const items = this.liveCodexToolItemsByThread.get(threadId);
     items?.delete(itemId);
     if (items?.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+  }
+
+  private async handleCodexAppServerUnexpectedExit(): Promise<void> {
+    const threadIds = [...this.liveCodexToolItemsByThread.keys()];
+    this.liveCodexToolItemsByThread.clear();
+    await Promise.all(threadIds.map((threadId) => this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: { threadId, status: { type: "notLoaded" } },
+      },
+    })));
+    await this.maybeRestartCodexForManagedRuntimeChange();
   }
 
   private emitEvent(event: AgentEvent): Promise<void> {

@@ -5760,9 +5760,7 @@ export function useThreadSessionState(params: {
       const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
       const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
-      if (event.backend === "codex" && (
-        !liveTranscriptEventFiltering || !isUnfocusedThread || isRetainedRemoteThread
-      )) {
+      if (event.backend === "codex") {
         const method = event.notification.method;
         if (method === "item/started" || method === "item/completed") {
           const item = getNotificationItem(event.notification.params);
@@ -5770,6 +5768,8 @@ export function useThreadSessionState(params: {
           if (detail) {
             const currentItems = liveToolItemsRef.current[targetThreadKey] ?? {};
             if (method === "item/started" && (
+              !liveTranscriptEventFiltering || !isUnfocusedThread || isRetainedRemoteThread
+            ) && (
               item?.status === "inProgress" || item?.status === "in_progress"
             )) {
               const turnId = readNotificationTurnId(event.notification);
@@ -5781,7 +5781,7 @@ export function useThreadSessionState(params: {
                 liveToolItemsRef.current = next;
                 setLiveToolItemsByThread(next);
               }
-            } else if (currentItems[detail.id]) {
+            } else if (method === "item/completed" && currentItems[detail.id]) {
               const nextItems = { ...currentItems };
               delete nextItems[detail.id];
               const next = { ...liveToolItemsRef.current };
@@ -5812,6 +5812,18 @@ export function useThreadSessionState(params: {
               setLiveToolItemsByThread(next);
             }
           }
+        } else if (
+          method === "thread/status/changed"
+          && typeof event.notification.params.status === "object"
+          && event.notification.params.status !== null
+          && "type" in event.notification.params.status
+          && event.notification.params.status.type === "notLoaded"
+          && liveToolItemsRef.current[targetThreadKey]
+        ) {
+          const next = { ...liveToolItemsRef.current };
+          delete next[targetThreadKey];
+          liveToolItemsRef.current = next;
+          setLiveToolItemsByThread(next);
         }
       }
       if (
