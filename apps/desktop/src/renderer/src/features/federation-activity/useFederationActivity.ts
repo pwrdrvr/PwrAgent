@@ -12,7 +12,7 @@ export function useFederationActivity(
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
   const toggleGeneration = useRef(0);
-  const { includeHistory, historyPeerId, historyView } = request;
+  const { includeHistory, historyPeerId, historyView, historySeconds } = request;
   useEffect(() => {
     if (!active || !desktopApi?.readFederationActivity) return;
     let disposed = false;
@@ -20,7 +20,7 @@ export function useFederationActivity(
     const poll = async () => {
       const generation = toggleGeneration.current;
       try {
-        const next = await desktopApi.readFederationActivity!({ includeHistory, historyPeerId, historyView });
+        const next = await desktopApi.readFederationActivity!({ includeHistory, historyPeerId, historyView, historySeconds });
         if (!disposed && generation === toggleGeneration.current) { setSnapshot(next); setError(undefined); }
       } catch (cause) {
         if (!disposed && generation === toggleGeneration.current) setError(cause instanceof Error ? cause.message : String(cause));
@@ -30,7 +30,7 @@ export function useFederationActivity(
     };
     void poll();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [desktopApi, active, includeHistory, historyPeerId, historyView]);
+  }, [desktopApi, active, includeHistory, historyPeerId, historyView, historySeconds]);
   const toggle = useCallback(async () => {
     if (!snapshot || pending || !desktopApi?.setFederationEnabled) return;
     setPending(true);

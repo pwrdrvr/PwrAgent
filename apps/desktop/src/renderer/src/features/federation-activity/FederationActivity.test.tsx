@@ -61,8 +61,13 @@ describe("Federation activity surfaces", () => {
     render(surface === "popup"
       ? <FederationStatusControl desktopApi={desktopApi} onOpen={vi.fn()} />
       : <FederationActivityScreen desktopApi={desktopApi} />);
-    if (surface === "popup") fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
-    const checkbox = await screen.findByRole("checkbox", { name: "Capture detailed Federation traffic" });
+    if (surface === "popup") {
+      fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+      fireEvent.click(await screen.findByRole("button", { name: "More Federation actions" }));
+    }
+    const checkbox = surface === "popup"
+      ? await screen.findByRole("menuitemcheckbox", { name: "Capture previous + next 60 seconds" })
+      : await screen.findByRole("checkbox", { name: "Capture detailed Federation traffic" });
     await waitFor(() => expect(checkbox).toBeEnabled());
     fireEvent.click(checkbox);
     await waitFor(() => expect(checkbox).toBeChecked());
@@ -230,7 +235,7 @@ describe("Federation activity surfaces", () => {
     fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
     await screen.findByText("Not running · lease held by another instance");
     expect(screen.getByText("Configured on · gateway")).toBeInTheDocument();
-    expect(screen.getByText(/Holder: other-app · PID 123/)).toBeInTheDocument();
+    expect(screen.getByText(/runs in another PwrAgent window \(PID 123, \/fixture\/other\)/)).toBeInTheDocument();
     const toggle = screen.getByRole("switch", { name: "Federation enabled" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
@@ -440,4 +445,46 @@ describe("Activity report controls", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Reset failed");
     expect(screen.getByRole("table", { name: "Sent traffic" })).toHaveTextContent("12");
   });
+  it("asks for one minute of history and draws it as the popover's traffic card", async () => {
+    const readFederationActivity = vi.fn(async () => fixture());
+    const openFederationActivity = vi.fn(async () => {});
+    render(<FederationStatusControl desktopApi={{ readFederationActivity, openFederationActivity }} onOpen={vi.fn()} />);
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    const card = await screen.findByRole("button", { name: "Open Federation Activity" });
+    expect(readFederationActivity).toHaveBeenCalledWith(expect.objectContaining({ includeHistory: true, historySeconds: 60 }));
+    expect(card).toHaveAccessibleDescription("↑ 1 KB sent ↓ 2 KB received");
+    fireEvent.click(card);
+    await waitFor(() => expect(openFederationActivity).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows instances as chips that fly the Star Map to them, and the map preview opens it", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "local";
+    snapshot.health.peers = [
+      { id: "laptop", label: "Laptop", role: "client", status: "connected", capabilities: [] },
+      { id: "travel", label: "Travel laptop", role: "client", status: "connected", capabilities: [] },
+      { id: "vm", label: "Build VM", role: "client", status: "disconnected", capabilities: [] },
+    ];
+    snapshot.health.activeConnections = [
+      { peerId: "laptop", direction: "incoming", remoteAddress: "192.168.1.20:54321", localAddress: "192.168.1.10:47830" },
+      { peerId: "travel", direction: "incoming", remoteAddress: "127.0.0.1:61876", localAddress: "127.0.0.1:47831",
+        via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" },
+    ];
+    const openStarMapWindow = vi.fn(async () => {});
+    const onOpen = vi.fn();
+    render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => structuredClone(snapshot), openStarMapWindow }}
+      onOpen={onOpen} />);
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    const chips = within(await screen.findByRole("list", { name: "Federation instances" }));
+    expect(chips.getAllByRole("button").map((chip) => chip.textContent))
+      .toEqual(["LaptopLAN", "Travel laptopCloudflare", "Build VM"]);
+    expect(screen.getByText("2 of 3 connected")).toBeInTheDocument();
+    fireEvent.click(chips.getByRole("button", { name: "Open Travel laptop on the Star Map" }));
+    await waitFor(() => expect(openStarMapWindow).toHaveBeenCalledWith({ instanceId: "travel" }));
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the Star Map" }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
 });

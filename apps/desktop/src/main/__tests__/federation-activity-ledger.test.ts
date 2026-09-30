@@ -96,6 +96,19 @@ describe("Federation activity ledger", () => {
       .toEqual([[1_000, 100_000], [2_000, 7], [3_000, 0]]);
   });
 
+  it("returns only the trailing seconds a surface asks for, leaving the rolling totals whole", () => {
+    const ledger = new FederationActivityLedger(0);
+    ledger.record({ ...base, at: 1_000, byteCount: 11 });
+    ledger.record({ ...base, at: 100_000, byteCount: 13 });
+    const full = ledger.snapshot(120_000);
+    const minute = ledger.snapshot(120_000, { historySeconds: 60 });
+    expect(full.physical.history).toHaveLength(3600);
+    expect(minute.physical.history).toHaveLength(60);
+    expect(minute.physical.history.at(-1)?.at).toBe(120_000);
+    expect(minute.physical.history.map((bucket) => bucket.totals.sent.wireBytes).reduce((a, b) => a + b)).toBe(13);
+    expect(minute.physical.windows["1h"]).toEqual(full.physical.windows["1h"]);
+  });
+
   it("bounds history and peer cardinality while overflow and lifetime counters retain every event", () => {
     const ledger = new FederationActivityLedger(0);
     for (let index = 1; index <= 8_000; index += 1) {

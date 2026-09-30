@@ -967,4 +967,10 @@ export type ReadFederationActivityRequest = {
   includeHistory?: boolean;
   historyPeerId?: string;
   historyView?: "physical" | "logical";
+  /**
+   * Trailing seconds of one-second history to return, 1-3600. Omitted means
+   * the full hour. The Star Map popover draws one minute and should not
+   * serialize 3,600 buckets every two seconds to do it.
+   */
+  historySeconds?: number;
 };

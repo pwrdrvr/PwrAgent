@@ -211,6 +211,7 @@ import type {
   SetStarMapCardPositionRequest,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
+  OpenStarMapWindowRequest,
   StarMapCommand,
   StarMapCommandResult,
   StarMapIntakeResponse,
@@ -808,8 +809,11 @@ export type DesktopApi = {
     callback: (command: StarMapCommand) => void,
   ) => () => void;
   resolveStarMapCommand?: (result: StarMapCommandResult) => Promise<void>;
-  /** Spawns or focuses the dedicated Federation Star Map window. */
-  openStarMapWindow?: () => Promise<void>;
+  /**
+   * Spawns or focuses the dedicated Federation Star Map window, and flies it
+   * to `instanceId` once that instance is drawn.
+   */
+  openStarMapWindow?: (request?: OpenStarMapWindowRequest) => Promise<void>;
   /** From the Star Map window: focus the main window and open a thread there. */
   openStarMapThreadInMainWindow?: (
     request: WindowShowThreadRequest,

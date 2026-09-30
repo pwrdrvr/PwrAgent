@@ -38359,9 +38359,69 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-connections--collapsible summary { cursor: pointer; }
 .federation-connections--collapsible summary span { color: var(--text-secondary); }
 .federation-connections--collapsible summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
-.federation-status-control__details p { margin: 6px 0; }
 .federation-status-control__title { display: flex; align-items: center; gap: 4px; }
+/* The popover drops from the Star Map button: map preview, instance chips,
+   one minute of traffic, then the socket list folded away. */
+.federation-status-control__body { display: flex; flex-direction: column; gap: 12px; padding: 10px 8px 4px; }
+.federation-status-control__status { display: flex; align-items: center; gap: 6px; }
+.federation-status-control__dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 999px; background: var(--text-muted); }
+.federation-status-control__dot--ok { background: var(--success-text); }
+.federation-status-control__dot--warn { background: var(--accent); }
+.federation-status-control__rec { padding: 1px 5px; border: 1px solid var(--accent-border); border-radius: 4px; color: var(--accent-bright); font: 600 9px/1.4 var(--font-mono); letter-spacing: 0.06em; }
+.federation-status-control__note { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.federation-status-control__body .federation-connections { margin: 0; font-size: 12px; }
+.federation-status-control__section { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; color: var(--text-muted); font-size: 11px; }
+.federation-status-control__section > span:first-child { font: 600 9.5px/1.2 var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; }
+.federation-status-control__menu-anchor { position: relative; }
+.federation-status-control__menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 2; display: flex; flex-direction: column; width: 260px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); }
+.federation-status-control__menu-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-primary); font: 500 12px/1.3 var(--font-sans, sans-serif); text-align: left; cursor: pointer; }
+.federation-status-control__menu-item:hover:not(:disabled), .federation-status-control__menu-item:focus-visible { background: var(--bg-panel-hover); outline: none; }
+.federation-status-control__menu-item:disabled { color: var(--text-muted); cursor: default; }
+.federation-status-control__menu-check { color: var(--accent-bright); }
+
+.federation-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.federation-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 24px; padding: 0 4px 0 7px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel); color: var(--text-primary); font: 550 11.5px/1 var(--font-sans, sans-serif); white-space: nowrap; cursor: pointer; }
+.federation-chip:hover, .federation-chip:focus-visible { border-color: var(--border-strong); background: var(--bg-panel-hover); }
+.federation-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.federation-chip--offline { color: var(--text-secondary); }
+.federation-chip--more { padding: 0 9px; color: var(--text-secondary); font-weight: 500; }
+.federation-chip__label { overflow: hidden; text-overflow: ellipsis; }
+.federation-chip__tag { padding: 1px 4px; border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-muted); font: 550 8.5px/1.3 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; }
+.federation-chip__tag--cloudflare { border-color: var(--accent-border); color: var(--accent-bright); }
+.federation-chip__tag--tailscale { border-color: var(--border-strong); color: var(--text-secondary); }
+.federation-chip__offline { width: 6px; height: 6px; border-radius: 999px; background: var(--text-muted); }
+
+/* A static doorway into the Star Map; nothing in it moves. */
+.federation-sky { position: relative; display: block; width: 100%; height: 150px; padding: 0; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 8px; background: radial-gradient(70px 44px at 24% 30%, var(--accent-soft), transparent 70%), radial-gradient(80px 46px at 76% 70%, var(--accent-soft), transparent 70%), var(--bg-panel); color: var(--text-primary); cursor: pointer; }
+.federation-sky:hover, .federation-sky:focus-visible { border-color: var(--border-strong); }
+.federation-sky:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.federation-sky__orbit { position: absolute; left: 50%; top: 42%; border: 1px solid var(--border-subtle); border-radius: 999px; transform: translate(-50%, -50%); }
+.federation-sky__orbit--inner { width: 38%; height: 34%; }
+.federation-sky__orbit--outer { width: 72%; height: 64%; }
+.federation-sky__sun { position: absolute; left: 50%; top: 42%; width: 14px; height: 14px; border-radius: 999px; background: var(--text-primary); box-shadow: 0 0 0 4px var(--bg-panel), 0 0 0 5px var(--border-strong); transform: translate(-50%, -50%); }
+.federation-sky__body { position: absolute; display: inline-flex; align-items: center; gap: 4px; max-width: 120px; padding: 2px 6px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-panel-elevated); color: var(--text-secondary); font: 550 9.5px/1.2 var(--font-sans, sans-serif); white-space: nowrap; transform: translate(-50%, -50%); }
+.federation-sky__body > span { overflow: hidden; text-overflow: ellipsis; }
+.federation-sky__body--online { border-color: var(--accent-border); color: var(--text-primary); }
+.federation-sky__caption { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.federation-sky__label { padding: 3px 8px; border-radius: 6px; background: var(--bg-panel-elevated); color: var(--text-secondary); font-size: 10.5px; }
+.federation-sky__label strong { color: var(--text-primary); font-weight: 650; }
+.federation-sky__cta { padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel-elevated); font: 550 11px/1.2 var(--font-sans, sans-serif); }
+.federation-sky:hover .federation-sky__cta, .federation-sky:focus-visible .federation-sky__cta { border-color: var(--accent); background: var(--accent); color: var(--button-text); }
+
+.federation-traffic { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 9px 10px 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); color: var(--text-primary); text-align: left; cursor: pointer; }
+.federation-traffic:hover:not(:disabled), .federation-traffic:focus-visible { border-color: var(--border-strong); background: var(--bg-panel-hover); }
+.federation-traffic:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.federation-traffic:disabled { cursor: default; }
+.federation-traffic__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.federation-traffic__title { font-size: 12px; font-weight: 600; }
+.federation-traffic__nums { display: flex; gap: 10px; color: var(--text-secondary); font: 500 10.5px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
+.federation-traffic__sent { color: var(--accent-bright); }
+.federation-traffic__bars { display: block; width: 100%; height: 44px; }
+.federation-traffic__axis { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.federation-traffic__up { fill: var(--accent); }
+.federation-traffic__down { fill: var(--text-muted); }
+.federation-traffic__axis-labels { display: flex; justify-content: space-between; color: var(--text-muted); font: 500 9.5px/1.2 var(--font-mono); }
+.federation-traffic:hover:not(:disabled) .federation-traffic__axis-labels > span:nth-child(2) { color: var(--accent-bright); }
 /* This report owns its scroll area; the shared Activity chrome stays outside it. */
 .federation-activity-content { display: block; overflow: auto; }
 .federation-activity { max-width: 1000px; margin: 0 auto; padding: 16px; font-size: 13px; }

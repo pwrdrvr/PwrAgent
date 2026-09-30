@@ -57,6 +57,12 @@ export function publishStarMapView(params: {
   });
 }
 
+/** Whether this map has published a view, which it does once it has mounted. */
+export function hasPublishedStarMapView(webContents: WebContents): boolean {
+  prune();
+  return entries.has(webContents.id);
+}
+
 /** Most recently published still-live view, or undefined when no map is open. */
 export function readStarMapView(): StarMapViewSnapshot | undefined {
   return currentEntry()?.snapshot;

@@ -418,6 +418,11 @@ export type StarMapCommand =
 
 export type StarMapCommandKind = StarMapCommand["kind"];
 
+/** Opening the Star Map window, optionally flown to one federation instance. */
+export type OpenStarMapWindowRequest = {
+  instanceId?: string;
+};
+
 /**
  * A command as a tool builds it, before the bus gives it a request id.
  * Distributes over the kinds, so the default is each command's own shape

@@ -68,6 +68,13 @@ export function isStarMapWindowWebContents(
   );
 }
 
+/** The open map window's renderer, for commands aimed at that window. */
+export function starMapWindowWebContents(): WebContents | undefined {
+  return starMapWindow && !starMapWindow.isDestroyed()
+    ? starMapWindow.webContents
+    : undefined;
+}
+
 /**
  * Spawn (or focus, if already open) the dedicated Federation Star Map
  * window. The window reuses the same renderer bundle as the main
