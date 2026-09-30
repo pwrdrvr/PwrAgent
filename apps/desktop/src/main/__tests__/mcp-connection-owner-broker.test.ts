@@ -107,6 +107,45 @@ describe("MCP connection owner broker", () => {
     }
   });
 
+  it("names an owner that stopped answering instead of its socket path", async () => {
+    // The shape an owner leaves behind when it exits holding the lease:
+    // discovery still names it and its socket, and nothing listens there.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-dead-owner-"));
+    const socketPath = process.platform === "win32"
+      ? `\\\\.\\pipe\\pwragent-mcp-dead-owner-${randomUUID()}`
+      : path.join(directory, "bridge.sock");
+    const stateDb = openInMemoryStateDb({ profileName: "dev" });
+    const store = new AppRuntimeInstanceStore(stateDb);
+    const discovery = new McpConnectionBrokerDiscovery({ filePath: path.join(directory, "broker.json") });
+    const lease = (instanceId: string, processId: number) => new RuntimeLeaseManager({
+      cwd: directory, instanceId, processId, profileName: "dev", runtimeIdentityIsAlive: () => true, store,
+    });
+    const ownerLease = lease("owner", 101);
+    ownerLease.acquire("mcp_connections");
+    const viewer = new McpConnectionGatewayService({
+      brokerDiscovery: discovery, leaseManager: lease("viewer", 202),
+      registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
+      settings: createSettings(),
+    });
+    try {
+      discovery.publish({ version: 1, ownerInstanceId: "owner", socketPath, brokerToken: "x".repeat(32), publishedAt: Date.now() });
+      const failure = await viewer.listConnections().then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+      expect(failure?.message).toBe(
+        "Another PwrAgent instance manages MCP connections for this profile and is not responding.",
+      );
+      expect(failure?.message).not.toContain(socketPath);
+      expect(failure?.cause).toMatchObject({ code: "ENOENT" });
+    } finally {
+      await viewer.close();
+      ownerLease.release("mcp_connections");
+      stateDb.close();
+      fs.rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it.each(["datadog", "pwrgit"])("lets a non-owner process receive a %s bridge from the profile owner", async (id) => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-mcp-owner-broker-"),

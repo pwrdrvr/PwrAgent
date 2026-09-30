@@ -177,6 +177,95 @@ describe("PwrGitConnectionPrompt", () => {
     expect(screen.getByText(/PwrAgent authorization saved/)).toBeTruthy();
   });
 
+  it("never shows a failed status read, and retries until one succeeds", async () => {
+    // What a dead broker owner produced on the card: Electron's IPC wrapper
+    // around a refused temp socket, printed verbatim beside "Checking…".
+    const refused = new Error(
+      "Error invoking remote method 'mcp-connection:pwrgit-status': "
+        + "Error: connect ECONNREFUSED /tmp/pwa-mcp-fixture/bridge.sock",
+    );
+    const readPwrGitConnectionStatus = vi.fn<() => Promise<PwrGitConnectionStatus>>()
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
+      .mockResolvedValue(status({ availability: "not_installed" }));
+    vi.useFakeTimers();
+    try {
+      render(
+        <PwrGitConnectionPrompt
+          backend="codex"
+          desktopApi={{ readPwrGitConnectionStatus }}
+          enabled={false}
+          onEnabledChange={vi.fn()}
+        />,
+      );
+      await act(async () => undefined);
+      expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Checking…")).toBeTruthy();
+      expect(screen.queryByText(/could not check/)).toBeNull();
+
+      await act(async () => await vi.advanceTimersByTimeAsync(2_000));
+      expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(2);
+      expect(
+        screen.getByText("PwrAgent could not check PwrGit yet. It will keep trying."),
+      ).toBeTruthy();
+
+      await act(async () => await vi.advanceTimersByTimeAsync(5_000));
+      expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(3);
+      expect(screen.getByRole("button", { name: "Get PwrGit" })).toBeTruthy();
+      expect(screen.queryByText(/could not check/)).toBeNull();
+      expect(screen.queryByText(/ECONNREFUSED|remote method/)).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the last status it read when a later read fails", async () => {
+    const readPwrGitConnectionStatus = vi.fn<() => Promise<PwrGitConnectionStatus>>()
+      .mockResolvedValueOnce(status({ configured: true }))
+      .mockRejectedValue(new Error("connect ECONNREFUSED /tmp/bridge.sock"));
+    render(
+      <PwrGitConnectionPrompt
+        backend="codex"
+        desktopApi={{ readPwrGitConnectionStatus }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+    await screen.findByRole("switch", { name: /Use PwrGit in this thread/i });
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("switch", { name: /Use PwrGit in this thread/i })).toBeTruthy();
+    expect(screen.queryByText(/ECONNREFUSED|could not check/)).toBeNull();
+  });
+
+  it("shows an action's failure without Electron's IPC wrapper", async () => {
+    render(
+      <PwrGitConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrGitConnectionStatus: async () => status(),
+          connectPwrGit: async () => {
+            throw new Error(
+              "Error invoking remote method 'mcp-connection:pwrgit-connect': "
+                + "Error: PwrGit declined the connection.",
+            );
+          },
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Connect to PwrGit" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "PwrGit declined the connection.",
+    );
+  });
+
   it("does not repeat the status instruction as an error after a failed connect", async () => {
     const detail =
       "Turn on Settings → Agents → Local agent access in PwrGit, then connect.";

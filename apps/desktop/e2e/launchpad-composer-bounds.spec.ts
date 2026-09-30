@@ -200,14 +200,7 @@ test("launchpad send controls stay on screen under two connection cards and past
     const composerInput = app.window.getByRole("textbox", { name: "New thread" });
     await expect(composerInput).toBeVisible();
 
-    // Local PwrSnap now lives in MCP access, so only PwrGit renders here.
-    // Duplicate the rendered card in this layout fixture to retain the
-    // original two-card crowding and overflow assertions.
     const cards = app.window.locator(".mcp-connection");
-    await expect(cards).toHaveCount(1);
-    await cards.first().evaluate((card) => {
-      card.after(card.cloneNode(true));
-    });
     await expect(cards).toHaveCount(2);
 
     await pastePng(composerInput, "bounds-one.png", "#3478f6");

@@ -3561,13 +3561,13 @@ export function ThreadView(props: ThreadViewProps) {
                   }}
                 />
               ) : null}
-              {/* Managed MCP selection lives in the composer's MCP access
-                  panel, beside the other per-thread execution settings, so it
-                  is reachable from an existing thread too. PwrGit retains its
-                  separate pairing card above. The remote PwrSnap card offers access from
-                  the machine that owns the thread, and the local panel
-                  refuses to edit a remote thread's selection. */}
-              {!launchpadMaterializing && props.activeFederationTarget ? (
+              {/* Both PwrSuite apps get a card, so each can be discovered,
+                  downloaded, and paired from here; per-thread selection also
+                  lives in the composer's MCP access panel, which reaches an
+                  existing thread too. The remote card offers access from the
+                  machine that owns the thread, and the local panel refuses to
+                  edit a remote thread's selection. */}
+              {!launchpadMaterializing ? (
                 <PwrSnapConnectionPrompt
                   backend={selectedLaunchpad.backend}
                   desktopApi={props.desktopApi}
@@ -3577,7 +3577,9 @@ export function ThreadView(props: ThreadViewProps) {
                     ) === true
                   }
                   remoteOwnerLabel={
-                    props.activeFederationOwnerLabel ?? "the remote machine"
+                    props.activeFederationTarget
+                      ? props.activeFederationOwnerLabel ?? "the remote machine"
+                      : undefined
                   }
                   onEnabledChange={async (enabled) => {
                     await props.onUpdateLaunchpad?.(

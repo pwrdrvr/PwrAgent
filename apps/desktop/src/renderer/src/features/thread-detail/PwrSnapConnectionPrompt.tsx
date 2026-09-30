@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
   isAcpBackendId,
   withMcpConnection,
   type AppServerBackendKind,
-  type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
 import pwrSnapIcon from "../../assets/pwrsnap/pwrsnap-app-icon.png";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+import {
+  connectionActionError,
+  usePwrSuiteConnectionStatus,
+} from "./usePwrSuiteConnectionStatus";
 
 export function PwrSnapConnectionPrompt(props: {
   backend: AppServerBackendKind;
@@ -17,29 +20,14 @@ export function PwrSnapConnectionPrompt(props: {
   remoteOwnerLabel?: string;
   onEnabledChange: (enabled: boolean) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<PwrSnapConnectionStatus>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const { status, setStatus, refresh, unreachable } =
+    usePwrSuiteConnectionStatus(
+      props.desktopApi?.readPwrSnapConnectionStatus,
+      () => setError(undefined),
+    );
   const backendSupported = props.backend === "codex" || isAcpBackendId(props.backend);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    if (!props.desktopApi?.readPwrSnapConnectionStatus) return;
-    try {
-      setStatus(await props.desktopApi.readPwrSnapConnectionStatus());
-      setError(undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, [props.desktopApi]);
-
-  useEffect(() => {
-    void refresh();
-    const onFocus = (): void => {
-      void refresh();
-    };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refresh]);
 
   const runAction = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
@@ -47,7 +35,7 @@ export function PwrSnapConnectionPrompt(props: {
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(connectionActionError(cause));
     } finally {
       setBusy(false);
     }
@@ -158,6 +146,11 @@ export function PwrSnapConnectionPrompt(props: {
         ) : null}
         {status?.detail ? (
           <p className="mcp-connection__detail">{status.detail}</p>
+        ) : null}
+        {unreachable ? (
+          <p className="mcp-connection__detail">
+            PwrAgent could not check PwrSnap yet. It will keep trying.
+          </p>
         ) : null}
         {!backendSupported && configured ? (
           <p className="mcp-connection__detail">

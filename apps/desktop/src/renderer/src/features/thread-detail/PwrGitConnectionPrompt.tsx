@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   PWRGIT_MCP_CONNECTION_ID,
   isAcpBackendId,
   withMcpConnection,
   type AppServerBackendKind,
-  type PwrGitConnectionStatus,
 } from "@pwragent/shared";
 import pwrGitIcon from "../../assets/pwrgit/pwrgit-app-icon.png";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+import {
+  connectionActionError,
+  usePwrSuiteConnectionStatus,
+} from "./usePwrSuiteConnectionStatus";
 
 export function PwrGitConnectionPrompt(props: {
   backend: AppServerBackendKind;
@@ -17,32 +20,15 @@ export function PwrGitConnectionPrompt(props: {
   remoteOwnerLabel?: string;
   onEnabledChange: (enabled: boolean) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<PwrGitConnectionStatus>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const { status, setStatus, refresh, unreachable } =
+    usePwrSuiteConnectionStatus(
+      props.desktopApi?.readPwrGitConnectionStatus,
+      () => setError(undefined),
+    );
   const backendSupported =
     props.backend === "codex" || isAcpBackendId(props.backend);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    if (!props.desktopApi?.readPwrGitConnectionStatus) return;
-    try {
-      setStatus(await props.desktopApi.readPwrGitConnectionStatus());
-      setError(undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, [props.desktopApi]);
-
-  useEffect(() => {
-    void refresh();
-    // Pairing happens in the PwrGit window, so the answer usually arrives
-    // while this window is in the background. Re-read on focus.
-    const onFocus = (): void => {
-      void refresh();
-    };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refresh]);
 
   const runAction = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
@@ -50,7 +36,7 @@ export function PwrGitConnectionPrompt(props: {
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(connectionActionError(cause));
     } finally {
       setBusy(false);
     }
@@ -165,6 +151,11 @@ export function PwrGitConnectionPrompt(props: {
         ) : null}
         {status?.detail ? (
           <p className="mcp-connection__detail">{status.detail}</p>
+        ) : null}
+        {unreachable ? (
+          <p className="mcp-connection__detail">
+            PwrAgent could not check PwrGit yet. It will keep trying.
+          </p>
         ) : null}
         {!backendSupported && configured ? (
           <p className="mcp-connection__detail">
