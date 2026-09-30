@@ -7426,8 +7426,16 @@ export function useThreadNavigation(
             readRendererFederationTarget(),
           threadId: thread.id,
         });
-        await refresh(threadSummaryIdentityKey(thread));
-        if (selectedItemKeyRef.current === threadSummaryIdentityKey(thread)) await selectedDetail.refresh();
+        // The main process has committed the workspace change before its IPC
+        // response. Reconcile the navigation surfaces without holding the
+        // handoff dialog open for Git-backed reads of the new workspace.
+        void (async () => {
+          const threadKey = threadSummaryIdentityKey(thread);
+          await refresh(threadKey);
+          if (selectedItemKeyRef.current === threadKey) await selectedDetail.refresh();
+        })().catch((error) => {
+          setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);

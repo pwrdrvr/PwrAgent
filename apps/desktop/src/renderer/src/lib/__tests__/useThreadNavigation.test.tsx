@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AppServerThreadTitleSource,
   FederationRemoteTarget,
+  HandoffThreadWorkspaceResponse,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -170,6 +171,81 @@ describe("useThreadNavigation", () => {
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  it("finishes a committed workspace handoff before navigation reconciliation completes", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-handoff",
+      title: "Handoff thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{ id: "repo", kind: "local", label: "Repo", path: "/repo" }],
+      inbox: { inInbox: true, reason: "new-thread" },
+      updatedAt: 1,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-handoff"],
+      threads: [thread],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    let blockRefresh = false;
+    let releaseRefresh: () => void = () => undefined;
+    let signalRefresh: () => void = () => undefined;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>((resolve) => { signalRefresh = resolve; });
+    const getNavigationQueryPage: NonNullable<DesktopApi["getNavigationQueryPage"]> = async (request) => {
+      if (blockRefresh) {
+        signalRefresh();
+        await refreshGate;
+      }
+      return { ...navigationQueryFixture(request, snapshot), coverage: { state: "complete" } };
+    };
+    const response: HandoffThreadWorkspaceResponse = {
+      backend: "codex",
+      threadId: thread.id,
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      workMode: "worktree",
+      repositoryPath: "/repo",
+      targetPath: "/worktree",
+      linkedDirectory: {
+        id: "worktree", kind: "worktree", label: "Worktree", path: "/repo", worktreePath: "/worktree",
+      },
+      warnings: [],
+      completedAt: 2,
+    };
+    const handoffThreadWorkspace = vi.fn<NonNullable<DesktopApi["handoffThreadWorkspace"]>>(async () => response);
+    const desktopApi: DesktopApi = {
+      readPopulation: async () => snapshot,
+      getNavigationQueryPage,
+      ...actionDetailApi(thread),
+      handoffThreadWorkspace,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    blockRefresh = true;
+    let handoffSettled = false;
+    let handoffPromise: Promise<void> | undefined;
+    act(() => {
+      handoffPromise = result.current.handoffThreadWorkspace(thread, {
+        direction: "local-to-worktree",
+      }).then(() => { handoffSettled = true; });
+    });
+    try {
+      await refreshStarted;
+      await Promise.resolve();
+      expect(handoffSettled).toBe(true);
+      expect(handoffThreadWorkspace).toHaveBeenCalledOnce();
+    } finally {
+      releaseRefresh();
+      await act(async () => { await handoffPromise; });
+    }
   });
 
   it.each(["inbox", "directories"] as const)("loads navigation before a visible window gains focus (%s)", async (browseMode) => {
