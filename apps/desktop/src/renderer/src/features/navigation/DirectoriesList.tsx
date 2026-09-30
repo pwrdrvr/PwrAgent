@@ -6,6 +6,7 @@ import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
+  useCallback,
   useEffect,
   Fragment,
   useMemo,
@@ -84,9 +85,21 @@ import {
   type NavigationDirectoryDisclosure,
 } from "../../lib/useNavigationDirectoryDisclosure";
 import { createSubthreadTrays } from "./subthread-trays";
+import {
+  interleaveStartingSubthreads,
+  selectUnlandedStartingThreads,
+  StartingThreadRow,
+} from "./StartingThreadRow";
+import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 
 type DirectoriesListProps = {
   presentationOrder?: NavigationPresentationOrder;
+  /**
+   * Threads still starting. Each renders in the slot its thread will take:
+   * under its parent, or in its project where a new top-level thread sorts.
+   */
+  startingThreads?: PendingLaunchpadCreation[];
+  onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -849,6 +862,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [props.directories],
   );
+  // The projects a starting thread will render in. A sub-thread launchpad's
+  // own key names no project; its thread lands under the parent's row.
+  const startingThreadDirectoryKeys = useCallback((creation: PendingLaunchpadCreation): string[] => {
+    const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
+    return parent
+      ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
+      : [creation.directoryKey];
+  }, [threadsByKey]);
+  const unplacedStartingThreads = selectUnlandedStartingThreads(
+    props.startingThreads?.filter((creation) =>
+      !visibleDirectories.some((directory) => directory.key === creation.directoryKey)
+      && !(creation.parentThreadKey && threadsByKey.has(creation.parentThreadKey))),
+    threadsByKey,
+  );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
   const handledProjectReveal = useRef<{ key: string } | undefined>(undefined);
 
@@ -1070,9 +1097,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
       previousSelectedItemKeyRef.current = undefined;
       return;
     }
+    const selectedStartingThread = props.startingThreads?.find(
+      (creation) => creation.selectionKey === selectedItemKey,
+    );
+    const startingDirectoryKeys = selectedStartingThread
+      ? startingThreadDirectoryKeys(selectedStartingThread)
+      : [];
     const matchingDirectory = visibleDirectories.find(
       (directory) =>
         selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
+        startingDirectoryKeys.includes(directory.key) ||
         props.selectedThreadDirectoryKeys?.includes(directory.key),
     );
     if (!matchingDirectory) {
@@ -1117,7 +1151,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     setExpandedByKey((current) => revealsDirectory(current)
       ? { ...current, [matchingDirectory.key]: true }
       : current);
-  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey]);
+  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.startingThreads, startingThreadDirectoryKeys]);
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
@@ -1267,9 +1301,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       props.selectedDirectoryKeys?.has(directory.key),
     );
     const selectedThreadInDirectory = props.selectedThreadDirectoryKeys?.includes(directory.key) ?? false;
+    const selectedStartingThread = Boolean(props.startingThreads?.some((creation) =>
+      creation.selectionKey === props.selectedItemKey
+      && startingThreadDirectoryKeys(creation).includes(directory.key)));
     const expanded =
       expandedByKey[directory.key] ??
-      (selectedLaunchpad || selectedThreadInDirectory);
+      (selectedLaunchpad || selectedThreadInDirectory || selectedStartingThread);
     const remoteActiveThreadCount = isFederationViewerWindow() ? 0 : directory.counts?.activeRemote ?? 0;
     const activeThreadCount = Math.max(0, (directory.counts?.active ?? 0) - remoteActiveThreadCount);
     const activeThreadLabel = remoteActiveThreadCount > 0
@@ -1316,9 +1353,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
           return resource ? [resource] : [];
         });
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
+      const trayEntries = interleaveStartingSubthreads({
+        trayKey: parentKey,
+        subtree: children,
+        depthOf: trays.depth,
+        creations: startingSubthreads,
+      });
+      // A starting child opens its tray: the created thread does the same when
+      // it lands, so the row is already where it will be.
+      const startsSubthread = trayEntries.length > children.length;
       if (
-        ((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
-        || subthreadsCollapsed
+        (((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
+          || subthreadsCollapsed)
+        && !startsSubthread
       ) {
         return null;
       }
@@ -1346,7 +1393,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {nativeSubAgentCount > 0 ? (
               <NativeSubAgentsDisclosure compact thread={parent} />
             ) : null}
-            {children.flatMap((child) => {
+            {trayEntries.flatMap((entry) => {
+              if (entry.kind === "starting") {
+                return [
+                  <StartingThreadRow
+                    key={`${directory.key}:${entry.creation.selectionKey}`}
+                    compact
+                    creation={entry.creation}
+                    locationMode="kind"
+                    nestedDepth={entry.depth}
+                    selected={props.selectedItemKey === entry.creation.selectionKey}
+                    onSelect={props.onSelectStartingThread}
+                  />,
+                ];
+              }
+              const child = entry.thread;
               const childKey = threadSummaryIdentityKey(child);
               const rowDropKey = `subthread:${parentKey}:${childKey}`;
               // A row plus its own worker group, as siblings of this list. A
@@ -1483,6 +1544,39 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directoryThreadsCollapsed,
       directoryUnpinnedThreadCount,
     } = expandedThreadModel;
+    // Starting threads, placed where the owner will put each one. A sub-thread
+    // lands under its parent wherever that row renders. A top-level thread
+    // lands in its project: newest first among the unpinned rows, or pinned
+    // last when the project's unpinned rows are collapsed under pins (main
+    // pins it then so it stays visible), or beside the open transcript when
+    // they are collapsed with nothing pinned.
+    const renderedThreadKeys = new Set<string>();
+    for (const thread of [...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads]) {
+      const threadKey = threadSummaryIdentityKey(thread);
+      renderedThreadKeys.add(threadKey);
+      for (const child of trays.subtree(threadKey)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
+    }
+    const directoryStartingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
+    const startingSubthreads = directoryStartingThreads.filter((creation) =>
+      creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
+    const startingRootThreads = directoryStartingThreads.filter((creation) =>
+      creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+    const startingRootSlot = !directoryThreadsCollapsed
+      ? "unpinned"
+      : (directory.pinnedRootCount ?? 0) > 0 ? "pinned" : "selected";
+    const renderStartingRootThreads = (slot: typeof startingRootSlot): ReactElement[] | null =>
+      slot === startingRootSlot
+        ? startingRootThreads.map((creation) => (
+            <StartingThreadRow
+              key={`${directory.key}:${creation.selectionKey}`}
+              compact
+              creation={creation}
+              locationMode="kind"
+              selected={props.selectedItemKey === creation.selectionKey}
+              onSelect={props.onSelectStartingThread}
+            />
+          ))
+        : null;
     // Range selection must use the same ordered, depth-first trays as the
     // rendered rows. Raw child pages can have a different order and omit
     // visible grandchildren from the range.
@@ -1938,7 +2032,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
             {expanded ? (
               <div className="directory-row__details">
-                {visibleThreadCount > 0 ? (
+                {visibleThreadCount > 0 || startingRootThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads" role="list" aria-label={`Threads in ${directory.label}`}>
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = threadSummaryIdentityKey(thread);
@@ -2004,6 +2098,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             </Fragment>
 	                      );
                     })}
+                    {renderStartingRootThreads("pinned")}
 
                     {renderPinnedAppendTarget ? (
                       <div
@@ -2045,9 +2140,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
+                    {renderStartingRootThreads("selected")}
                     {selectedUnpinnedThreads.map(renderUnpinnedRow)}
                     {(directory.pinnedRootCount ?? 0) > 0 &&
-                    directoryUnpinnedThreadCount > 0 ? (
+                    (directoryUnpinnedThreadCount > 0
+                      || (startingRootSlot === "unpinned" && startingRootThreads.length > 0)) ? (
                       <div className="directory-row__threads-slot" role="listitem">
                         <button
                           type="button"
@@ -2092,6 +2189,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
+                    {renderStartingRootThreads("unpinned")}
                     {directoryThreadsCollapsed
                       ? null
                       : unpinnedThreads.map(renderUnpinnedRow)}
@@ -2120,6 +2218,22 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
   return (
     <div className="directory-list sidebar-list sidebar-list--dense">
+      {unplacedStartingThreads.length > 0 ? (
+        // No project or parent row this lens has loaded will take these, so
+        // they wait at the top, the one place every lens can show them.
+        <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
+          {unplacedStartingThreads.map((creation) => (
+            <StartingThreadRow
+              key={creation.selectionKey}
+              compact
+              creation={creation}
+              locationMode="label"
+              selected={props.selectedItemKey === creation.selectionKey}
+              onSelect={props.onSelectStartingThread}
+            />
+          ))}
+        </div>
+      ) : null}
       {pinnedDirectories.map(renderDirectoryRow)}
       {directoryDragEnabled && pinnedDirectories.length > 0 ? (
         <div

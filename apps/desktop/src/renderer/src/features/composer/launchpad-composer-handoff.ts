@@ -90,14 +90,16 @@ export function resolveLaunchpadComposerScope(store: ComposerDraftStore, scopeKe
   return handoffTargets.get(store)?.get(scopeKey)?.scopeKey ?? scopeKey;
 }
 
-/** Move local composition before navigation exposes the new thread. */
+/**
+ * Move local composition before navigation exposes the new thread.
+ * `source` is the composer scope the thread was starting in.
+ */
 export function handoffLaunchpadComposer(
   store: ComposerDraftStore,
-  directoryKey: string,
+  source: string,
   thread: NavigationThreadSummary,
   desktopApi?: DesktopApi,
 ): void {
-  const source = `launchpad:${directoryKey}`;
   const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
   const target = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   getLaunchpadComposerDestination(store, source).scopeKey = target;

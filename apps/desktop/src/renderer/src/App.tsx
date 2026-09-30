@@ -2812,7 +2812,8 @@ function DesktopAppShell(props: {
         undefined,
         extraDirectoryPaths,
         scheduledFor,
-        (thread) => handoffLaunchpadComposer(composerDraftStore, directoryKey, thread, desktopApi),
+        (thread, composerScopeKey) =>
+          handoffLaunchpadComposer(composerDraftStore, composerScopeKey, thread, desktopApi),
       ),
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,

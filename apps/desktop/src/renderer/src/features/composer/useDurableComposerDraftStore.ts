@@ -1,4 +1,5 @@
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { getLaunchpadScopeDirectoryKey } from "./launchpad-composer-scope";
 import { parseOwnedComposerScopeKey, parseThreadIdentityKey } from "@pwragent/shared";
 import {
   useCallback,
@@ -411,7 +412,7 @@ function parseScope(scopeKey: string): {
   }
   if (scopeKey.startsWith("launchpad:")) {
     return {
-      directoryKey: scopeKey.slice("launchpad:".length),
+      directoryKey: getLaunchpadScopeDirectoryKey(scopeKey),
       scopeKind: "launchpad",
     };
   }

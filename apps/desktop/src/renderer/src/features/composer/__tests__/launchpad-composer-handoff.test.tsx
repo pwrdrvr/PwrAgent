@@ -39,7 +39,7 @@ describe("launchpad composer handoff", () => {
     store.set(source, draft("Still typing"));
     store.pushDraft(source, draft("Older draft"));
     store.setQueuedTurns(source, [queued("second"), queued("third")]);
-    act(() => handoffLaunchpadComposer(store, "project", thread));
+    act(() => handoffLaunchpadComposer(store, "launchpad:project", thread));
     expect(store.get(target)?.draft).toBe("Still typing");
     expect(store.popDraft(target)?.draft).toBe("Older draft");
     expect(store.getQueuedTurns(target).map((entry) => entry.text)).toEqual(["second", "third"]);
@@ -51,7 +51,7 @@ describe("launchpad composer handoff", () => {
   it("retains the destination for an attachment finishing after another launchpad opens", () => {
     const { result } = renderHook(useComposerDraftStore);
     const destination = getLaunchpadComposerDestination(result.current, source);
-    act(() => handoffLaunchpadComposer(result.current, "project", thread));
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread));
     beginLaunchpadComposition(result.current, source);
     expect(destination.scopeKey).toBe(target);
     expect(getLaunchpadComposerDestination(result.current, source).scopeKey).toBe(source);
@@ -63,7 +63,7 @@ describe("launchpad composer handoff", () => {
       backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered",
     });
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", thread, { steerTurn }));
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, { steerTurn }));
     expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
       threadId: thread.id,
       expectedTurnId: "first-turn",
@@ -79,7 +79,7 @@ describe("launchpad composer handoff", () => {
     let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>) => void;
     const steerTurn = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>>((done) => { resolve = done; }));
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", thread, {
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, {
       steerTurn,
       onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
     }));
@@ -110,7 +110,7 @@ describe("launchpad composer handoff", () => {
       backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered",
     });
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", thread, {
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, {
       steerTurn, onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
     }));
     await waitFor(() => expect(result.current.getQueuedTurns(target)[0].steerDelivery).toBe("accepted"));
@@ -131,7 +131,7 @@ describe("launchpad composer handoff", () => {
     let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>) => void;
     const steerTurn = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>>((done) => { resolve = done; }));
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", thread, {
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, {
       steerTurn, onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
     }));
     act(() => emit({ backend: "codex", notification: {
@@ -152,7 +152,7 @@ describe("launchpad composer handoff", () => {
     let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
     const unsubscribe = vi.fn();
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    await act(async () => handoffLaunchpadComposer(result.current, "project", thread, {
+    await act(async () => handoffLaunchpadComposer(result.current, "launchpad:project", thread, {
       steerTurn: async () => ({ backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered" }),
       onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
     }));
@@ -172,7 +172,7 @@ describe("launchpad composer handoff", () => {
     const unsubscribe = vi.fn();
     let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>) => void;
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", acpThread, {
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", acpThread, {
       steerTurn: () => new Promise((done) => { resolve = done; }),
       onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
     }));
@@ -206,7 +206,7 @@ describe("launchpad composer handoff", () => {
       input: [{ type: "text", text: "[@notes.txt](/repo/notes.txt)" }],
       fileAttachments: [{ id: "file", label: "notes.txt", path: "/repo/notes.txt" }],
     }]);
-    await act(async () => handoffLaunchpadComposer(result.current, "project", thread, {
+    await act(async () => handoffLaunchpadComposer(result.current, "launchpad:project", thread, {
       steerTurn: async () => ({ backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered" }),
       onAgentEvent: (callback) => { emit = callback; return () => undefined; },
     }));
@@ -220,7 +220,7 @@ describe("launchpad composer handoff", () => {
     const { result } = renderHook(useComposerDraftStore);
     const steerTurn = vi.fn().mockRejectedValue(new Error("Connection lost"));
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", thread, { steerTurn }));
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, { steerTurn }));
     await waitFor(() => expect(result.current.getQueuedTurns(target)[0]).toMatchObject({
       text: "correction", manualReleaseRequired: true, backendQueuePending: false,
       errorMessage: "Connection lost",
@@ -238,7 +238,7 @@ describe("launchpad composer handoff", () => {
     };
     if (delivery === "early event") act(() => applyScheduledActionProjection(store, action));
     store.setQueuedTurns(source, [queued("second"), queued("third")]);
-    act(() => handoffLaunchpadComposer(store, "project", {
+    act(() => handoffLaunchpadComposer(store, "launchpad:project", {
       ...thread, optimisticActiveTurn: undefined,
       scheduledStart: { actionId: action.id, scheduledFor: 100, state: "scheduled" },
     }));
@@ -262,7 +262,7 @@ describe("launchpad composer handoff", () => {
       backend: "codex", threadId: thread.id, turnId: "scheduled-turn", disposition: "steered",
     });
     result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
-    act(() => handoffLaunchpadComposer(result.current, "project", {
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", {
       ...thread, optimisticActiveTurn: undefined,
       scheduledStart: { actionId: "first", scheduledFor: 100, state: "scheduled" },
     }, { steerTurn }));
@@ -279,7 +279,7 @@ describe("launchpad composer handoff", () => {
   it("does not release follow-ups ahead of a first message whose setup failed", () => {
     const { result } = renderHook(useComposerDraftStore);
     result.current.setQueuedTurns(source, [queued("second")]);
-    act(() => handoffLaunchpadComposer(result.current, "project", {
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", {
       ...thread, optimisticActiveTurn: undefined,
     }));
     expect(result.current.getQueuedTurns(target)[0].manualReleaseRequired).toBe(true);

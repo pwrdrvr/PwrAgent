@@ -14,6 +14,11 @@ import {
   resolveLaunchpadComposerScope,
   subscribeLaunchpadAttachmentHandoffs,
 } from "./launchpad-composer-handoff";
+import {
+  getEditableLaunchpadDirectoryKey,
+  getLaunchpadScopeDirectoryKey,
+  isStartingLaunchpadComposerScopeKey,
+} from "./launchpad-composer-scope";
 import { QueuedMessageInspector } from "./QueuedMessageInspector";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
@@ -281,6 +286,11 @@ type ComposerProps = {
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   launchpadMaterializing?: boolean;
+  /**
+   * Draft scope for a launchpad whose thread is starting. Defaults to the
+   * directory's editable `launchpad:<directoryKey>` scope.
+   */
+  launchpadComposerScopeKey?: string;
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
@@ -981,12 +991,6 @@ function buildReviewCommitOptions(
   directory?: NavigationDirectorySummary,
 ): NavigationGitCommitSummary[] {
   return (directory?.gitStatus?.recentCommits ?? []).slice(0, 20);
-}
-
-function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined {
-  return scopeKey.startsWith("launchpad:")
-    ? scopeKey.slice("launchpad:".length)
-    : undefined;
 }
 
 /**
@@ -2736,7 +2740,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
-    ? `launchpad:${props.launchpad.directoryKey}`
+    ? props.launchpadComposerScopeKey ?? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
       ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
@@ -2770,6 +2774,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const [editorScopeKey, setEditorScopeKey] = useState(composerScopeKey);
+  const editorRemountSequenceRef = useRef(0);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const pendingDraftRetargetRef = useRef<
     | {
@@ -4426,7 +4431,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     scopeKey: string,
     snapshot: ComposerDraftSnapshot,
   ): void => {
-    const directoryKey = getLaunchpadDirectoryKeyFromScope(scopeKey);
+    const directoryKey = getEditableLaunchpadDirectoryKey(scopeKey);
     const updateLaunchpad = launchpadUpdateRef.current;
     if (!directoryKey || !updateLaunchpad || launchpadMaterializingRef.current) {
       return;
@@ -5016,7 +5021,26 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     activeComposerScopeKeyRef.current = composerScopeKey;
-    setEditorScopeKey(composerScopeKey);
+    // The editor remounts per scope (#1947) with one exception: the empty
+    // editor a launchpad submission leaves behind follows the message into
+    // its starting thread. Remounting there would drop focus, and any keys
+    // typed straight after Enter. Anything after that remounts again, even
+    // back to the scope key the editor was mounted under.
+    const followsSubmission =
+      isStartingLaunchpadComposerScopeKey(composerScopeKey)
+      && getLaunchpadScopeDirectoryKey(composerScopeKey)
+        === getEditableLaunchpadDirectoryKey(previousScopeKey)
+      && !hasComposerDraftSnapshotContent(previousSnapshot)
+      // Nothing to load into it. Returning to a starting thread that holds
+      // a follow-up swaps content, which needs the remount.
+      && !draftStore.hasDraftContent(composerScopeKey);
+    if (!followsSubmission) {
+      setEditorScopeKey((mounted) =>
+        mounted === composerScopeKey
+          ? `${composerScopeKey}#${++editorRemountSequenceRef.current}`
+          : composerScopeKey,
+      );
+    }
     const current = pasteScopeRef.current;
     if (retargetingDraft && current.key === previousScopeKey) {
       current.key = composerScopeKey;
@@ -5248,11 +5272,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (hydratedLaunchpadKeyRef.current === props.launchpad?.directoryKey) {
+    // Keyed by scope: a starting thread and the directory's next draft share
+    // a directory key but are separate composers.
+    if (hydratedLaunchpadKeyRef.current === composerScopeKey) {
       return;
     }
 
-    hydratedLaunchpadKeyRef.current = props.launchpad?.directoryKey;
+    hydratedLaunchpadKeyRef.current = composerScopeKey;
     if (!props.launchpadMaterializing) beginLaunchpadComposition(draftStore, composerScopeKey);
     const saved = draftStore.get(composerScopeKey);
     if (saved) {
@@ -5688,7 +5714,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   ]);
 
   useEffect(() => {
-    if (!launchpad || !props.onUpdateLaunchpad) {
+    if (
+      !launchpad
+      || !props.onUpdateLaunchpad
+      || getEditableLaunchpadDirectoryKey(composerScopeKey) !== launchpad.directoryKey
+    ) {
       return;
     }
 
@@ -5811,8 +5841,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         );
         setReviewConfig(undefined);
       } catch (error) {
-        if (!draftStore.get(submittedScopeKey)
-          && activeComposerScopeKeyRef.current === submittedScopeKey) {
+        if (!draftStore.get(submittedScopeKey)) {
           restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
         } else {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
@@ -7197,8 +7226,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         setPlanModeEnabled(false);
       }
     } catch (error) {
-      if (!draftStore.get(submittedScopeKey)
-        && activeComposerScopeKeyRef.current === submittedScopeKey) {
+      if (!draftStore.get(submittedScopeKey)) {
         restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
       } else {
         draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
@@ -8127,8 +8155,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         }
       } catch (error) {
         // Never overwrite a follow-up typed while creation was in flight.
-        if (!draftStore.hasDraftContent(submittedScopeKey)
-          && activeComposerScopeKeyRef.current === submittedScopeKey) {
+        // The composer may be showing the starting thread's own scope when
+        // this fails; the restore still belongs to the directory's draft.
+        if (!draftStore.hasDraftContent(submittedScopeKey)) {
           restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
         } else {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);

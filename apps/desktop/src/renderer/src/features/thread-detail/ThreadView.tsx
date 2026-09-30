@@ -1343,6 +1343,9 @@ export function ThreadView(props: ThreadViewProps) {
     setWorkflowBudgetDialog(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
+    // A starting thread and the next launchpad in its directory share a
+    // directory key; switching between them is still a new view.
+    props.pendingLaunchpadCreation?.selectionKey,
     props.pendingForkEnvironmentSetup?.directoryKey,
     props.selectedThread?.id,
     props.selectedThread?.source,
@@ -3695,6 +3698,7 @@ export function ThreadView(props: ThreadViewProps) {
                 disabled={props.launchpadConfigurationReady === false || !launchpadBackend?.available}
                 unavailableReason={launchpadBackend?.unavailableReason}
                 launchpad={selectedLaunchpad}
+                launchpadComposerScopeKey={props.pendingLaunchpadCreation?.composerScopeKey}
                 launchpadMaterializing={launchpadMaterializing}
                 launchpadError={props.launchpadError}
                 pastedImageMaxPatches={props.pastedImageMaxPatches}

@@ -38110,34 +38110,6 @@ button.pricing-token-miser__folded:focus-visible {
   object-fit: contain;
 }
 
-.sidebar-pending-thread {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-muted);
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
-}
-
-.sidebar-pending-thread[aria-current="true"] {
-  background: var(--bg-row-active);
-}
-
-.sidebar-pending-thread__title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-}
-
 details.launchpad-pending__output {
   display: block;
   flex: 0 0 auto;

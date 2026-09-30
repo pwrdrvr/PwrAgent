@@ -3051,7 +3051,15 @@ describe("ThreadView", () => {
           prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
         }}
         pendingLaunchpadCreation={{
-          selectionKey: "launchpad:directory:/repo", directoryKey: "directory:/repo",
+          selectionKey: "starting-launchpad:1", directoryKey: "directory:/repo",
+          directoryLabel: "Example",
+          launchpad: {
+            backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+            directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+            prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
+          },
+          composerScopeKey: "launchpad:starting:1:directory:/repo",
+          setupProgressKey: "starting-launchpad:1",
           title: "Inspect this screenshot",
           input: [{ type: "image", url: dataUrl }],
         }}

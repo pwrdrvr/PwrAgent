@@ -684,7 +684,7 @@ describe("Composer", () => {
       id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
     };
-    act(() => handoffLaunchpadComposer(store, launchpad.directoryKey, thread));
+    act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
     view.rerender(<Composer backends={[backendSummary("codex")]} thread={thread}
       activeTurnId="first-turn" draftStore={store} skills={[]} />);
     await act(async () => {
@@ -762,7 +762,7 @@ describe("Composer", () => {
       id: "correction", text: "Please add tests", input: [{ type: "text", text: "Please add tests" }],
       imageAttachments: [], fileAttachments: [], steerWhenReady: true,
     }]);
-    act(() => handoffLaunchpadComposer(store, "project", thread, desktopApi));
+    act(() => handoffLaunchpadComposer(store, "launchpad:project", thread, desktopApi));
     const composer = <Composer backends={[backend]} thread={thread} activeTurnId="first-turn"
       draftStore={store} desktopApi={desktopApi} skills={[]} />;
     const view = render(composer);
