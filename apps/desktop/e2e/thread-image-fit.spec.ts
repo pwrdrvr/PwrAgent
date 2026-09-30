@@ -408,7 +408,24 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     await app.window.getByRole("textbox", { name: "Search SVG frames" }).fill("frame");
     await app.window.getByRole("button", { name: "Find" }).click();
     await expect(frame.locator("#matched")).toHaveText("frame");
-    expect(await frame.locator("html").evaluate(() => location.origin)).toBe("null");
+    const isolation = await frame.locator("html").evaluate(async () => {
+      let parentDomAccessible = true;
+      try {
+        void window.parent.document.body;
+      } catch {
+        parentDomAccessible = false;
+      }
+      const popupOpened = window.open("about:blank") !== null;
+      const fetchAllowed = await fetch("data:text/plain,probe")
+        .then(() => true, () => false);
+      return { origin: location.origin, parentDomAccessible, popupOpened, fetchAllowed };
+    });
+    expect(isolation).toEqual({
+      origin: "null",
+      parentDomAccessible: false,
+      popupOpened: false,
+      fetchAllowed: false,
+    });
   } finally {
     await app.close();
     await fixture.cleanup();
