@@ -309,15 +309,19 @@ describe("profile IPC helpers", () => {
     const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
 
     const previousArgv = process.argv;
-    const previousDefaultApp = process.defaultApp;
+    const previousDefaultApp = Object.getOwnPropertyDescriptor(process, "defaultApp");
     process.argv = [process.execPath, "/fixture/electron-bootstrap.mjs"];
-    process.defaultApp = true;
+    Object.defineProperty(process, "defaultApp", { configurable: true, value: true });
     let response;
     try {
       response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
     } finally {
       process.argv = previousArgv;
-      process.defaultApp = previousDefaultApp;
+      if (previousDefaultApp) {
+        Object.defineProperty(process, "defaultApp", previousDefaultApp);
+      } else {
+        Reflect.deleteProperty(process, "defaultApp");
+      }
     }
 
     expect(response).toEqual({ opened: true, profile: "my-work-profile" });
