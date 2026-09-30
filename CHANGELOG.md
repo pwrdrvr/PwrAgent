@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.4 - 2026-09-30
+
+- Models - Added GPT-6.1 Sol to the model picker with usage pricing.
+- Managed Builds - Added a PwrAgent Codex build switch and visible download progress for managed Codex and Grok runtimes.
+- Usage Activity - Open usage in its own window and analyze turns or threads with either Codex or Grok.
+- PwrSuite - Download verified PwrSnap and PwrGit installers from compact New Thread launchpad tiles.
+- Federation - Redesigned connection status and Activity views; long remote environment setups now show progress and can finish without the old timeout.
+- Thread Reliability - Recover from unexpected Codex server exits without requiring an app restart, and protect active turns during history repair.
+- Everyday Work - Preview interactive SVGs in transcripts, see tool thinking after a turn, and follow automation failures to their owning thread.
+
 ## v1.1.3 - 2026-09-28
 
 - MCP Connections - Supported existing threads can discover and invoke newly added tools from their selected connections, with current permissions and approval checked on each call.
