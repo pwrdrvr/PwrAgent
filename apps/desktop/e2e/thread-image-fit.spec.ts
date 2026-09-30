@@ -343,7 +343,8 @@ test("copies a transcript SVG as PNG for the composer", async () => {
 test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
   const fixture = await createThreadImageFitFixture();
   const homeRoot = path.join(path.dirname(fixture.fixturePath), "home");
-  const svgPath = path.join(homeRoot, ".codex", "worktrees", "flamegraph.svg");
+  const codexHome = path.join(homeRoot, ".codex");
+  const svgPath = path.join(codexHome, "worktrees", "flamegraph.svg");
   const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
   const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160" onload="init(evt)">
@@ -382,7 +383,11 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     if (message.id === "message-image-fit-2") message.parts[2] = image;
   }
   await writeFile(fixture.fixturePath, JSON.stringify(replay));
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath, homeRoot });
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    homeRoot,
+    env: { CODEX_HOME: codexHome },
+  });
 
   try {
     await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
