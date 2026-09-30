@@ -279,8 +279,13 @@ describe("Federation activity surfaces", () => {
     const api: DesktopApi = { readFederationActivity, setFederationActivityTopmost };
     render(<FederationActivityScreen desktopApi={api} />);
     await screen.findByText("Running · connected");
-    expect(screen.getByText("2")).toBeInTheDocument();
-    expect(screen.getByText("24")).toBeInTheDocument();
+    // Mirrored axes: the peak above, zero on the axis, the same peak below.
+    const axes = [...document.querySelectorAll(".federation-activity__chart-axis")]
+      .map((axis) => [...axis.querySelectorAll("text")].map((text) => text.textContent));
+    expect(axes).toEqual([["KB", "1.6", "0", "1.6"], ["envelopes", "24", "0", "24"]]);
+    const minute = document.querySelector<HTMLElement>(".federation-activity__minute")!;
+    expect(within(minute).getAllByRole("definition").map((value) => value.textContent))
+      .toEqual(["1 KB", "2 KB", "15", "15"]);
     for (const name of ["Sent traffic", "Received traffic"]) {
       const table = within(screen.getByRole("table", { name }));
       for (const column of ["Last 1m", "Last 10m", "Last 1h", "Total"]) {
@@ -306,7 +311,7 @@ describe("Federation activity surfaces", () => {
 
   it("keeps numeric axes outside scrolling history in longer windows", async () => {
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
-    await screen.findByRole("img", { name: /Data and wire amounts/ });
+    await screen.findByRole("img", { name: /Wire byte amounts/ });
     for (const period of ["10m", "1h"]) {
       choose("Chart window", period);
       for (const plot of screen.getAllByRole("img")) {
@@ -323,11 +328,11 @@ describe("Federation activity surfaces", () => {
     let resolveActivity!: (snapshot: ReadFederationActivityResponse) => void;
     const activity = new Promise<ReadFederationActivityResponse>((resolve) => { resolveActivity = resolve; });
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: () => activity }} />);
-    expect(screen.queryByRole("img", { name: /Data and wire amounts/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Wire byte amounts/ })).not.toBeInTheDocument();
     // Flush the async mount and its initial selection-reset effect before focusing.
     // Finding the SVG alone can race that effect on a busy runner.
     await act(async () => { resolveActivity(fixture()); });
-    const chart = screen.getByRole("img", { name: /Data and wire amounts/ });
+    const chart = screen.getByRole("img", { name: /Wire byte amounts/ });
     fireEvent.focus(chart);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Sent wire: 800 bytes");
     expect(screen.getByRole("tooltip")).toHaveTextContent("In progress");
@@ -337,7 +342,7 @@ describe("Federation activity surfaces", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({ left: 0, width: 640 } as DOMRect);
     fireEvent.pointerMove(chart, { clientX: 100 });
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Received data: 4,000 bytes");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Received wire: 1,600 bytes");
     fireEvent.pointerLeave(chart);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });

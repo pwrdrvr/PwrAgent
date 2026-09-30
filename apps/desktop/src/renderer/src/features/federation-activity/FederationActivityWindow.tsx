@@ -73,6 +73,12 @@ function PayloadSizes({ series }: { series: FederationActivitySeries }) {
   </div>;
 }
 
+/**
+ * One mirrored chart: sent bars rise from the axis in the accent, received
+ * bars hang below it in neutral, the same shape as the popover's traffic
+ * card. Bytes charts show wire bytes only; data (uncompressed) bytes live in
+ * the tables, so no bar needs a legend entry for fading.
+ */
 export function FederationAmountChart({ history, period, bytes }: {
   history: FederationActivitySeries["history"]; period: Period; bytes: boolean;
 }) {
@@ -86,19 +92,13 @@ export function FederationAmountChart({ history, period, bytes }: {
     setSelectedAt(undefined);
   }, [period]);
   const points = history.slice(-length);
-  const lines = bytes ? [
-    { direction: "sent", field: "wireBytes", label: "Sent wire", dashed: false },
-    { direction: "received", field: "wireBytes", label: "Received wire", dashed: false },
-    { direction: "sent", field: "dataBytes", label: "Sent data", dashed: true },
-    { direction: "received", field: "dataBytes", label: "Received data", dashed: true },
-  ] as const : [
-    { direction: "sent", field: "events", label: "Sent", dashed: false },
-    { direction: "received", field: "events", label: "Received", dashed: false },
+  const lines = [
+    { direction: "sent", label: bytes ? "Sent wire" : "Sent" },
+    { direction: "received", label: bytes ? "Received wire" : "Received" },
   ] as const;
   const values = lines.map((line) => points.map(({ totals }) => {
     const value = totals[line.direction];
-    return (line.field === "events" ? value.requests + value.responses + value.notifications + value.other
-      : value[line.field]);
+    return bytes ? value.wireBytes : value.requests + value.responses + value.notifications + value.other;
   }));
   const max = Math.max(0, ...values.flat()) || 1;
   const byteUnit = trafficByteUnit(max);
@@ -110,13 +110,15 @@ export function FederationAmountChart({ history, period, bytes }: {
   const selectedIndex = points.findIndex((point) => point.at === selectedAt);
   const selected = points[selectedIndex];
   const time = (at: number) => new Date(at).toLocaleTimeString();
+  const title = bytes ? "Wire bytes" : "Envelopes";
   return <figure className="federation-activity__chart">
-    <figcaption>{bytes ? "Data and wire" : "Envelopes"} · {unit} per one-second bar</figcaption>
+    <figcaption>{title} · {unit} per second
+      <span className="federation-activity__muted"> · sent above, received below</span></figcaption>
     <div className="federation-activity__chart-frame">
     <svg className="federation-activity__chart-axis" viewBox="0 0 95 165" aria-hidden="true">
       <text x="87" y="12" textAnchor="end">{unit}</text>
-      {[0, 0.5, 1].map((fraction) => <text key={fraction} x="87"
-        y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>)}
+      {[1, 0, -1].map((fraction) => <text key={fraction} x="87"
+        y={CHART_AXIS - fraction * CHART_HALF + 4} textAnchor="end">{axisNumber(max * Math.abs(fraction) / scale)}</text>)}
     </svg>
     <div className="federation-activity__chart-scroll" ref={scrollRef}>
     <svg viewBox={`0 0 ${width} 165`} style={{ minWidth: width }} preserveAspectRatio="none" role="img" tabIndex={0}
@@ -137,42 +139,67 @@ export function FederationAmountChart({ history, period, bytes }: {
         setSelectedAt(points[index]?.at);
         if (scrollRef.current) scrollRef.current.scrollLeft = index * step - 150;
       }}>
-      <title id={`${id}-title`}>{bytes ? "Data and wire" : "Envelope"} amounts, {unit}</title>
+      <title id={`${id}-title`}>{bytes ? "Wire byte" : "Envelope"} amounts, {unit}</title>
       <desc id={`${id}-description`}>One-second totals. Peak {axisNumber(max / scale)} {unit}.
-        Sent uses accent bars; received uses neutral bars. Faded bars show uncompressed data.
+        Sent rises above the axis in accent bars; received hangs below it in neutral bars.
         Hover or use left and right arrow keys for exact amounts. The latest second may be incomplete.</desc>
-      {[0, 0.5, 1].map((fraction) => <line key={fraction}
-        x1="0" x2={width - 10} y1={130 - fraction * 110} y2={130 - fraction * 110}
-        className="federation-activity__grid" />)}
+      {[1, 0, -1].map((fraction) => <line key={fraction}
+        x1="0" x2={width - 10} y1={CHART_AXIS - fraction * CHART_HALF} y2={CHART_AXIS - fraction * CHART_HALF}
+        className={fraction === 0 ? "federation-activity__axis" : "federation-activity__grid"} />)}
       {lines.map((line, index) => <path key={line.label}
         className={`federation-activity__bar federation-activity__bar--${line.direction}`}
-        opacity={line.dashed ? 0.4 : 1}
         d={values[index].map((value, point) => {
           if (value <= 0) return "";
-          const x = point * step + index * step / lines.length;
-          const height = value / max * 110;
-          return `M${x},130v${-height}h${step / lines.length - 0.5}v${height}Z`;
+          const x = point * step + 0.5;
+          const height = Math.max(1, value / max * CHART_HALF);
+          return line.direction === "sent"
+            ? `M${x},${CHART_AXIS}v${-height}h${step - 1}v${height}Z`
+            : `M${x},${CHART_AXIS + 1}v${height}h${step - 1}v${-height}Z`;
         }).join(" ")} />)}
-      {selected ? <rect x={selectedIndex * step} y="20" width={step} height="110"
+      {selected ? <rect x={selectedIndex * step} y={CHART_AXIS - CHART_HALF} width={step} height={CHART_HALF * 2 + 1}
         className="federation-activity__selection" /> : null}
-      <text x="0" y="155">{period} ago</text>
-      <text x={width - 10} y="155" textAnchor="end">Now</text>
+      <text x="0" y="160">{period} ago</text>
+      <text x={width - 10} y="160" textAnchor="end">Now</text>
     </svg>
     </div>
     </div>
-    <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
-      className={`federation-activity__legend--${line.direction}`}>
-      <span style={{ opacity: line.dashed ? 0.4 : 1 }}>■</span> {line.label}</span>)}</div>
     <div className="federation-activity__chart-detail">
       {selected ? <div role="tooltip" id={`${id}-tooltip`}>
         <strong>{time(selected.at)} – {time(selected.at + 1000)}</strong>
         {selectedIndex === points.length - 1 ? " · In progress" : ""}
-        <div>{lines.map((line, index) => <span key={line.label}>
+        {lines.map((line, index) => <span key={line.label}
+          className={`federation-activity__legend--${line.direction}`}>
           {line.label}: {bytes ? `${number(values[index][selectedIndex])} bytes` : number(values[index][selectedIndex])}
-        </span>)}</div>
-      </div> : <span>Hover a bar or focus the chart and use ← → for amounts. Scroll to see earlier seconds.</span>}
+        </span>)}
+      </div> : <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
+        className={`federation-activity__legend--${line.direction}`}>
+        <span aria-hidden="true">■</span> {line.label}</span>)}
+        <span>Hover a bar or focus the chart and use ← → for amounts.</span></div>}
     </div>
   </figure>;
+}
+
+/** Plot geometry shared by the mirrored charts, in viewBox units. */
+const CHART_AXIS = 80;
+const CHART_HALF = 58;
+
+/** The selected view's last minute as four numbers, above the charts. */
+function MinuteStrip({ series }: { series: FederationActivitySeries }) {
+  const minute = series.windows["1m"];
+  const both = (key: "requests" | "responses") => minute.sent[key] + minute.received[key];
+  const stats = [
+    { label: "Sent", value: formatTrafficBytes(minute.sent.wireBytes), title: `${number(minute.sent.wireBytes)} wire bytes` },
+    { label: "Received", value: formatTrafficBytes(minute.received.wireBytes), title: `${number(minute.received.wireBytes)} wire bytes` },
+    { label: "Requests", value: number(both("requests")),
+      title: `${number(minute.sent.requests)} sent · ${number(minute.received.requests)} received` },
+    { label: "Responses", value: number(both("responses")),
+      title: `${number(minute.sent.responses)} sent · ${number(minute.received.responses)} received, including errors` },
+  ];
+  return <dl className="federation-activity__minute">
+    {stats.map((stat) => <div key={stat.label} title={stat.title}>
+      <dt>{stat.label} · 1m</dt><dd>{stat.value}</dd>
+    </div>)}
+  </dl>;
 }
 
 export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopApi }) {
@@ -300,13 +327,15 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
       {snapshot ? <FederationConnections health={snapshot.health} collapsible /> : null}
     </div>
     {series && (view === "physical" || peerId) ? <>
+      <MinuteStrip series={series} />
       <FederationAmountChart history={series.history} period={period} bytes />
       <FederationAmountChart history={series.history} period={period} bytes={false} />
       <Totals series={series} />
       <PayloadSizes series={series} />
     </> : <p>No endpoint traffic recorded.</p>}
     {snapshot ? <p className="federation-activity__muted">Totals since {new Date(snapshot.activity.since).toLocaleString()}.
-      Charts show amounts recorded in each second for up to one hour. The latest second is still in progress.</p> : null}
+      Charts show wire bytes and envelopes recorded in each second for up to one hour; the tables
+      also show uncompressed data bytes. The latest second is still in progress.</p> : null}
     <details className="federation-activity__boundaries"><summary>What is measured</summary>
       <p>{view === "physical"
         ? "Each direct or gateway connection counts its own transfers. A relayed envelope crosses two connections at a gateway."

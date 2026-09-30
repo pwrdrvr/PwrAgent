@@ -38454,8 +38454,16 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-activity__bar--sent { fill: var(--accent); }
 .federation-activity__bar--received { fill: var(--text-secondary); }
 .federation-activity__selection { fill: var(--text-secondary); opacity: 0.15; pointer-events: none; }
-.federation-activity__chart-detail { min-height: 54px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+.federation-activity__chart-detail { min-height: 20px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+.federation-activity__chart-detail [role="tooltip"] strong { margin-right: 12px; }
+.federation-activity__chart figcaption .federation-activity__muted { font-weight: 400; }
+.federation-activity__axis { stroke: var(--border-strong); }
+.federation-activity__minute { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0 0; }
+.federation-activity__minute > div { padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel); }
+.federation-activity__minute dt { color: var(--text-muted); font: 600 9.5px/1.2 var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; }
+.federation-activity__minute dd { margin: 3px 0 0; color: var(--text-primary); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .federation-activity__chart-detail span { display: inline-block; margin-right: 12px; }
+.federation-activity__chart-detail .federation-activity__legend span { margin-right: 0; }
 .federation-activity__legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; }
 .federation-activity__legend--sent { color: var(--accent); }
 .federation-activity__legend--received { color: var(--text-secondary); }

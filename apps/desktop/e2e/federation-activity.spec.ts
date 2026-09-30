@@ -99,7 +99,7 @@ for (const theme of ["dark", "light"] as const) {
       await activity.emulateMedia({ reducedMotion: "reduce" });
       await expect(activity.getByText("Running · connected")).toBeVisible();
       await expect(activity.getByRole("switch", { name: "Federation enabled" })).toHaveClass(/settings-switch/);
-      await expect(activity.getByRole("img", { name: /Data and wire amounts/ })).toBeVisible();
+      await expect(activity.getByRole("img", { name: /Wire byte amounts/ })).toBeVisible();
       for (const period of ["10m", "1h"]) {
         await activity.getByRole("group", { name: "Chart window" }).getByRole("button", { name: period, exact: true }).click();
         for (const chart of await activity.locator(".federation-activity__chart").all()) {
