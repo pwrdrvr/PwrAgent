@@ -291,6 +291,54 @@ test("fits wide, small, and tiny pasted transcript images", async () => {
   }
 });
 
+test("copies a transcript SVG as PNG for the composer", async () => {
+  const fixture = await createThreadImageFitFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+    await app.window.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          write: async (items: ClipboardItem[]) => {
+            const blob = await items[0].getType("image/png");
+            (window as Window & { testCopiedImage?: Blob }).testCopiedImage = blob;
+          },
+        },
+      });
+    });
+
+    await app.window.getByAltText("Small intrinsic screenshot").click();
+    await app.window.getByRole("button", { name: "Copy image" }).click();
+    await expect(app.window.getByText("Copy image succeeded")).toBeAttached();
+    const image = await app.window.evaluate(async () => {
+      const blob = (window as Window & { testCopiedImage?: Blob }).testCopiedImage;
+      return blob ? { type: blob.type, size: blob.size } : undefined;
+    });
+    expect(image?.type).toBe("image/png");
+    expect(image?.size).toBeGreaterThan(0);
+
+    await app.window.getByRole("button", { name: "Close" }).click();
+    await app.window.evaluate(() => {
+      const blob = (window as Window & { testCopiedImage?: Blob }).testCopiedImage;
+      const composer = document.querySelector("#thread-composer");
+      if (!blob || !composer) throw new Error("Copied image or composer unavailable");
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([blob], "copied-flamegraph.png", { type: "image/png" }));
+      composer.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      }));
+    });
+    await expect(app.window.getByAltText("copied-flamegraph.png")).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("loads an offscreen transcript image only after scrolling it into view", async () => {
   const fixture = await createThreadImageFitFixture(true);
   const app = await launchElectronApp({

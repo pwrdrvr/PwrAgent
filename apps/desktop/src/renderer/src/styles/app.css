@@ -31515,6 +31515,10 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--success-text);
 }
 
+.image-lightbox__tool[data-status="failed"] {
+  color: var(--danger-text);
+}
+
 .image-lightbox__tool-divider {
   flex: none;
   width: 1px;
@@ -38138,6 +38142,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 .image-viewer__button--labelled[data-status="copied"] { color: var(--success-text); }
+.image-viewer__button--labelled[data-status="failed"] { color: var(--danger-text); }
 
 .image-viewer__button:hover:not(:disabled),
 .mermaid-diagram__toggle:hover { background: var(--bg-panel-hover); }
@@ -38161,6 +38166,15 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.image-viewer__status--error {
+  position: static;
+  width: auto;
+  height: auto;
+  clip-path: none;
+  padding: 0 8px;
+  color: var(--danger-text);
 }
 
 /* ---- Messaging surface picker specifics ----
