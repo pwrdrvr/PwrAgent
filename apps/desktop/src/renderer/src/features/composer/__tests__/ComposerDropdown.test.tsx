@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { ComposerDropdown } from "../ComposerDropdown";
@@ -110,5 +110,49 @@ describe("ComposerDropdown tooltip", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Auto keeps the workspace sandbox.");
     fireEvent.blur(button);
     expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+});
+
+describe("ComposerDropdown Other models", () => {
+  it("opens older choices in a flyout and keeps the selected model label", () => {
+    const onChange = vi.fn();
+    render(
+      <ComposerDropdown
+        ariaLabel="Model"
+        onChange={onChange}
+        options={[
+          { value: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+          { value: "gpt-6-sol", label: "GPT-6-Sol" },
+        ]}
+        otherOptions={[
+          { value: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
+          { value: "gpt-5.5", label: "GPT-5.5" },
+        ]}
+        value="gpt-5.6-sol"
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Model" });
+    expect(trigger).toHaveTextContent("GPT-5.6-Sol");
+    fireEvent.click(trigger);
+    expect(screen.getAllByRole("option").map((option) =>
+      option.querySelector(".composer-dropdown__option-label")?.textContent,
+    )).toEqual(["GPT-6.1-Sol", "GPT-6-Sol", "Other"]);
+    expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    const other = screen.getByRole("listbox", { name: "Model: Other" });
+    expect(other).toBeVisible();
+    expect(within(other).getByRole("option", { name: "GPT-5.6-Sol" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(within(other).getByRole("option", { name: "GPT-5.6-Sol" })).toHaveFocus();
+    expect(screen.getByRole("option", { name: "GPT-6.1-Sol" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    expect(screen.queryByRole("listbox", { name: "Model: Other" })).toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    fireEvent.click(screen.getByRole("option", { name: "GPT-5.5" }));
+    expect(onChange).toHaveBeenCalledWith("gpt-5.5");
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 });

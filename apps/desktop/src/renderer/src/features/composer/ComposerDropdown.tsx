@@ -76,17 +76,28 @@ export function ComposerDropdown(props: {
   onOpenChange?: (open: boolean) => void;
   onPointerEnter?: () => void;
   options: ComposerDropdownOption[];
+  otherOptions?: ComposerDropdownOption[];
   tooltip?: string;
   value: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [showOther, setShowOther] = useState(false);
+  const [otherMenuPosition, setOtherMenuPosition] = useState({ left: 0, top: 0 });
   const [tooltipOption, setTooltipOption] = useState<string>();
   const listboxId = useId();
+  const otherListboxId = useId();
   const onOpenChange = props.onOpenChange;
+  const otherButtonRef = useRef<HTMLButtonElement>(null);
+  const firstOtherOptionRef = useRef<HTMLButtonElement>(null);
+  const otherOptions = props.otherOptions ?? [];
+  const showingOther = showOther && otherOptions.length > 0;
   const selectedOption =
-    props.options.find((option) => option.value === props.value) ?? props.options[0];
+    [...props.options, ...otherOptions].find((option) => option.value === props.value)
+    ?? props.options[0]
+    ?? otherOptions[0];
   const closeMenu = useCallback((): void => {
     setOpen(false);
+    setShowOther(false);
     onOpenChange?.(false);
   }, [onOpenChange]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
@@ -110,6 +121,109 @@ export function ComposerDropdown(props: {
       hide();
     }
   }, [hide, open]);
+
+  useEffect(() => {
+    if (open && showingOther) {
+      firstOtherOptionRef.current?.focus();
+    }
+  }, [open, showingOther]);
+
+  const renderOptions = (options: ComposerDropdownOption[], menuId: string, focusFirst: boolean) =>
+    options.map((option, index) => {
+      // Indexed rather than keyed on the value: branch names and model ids
+      // are not safe fragments for a DOM id.
+      const descriptionId = option.description
+        ? `${menuId}-description-${index}`
+        : undefined;
+      return (
+        <div
+          key={option.value}
+          role="presentation"
+          onBlur={hide}
+          onFocus={(event) => {
+            if (option.tooltip) {
+              setTooltipOption(option.value);
+              show(event.currentTarget.parentElement!, option.tooltip);
+            }
+          }}
+          onMouseEnter={(event) => {
+            if (option.tooltip) {
+              setTooltipOption(option.value);
+              // Anchor above the whole list so help cannot cover its rows.
+              showAfterDelay(event.currentTarget.parentElement!, option.tooltip);
+            }
+          }}
+          onMouseLeave={hide}
+        >
+          <button
+            aria-description={option.tooltip}
+            aria-describedby={[
+              descriptionId,
+              visible && tooltipOption === option.value ? tooltipId : undefined,
+            ].filter(Boolean).join(" ") || undefined}
+            aria-disabled={option.disabled ? true : undefined}
+            disabled={option.disabled && !option.description}
+            aria-selected={option.value === props.value}
+            className="composer-dropdown__option"
+            ref={focusFirst && index === 0 ? firstOtherOptionRef : undefined}
+            role="option"
+            type="button"
+            onClick={() => {
+              // Described options stay focusable so their reason is reachable.
+              if (option.disabled) {
+                return;
+              }
+              hide();
+              closeMenu();
+              if (option.value !== props.value) {
+                props.onChange(option.value);
+              }
+            }}
+          >
+            <span aria-hidden="true" className="composer-dropdown__check">
+              {option.value === props.value ? "✓" : ""}
+            </span>
+            <span className="composer-dropdown__option-body">
+              <span className="composer-dropdown__option-label">{option.label}</span>
+              {option.description ? (
+                <span
+                  aria-hidden="true"
+                  className="composer-dropdown__option-description"
+                  id={descriptionId}
+                >
+                  {option.description}
+                </span>
+              ) : null}
+            </span>
+          </button>
+        </div>
+      );
+    });
+
+  const toggleOtherMenu = (): void => {
+    if (showingOther) {
+      setShowOther(false);
+      return;
+    }
+    const row = otherButtonRef.current?.getBoundingClientRect();
+    if (row) {
+      const width = Math.min(260, window.innerWidth - 16);
+      const height = Math.min(420, window.innerHeight - 128, otherOptions.length * 40 + 12);
+      const padding = 8;
+      const right = Math.max(padding, row.right + 4);
+      const left = row.left - width - 4;
+      const nextLeft = right + width + padding <= window.innerWidth
+        ? right
+        : left >= padding
+          ? left
+          : Math.max(padding, Math.min(row.left, window.innerWidth - width - padding));
+      setOtherMenuPosition({
+        left: nextLeft,
+        top: Math.max(padding, Math.min(row.bottom - height, window.innerHeight - height - padding)),
+      });
+    }
+    setShowOther(true);
+  };
 
   return (
     <div
@@ -140,7 +254,7 @@ export function ComposerDropdown(props: {
         aria-label={props.ariaLabel}
         className="composer-dropdown__button"
         data-value={props.value}
-        disabled={props.disabled || props.options.length === 0}
+        disabled={props.disabled || props.options.length + otherOptions.length === 0}
         id={props.id}
         type="button"
         value={props.value}
@@ -154,6 +268,9 @@ export function ComposerDropdown(props: {
           hide();
           const nextOpen = !open;
           setOpen(nextOpen);
+          if (nextOpen) {
+            setShowOther(false);
+          }
           onOpenChange?.(nextOpen);
         }}
       >
@@ -176,83 +293,35 @@ export function ComposerDropdown(props: {
           id={listboxId}
           role="listbox"
         >
-          {props.options.map((option, index) => {
-            // Indexed rather than keyed on the value: other callers use branch
-            // names and model ids as values, which are not safe id fragments.
-            const descriptionId = option.description
-              ? `${listboxId}-description-${index}`
-              : undefined;
-            return (
-              <div
-                key={option.value}
-                role="presentation"
-                onBlur={hide}
-                onFocus={(event) => {
-                  if (option.tooltip) {
-                    setTooltipOption(option.value);
-                    show(event.currentTarget.parentElement!, option.tooltip);
-                  }
-                }}
-                onMouseEnter={(event) => {
-                  if (option.tooltip) {
-                    setTooltipOption(option.value);
-                    // Anchor above the whole list so help cannot cover its rows.
-                    showAfterDelay(event.currentTarget.parentElement!, option.tooltip);
-                  }
-                }}
-                onMouseLeave={hide}
-              >
-                <button
-                  aria-description={option.tooltip}
-                  aria-describedby={[
-                    descriptionId,
-                    visible && tooltipOption === option.value ? tooltipId : undefined,
-                  ].filter(Boolean).join(" ") || undefined}
-                  aria-disabled={option.disabled ? true : undefined}
-                  disabled={option.disabled && !option.description}
-                  aria-selected={option.value === props.value}
-                  className="composer-dropdown__option"
-                  role="option"
-                  type="button"
-                  onClick={() => {
-                    // Described options stay focusable so their reason is reachable.
-                    // They need this guard in addition to aria-disabled.
-                    if (option.disabled) {
-                      return;
-                    }
-                    hide();
-                    closeMenu();
-                    if (option.value !== props.value) {
-                      props.onChange(option.value);
-                    }
-                  }}
-                >
-                  {option.value === props.value ? (
-                    <span aria-hidden="true" className="composer-dropdown__check">
-                      ✓
-                    </span>
-                  ) : (
-                    <span aria-hidden="true" className="composer-dropdown__check" />
-                  )}
-                  <span className="composer-dropdown__option-body">
-                    <span className="composer-dropdown__option-label">{option.label}</span>
-                    {option.description ? (
-                      // Hidden from name-from-content so the option is still
-                      // named by its label alone; aria-describedby reaches
-                      // through aria-hidden to announce it as the description.
-                      <span
-                        aria-hidden="true"
-                        className="composer-dropdown__option-description"
-                        id={descriptionId}
-                      >
-                        {option.description}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              </div>
-            );
-          })}
+          {renderOptions(props.options, listboxId, false)}
+          {otherOptions.length > 0 ? (
+            <button
+              aria-controls={showingOther ? otherListboxId : undefined}
+              aria-expanded={showingOther}
+              aria-haspopup="listbox"
+              aria-selected={false}
+              className="composer-dropdown__option"
+              ref={otherButtonRef}
+              role="option"
+              type="button"
+              onClick={toggleOtherMenu}
+            >
+              <span aria-hidden="true" className="composer-dropdown__check" />
+              <span className="composer-dropdown__option-label">Other</span>
+              <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {open && showingOther ? (
+        <div
+          aria-label={`${props.ariaLabel}: Other`}
+          className="composer-dropdown__menu composer-dropdown__menu--other"
+          id={otherListboxId}
+          role="listbox"
+          style={otherMenuPosition}
+        >
+          {renderOptions(otherOptions, otherListboxId, true)}
         </div>
       ) : null}
       {tooltipNode}
