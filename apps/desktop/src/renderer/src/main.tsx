@@ -12,9 +12,12 @@ import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
 import { mountRendererRoot } from "./lib/renderer-root";
 import { startWindowFrameSync } from "./lib/window-frame";
+import { preloadBundledFonts } from "./lib/bundled-font-preload";
 import "./styles/app.css";
 
 const uninstallGlobalErrorHandlers = installGlobalRendererErrorHandlers();
+// Before anything renders, so no face arrives mid-interaction (see the module).
+preloadBundledFonts();
 const performancePruning = import.meta.env.DEV
   ? installDevPerformancePruning()
   : undefined;

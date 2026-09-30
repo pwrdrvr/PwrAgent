@@ -175,6 +175,64 @@ describe("IntegratedTerminal", () => {
     });
   });
 
+  it("opens xterm only after the mono faces load", async () => {
+    // xterm measures its cells once, at open(), and never again when a web
+    // font arrives, so opening first would size the grid for the fallback.
+    let resolveFonts: () => void = () => undefined;
+    const fontsLoaded = new Promise<void>((resolve) => {
+      resolveFonts = resolve;
+    });
+    const load = vi.fn(() => fontsLoaded.then(() => []));
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load },
+    });
+    document.documentElement.style.setProperty("--font-mono", "\"Geist Mono\", monospace");
+
+    try {
+      render(
+        <IntegratedTerminal
+          desktopApi={{
+            createIntegratedTerminal: vi.fn(async () => ({
+              sessionId: "session-1",
+              threadKey: "codex:thread-a",
+              cwd: "/repo/a",
+              shell: "/bin/zsh",
+            })),
+            writeIntegratedTerminal: vi.fn(async () => undefined),
+            resizeIntegratedTerminal: vi.fn(async () => undefined),
+            onIntegratedTerminalOutput: vi.fn(() => () => undefined),
+            onIntegratedTerminalExit: vi.fn(() => () => undefined),
+            onIntegratedTerminalError: vi.fn(() => () => undefined),
+          }}
+          threadKey="codex:thread-a"
+          cwd="/repo/a"
+          height={260}
+          onHeightChange={() => undefined}
+          onClose={() => undefined}
+          onExit={() => undefined}
+        />,
+      );
+
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      expect(load).toHaveBeenCalledWith("12px \"Geist Mono\", monospace");
+      expect(load).toHaveBeenCalledWith("bold 12px \"Geist Mono\", monospace");
+      // Let the xterm imports settle: only the font load holds it back now.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(xtermState.instances).toHaveLength(0);
+
+      await act(async () => {
+        resolveFonts();
+        await fontsLoaded;
+      });
+      await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    } finally {
+      delete (document as { fonts?: unknown }).fonts;
+    }
+  });
+
   it("buffers user input until the pty session attaches", async () => {
     let resolveCreate: (
       value: Awaited<ReturnType<NonNullable<DesktopApi["createIntegratedTerminal"]>>>,

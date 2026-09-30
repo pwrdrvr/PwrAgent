@@ -58,20 +58,17 @@ Avoid the default “blue-black Electron app with random rounded panels” look,
 
 Use at most two families:
 
-- **Primary sans:** `Geist`, `IBM Plex Sans`, or `SF Pro` fallback stack
-- **Utility mono:** `IBM Plex Mono` or `JetBrains Mono` for branch names, commit-ish text, paths, and machine state
+- **Primary sans:** Geist Sans, bundled, with an `SF Pro` fallback stack
+- **Utility mono:** Geist Mono, bundled, for branch names, commit-ish text, paths, and machine state
 
-Recommended default stack if custom fonts are not installed yet:
-
-```css
-font-family: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
-```
-
-Recommended mono stack:
+The renderer bundles both faces (`styles/fonts.css`), and the tokens in `styles/app.css` lead with the family names the bundle registers:
 
 ```css
-font-family: "IBM Plex Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+--font-sans: "Geist Sans", "Geist", "SF Pro Text", "Inter", system-ui, sans-serif;
+--font-mono: "Geist Mono", "SF Mono", "JetBrains Mono", Consolas, monospace;
 ```
+
+Read the stacks through `var(--font-sans)` and `var(--font-mono)`. See [UI-THEME.md](../UI-THEME.md) for why the sans is named `Geist Sans`.
 
 ### Type Scale
 

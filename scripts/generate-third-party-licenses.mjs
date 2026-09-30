@@ -423,6 +423,9 @@ function main() {
     "For Chromium runtime credits, see https://source.chromium.org/chromium and Electron's packaged LICENSES.chromium.html in the corresponding Electron release.",
   );
   lines.push(
+    "The renderer build emits Geist Sans and Geist Mono webfont assets from @fontsource/geist-sans and @fontsource/geist-mono. Those packages are listed below under OFL-1.1, and their SIL Open Font License text is included in the License Texts section.",
+  );
+  lines.push(
     "Codex App Server Rust dependency disclosures are maintained by the Codex distribution; PwrAgent invokes a local Codex App Server and does not vendor those Rust crates into this npm notice.",
   );
   lines.push("");
