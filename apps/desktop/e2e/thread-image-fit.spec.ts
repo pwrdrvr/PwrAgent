@@ -319,7 +319,8 @@ test("copies a transcript SVG as PNG for the composer", async () => {
     expect(image?.type).toBe("image/png");
     expect(image?.size).toBeGreaterThan(0);
 
-    await app.window.getByRole("button", { name: "Close" }).click();
+    await app.window.getByRole("dialog", { name: "Expanded image" })
+      .getByRole("button", { name: "Close" }).click();
     await app.window.evaluate(() => {
       const blob = (window as Window & { testCopiedImage?: Blob }).testCopiedImage;
       const composer = document.querySelector("#thread-composer");
