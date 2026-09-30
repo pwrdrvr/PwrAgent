@@ -158,7 +158,8 @@ export function AppTitleBar(props: {
             />
           ) : null}
           {props.starMap && !isFederationWindow ? (
-            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
+            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen}
+              onOpenSettings={props.starMap.onOpenFederationSettings} />
           ) : null}
           {props.desktopApi ? (
             <MessagingStatusBar

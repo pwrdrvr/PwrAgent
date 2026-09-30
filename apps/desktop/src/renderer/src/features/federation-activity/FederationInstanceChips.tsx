@@ -9,7 +9,7 @@ import { CelestialIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceGlyph } from "../federation/InstanceGlyph";
 import { formatTrafficBytes } from "./format-traffic-bytes";
-import { federationTransportTag, type FederationTransportTag } from "./federation-transport";
+import { federationTransportTag, federationViaLabel, type FederationTransportTag } from "./federation-transport";
 
 export type FederationInstanceChipModel = {
   instanceId: string;
@@ -64,17 +64,35 @@ function connectionLine(connection: FederationActiveConnection): string {
       ? `Client ${connection.reportedClientAddress} (reported by Cloudflare)`
       : "Through the Cloudflare Tunnel";
   }
+  const via = federationViaLabel(connection.via);
+  if (via) return `Through ${via}`;
   return `${connection.remoteAddress ?? "Unknown"} → ${connection.localAddress ?? "Unknown"}`;
 }
 
-function tooltipFor(chip: FederationInstanceChipModel, minute?: FederationActivitySeries["windows"]["1m"]): string {
+export function federationChipTooltip(
+  chip: FederationInstanceChipModel,
+  minute: FederationActivitySeries["windows"]["1m"] | undefined,
+  action: string,
+): string {
   const head = [chip.label, chip.transport ?? "Offline", chip.connection?.direction].filter(Boolean).join(" · ");
   return [
     head,
     minute ? `↑ ${formatTrafficBytes(minute.sent.wireBytes)} ↓ ${formatTrafficBytes(minute.received.wireBytes)} this minute` : undefined,
     chip.connection ? connectionLine(chip.connection) : undefined,
-    "Click to open on the Star Map",
+    action,
   ].filter(Boolean).join("\n");
+}
+
+/** Glyph, label, transport tag and offline dot: what every Federation chip shows. */
+export function FederationChipFace({ chip }: { chip: FederationInstanceChipModel }) {
+  return <>
+    {chip.icon ? <CelestialIcon icon={chip.icon} size={12} />
+      : <InstanceGlyph instanceId={chip.instanceId} size={12} />}
+    <span className="federation-chip__label">{chip.label}</span>
+    {chip.transport ? <span className={`federation-chip__tag federation-chip__tag--${chip.transport.toLowerCase().replace(/ /g, "-")}`}>
+      {chip.transport}</span> : null}
+    {chip.online ? null : <span className="federation-chip__offline" aria-label="Offline" />}
+  </>;
 }
 
 export function FederationInstanceChips(props: {
@@ -92,7 +110,7 @@ export function FederationInstanceChips(props: {
   return <div className="federation-chips" role="list" aria-label="Federation instances">
     {visible.map((chip) => {
       const minute = props.peerSeries?.find((peer) => peer.peerId === chip.instanceId)?.series.windows["1m"];
-      const text = tooltipFor(chip, minute);
+      const text = federationChipTooltip(chip, minute, "Click to open on the Star Map");
       return <div role="listitem" key={chip.instanceId}>
         <button type="button"
           className={`federation-chip${chip.online ? "" : " federation-chip--offline"}`}
@@ -103,12 +121,7 @@ export function FederationInstanceChips(props: {
           onMouseLeave={tooltip.hide}
           onBlur={tooltip.hide}
           onClick={() => { tooltip.hide(); props.onOpenInstance(chip.instanceId); }}>
-          {chip.icon ? <CelestialIcon icon={chip.icon} size={12} />
-            : <InstanceGlyph instanceId={chip.instanceId} size={12} />}
-          <span className="federation-chip__label">{chip.label}</span>
-          {chip.transport ? <span className={`federation-chip__tag federation-chip__tag--${chip.transport.toLowerCase()}`}>
-            {chip.transport}</span> : null}
-          {chip.online ? null : <span className="federation-chip__offline" aria-label="Offline" />}
+          <FederationChipFace chip={chip} />
         </button>
       </div>;
     })}

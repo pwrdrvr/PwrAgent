@@ -10,8 +10,13 @@ import { federationRuntimeLabel, useFederationActivity } from "./useFederationAc
 import { FederationInstanceChips, federationInstanceChips } from "./FederationInstanceChips";
 import { FederationStarMapPreview } from "./FederationStarMapPreview";
 import { FEDERATION_TRAFFIC_CARD_SECONDS, FederationTrafficCard } from "./FederationTrafficCard";
+import { FEDERATION_CAPTURE_DESCRIPTION, FederationCaptureTag } from "./FederationTrafficCapture";
 
-export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen: () => void }) {
+export function FederationStatusControl(props: {
+  desktopApi?: DesktopApi;
+  onOpen: () => void;
+  onOpenSettings?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -94,7 +99,7 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
                   {snapshot?.health.instanceId ? (
                     <InstanceIdCopyButton instanceId={snapshot.health.instanceId} desktopApi={props.desktopApi} />
                   ) : null}
-                  {capturing ? <span className="federation-status-control__rec">REC</span> : null}
+                  <FederationCaptureTag until={snapshot?.detailedLoggingUntil} />
                 </div>
                 <div className="messaging-status-popover__summary federation-status-control__status">
                   <span aria-hidden="true" className={`federation-status-control__dot federation-status-control__dot--${tone}`} />
@@ -130,7 +135,7 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
                       }}>Copy instance ID</button>
                     <button type="button" role="menuitemcheckbox" aria-checked={capturing}
                       className="federation-status-control__menu-item"
-                      title="Save the preceding 60 seconds of frame metadata to the profile diagnostics folder, then log the next 60 seconds. Payload contents are excluded."
+                      title={FEDERATION_CAPTURE_DESCRIPTION}
                       disabled={!snapshot || pending || !props.desktopApi?.setFederationTrafficCapture}
                       onClick={() => { void capture(!capturing); }}>
                       Capture previous + next 60 seconds
@@ -139,6 +144,10 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
                     <button type="button" role="menuitem" className="federation-status-control__menu-item"
                       disabled={!openActivity}
                       onClick={() => { setMenuOpen(false); openActivity?.(); }}>Federation Activity window</button>
+                    {props.onOpenSettings ? <button type="button" role="menuitem"
+                      className="federation-status-control__menu-item"
+                      onClick={() => { cancelDismiss(); setMenuOpen(false); setOpen(false); props.onOpenSettings?.(); }}>
+                      Federation settings…</button> : null}
                   </div> : null}
                 </div>
               </div>

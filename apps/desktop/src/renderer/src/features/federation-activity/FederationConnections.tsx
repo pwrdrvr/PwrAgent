@@ -1,5 +1,6 @@
 import type { FederationHealthStatus } from "@pwragent/shared";
 import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
+import { federationViaLabel } from "./federation-transport";
 
 /**
  * Only authenticated local transports belong here, not relayed directory peers.
@@ -21,6 +22,10 @@ export function FederationConnections({ health, collapsible = false }: {
             {/* The remote socket is this computer's own cloudflared, which read as a local peer. */}
             <p>Incoming · via Cloudflare Tunnel{connection.reportedClientAddress
               ? <> · client <code>{connection.reportedClientAddress}</code> (reported by Cloudflare)</> : null}</p>
+            <p>Local socket: <code>{connection.localAddress ?? "Unavailable"}</code></p>
+          </> : connection.via ? <>
+            {/* tailscaled proxies over loopback too; its socket is not the peer's. */}
+            <p>Incoming · via {federationViaLabel(connection.via)}</p>
             <p>Local socket: <code>{connection.localAddress ?? "Unavailable"}</code></p>
           </> : <>
             <p>Incoming · Remote socket: <code>{connection.remoteAddress ?? "Unavailable"}</code></p>

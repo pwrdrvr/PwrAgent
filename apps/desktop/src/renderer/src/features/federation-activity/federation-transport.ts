@@ -8,6 +8,7 @@ import type { FederationActiveConnection } from "@pwragent/shared";
 export type FederationTransportTag =
   | "Cloudflare"
   | "Tailscale"
+  | "TS Funnel"
   | "LAN"
   | "Local"
   | "Direct"
@@ -52,6 +53,8 @@ function classifyHost(rawHost: string): Exclude<FederationTransportTag, "Cloudfl
 
 export function federationTransportTag(connection: FederationActiveConnection): FederationTransportTag {
   if (connection.via === "cloudflare-tunnel") return "Cloudflare";
+  if (connection.via === "tailscale-funnel") return "TS Funnel";
+  if (connection.via === "tailscale-serve") return "Tailscale";
   if (connection.direction === "outgoing") {
     if (!connection.endpoint) return "Direct";
     try {
@@ -61,4 +64,12 @@ export function federationTransportTag(connection: FederationActiveConnection): 
     }
   }
   return connection.remoteAddress ? classifyHost(hostOf(connection.remoteAddress)) : "Direct";
+}
+
+/** The route an incoming connection took through a local connector, in words. */
+export function federationViaLabel(via: FederationActiveConnection["via"]): string | undefined {
+  return via === "cloudflare-tunnel" ? "Cloudflare Tunnel"
+    : via === "tailscale-funnel" ? "Tailscale Funnel"
+      : via === "tailscale-serve" ? "Tailscale Serve"
+        : undefined;
 }

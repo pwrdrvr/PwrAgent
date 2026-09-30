@@ -28,6 +28,11 @@ describe("federationTransportTag", () => {
     expect(federationTransportTag({ ...incoming("127.0.0.1:61876"), via: "cloudflare-tunnel" })).toBe("Cloudflare");
   });
 
+  it("tells a public Funnel connection from a tailnet-only Serve one", () => {
+    expect(federationTransportTag({ ...incoming("127.0.0.1:61876"), via: "tailscale-funnel" })).toBe("TS Funnel");
+    expect(federationTransportTag({ ...incoming("127.0.0.1:61876"), via: "tailscale-serve" })).toBe("Tailscale");
+  });
+
   it.each([
     ["ws://gateway.example.ts.net:47830", "Tailscale"],
     ["ws://192.168.1.20:47830", "LAN"],

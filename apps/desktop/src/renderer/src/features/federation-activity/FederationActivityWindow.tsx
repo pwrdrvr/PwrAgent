@@ -1,4 +1,4 @@
-import { FederationTrafficCapture } from "./FederationTrafficCapture";
+import { FEDERATION_CAPTURE_DESCRIPTION, FederationCaptureTag } from "./FederationTrafficCapture";
 import { useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import { CheckIcon, CopyIcon } from "../../icons";
@@ -6,6 +6,9 @@ import { copyText } from "../../lib/copy-text";
 import { formatActivityReport } from "./format-activity-report";
 import type { FederationActivitySeries } from "@pwragent/shared";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { PinIcon } from "../../icons";
+import { FederationPeerFilter, federationPeerFilterChips } from "./FederationPeerFilter";
 import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
 import { BrandLockup } from "../chrome/BrandLockup";
@@ -180,6 +183,11 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   const [topmostPending, setTopmostPending] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyPending, setCopyPending] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  useMenuNavigation({ open: menuOpen, menuRef: menu, triggerRef: menuButton, onClose: () => setMenuOpen(false) });
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 2_000);
@@ -192,68 +200,104 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   const peers = snapshot ? view === "physical" ? snapshot.activity.peers : snapshot.activity.logical : [];
   const series = peerId ? peers.find((peer) => peer.peerId === peerId)?.series : snapshot?.activity.physical;
   const enabled = Boolean(snapshot?.running);
-  const labelFor = (id: string) => snapshot?.health.peers.find((peer) => peer.id === id)?.label || id;
+  const capturing = Boolean(snapshot?.detailedLoggingUntil);
+  const chips = snapshot ? federationPeerFilterChips(snapshot.health, peers) : [];
+  const labelFor = (id: string) => chips.find((chip) => chip.instanceId === id)?.label || id;
+  const fail = (cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause));
+  const selectView = (next: "physical" | "logical") => {
+    setView(next); setPeerId(next === "logical" ? snapshot?.activity.logical[0]?.peerId || "" : "");
+  };
+  const canCopy = Boolean(snapshot && series && (view === "physical" || peerId) && !copyPending);
+  const copyActivity = () => {
+    if (!snapshot || !series) return;
+    setCopyPending(true);
+    setActionError(undefined);
+    void copyText(formatActivityReport(series,
+      `${view === "physical" ? "Physical connections" : "Logical endpoint"}: ${peerId ? labelFor(peerId) : "All physical connections"}`,
+      snapshot.activity.since, snapshot.activity.at), desktopApi)
+      .then(() => setCopied(true))
+      .catch(fail)
+      .finally(() => setCopyPending(false));
+  };
   return <div className="federation-activity">
-    <div className="federation-activity__toolbar">
-      <div><strong>{snapshot ? federationRuntimeLabel(snapshot) : "Loading Federation activity…"}</strong>
-        {snapshot ? <p>Configured {snapshot.configuredMode === "disabled" ? "off" : `on · ${snapshot.configuredMode}`}</p> : null}</div>
-      <button type="button" role="switch" aria-label="Federation enabled"
-        title="Turn Federation on or off for this app instance only"
-        aria-checked={enabled}
-        className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
-        disabled={!snapshot || pending || !desktopApi?.setFederationEnabled} onClick={() => void toggle()}>
-        <span className="settings-switch__track" aria-hidden="true"><span className="settings-switch__thumb" /></span>
-        <span>{enabled ? "On" : "Off"}</span>
-      </button>
-      <label><input type="checkbox" checked={topmost} disabled={topmostPending || !desktopApi?.setFederationActivityTopmost}
-        onChange={(event) => {
-          const enabled = event.target.checked;
-          setTopmostPending(true);
-          void desktopApi?.setFederationActivityTopmost?.(enabled).then(setTopmost).catch((cause: unknown) => {
-            setActionError(cause instanceof Error ? cause.message : String(cause));
-          }).finally(() => setTopmostPending(false));
-        }} /> Always on top</label>
-      <FederationTrafficCapture until={snapshot?.detailedLoggingUntil}
-        disabled={!snapshot || pending || !desktopApi?.setFederationTrafficCapture}
-        onChange={(enabled) => { void capture(enabled); }} />
-      <button type="button" disabled={pending || !desktopApi?.resetFederationActivity}
-        title="Clear all Federation activity totals, size statistics and history for every peer"
-        onClick={() => { setCopied(false); void reset(); }}>Reset</button>
-      <button type="button" aria-label="Copy Federation activity" title={copied ? "Copied" : "Copy selected activity view"}
-        disabled={!snapshot || !series || (view === "logical" && !peerId) || copyPending}
-        onClick={() => {
-          if (!snapshot || !series) return;
-          setCopyPending(true);
-          setActionError(undefined);
-          void copyText(formatActivityReport(series,
-            `${view === "physical" ? "Physical connections" : "Logical endpoint"}: ${peerId ? labelFor(peerId) : "All physical connections"}`,
-            snapshot.activity.since, snapshot.activity.at), desktopApi)
-            .then(() => setCopied(true))
-            .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
-            .finally(() => setCopyPending(false));
-        }}>
-        {copied ? <CheckIcon size={16} aria-hidden="true" /> : <CopyIcon size={16} aria-hidden="true" />}
-      </button>
+    <div className="federation-activity__head">
+      <div className="federation-activity__state">
+        <strong>{snapshot ? federationRuntimeLabel(snapshot) : "Loading Federation activity…"}</strong>
+        <FederationCaptureTag until={snapshot?.detailedLoggingUntil} />
+        {snapshot ? <p>Configured {snapshot.configuredMode === "disabled" ? "off" : `on · ${snapshot.configuredMode}`}</p> : null}
+      </div>
+      <div className="federation-activity__tools">
+        <button type="button" role="switch" aria-label="Federation enabled"
+          title="Turn Federation on or off for this app instance only"
+          aria-checked={enabled}
+          className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
+          disabled={!snapshot || pending || !desktopApi?.setFederationEnabled} onClick={() => void toggle()}>
+          <span className="settings-switch__track" aria-hidden="true"><span className="settings-switch__thumb" /></span>
+          <span>{enabled ? "On" : "Off"}</span>
+        </button>
+        <button type="button" className="messaging-status-popover__settings federation-activity__pin"
+          aria-label="Always on top" aria-pressed={topmost} title="Keep this window above other windows"
+          disabled={topmostPending || !desktopApi?.setFederationActivityTopmost}
+          onClick={() => {
+            setTopmostPending(true);
+            void desktopApi?.setFederationActivityTopmost?.(!topmost).then(setTopmost).catch(fail)
+              .finally(() => setTopmostPending(false));
+          }}>
+          <PinIcon size={14} aria-hidden="true" />
+        </button>
+        <div className="federation-status-control__menu-anchor">
+          <button ref={menuButton} type="button" className="messaging-status-popover__settings"
+            aria-label="More Federation Activity actions" aria-haspopup="menu" aria-expanded={menuOpen}
+            aria-controls={menuOpen ? menuId : undefined}
+            onClick={() => setMenuOpen((value) => !value)}>
+            <span aria-hidden="true">⋯</span>
+          </button>
+          {menuOpen ? <div ref={menu} id={menuId} role="menu" aria-label="Federation Activity actions"
+            tabIndex={-1} className="federation-status-control__menu">
+            <button type="button" role="menuitem" className="federation-status-control__menu-item"
+              disabled={!canCopy}
+              onClick={() => { setMenuOpen(false); menuButton.current?.focus(); copyActivity(); }}>
+              Copy Federation activity
+              {copied ? <CheckIcon size={12} aria-hidden="true" /> : <CopyIcon size={12} aria-hidden="true" />}
+            </button>
+            <button type="button" role="menuitemcheckbox" aria-checked={capturing}
+              className="federation-status-control__menu-item" title={FEDERATION_CAPTURE_DESCRIPTION}
+              disabled={!snapshot || pending || !desktopApi?.setFederationTrafficCapture}
+              onClick={() => { void capture(!capturing); }}>
+              Capture previous + next 60 seconds
+              <span aria-hidden="true" className="federation-status-control__menu-check">{capturing ? "✓" : ""}</span>
+            </button>
+            <button type="button" role="menuitem" className="federation-status-control__menu-item"
+              title="Clear all Federation activity totals, size statistics and history for every peer"
+              disabled={pending || !desktopApi?.resetFederationActivity}
+              onClick={() => { setMenuOpen(false); menuButton.current?.focus(); setCopied(false); void reset(); }}>
+              Reset all activity</button>
+          </div> : null}
+        </div>
+      </div>
       <span role="status" className="federation-activity__muted">{copied ? "Federation activity copied" : ""}</span>
     </div>
-    {snapshot ? <FederationConnections health={snapshot.health} collapsible /> : null}
     {snapshot?.health.leaseHolder ? <p>Lease holder: {snapshot.health.leaseHolder.instanceId}
       {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
       {snapshot.health.leaseHolder.cwdHint ? ` · ${snapshot.health.leaseHolder.cwdHint}` : ""}</p> : null}
     {snapshot?.health.unavailableReason ? <p>{snapshot.health.unavailableReason}</p> : null}
     {error || actionError ? <p role="alert">{error || actionError}</p> : null}
-    <div className="federation-activity__toolbar">
-      <label>Attribution <select value={view} onChange={(event) => {
-        const next = event.target.value as "physical" | "logical";
-        setView(next); setPeerId(next === "logical" ? snapshot?.activity.logical[0]?.peerId || "" : "");
-      }}><option value="physical">Physical connections</option><option value="logical">Logical endpoints</option></select></label>
-      <label>Peer <select value={peerId} onChange={(event) => setPeerId(event.target.value)}>
-        {view === "physical" ? <option value="">All physical connections</option> : <option value="" disabled>Select an endpoint</option>}
-        {peers.map((peer) => <option value={peer.peerId} key={peer.peerId}>{labelFor(peer.peerId)}</option>)}
-      </select></label>
-      <label>Chart window <select value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
-        {PERIODS.map((value) => <option key={value} value={value}>{value}</option>)}
-      </select></label>
+    {chips.length || view === "physical"
+      ? <FederationPeerFilter chips={chips} peers={peers} selected={peerId}
+        allowAll={view === "physical"} onSelect={setPeerId} />
+      : null}
+    <div className="federation-activity__controls">
+      <span className="usage-segmented" role="group" aria-label="Attribution">
+        <button type="button" aria-pressed={view === "physical"} title="Each direct or gateway connection"
+          onClick={() => selectView("physical")}>Connections</button>
+        <button type="button" aria-pressed={view === "logical"} title="Only traffic this instance sent or received as an endpoint"
+          onClick={() => selectView("logical")}>Endpoints</button>
+      </span>
+      <span className="usage-segmented" role="group" aria-label="Chart window">
+        {PERIODS.map((value) => <button type="button" key={value} aria-pressed={period === value}
+          onClick={() => setPeriod(value)}>{value}</button>)}
+      </span>
+      {snapshot ? <FederationConnections health={snapshot.health} collapsible /> : null}
     </div>
     {series && (view === "physical" || peerId) ? <>
       <FederationAmountChart history={series.history} period={period} bytes />

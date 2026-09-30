@@ -1157,14 +1157,25 @@ describe("federation transport", () => {
     );
   });
 
-  // The second run arrives the way cloudflared delivers a tunnelled client:
-  // over loopback, with Cloudflare's request headers on the upgrade.
+  // The later runs arrive the way cloudflared and tailscaled deliver a
+  // proxied client: over loopback, with the connector's request headers on
+  // the upgrade. A Funnel request carries no Tailscale identity headers.
   it.each([
     { path: "direct", headers: undefined, marked: {} },
     {
       path: "through a Cloudflare tunnel",
       headers: { "cf-ray": "8c1f0000aaaa-SJC", "cf-connecting-ip": "203.0.113.7" },
       marked: { via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" },
+    },
+    {
+      path: "through Tailscale Funnel",
+      headers: { "tailscale-funnel-request": "?1" },
+      marked: { via: "tailscale-funnel" },
+    },
+    {
+      path: "through Tailscale Serve",
+      headers: { "tailscale-user-login": "operator@example.com" },
+      marked: { via: "tailscale-serve" },
     },
   ])("closes an established session after encrypted frame authentication fails ($path)", async ({ headers, marked }) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
