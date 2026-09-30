@@ -7025,6 +7025,14 @@ export function useThreadNavigation(
           setSelectedItemKey((current) =>
             current === launchpadSelectionKey ? editableSelectionKey : current,
           );
+          // Put back the local launchpad cleared at submit. A sub-thread
+          // launchpad exists nowhere else, so without it there is nothing to
+          // return to. A launchpad opened here since then is newer; keep it.
+          setLocalLaunchpads((current) =>
+            current[directoryKey]
+              ? current
+              : { ...current, [directoryKey]: launchpad },
+          );
           void refreshNavigation().catch(() => undefined);
         }
       }

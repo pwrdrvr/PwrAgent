@@ -5030,7 +5030,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       isStartingLaunchpadComposerScopeKey(composerScopeKey)
       && getLaunchpadScopeDirectoryKey(composerScopeKey)
         === getEditableLaunchpadDirectoryKey(previousScopeKey)
-      && !hasComposerDraftSnapshotContent(previousSnapshot);
+      && !hasComposerDraftSnapshotContent(previousSnapshot)
+      // Nothing to load into it. Returning to a starting thread that holds
+      // a follow-up swaps content, which needs the remount.
+      && !draftStore.hasDraftContent(composerScopeKey);
     if (!followsSubmission) {
       setEditorScopeKey((mounted) =>
         mounted === composerScopeKey

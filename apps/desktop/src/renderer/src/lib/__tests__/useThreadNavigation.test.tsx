@@ -6717,6 +6717,10 @@ describe("useThreadNavigation", () => {
         await expect(start).rejects.toThrow("branch already exists");
       });
       expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+      expect(result.current.selectedLaunchpad).toMatchObject({
+        directoryKey,
+        prompt: "Set up the first thread",
+      });
       expect(result.current.pendingLaunchpadCreations).toEqual([]);
       expect(result.current.launchpadError).toBe("branch already exists");
     });
