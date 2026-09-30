@@ -23523,7 +23523,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("keeps a yielded Codex tool in the quit snapshot after its turn ends", async () => {
+  it("keeps a running Codex command in the quit snapshot after its turn ends", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/read"] },
       threads: [{

@@ -16205,7 +16205,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
   });
 
-  it("keeps a yielded Codex tool thinking after its turn completes until the tool finishes", async () => {
+  it("keeps a Codex command thinking after its turn completes until the command finishes", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;

@@ -3009,7 +3009,7 @@ function settleTurnActivity(
   liveToolItemIds?: ReadonlySet<string>,
 ): AppServerThreadEntry {
   if (entry.type !== "activity") return { ...entry, turn };
-  // A completed Codex turn can leave a yielded Code Mode tool running. Keep
+  // A completed Codex turn can leave a command session running. Keep
   // only items with a live start notification pending their completion; other
   // unfinished items have no evidence of work after the turn boundary.
   const details = entry.details.map((detail) =>
@@ -4767,9 +4767,9 @@ export function useThreadSessionState(params: {
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
-  // Tool item notifications can outlive turn/completed when Code Mode yields
-  // a running cell. This stays separate from transcript retention so an
-  // observed thread can still show its live work in navigation.
+  // Tool item notifications can outlive turn/completed when a nested command
+  // returns a running session. Keep this separate from transcript retention
+  // so an observed thread can still show its live work in navigation.
   const liveToolItemsRef = useRef<Record<string, Record<string, string>>>({});
   const [liveToolItemsByThread, setLiveToolItemsByThread] = useState<
     Record<string, Record<string, string>>
