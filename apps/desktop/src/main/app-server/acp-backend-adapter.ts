@@ -99,6 +99,11 @@ import {
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
+  runAcpEphemeralPrompt,
+  type AcpEphemeralPromptRequest,
+  type AcpEphemeralPromptResult,
+} from "../acp/acp-ephemeral-prompt";
+import {
   recordWithSessionRuntimeCapabilities,
   shouldProbeAcpCapabilitiesAtStartup,
 } from "../acp/acp-capability-freshness";
@@ -2176,6 +2181,34 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
     return agent;
+  }
+
+  /**
+   * One prompt in a session on an agent process of its own, closed when the
+   * run ends. See acp-ephemeral-prompt.ts for why the pooled client cannot
+   * host it. The process is killed on every outcome, a timeout included.
+   */
+  async runEphemeralPrompt(
+    backend: AcpBackendId,
+    request: AcpEphemeralPromptRequest,
+  ): Promise<AcpEphemeralPromptResult> {
+    if (this.closed) {
+      throw new Error("ACP backend adapter is closed");
+    }
+    const agent = await this.resolveInstalledAgent(backend);
+    if (!agent.launchDescriptor) {
+      throw new Error(`ACP backend ${backend} has no launch descriptor`);
+    }
+    const transport = this.createAcpTransport?.(agent)
+      ?? new AcpStdioJsonRpcTransport({
+        launchDescriptor: agent.launchDescriptor,
+        observer: createProtocolLogObserverFromEnv({ backend }),
+      });
+    try {
+      return await runAcpEphemeralPrompt(transport, request);
+    } finally {
+      await transport.close?.().catch(() => undefined);
+    }
   }
 
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {

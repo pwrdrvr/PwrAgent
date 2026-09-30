@@ -1,5 +1,6 @@
-import { analyzeUsageActivity } from "./usage-activity-analysis";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
+import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
+import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import {
   buildMonitorJobHeuristicPrompt,
@@ -417,6 +418,7 @@ import {
   type AcpRuntimeClient,
   type AcpSessionMetadata,
   type AcpSessionStoreLike,
+  type AcpTransportFactory,
   type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
 import {
@@ -625,6 +627,7 @@ import {
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
+import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
 import { getMainLogger } from "../log";
 import {
   getDesktopConfigStore,
@@ -8361,6 +8364,7 @@ export class DesktopBackendRegistry {
   private readonly archivedMessagingCleanupCompleted = new Set<string>();
   private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
   private readonly createScratchProjectDirectory: () => Promise<string>;
+  private readonly resolveAcpHelperWorkspace: () => Promise<string>;
   private createScheduledThreadActionFn?: (
     request: CreateScheduledThreadActionRequest,
     options: { id: string },
@@ -9072,6 +9076,10 @@ export class DesktopBackendRegistry {
     useMachineAcpDiscovery?: boolean;
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
+    /** The transport of an ACP helper's own agent process. */
+    createAcpTransport?: AcpTransportFactory;
+    /** The cwd of ACP helper sessions; defaults to the profile's helper workspace. */
+    resolveAcpHelperWorkspace?: () => Promise<string>;
     agentToolMcpServer?: AgentToolMcpServerLike | null;
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
     mcpConnectionService?: BackendRegistryMcpConnectionService | null;
@@ -9695,6 +9703,7 @@ export class DesktopBackendRegistry {
       agentToolMcpServer,
       captureStores: this.captureStores,
       createAcpClient: options?.createAcpClient,
+      createAcpTransport: options?.createAcpTransport,
       discoverLocalAcpAgents:
         options?.discoverLocalAcpAgents
         ?? (options?.useMachineAcpDiscovery
@@ -9777,6 +9786,8 @@ export class DesktopBackendRegistry {
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
       });
+    this.resolveAcpHelperWorkspace =
+      options?.resolveAcpHelperWorkspace ?? ensureAcpHelperWorkspace;
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
     this.createScheduledThreadActionFn = options?.createScheduledThreadAction;
@@ -14833,7 +14844,9 @@ export class DesktopBackendRegistry {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
     return { ...await this.overlayStore.readUsageActivity(request), readAt: Date.now(),
       rateLimits: this.codexBackendSummary?.rateLimits ?? [],
-      limitObservation: this.codexLimitObservation() };
+      limitObservation: this.codexLimitObservation(),
+      analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
+        backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
 
   /**
@@ -14863,9 +14876,21 @@ export class DesktopBackendRegistry {
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
     this.assertNotBootstrap("analyzeUsageActivity");
-    if (!this.codexClient.generateStructuredObject) throw new Error("Codex analysis unavailable on this instance.");
-    return await analyzeUsageActivity(request, (read) => this.readThread(read),
-      (params) => this.codexClient.generateStructuredObject!(params));
+    const modelBackend = usageAnalysisModelBackend(request);
+    const read = (params: AppServerReadThreadRequest) => this.readThread(params);
+    if (modelBackend === "codex") {
+      if (!this.codexClient.generateStructuredObject) throw new Error("Codex analysis unavailable on this instance.");
+      return await analyzeUsageActivity(request, read, (params) => this.codexClient.generateStructuredObject!(params));
+    }
+    // An ACP agent answers in a tool-less session on a process of its own,
+    // which it forgets afterwards; see acp-structured-generation.ts.
+    return await analyzeUsageActivity(request, read, async (params) => await generateAcpStructuredObject({
+      backend: modelBackend,
+      cwd: await this.resolveAcpHelperWorkspace(),
+      run: (prompt) => this.acpBackend.runEphemeralPrompt(modelBackend, prompt),
+      model: params.model, reasoningEffort: params.reasoningEffort, system: params.system, prompt: params.prompt,
+      schema: params.schema, isMatch: params.isMatch, turnTimeoutMs: params.turnTimeoutMs,
+    }));
   }
 
   async inspectTokenMiserOutput(

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { AppServerBackendKind, BackendModelOption, FederationTarget, ReadUsageActivityResponse } from "@pwragent/shared";
+import type { AppServerBackendKind, FederationTarget, ReadUsageActivityResponse, UsageAnalysisModelBackend } from "@pwragent/shared";
 import { UsageTimeline, type UsageChartForecast } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
-import { UsageInspector, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
+import { DEFAULT_ANALYSIS_MODEL, UsageInspector, analysisModelKey, parseAnalysisModelKey,
+  type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
 import { USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
@@ -111,8 +112,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [selectedExcluded, setSelectedExcluded] = useState<OwnedUsageRow>();
   const [turn, setTurn] = useState<OwnedUsageRow>();
   const [scope, setScope] = useState<AnalysisScope>("turn");
-  const [models, setModels] = useState<BackendModelOption[]>([]);
-  const [model, setModel] = useState("gpt-6-luna");
+  const [models, setModels] = useState<AnalysisModelChoice[]>([]);
+  const [model, setModel] = useState(DEFAULT_ANALYSIS_MODEL);
   const [entryLimit, setEntryLimit] = useState("40");
   const [characterLimit, setCharacterLimit] = useState("20000");
   const [analysis, setAnalysis] = useState<UsageAnalysis>();
@@ -146,16 +147,34 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const analyzing = analysis?.status === "running";
   const modelTarget = analysisTarget?.target;
   const modelTargetKey = modelTarget ? sourceId(modelTarget) : undefined;
+  // Only an owner that lists a backend runs analysis on it. An older owner
+  // lists none and would ask Codex for a Grok model, so it gets Codex only.
+  const ownerBackends: readonly UsageAnalysisModelBackend[] = snapshot?.sources
+    .find((source) => sourceId(source.target) === modelTargetKey)?.data?.analysisModelBackends ?? ["codex"];
+  const ownerBackendsKey = ownerBackends.join(",");
   useEffect(() => {
     let disposed = false;
     setModels([]);
+    // Before the owner's models arrive, and if they never do, a choice on a
+    // backend this owner does not list is not sent to it.
+    setModel((current) => ownerBackends.includes(parseAnalysisModelKey(current).backend) ? current : DEFAULT_ANALYSIS_MODEL);
     if (modelTarget) void desktopApi?.listBackends?.({ federationTarget: modelTarget }).then((value) => {
-      if (!disposed) setModels(value.backends.find((backend) => backend.kind === "codex")?.launchpadOptions?.models ?? []);
+      if (disposed) return;
+      const choices = ownerBackends.flatMap((kind) => {
+        const backend = value.backends.find((item) => item.kind === kind);
+        if (!backend || (kind !== "codex" && !backend.available)) return [];
+        return (backend.launchpadOptions?.models ?? []).map((item) => ({ backend: kind, id: item.id, label: item.label ?? item.id, agent: backend.label }));
+      });
+      setModels(choices);
+      // An agent this owner cannot run falls back to the default. A Codex
+      // model stays selectable; the owner reports its availability.
+      setModel((current) => parseAnalysisModelKey(current).backend === "codex"
+        || choices.some((item) => analysisModelKey(item.backend, item.id) === current) ? current : DEFAULT_ANALYSIS_MODEL);
     }).catch(() => { /* The default stays selectable; the owner reports availability. */ });
     return () => { disposed = true; };
     // Refetch per owner, not per selected row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktopApi, modelTargetKey]);
+  }, [desktopApi, modelTargetKey, ownerBackendsKey]);
 
   const enabledSources = sources.filter((source) => isOnline(source) && !disabled.has(sourceId(source.target)));
   const offlineSources = sources.filter((source) => !isOnline(source));
@@ -340,12 +359,16 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const key = currentAnalysisKey;
     if (!target || !key || !desktopApi?.analyzeUsageActivity || analyzing) return;
     const turnId = analysisTurnId;
+    const choice = parseAnalysisModelKey(model);
     const started = { key, startedAt: Date.now(), owner: target.owner,
-      modelLabel: models.find((item) => item.id === model)?.label ?? (model === "gpt-6-luna" ? "GPT-6-Luna" : model) };
+      modelLabel: models.find((item) => analysisModelKey(item.backend, item.id) === model)?.label
+        ?? (model === DEFAULT_ANALYSIS_MODEL ? "GPT-6-Luna" : choice.id) };
     setAnalysis({ ...started, status: "running" });
     const settle = (next: UsageAnalysis) => { if (mounted.current) setAnalysis(next); };
+    // Codex is sent as before, so a request to an older owner is unchanged.
     void desktopApi.analyzeUsageActivity({ backend: target.line.backend as AppServerBackendKind, threadId: target.line.threadId,
-      ...turnId ? { turnId } : {}, federationTarget: target.target, model,
+      ...turnId ? { turnId } : {}, federationTarget: target.target, model: choice.id,
+      ...choice.backend !== "codex" ? { modelBackend: choice.backend } : {},
       entryLimit: Number(entryLimit), characterLimit: Number(characterLimit) })
       .then((result) => settle({ ...started, status: "done", result }))
       .catch((cause: unknown) => settle({ ...started, status: "failed", error: plainError(cause) }));

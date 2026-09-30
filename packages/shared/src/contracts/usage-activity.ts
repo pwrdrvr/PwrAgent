@@ -54,7 +54,19 @@ export type ReadUsageActivityResponse = {
    * A reading can predate its turn's completion; readings are never per-thread.
    */
   limitHistory?: UsageLimitObservation[];
+  /**
+   * Backends this owner can run usage analysis on. Absent from older peers,
+   * which run it on Codex only and ignore `modelBackend`.
+   */
+  analysisModelBackends?: UsageAnalysisModelBackend[];
 };
+
+/**
+ * Backends an owner can run usage analysis on. An ACP agent is listed only
+ * once it has a tool-less, ephemeral structured helper.
+ */
+export const USAGE_ANALYSIS_MODEL_BACKENDS = ["codex", "acp:grok"] as const;
+export type UsageAnalysisModelBackend = typeof USAGE_ANALYSIS_MODEL_BACKENDS[number];
 
 export type AnalyzeUsageActivityRequest = {
   backend: AppServerBackendKind;
@@ -65,6 +77,13 @@ export type AnalyzeUsageActivityRequest = {
    */
   turnId?: string;
   model: string;
+  /**
+   * The backend that runs the analysis, which need not be the thread's.
+   * Absent means Codex, as for older peers. Send another value only to an
+   * owner that lists it in `analysisModelBackends`: an older owner ignores
+   * this field and would ask Codex for `model`.
+   */
+  modelBackend?: UsageAnalysisModelBackend;
   /** Entry and character bounds; the server also enforces these. */
   entryLimit: number;
   characterLimit: number;
@@ -81,6 +100,8 @@ export type AnalyzeUsageActivityResponse = {
   /** "turn" when the requested turn was found; absent from older peers. */
   scope?: "turn" | "recent";
   pagesRead?: number;
+  /** The backend that ran the analysis; absent from older peers (Codex). */
+  modelBackend?: UsageAnalysisModelBackend;
 };
 
 const LIMIT_WINDOW_KEYS = new Set(["primary", "secondary", "individual", "credits"]);

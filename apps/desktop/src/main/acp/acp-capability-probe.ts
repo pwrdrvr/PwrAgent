@@ -79,12 +79,25 @@ export async function probeAcpRuntimeCapabilities(
 }
 
 export async function ensureAcpRuntimeDiscoveryWorkspace(): Promise<string> {
+  return await ensureProfileStateDirectory("acp-discovery-workspace");
+}
+
+/**
+ * The cwd of one-shot ACP helper sessions. Agents keep history per cwd (Grok
+ * keeps each prompt in a per-cwd prompt history that outlives the session), so
+ * a helper never runs in a directory the operator works in.
+ */
+export async function ensureAcpHelperWorkspace(): Promise<string> {
+  return await ensureProfileStateDirectory("acp-helper-workspace");
+}
+
+async function ensureProfileStateDirectory(name: string): Promise<string> {
   const directory = path.join(
     getAppStateMode() === "bootstrap"
       ? resolveBootstrapProfileDir()
       : resolveActiveProfileDir(),
     "state",
-    "acp-discovery-workspace",
+    name,
   );
   await mkdir(directory, { recursive: true });
   return directory;
