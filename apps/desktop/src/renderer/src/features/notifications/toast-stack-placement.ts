@@ -2,30 +2,50 @@ import { useEffect, useState, type RefObject } from "react";
 
 /**
  * Where the notice stack sits. It lives at the window's bottom-left, and a
- * notice that stays up (an error does not dismiss itself) covered whatever
- * was under it: at the 960px minimum, the composer's Workspace mode button
- * and the last sidebar row's chips, with no way to uncover them but moving
- * focus onto the notice (WCAG 2.2 SC 2.4.11). So when keyboard focus lands
- * on a control the stack covers, it moves to the edge that covers less of
- * it. It stays there while focus moves on to controls neither edge covers,
- * so Tab along the composer does not bounce it, and goes home when the last
- * notice closes. Nothing is dismissed and no key is taken, which leaves
- * Escape to the layers that own it.
+ * notice that stays up (an error does not dismiss itself) can hide whatever
+ * is under it, with no way for a keyboard user to uncover it but moving
+ * focus onto the notice (WCAG 2.2 SC 2.4.11). So when keyboard navigation
+ * lands on a control the stack hides entirely, it moves to the top edge.
+ *
+ * A notice that moves is a notice the operator reaches for and misses, so
+ * everything short of that one case leaves it where it is:
+ *
+ * - A control it only partly covers is not obscured (2.4.11 asks that focus
+ *   not be entirely hidden), and a sidebar row or the composer peeking out
+ *   from under it is the common case, not the failure.
+ * - A click, or a focus the app moves after one, never moves it. A text
+ *   field matches `:focus-visible` on click, so the platform's flag alone
+ *   cannot tell a click into the composer from a Tab onto it.
+ * - Nothing but focus arriving moves it. Paging between notices of
+ *   different heights, a notice arriving, and a window resize leave it put.
+ * - It never slides out from under the pointer, or from under its own
+ *   focused buttons.
+ *
+ * It stays on whichever edge it moved to until keyboard focus lands on a
+ * control that edge hides, or the last notice closes. Nothing is dismissed
+ * and no key is taken, which leaves Escape to the layers that own it.
  */
 export type ToastStackPlacement = "bottom" | "top";
 
 type Box = { left: number; top: number; right: number; bottom: number };
 
-function overlapArea(a: Box, b: Box): number {
-  const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-  const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-  return width > 0 && height > 0 ? width * height : 0;
+/** Sub-pixel layout can leave a fully covered control a hair uncovered. */
+const HIDDEN_TOLERANCE_PX = 1;
+
+function hides(cover: Box, target: Box): boolean {
+  return (
+    cover.left <= target.left + HIDDEN_TOLERANCE_PX
+    && cover.right >= target.right - HIDDEN_TOLERANCE_PX
+    && cover.top <= target.top + HIDDEN_TOLERANCE_PX
+    && cover.bottom >= target.bottom - HIDDEN_TOLERANCE_PX
+  );
 }
 
 /**
- * The edge where the stack covers less of the focused control, or `current`
- * when the two cover it equally. The two positions share the stack's width
- * and height; only the vertical anchor differs.
+ * The edge the stack belongs on for this focused control: the other edge
+ * when `current` hides it entirely and the other edge would not, and
+ * `current` otherwise. The two positions share the stack's width and
+ * height; only the vertical anchor differs.
  */
 export function placeToastStack(input: {
   current: ToastStackPlacement;
@@ -40,20 +60,16 @@ export function placeToastStack(input: {
   const { current, focused, stack, viewportHeight, edge, chromeBand } = input;
   const bottomTop = viewportHeight - edge - stack.height;
   const topTop = chromeBand + edge;
-  const atBottom = overlapArea(focused, {
+  const at = (top: number): Box => ({
     left: stack.left,
     right: stack.right,
-    top: bottomTop,
-    bottom: bottomTop + stack.height,
+    top,
+    bottom: top + stack.height,
   });
-  const atTop = overlapArea(focused, {
-    left: stack.left,
-    right: stack.right,
-    top: topTop,
-    bottom: topTop + stack.height,
-  });
-  if (atBottom === atTop) return current;
-  return atBottom > atTop ? "top" : "bottom";
+  const hiddenAtBottom = hides(at(bottomTop), focused);
+  const hiddenAtTop = hides(at(topTop), focused);
+  if (current === "bottom") return hiddenAtBottom && !hiddenAtTop ? "top" : "bottom";
+  return hiddenAtTop && !hiddenAtBottom ? "bottom" : "top";
 }
 
 function isFocusVisible(element: Element): boolean {
@@ -64,18 +80,26 @@ function isFocusVisible(element: Element): boolean {
   }
 }
 
+function isHovered(element: Element): boolean {
+  try {
+    return element.matches(":hover");
+  } catch {
+    return false;
+  }
+}
+
 function cssPixels(style: CSSStyleDeclaration, property: string): number {
   const value = Number.parseFloat(style.getPropertyValue(property));
   return Number.isFinite(value) ? value : 0;
 }
 
+const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
+
 /**
- * Tracks keyboard focus and the stack's size, and answers where the stack
- * goes. Only `:focus-visible` focus moves it: a click already shows the
- * operator where they are, and a text field matches on click anyway, so
- * typing into a covered composer still clears it. Focus inside the stack
- * keeps it where it is, so a notice never moves out from under its own
- * buttons. An empty stack goes home, so the next notice opens where
+ * Tracks keyboard focus and answers where the stack goes. Focus counts as
+ * keyboard focus when it matches `:focus-visible` and the last input was a
+ * key, not a pointer press. It is measured once, a frame after it arrives,
+ * and never again. An empty stack goes home, so the next notice opens where
  * notices always do.
  */
 export function useToastStackPlacement(
@@ -88,57 +112,78 @@ export function useToastStackPlacement(
     if (!stack) return;
     let current: ToastStackPlacement = "bottom";
     let frame: number | undefined;
+    let keyboardInput = false;
     // Read as focus arrives, when the platform knows how it came; a frame
     // later, a keystroke or a click in between can say otherwise.
-    let keyboardFocus: Element | null = null;
+    let arrived: HTMLElement | null = null;
 
-    const update = () => {
-      frame = undefined;
-      const active = document.activeElement;
-      if (active instanceof Element && stack.contains(active)) return;
-      const box = stack.getBoundingClientRect();
-      let next = current;
-      if (box.height <= 0) {
-        next = "bottom";
-      } else if (active instanceof HTMLElement && active === keyboardFocus) {
-        const style = getComputedStyle(stack);
-        next = placeToastStack({
-          current,
-          focused: active.getBoundingClientRect(),
-          stack: { left: box.left, right: box.right, height: box.height },
-          viewportHeight: window.innerHeight,
-          edge: cssPixels(style, "--app-toast-stack-edge"),
-          chromeBand: cssPixels(style, "--chrome-band-h"),
-        });
-      }
-      // Compared before dispatching: this runs on every focus change.
+    const commit = (next: ToastStackPlacement) => {
+      // Compared before dispatching: this runs on every keyboard focus change.
       if (next === current) return;
       current = next;
       setPlacement(next);
     };
-    // A frame later, so a control that Tab scrolled into view is measured
-    // where it came to rest.
-    const schedule = () => {
-      if (frame === undefined) frame = window.requestAnimationFrame(update);
+
+    const update = () => {
+      frame = undefined;
+      const target = arrived;
+      arrived = null;
+      if (!target || document.activeElement !== target) return;
+      if (stack.contains(target) || isHovered(stack)) return;
+      const box = stack.getBoundingClientRect();
+      if (box.height <= 0) {
+        commit("bottom");
+        return;
+      }
+      const style = getComputedStyle(stack);
+      commit(placeToastStack({
+        current,
+        focused: target.getBoundingClientRect(),
+        stack: { left: box.left, right: box.right, height: box.height },
+        viewportHeight: window.innerHeight,
+        edge: cssPixels(style, "--app-toast-stack-edge"),
+        chromeBand: cssPixels(style, "--chrome-band-h"),
+      }));
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!MODIFIER_KEYS.has(event.key)) keyboardInput = true;
+    };
+    const onPointerDown = () => {
+      keyboardInput = false;
     };
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target;
-      keyboardFocus =
-        target instanceof Element && isFocusVisible(target) ? target : null;
-      schedule();
+      if (
+        !keyboardInput
+        || !(target instanceof HTMLElement)
+        || !isFocusVisible(target)
+      ) {
+        arrived = null;
+        return;
+      }
+      arrived = target;
+      // A frame later, so a control that Tab scrolled into view is measured
+      // where it came to rest.
+      if (frame === undefined) frame = window.requestAnimationFrame(update);
     };
 
+    // Capture, so a handler that stops propagation cannot hide the input.
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("focusin", onFocusIn);
-    document.addEventListener("focusout", schedule);
-    window.addEventListener("resize", schedule);
-    // A notice arriving, leaving, or changing height moves both positions.
+    // The last notice leaving sends the stack home; nothing else a resize
+    // reports moves it.
     const observer =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            if (stack.getBoundingClientRect().height <= 0) commit("bottom");
+          });
     observer?.observe(stack);
     return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("focusin", onFocusIn);
-      document.removeEventListener("focusout", schedule);
-      window.removeEventListener("resize", schedule);
       observer?.disconnect();
       if (frame !== undefined) window.cancelAnimationFrame(frame);
     };
