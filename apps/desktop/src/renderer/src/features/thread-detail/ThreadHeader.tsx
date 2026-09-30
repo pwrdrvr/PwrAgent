@@ -47,6 +47,8 @@ type ThreadHeaderLayoutControls = {
  */
 export type StarMapToggleControls = {
   onOpen: () => void;
+  /** The Federation popover's ⋯ menu opens Settings at Federation. */
+  onOpenFederationSettings?: () => void;
 };
 
 type ThreadHeaderProps = {
@@ -340,7 +342,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           ) : null}
           {terminalTooltip.tooltipNode}
           {props.starMap && !hasAppTitleBar ? (
-            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
+            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen}
+              onOpenSettings={props.starMap.onOpenFederationSettings} />
           ) : null}
           <MessagingStatusBar
             desktopApi={props.desktopApi}

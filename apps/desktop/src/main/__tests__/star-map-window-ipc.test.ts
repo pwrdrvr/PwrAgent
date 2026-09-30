@@ -31,7 +31,11 @@ import {
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import { requestShowThread } from "../window-show-thread";
-import { showStarMapWindow } from "../star-map-window";
+import { showStarMapWindow, starMapWindowWebContents } from "../star-map-window";
+import {
+  attemptStarMapInstanceFocus,
+  requestStarMapInstanceFocus,
+} from "../star-map/star-map-instance-focus";
 
 const { handlers, fromWebContentsMock } = vi.hoisted(() => ({
   handlers: new Map<
@@ -80,8 +84,13 @@ vi.mock("../window-channels", () => ({
 vi.mock("../window-show-thread", () => ({
   requestShowThread: vi.fn(),
 }));
+vi.mock("../star-map/star-map-instance-focus", () => ({
+  attemptStarMapInstanceFocus: vi.fn(),
+  requestStarMapInstanceFocus: vi.fn(),
+}));
 vi.mock("../star-map-window", () => ({
   showStarMapWindow: vi.fn(),
+  starMapWindowWebContents: vi.fn(),
   isStarMapWindowWebContents: (contents: { id?: number } | undefined) =>
     contents?.id === STAR_MAP_SENDER_ID,
 }));
@@ -123,6 +132,27 @@ describe("star map window IPC", () => {
     expect(showStarMapWindow).toHaveBeenCalledWith({
       sourceWindow,
     });
+  });
+
+  it("flies the opened map to a requested instance, and only to a well-formed one", async () => {
+    const mapContents = { id: STAR_MAP_SENDER_ID, isDestroyed: () => false } as unknown as WebContents;
+    vi.mocked(starMapWindowWebContents).mockReturnValue(mapContents);
+    vi.mocked(requestStarMapInstanceFocus).mockReset();
+    resetStarMapViewRegistry();
+
+    await handlerFor(STAR_MAP_OPEN_WINDOW_CHANNEL)({ sender: {} }, { instanceId: "laptop" });
+    expect(showStarMapWindow).toHaveBeenCalledTimes(1);
+    expect(requestStarMapInstanceFocus).toHaveBeenCalledWith({
+      webContents: mapContents,
+      instanceId: "laptop",
+      mapReady: false,
+    });
+
+    await handlerFor(STAR_MAP_OPEN_WINDOW_CHANNEL)({ sender: {} }, { instanceId: 7 });
+    await handlerFor(STAR_MAP_OPEN_WINDOW_CHANNEL)({ sender: {} }, { instanceId: "x".repeat(257) });
+    await handlerFor(STAR_MAP_OPEN_WINDOW_CHANNEL)({ sender: {} });
+    expect(showStarMapWindow).toHaveBeenCalledTimes(4);
+    expect(requestStarMapInstanceFocus).toHaveBeenCalledTimes(1);
   });
 
   it("routes a thread open to the first non-federation main window", async () => {
@@ -342,6 +372,8 @@ describe("star map window IPC", () => {
     );
 
     expect(readStarMapView()?.layout).toBe("orbit");
+    // A publish is the map saying it has drawn: a waiting fly-to tries now.
+    expect(attemptStarMapInstanceFocus).toHaveBeenCalledWith(sender);
   });
 
   it("takes a command's answer only from the map, and only well formed", async () => {

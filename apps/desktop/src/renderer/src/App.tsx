@@ -2487,6 +2487,7 @@ function DesktopAppShell(props: {
             console.error("Opening the Star Map window failed.", error);
           });
         },
+        onOpenFederationSettings: () => openSettingsSection("federation"),
       };
   useEffect(() => {
     const thread = navigation.selectedThread;

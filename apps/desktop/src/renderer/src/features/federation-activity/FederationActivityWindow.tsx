@@ -1,11 +1,15 @@
-import { FederationTrafficCapture } from "./FederationTrafficCapture";
-import { useEffect, useId, useRef, useState } from "react";
+import { FEDERATION_CAPTURE_DESCRIPTION, FederationCaptureTag } from "./FederationTrafficCapture";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { formatActivityReport } from "./format-activity-report";
 import type { FederationActivitySeries } from "@pwragent/shared";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";
+import { PinIcon } from "../../icons";
+import { FederationPeerFilter, federationPeerFilterChips } from "./FederationPeerFilter";
 import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
 import { BrandLockup } from "../chrome/BrandLockup";
@@ -70,6 +74,12 @@ function PayloadSizes({ series }: { series: FederationActivitySeries }) {
   </div>;
 }
 
+/**
+ * One mirrored chart: sent bars rise from the axis in the accent, received
+ * bars hang below it in neutral, the same shape as the popover's traffic
+ * card. Bytes charts show wire bytes only; data (uncompressed) bytes live in
+ * the tables, so no bar needs a legend entry for fading.
+ */
 export function FederationAmountChart({ history, period, bytes }: {
   history: FederationActivitySeries["history"]; period: Period; bytes: boolean;
 }) {
@@ -83,19 +93,13 @@ export function FederationAmountChart({ history, period, bytes }: {
     setSelectedAt(undefined);
   }, [period]);
   const points = history.slice(-length);
-  const lines = bytes ? [
-    { direction: "sent", field: "wireBytes", label: "Sent wire", dashed: false },
-    { direction: "received", field: "wireBytes", label: "Received wire", dashed: false },
-    { direction: "sent", field: "dataBytes", label: "Sent data", dashed: true },
-    { direction: "received", field: "dataBytes", label: "Received data", dashed: true },
-  ] as const : [
-    { direction: "sent", field: "events", label: "Sent", dashed: false },
-    { direction: "received", field: "events", label: "Received", dashed: false },
+  const lines = [
+    { direction: "sent", label: bytes ? "Sent wire" : "Sent" },
+    { direction: "received", label: bytes ? "Received wire" : "Received" },
   ] as const;
   const values = lines.map((line) => points.map(({ totals }) => {
     const value = totals[line.direction];
-    return (line.field === "events" ? value.requests + value.responses + value.notifications + value.other
-      : value[line.field]);
+    return bytes ? value.wireBytes : value.requests + value.responses + value.notifications + value.other;
   }));
   const max = Math.max(0, ...values.flat()) || 1;
   const byteUnit = trafficByteUnit(max);
@@ -107,13 +111,15 @@ export function FederationAmountChart({ history, period, bytes }: {
   const selectedIndex = points.findIndex((point) => point.at === selectedAt);
   const selected = points[selectedIndex];
   const time = (at: number) => new Date(at).toLocaleTimeString();
+  const title = bytes ? "Wire bytes" : "Envelopes";
   return <figure className="federation-activity__chart">
-    <figcaption>{bytes ? "Data and wire" : "Envelopes"} · {unit} per one-second bar</figcaption>
+    <figcaption>{title} · {unit} per second
+      <span className="federation-activity__muted"> · sent above, received below</span></figcaption>
     <div className="federation-activity__chart-frame">
     <svg className="federation-activity__chart-axis" viewBox="0 0 95 165" aria-hidden="true">
       <text x="87" y="12" textAnchor="end">{unit}</text>
-      {[0, 0.5, 1].map((fraction) => <text key={fraction} x="87"
-        y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>)}
+      {[1, 0, -1].map((fraction) => <text key={fraction} x="87"
+        y={CHART_AXIS - fraction * CHART_HALF + 4} textAnchor="end">{axisNumber(max * Math.abs(fraction) / scale)}</text>)}
     </svg>
     <div className="federation-activity__chart-scroll" ref={scrollRef}>
     <svg viewBox={`0 0 ${width} 165`} style={{ minWidth: width }} preserveAspectRatio="none" role="img" tabIndex={0}
@@ -134,42 +140,67 @@ export function FederationAmountChart({ history, period, bytes }: {
         setSelectedAt(points[index]?.at);
         if (scrollRef.current) scrollRef.current.scrollLeft = index * step - 150;
       }}>
-      <title id={`${id}-title`}>{bytes ? "Data and wire" : "Envelope"} amounts, {unit}</title>
+      <title id={`${id}-title`}>{bytes ? "Wire byte" : "Envelope"} amounts, {unit}</title>
       <desc id={`${id}-description`}>One-second totals. Peak {axisNumber(max / scale)} {unit}.
-        Sent uses accent bars; received uses neutral bars. Faded bars show uncompressed data.
+        Sent rises above the axis in accent bars; received hangs below it in neutral bars.
         Hover or use left and right arrow keys for exact amounts. The latest second may be incomplete.</desc>
-      {[0, 0.5, 1].map((fraction) => <line key={fraction}
-        x1="0" x2={width - 10} y1={130 - fraction * 110} y2={130 - fraction * 110}
-        className="federation-activity__grid" />)}
+      {[1, 0, -1].map((fraction) => <line key={fraction}
+        x1="0" x2={width - 10} y1={CHART_AXIS - fraction * CHART_HALF} y2={CHART_AXIS - fraction * CHART_HALF}
+        className={fraction === 0 ? "federation-activity__axis" : "federation-activity__grid"} />)}
       {lines.map((line, index) => <path key={line.label}
         className={`federation-activity__bar federation-activity__bar--${line.direction}`}
-        opacity={line.dashed ? 0.4 : 1}
         d={values[index].map((value, point) => {
           if (value <= 0) return "";
-          const x = point * step + index * step / lines.length;
-          const height = value / max * 110;
-          return `M${x},130v${-height}h${step / lines.length - 0.5}v${height}Z`;
+          const x = point * step + 0.5;
+          const height = Math.max(1, value / max * CHART_HALF);
+          return line.direction === "sent"
+            ? `M${x},${CHART_AXIS}v${-height}h${step - 1}v${height}Z`
+            : `M${x},${CHART_AXIS + 1}v${height}h${step - 1}v${-height}Z`;
         }).join(" ")} />)}
-      {selected ? <rect x={selectedIndex * step} y="20" width={step} height="110"
+      {selected ? <rect x={selectedIndex * step} y={CHART_AXIS - CHART_HALF} width={step} height={CHART_HALF * 2 + 1}
         className="federation-activity__selection" /> : null}
-      <text x="0" y="155">{period} ago</text>
-      <text x={width - 10} y="155" textAnchor="end">Now</text>
+      <text x="0" y="160">{period} ago</text>
+      <text x={width - 10} y="160" textAnchor="end">Now</text>
     </svg>
     </div>
     </div>
-    <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
-      className={`federation-activity__legend--${line.direction}`}>
-      <span style={{ opacity: line.dashed ? 0.4 : 1 }}>■</span> {line.label}</span>)}</div>
     <div className="federation-activity__chart-detail">
       {selected ? <div role="tooltip" id={`${id}-tooltip`}>
         <strong>{time(selected.at)} – {time(selected.at + 1000)}</strong>
         {selectedIndex === points.length - 1 ? " · In progress" : ""}
-        <div>{lines.map((line, index) => <span key={line.label}>
+        {lines.map((line, index) => <span key={line.label}
+          className={`federation-activity__legend--${line.direction}`}>
           {line.label}: {bytes ? `${number(values[index][selectedIndex])} bytes` : number(values[index][selectedIndex])}
-        </span>)}</div>
-      </div> : <span>Hover a bar or focus the chart and use ← → for amounts. Scroll to see earlier seconds.</span>}
+        </span>)}
+      </div> : <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
+        className={`federation-activity__legend--${line.direction}`}>
+        <span aria-hidden="true">■</span> {line.label}</span>)}
+        <span>Hover a bar or focus the chart and use ← → for amounts.</span></div>}
     </div>
   </figure>;
+}
+
+/** Plot geometry shared by the mirrored charts, in viewBox units. */
+const CHART_AXIS = 80;
+const CHART_HALF = 58;
+
+/** The selected view's last minute as four numbers, above the charts. */
+function MinuteStrip({ series }: { series: FederationActivitySeries }) {
+  const minute = series.windows["1m"];
+  const both = (key: "requests" | "responses") => minute.sent[key] + minute.received[key];
+  const stats = [
+    { label: "Sent", value: formatTrafficBytes(minute.sent.wireBytes), title: `${number(minute.sent.wireBytes)} wire bytes` },
+    { label: "Received", value: formatTrafficBytes(minute.received.wireBytes), title: `${number(minute.received.wireBytes)} wire bytes` },
+    { label: "Requests", value: number(both("requests")),
+      title: `${number(minute.sent.requests)} sent · ${number(minute.received.requests)} received` },
+    { label: "Responses", value: number(both("responses")),
+      title: `${number(minute.sent.responses)} sent · ${number(minute.received.responses)} received, including errors` },
+  ];
+  return <dl className="federation-activity__minute">
+    {stats.map((stat) => <div key={stat.label} title={stat.title}>
+      <dt>{stat.label} · 1m</dt><dd>{stat.value}</dd>
+    </div>)}
+  </dl>;
 }
 
 export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopApi }) {
@@ -180,6 +211,14 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   const [topmostPending, setTopmostPending] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyPending, setCopyPending] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const menuAnchor = useRef<HTMLDivElement>(null);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useMenuNavigation({ open: menuOpen, menuRef: menu, triggerRef: menuButton, onClose: closeMenu });
+  useDismissOnOutsidePointer(menuOpen, menuAnchor, closeMenu);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 2_000);
@@ -192,82 +231,120 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   const peers = snapshot ? view === "physical" ? snapshot.activity.peers : snapshot.activity.logical : [];
   const series = peerId ? peers.find((peer) => peer.peerId === peerId)?.series : snapshot?.activity.physical;
   const enabled = Boolean(snapshot?.running);
-  const labelFor = (id: string) => snapshot?.health.peers.find((peer) => peer.id === id)?.label || id;
+  const capturing = Boolean(snapshot?.detailedLoggingUntil);
+  const chips = snapshot ? federationPeerFilterChips(snapshot.health, peers) : [];
+  const labelFor = (id: string) => chips.find((chip) => chip.instanceId === id)?.label || id;
+  const fail = (cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause));
+  const selectView = (next: "physical" | "logical") => {
+    setView(next); setPeerId(next === "logical" ? snapshot?.activity.logical[0]?.peerId || "" : "");
+  };
+  const canCopy = Boolean(snapshot && series && (view === "physical" || peerId) && !copyPending);
+  const copyActivity = () => {
+    if (!snapshot || !series) return;
+    setCopyPending(true);
+    setActionError(undefined);
+    void copyText(formatActivityReport(series,
+      `${view === "physical" ? "Physical connections" : "Logical endpoint"}: ${peerId ? labelFor(peerId) : "All physical connections"}`,
+      snapshot.activity.since, snapshot.activity.at), desktopApi)
+      .then(() => setCopied(true))
+      .catch(fail)
+      .finally(() => setCopyPending(false));
+  };
   return <div className="federation-activity">
-    <div className="federation-activity__toolbar">
-      <div><strong>{snapshot ? federationRuntimeLabel(snapshot) : "Loading Federation activity…"}</strong>
-        {snapshot ? <p>Configured {snapshot.configuredMode === "disabled" ? "off" : `on · ${snapshot.configuredMode}`}</p> : null}</div>
-      <button type="button" role="switch" aria-label="Federation enabled"
-        title="Turn Federation on or off for this app instance only"
-        aria-checked={enabled}
-        className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
-        disabled={!snapshot || pending || !desktopApi?.setFederationEnabled} onClick={() => void toggle()}>
-        <span className="settings-switch__track" aria-hidden="true"><span className="settings-switch__thumb" /></span>
-        <span>{enabled ? "On" : "Off"}</span>
-      </button>
-      <label><input type="checkbox" checked={topmost} disabled={topmostPending || !desktopApi?.setFederationActivityTopmost}
-        onChange={(event) => {
-          const enabled = event.target.checked;
-          setTopmostPending(true);
-          void desktopApi?.setFederationActivityTopmost?.(enabled).then(setTopmost).catch((cause: unknown) => {
-            setActionError(cause instanceof Error ? cause.message : String(cause));
-          }).finally(() => setTopmostPending(false));
-        }} /> Always on top</label>
-      <FederationTrafficCapture until={snapshot?.detailedLoggingUntil}
-        disabled={!snapshot || pending || !desktopApi?.setFederationTrafficCapture}
-        onChange={(enabled) => { void capture(enabled); }} />
-      <button type="button" disabled={pending || !desktopApi?.resetFederationActivity}
-        title="Clear all Federation activity totals, size statistics and history for every peer"
-        onClick={() => { setCopied(false); void reset(); }}>Reset</button>
-      <button type="button" aria-label="Copy Federation activity" title={copied ? "Copied" : "Copy selected activity view"}
-        disabled={!snapshot || !series || (view === "logical" && !peerId) || copyPending}
-        onClick={() => {
-          if (!snapshot || !series) return;
-          setCopyPending(true);
-          setActionError(undefined);
-          void copyText(formatActivityReport(series,
-            `${view === "physical" ? "Physical connections" : "Logical endpoint"}: ${peerId ? labelFor(peerId) : "All physical connections"}`,
-            snapshot.activity.since, snapshot.activity.at), desktopApi)
-            .then(() => setCopied(true))
-            .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
-            .finally(() => setCopyPending(false));
-        }}>
-        {copied ? <CheckIcon size={16} aria-hidden="true" /> : <CopyIcon size={16} aria-hidden="true" />}
-      </button>
+    <div className="federation-activity__head">
+      <div className="federation-activity__state">
+        <strong>{snapshot ? federationRuntimeLabel(snapshot) : "Loading Federation activity…"}</strong>
+        <FederationCaptureTag until={snapshot?.detailedLoggingUntil} />
+        {snapshot ? <p>Configured {snapshot.configuredMode === "disabled" ? "off" : `on · ${snapshot.configuredMode}`}</p> : null}
+      </div>
+      <div className="federation-activity__tools">
+        <button type="button" role="switch" aria-label="Federation enabled"
+          title="Turn Federation on or off for this app instance only"
+          aria-checked={enabled}
+          className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
+          disabled={!snapshot || pending || !desktopApi?.setFederationEnabled} onClick={() => void toggle()}>
+          <span className="settings-switch__track" aria-hidden="true"><span className="settings-switch__thumb" /></span>
+          <span>{enabled ? "On" : "Off"}</span>
+        </button>
+        <button type="button" className="messaging-status-popover__settings federation-activity__pin"
+          aria-label="Always on top" aria-pressed={topmost} title="Keep this window above other windows"
+          disabled={topmostPending || !desktopApi?.setFederationActivityTopmost}
+          onClick={() => {
+            setTopmostPending(true);
+            void desktopApi?.setFederationActivityTopmost?.(!topmost).then(setTopmost).catch(fail)
+              .finally(() => setTopmostPending(false));
+          }}>
+          <PinIcon size={14} aria-hidden="true" />
+        </button>
+        <div ref={menuAnchor} className="federation-status-control__menu-anchor">
+          <button ref={menuButton} type="button" className="messaging-status-popover__settings"
+            aria-label="More Federation Activity actions" aria-haspopup="menu" aria-expanded={menuOpen}
+            aria-controls={menuOpen ? menuId : undefined}
+            onClick={() => setMenuOpen((value) => !value)}>
+            <span aria-hidden="true">⋯</span>
+          </button>
+          {menuOpen ? <div ref={menu} id={menuId} role="menu" aria-label="Federation Activity actions"
+            tabIndex={-1} className="federation-status-control__menu">
+            <button type="button" role="menuitem" className="federation-status-control__menu-item"
+              disabled={!canCopy}
+              onClick={() => { setMenuOpen(false); menuButton.current?.focus(); copyActivity(); }}>
+              Copy Federation activity
+              {copied ? <CheckIcon size={12} aria-hidden="true" /> : <CopyIcon size={12} aria-hidden="true" />}
+            </button>
+            <button type="button" role="menuitemcheckbox" aria-checked={capturing}
+              className="federation-status-control__menu-item" title={FEDERATION_CAPTURE_DESCRIPTION}
+              disabled={!snapshot || pending || !desktopApi?.setFederationTrafficCapture}
+              onClick={() => { void capture(!capturing); }}>
+              Capture previous + next 60 seconds
+              <span aria-hidden="true" className="federation-status-control__menu-check">{capturing ? "✓" : ""}</span>
+            </button>
+            <button type="button" role="menuitem" className="federation-status-control__menu-item"
+              title="Clear all Federation activity totals, size statistics and history for every peer"
+              disabled={pending || !desktopApi?.resetFederationActivity}
+              onClick={() => { setMenuOpen(false); menuButton.current?.focus(); setCopied(false); void reset(); }}>
+              Reset all activity</button>
+          </div> : null}
+        </div>
+      </div>
       <span role="status" className="federation-activity__muted">{copied ? "Federation activity copied" : ""}</span>
     </div>
-    {snapshot ? <FederationConnections health={snapshot.health} /> : null}
     {snapshot?.health.leaseHolder ? <p>Lease holder: {snapshot.health.leaseHolder.instanceId}
       {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
       {snapshot.health.leaseHolder.cwdHint ? ` · ${snapshot.health.leaseHolder.cwdHint}` : ""}</p> : null}
     {snapshot?.health.unavailableReason ? <p>{snapshot.health.unavailableReason}</p> : null}
     {error || actionError ? <p role="alert">{error || actionError}</p> : null}
-    <div className="federation-activity__toolbar">
-      <label>Attribution <select value={view} onChange={(event) => {
-        const next = event.target.value as "physical" | "logical";
-        setView(next); setPeerId(next === "logical" ? snapshot?.activity.logical[0]?.peerId || "" : "");
-      }}><option value="physical">Physical connections</option><option value="logical">Logical endpoints</option></select></label>
-      <label>Peer <select value={peerId} onChange={(event) => setPeerId(event.target.value)}>
-        {view === "physical" ? <option value="">All physical connections</option> : <option value="" disabled>Select an endpoint</option>}
-        {peers.map((peer) => <option value={peer.peerId} key={peer.peerId}>{labelFor(peer.peerId)}</option>)}
-      </select></label>
-      <label>Chart window <select value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
-        {PERIODS.map((value) => <option key={value} value={value}>{value}</option>)}
-      </select></label>
+    {chips.length || view === "physical"
+      ? <FederationPeerFilter chips={chips} peers={peers} selected={peerId}
+        allowAll={view === "physical"} onSelect={setPeerId} />
+      : null}
+    <div className="federation-activity__controls">
+      <span className="usage-segmented" role="group" aria-label="Attribution">
+        <button type="button" aria-pressed={view === "physical"} title="Each direct or gateway connection"
+          onClick={() => selectView("physical")}>Connections</button>
+        <button type="button" aria-pressed={view === "logical"} title="Only traffic this instance sent or received as an endpoint"
+          onClick={() => selectView("logical")}>Endpoints</button>
+      </span>
+      <span className="usage-segmented" role="group" aria-label="Chart window">
+        {PERIODS.map((value) => <button type="button" key={value} aria-pressed={period === value}
+          onClick={() => setPeriod(value)}>{value}</button>)}
+      </span>
+      {snapshot ? <FederationConnections health={snapshot.health} collapsible /> : null}
     </div>
-    <p className="federation-activity__muted">{view === "physical"
-      ? "Each direct or gateway connection counts its own transfers. A relayed envelope crosses two connections at a gateway."
-      : "Only traffic sent or received by this instance as an endpoint; transit forwarding is excluded. This is an alternate view, not extra traffic."}</p>
-    <p className="federation-activity__muted">Sent counts bytes accepted by the local socket; it does not confirm delivery.</p>
     {series && (view === "physical" || peerId) ? <>
+      <MinuteStrip series={series} />
       <FederationAmountChart history={series.history} period={period} bytes />
       <FederationAmountChart history={series.history} period={period} bytes={false} />
       <Totals series={series} />
       <PayloadSizes series={series} />
     </> : <p>No endpoint traffic recorded.</p>}
     {snapshot ? <p className="federation-activity__muted">Totals since {new Date(snapshot.activity.since).toLocaleString()}.
-      Charts show amounts recorded in each second for up to one hour. The latest second is still in progress.</p> : null}
+      Charts show wire bytes and envelopes recorded in each second for up to one hour; the tables
+      also show uncompressed data bytes. The latest second is still in progress.</p> : null}
     <details className="federation-activity__boundaries"><summary>What is measured</summary>
+      <p>{view === "physical"
+        ? "Each direct or gateway connection counts its own transfers. A relayed envelope crosses two connections at a gateway."
+        : "Only traffic sent or received by this instance as an endpoint; transit forwarding is excluded. This is an alternate view, not extra traffic."}
+        {" "}Sent counts bytes accepted by the local socket; it does not confirm delivery.</p>
       <p>Data is the serialized envelope before compression and encryption, including its protocol metadata and binary blob data.
         Wire is the encoded WebSocket application-message payload, including Noise authentication tags when present.
         It excludes WebSocket headers, TCP/TLS overhead, handshake/authentication messages and WebSocket ping, pong and close frames.</p>

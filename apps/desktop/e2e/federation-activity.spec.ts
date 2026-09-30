@@ -14,22 +14,41 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 function activityFixture(): ReadFederationActivityResponse {
   const now = Date.UTC(2026, 8, 5, 12);
   const ledger = new FederationActivityLedger(now - 3_600_000);
+  // Contrived peers, one per transport tag the chips can show.
+  const peerScale = { pwr_fixture_gateway: 1, pwr_fixture_travel: 0.4, pwr_fixture_vm: 0.2 };
   for (let index = 0; index < 360; index += 1) {
-    for (const direction of ["sent", "received"] as const) {
+    for (const [peerId, scale] of Object.entries(peerScale)) for (const direction of ["sent", "received"] as const) {
       ledger.record({
         at: now - 3_590_000 + index * 10_000,
-        peerId: "pwr_fixture_gateway", localInstanceId: "pwr_fixture_local", direction,
-        dataByteCount: (direction === "sent" ? 8_000 : 4_000) + Math.round(Math.abs(Math.sin(index / 3)) * 12_000),
-        byteCount: (direction === "sent" ? 3_000 : 1_000) + Math.round(Math.abs(Math.sin(index / 3)) * 6_000),
+        peerId, localInstanceId: "pwr_fixture_local", direction,
+        dataByteCount: Math.round(scale * ((direction === "sent" ? 8_000 : 4_000) + Math.abs(Math.sin(index / 3)) * 12_000)),
+        byteCount: Math.round(scale * ((direction === "sent" ? 3_000 : 1_000) + Math.abs(Math.sin(index / 3)) * 6_000)),
         envelope: { kind: direction === "sent" ? "request" : "response",
           sourceInstanceId: direction === "sent" ? "pwr_fixture_local" : "pwr_fixture_remote",
           targetInstanceId: direction === "sent" ? "pwr_fixture_remote" : "pwr_fixture_local" },
       });
     }
   }
+  const peer = (id: string, label: string, status: "connected" | "disconnected") =>
+    ({ id, label, role: "client" as const, status, capabilities: [] });
   return {
     activity: ledger.snapshot(now), configuredMode: "dual", running: true,
-    health: { enabled: true, role: "dual", status: "connected", peers: [] },
+    health: {
+      enabled: true, role: "dual", status: "connected", instanceId: "pwr_fixture_local",
+      peers: [
+        peer("pwr_fixture_gateway", "Studio Mac", "connected"),
+        peer("pwr_fixture_travel", "Travel laptop", "connected"),
+        peer("pwr_fixture_vm", "Build VM", "connected"),
+        peer("pwr_fixture_old", "Old desktop", "disconnected"),
+      ],
+      activeConnections: [
+        { peerId: "pwr_fixture_gateway", direction: "outgoing", endpoint: "ws://192.168.1.20:47830" },
+        { peerId: "pwr_fixture_travel", direction: "incoming", remoteAddress: "127.0.0.1:61876",
+          localAddress: "127.0.0.1:47831", via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" },
+        { peerId: "pwr_fixture_vm", direction: "incoming", remoteAddress: "100.101.7.22:51210",
+          localAddress: "100.101.7.10:47830" },
+      ],
+    },
   };
 }
 
@@ -80,9 +99,9 @@ for (const theme of ["dark", "light"] as const) {
       await activity.emulateMedia({ reducedMotion: "reduce" });
       await expect(activity.getByText("Running · connected")).toBeVisible();
       await expect(activity.getByRole("switch", { name: "Federation enabled" })).toHaveClass(/settings-switch/);
-      await expect(activity.getByRole("img", { name: /Data and wire amounts/ })).toBeVisible();
+      await expect(activity.getByRole("img", { name: /Wire byte amounts/ })).toBeVisible();
       for (const period of ["10m", "1h"]) {
-        await activity.getByLabel("Chart window").selectOption(period);
+        await activity.getByRole("group", { name: "Chart window" }).getByRole("button", { name: period, exact: true }).click();
         for (const chart of await activity.locator(".federation-activity__chart").all()) {
           const axis = chart.locator(".federation-activity__chart-axis");
           const scroller = chart.locator(".federation-activity__chart-scroll");
@@ -97,10 +116,10 @@ for (const theme of ["dark", "light"] as const) {
           expect(await axis.boundingBox()).toEqual(recentAxis);
         }
       }
-      await activity.getByLabel("Chart window").selectOption("1m");
-      const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
+      await activity.getByRole("group", { name: "Chart window" }).getByRole("button", { name: "1m", exact: true }).click();
+      const topmost = activity.getByRole("button", { name: "Always on top", exact: true });
       await topmost.click();
-      await expect(topmost).toBeChecked();
+      await expect(topmost).toHaveAttribute("aria-pressed", "true");
       // One instance serves both polls: `read()` clears the retained failure
       // on every success, so the second poll cannot be blamed for a blip the
       // first one already recovered from.
@@ -111,7 +130,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect.poll(alwaysOnTop.read).toBe(true)
         .catch(alwaysOnTop.rethrowWithLastFailure);
       await topmost.click();
-      await expect(topmost).not.toBeChecked();
+      await expect(topmost).toHaveAttribute("aria-pressed", "false");
       await expect.poll(alwaysOnTop.read).toBe(false)
         .catch(alwaysOnTop.rethrowWithLastFailure);
       const audit = await new AxeBuilder({ page: activity })
@@ -133,7 +152,9 @@ for (const theme of ["dark", "light"] as const) {
       expect(await activity.evaluate(() => document.scrollingElement?.scrollTop)).toBe(0);
       await expect(sizes.getByRole("columnheader", { name: "p50 ≈", exact: true })).toBeVisible();
       await activity.screenshot({ path: testInfo.outputPath(`federation-sizes-${theme}.png`) });
-      await activity.getByRole("button", { name: "Copy Federation activity" }).click();
+      const more = activity.getByRole("button", { name: "More Federation Activity actions", exact: true });
+      await more.click();
+      await activity.getByRole("menuitem", { name: "Copy Federation activity", exact: true }).click();
       await expect(activity.getByRole("status")).toHaveText("Federation activity copied");
       const copied = (await app.getClipboardSnapshot())?.text ?? "";
       expect(copied).toContain("Last 1m\tLast 10m\tLast 1h\tTotal");
@@ -153,7 +174,8 @@ for (const theme of ["dark", "light"] as const) {
           });
         }, new FederationActivityLedger().snapshot()),
       );
-      await activity.getByRole("button", { name: "Reset", exact: true }).click();
+      await more.click();
+      await activity.getByRole("menuitem", { name: "Reset all activity", exact: true }).click();
       await sizes.scrollIntoViewIfNeeded();
       await expect(sizes.getByRole("row", { name: "Sent requests 0 — — — —", exact: true })).toBeVisible();
       await activity.close();

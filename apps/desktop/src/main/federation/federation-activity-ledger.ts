@@ -62,10 +62,10 @@ class Series {
     this.values[offset + 4] += dataBytes;
     this.values[offset + 5] += wireBytes;
   }
-  snapshot(at: number, includeHistory: boolean): FederationActivitySeries {
+  snapshot(at: number, includeHistory: boolean, historySeconds = HOUR): FederationActivitySeries {
     const windows = { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() };
     const history: FederationActivitySeries["history"] = [];
-    const first = at - HOUR + 1;
+    const first = at - historySeconds + 1;
     // One-second chart bins use the same counts as the rolling totals.
     if (includeHistory) {
       for (let start = first; start <= at; start += 1) {
@@ -81,7 +81,7 @@ class Series {
         if (time > at - 600) addBucket(windows["10m"], this.values, offset);
         if (time > at - 300) addBucket(windows["5m"], this.values, offset);
         if (time > at - 60) addBucket(windows["1m"], this.values, offset);
-        if (includeHistory) addBucket(history[time - first].totals, this.values, offset);
+        if (includeHistory && time >= first) addBucket(history[time - first].totals, this.values, offset);
       }
     }
     return {
@@ -150,15 +150,16 @@ export class FederationActivityLedger {
   snapshot(now = Date.now(), request: ReadFederationActivityRequest = {}): FederationActivitySnapshot {
     const at = Math.max(this.lastSecond, Math.floor(now / SECOND));
     this.lastSecond = at;
+    const historySeconds = request.historySeconds ?? HOUR;
     const snapshotMap = (map: Map<string, Series>, view: "physical" | "logical") =>
       [...map].map(([peerId, series]) => ({
         peerId,
         series: series.snapshot(at, request.includeHistory !== false
-          && request.historyPeerId === peerId && request.historyView === view),
+          && request.historyPeerId === peerId && request.historyView === view, historySeconds),
       }));
     return {
       since: this.since, at: at * SECOND, bucketMs: SECOND,
-      physical: this.physical.snapshot(at, request.includeHistory !== false && !request.historyPeerId),
+      physical: this.physical.snapshot(at, request.includeHistory !== false && !request.historyPeerId, historySeconds),
       peers: snapshotMap(this.peers, "physical"), logical: snapshotMap(this.logical, "logical"),
     };
   }

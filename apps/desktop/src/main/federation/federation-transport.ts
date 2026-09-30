@@ -1,4 +1,4 @@
-import type { FederationReceiverPermissions } from "@pwragent/shared";
+import type { FederationConnectionVia, FederationReceiverPermissions } from "@pwragent/shared";
 import { federationTrafficCaptureUntil, recordFederationTraffic } from "./federation-traffic-capture";
 import http from "node:http";
 import net from "node:net";
@@ -317,7 +317,7 @@ type FederationSocketMessage =
 export type FederationGatewayConnection = {
   remoteAddress?: string;
   localAddress?: string;
-  via?: "cloudflare-tunnel";
+  via?: FederationConnectionVia;
   reportedClientAddress?: string;
   peerDirectoryPaging?: boolean;
   navigationQueryProtocol?: 2;
@@ -783,13 +783,21 @@ export class FederationGatewayWebSocketServer {
     const tunnelled = typeof request.headers["cf-ray"] === "string"
       && isLoopbackAddress(request.socket.remoteAddress);
     const reportedClient = request.headers["cf-connecting-ip"];
+    // tailscaled's serve proxy does the same over loopback. It marks a Funnel
+    // request `Tailscale-Funnel-Request: ?1` and never adds identity headers
+    // to one; a tailnet-only Serve request carries `Tailscale-User-Login`.
+    const tailscaleVia = !tunnelled && isLoopbackAddress(request.socket.remoteAddress)
+      ? request.headers["tailscale-funnel-request"] === "?1" ? "tailscale-funnel" as const
+        : typeof request.headers["tailscale-user-login"] === "string" ? "tailscale-serve" as const
+          : undefined
+      : undefined;
     const connection: FederationGatewayConnection = {
       remoteAddress: socketAddress(request.socket.remoteAddress, request.socket.remotePort),
       localAddress: socketAddress(request.socket.localAddress, request.socket.localPort),
       ...(tunnelled ? {
         via: "cloudflare-tunnel" as const,
         reportedClientAddress: typeof reportedClient === "string" && net.isIP(reportedClient) ? reportedClient : undefined,
-      } : {}),
+      } : tailscaleVia ? { via: tailscaleVia } : {}),
       peerDirectoryPaging: message.peerDirectoryPaging === true,
       navigationQueryProtocol:
         message.navigationQueryProtocol === 2 ? 2 : undefined,

@@ -413,6 +413,8 @@ export type FederationEndpointStatus = {
   lastError?: string;
 };
 
+export type FederationConnectionVia = "cloudflare-tunnel" | "tailscale-funnel" | "tailscale-serve";
+
 /** Local authenticated transports only; never advertised in the peer directory. */
 export type FederationActiveConnection = {
   peerId: FederationInstanceId;
@@ -423,10 +425,12 @@ export type FederationActiveConnection = {
   remoteAddress?: string;
   localAddress?: string;
   /**
-   * An incoming connection that arrived through the local Cloudflare Tunnel
-   * connector, whose own socket is then the observed remote. Display only.
+   * An incoming connection that arrived through a local connector, whose own
+   * socket is then the observed remote: the Cloudflare Tunnel connector, or
+   * tailscaled proxying a Tailscale Funnel (public) or Serve (tailnet-only)
+   * request. Display only; any local process could send the same headers.
    */
-  via?: "cloudflare-tunnel";
+  via?: FederationConnectionVia;
   /** The client address Cloudflare reported for a tunnelled connection. Display only; never trusted. */
   reportedClientAddress?: string;
 };
@@ -967,4 +971,10 @@ export type ReadFederationActivityRequest = {
   includeHistory?: boolean;
   historyPeerId?: string;
   historyView?: "physical" | "logical";
+  /**
+   * Trailing seconds of one-second history to return, 1-3600. Omitted means
+   * the full hour. The Star Map popover draws one minute and should not
+   * serialize 3,600 buckets every two seconds to do it.
+   */
+  historySeconds?: number;
 };

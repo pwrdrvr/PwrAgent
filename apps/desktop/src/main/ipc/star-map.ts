@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain } from "electron";
 import type {
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
+  OpenStarMapWindowRequest,
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
@@ -50,8 +51,16 @@ import { primaryMainWindowWebContents } from "../primary-main-window";
 import {
   isStarMapWindowWebContents,
   showStarMapWindow,
+  starMapWindowWebContents,
 } from "../star-map-window";
-import { publishStarMapView } from "../star-map/star-map-view-registry";
+import {
+  hasPublishedStarMapView,
+  publishStarMapView,
+} from "../star-map/star-map-view-registry";
+import {
+  attemptStarMapInstanceFocus,
+  requestStarMapInstanceFocus,
+} from "../star-map/star-map-instance-focus";
 import { resolveStarMapCommand } from "../star-map/star-map-command-bus";
 import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
 
@@ -128,11 +137,29 @@ export function registerStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_PUBLISH_VIEW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_MANAGER_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_COMMAND_RESULT_CHANNEL);
-  ipcMain.handle(STAR_MAP_OPEN_WINDOW_CHANNEL, async (event): Promise<void> => {
-    showStarMapWindow({
-      sourceWindow: BrowserWindow.fromWebContents(event.sender),
-    });
-  });
+  ipcMain.handle(
+    STAR_MAP_OPEN_WINDOW_CHANNEL,
+    async (event, request?: OpenStarMapWindowRequest): Promise<void> => {
+      showStarMapWindow({
+        sourceWindow: BrowserWindow.fromWebContents(event.sender),
+      });
+      const instanceId = request?.instanceId;
+      if (
+        typeof instanceId !== "string"
+        || instanceId.length === 0
+        || instanceId.length > 256
+      ) {
+        return;
+      }
+      const contents = starMapWindowWebContents();
+      if (!contents) return;
+      requestStarMapInstanceFocus({
+        webContents: contents,
+        instanceId,
+        mapReady: hasPublishedStarMapView(contents),
+      });
+    },
+  );
   ipcMain.handle(
     STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
     async (_event, request: WindowShowThreadRequest): Promise<void> => {
@@ -206,6 +233,7 @@ export function registerStarMapIpcHandlers(): void {
         return;
       }
       publishStarMapView({ snapshot, webContents: event.sender });
+      attemptStarMapInstanceFocus(event.sender);
     },
   );
   ipcMain.handle(

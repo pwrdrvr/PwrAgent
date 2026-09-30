@@ -113,7 +113,8 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
             />
           ) : null}
           {props.starMap && !hasAppTitleBar ? (
-            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
+            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen}
+              onOpenSettings={props.starMap.onOpenFederationSettings} />
           ) : null}
           <MessagingStatusBar
             desktopApi={props.desktopApi}

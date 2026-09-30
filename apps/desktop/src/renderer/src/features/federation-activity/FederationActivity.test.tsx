@@ -1,4 +1,4 @@
-import { FederationTrafficCapture } from "./FederationTrafficCapture";
+import { FederationCaptureTag } from "./FederationTrafficCapture";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +29,13 @@ function fixture(): ReadFederationActivityResponse {
   };
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+/** Presses one button of a labelled group: a segmented control or the peer chips. */
+const choose = (group: string, name: string | RegExp) =>
+  fireEvent.click(within(screen.getByRole("group", { name: group })).getByRole("button", { name }));
+const activityAction = async (name: string, role: "menuitem" | "menuitemcheckbox" = "menuitem") => {
+  fireEvent.click(screen.getByRole("button", { name: "More Federation Activity actions" }));
+  fireEvent.click(await screen.findByRole(role, { name }));
+};
 
 describe("Federation activity surfaces", () => {
   it("shows the viewer instance ID only in a tooltip and copies it", async () => {
@@ -62,7 +69,9 @@ describe("Federation activity surfaces", () => {
       ? <FederationStatusControl desktopApi={desktopApi} onOpen={vi.fn()} />
       : <FederationActivityScreen desktopApi={desktopApi} />);
     if (surface === "popup") fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
-    const checkbox = await screen.findByRole("checkbox", { name: "Capture detailed Federation traffic" });
+    fireEvent.click(await screen.findByRole("button",
+      { name: surface === "popup" ? "More Federation actions" : "More Federation Activity actions" }));
+    const checkbox = await screen.findByRole("menuitemcheckbox", { name: "Capture previous + next 60 seconds" });
     await waitFor(() => expect(checkbox).toBeEnabled());
     fireEvent.click(checkbox);
     await waitFor(() => expect(checkbox).toBeChecked());
@@ -72,17 +81,15 @@ describe("Federation activity surfaces", () => {
     expect(setFederationTrafficCapture).toHaveBeenLastCalledWith(false);
   });
 
-  it("shows remaining time and unchecks when a capture expires", async () => {
+  it("counts a capture down in the REC tag and drops the tag when it expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const onChange = vi.fn();
-    render(<FederationTrafficCapture until={61_000} disabled={false} onChange={onChange} />);
-    const checkbox = screen.getByRole("checkbox", { name: "Capture detailed Federation traffic" });
-    expect(checkbox).toBeChecked();
-    expect(screen.getByText("Detailed logs · 60s left")).toBeInTheDocument();
-    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(checkbox).not.toBeChecked();
-    expect(onChange).not.toHaveBeenCalled();
+    render(<FederationCaptureTag until={61_000} />);
+    expect(screen.getByText("REC · 60s")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(59_000); });
+    expect(screen.getByText("REC · 1s")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(screen.queryByText(/^REC/)).not.toBeInTheDocument();
   });
 
   it("does not present stopped or lease-denied connections as active", () => {
@@ -135,6 +142,24 @@ describe("Federation activity surfaces", () => {
     expect(screen.getByText("203.0.113.7")).toBeInTheDocument();
     expect(screen.queryByText("127.0.0.1:61876")).not.toBeInTheDocument();
     expect(screen.queryByText(/incoming tunnels or proxies may appear as the remote/)).not.toBeInTheDocument();
+  });
+
+  it("folds the Activity window's connection list behind a count so it cannot push the charts down", () => {
+    const health = fixture().health;
+    health.role = "gateway";
+    health.peers = [{ id: "client", label: "Laptop", role: "client", status: "connected", capabilities: [] }];
+    health.activeConnections = [
+      { peerId: "client", direction: "incoming", remoteAddress: "192.168.1.20:54321", localAddress: "192.168.1.10:47830" },
+    ];
+    const { container, rerender } = render(<FederationConnections health={health} collapsible />);
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent("Active connections · 1");
+    expect(screen.getByText("192.168.1.20:54321")).toBeInTheDocument();
+    rerender(<FederationConnections health={{ ...health, activeConnections: [] }} collapsible />);
+    expect(container.querySelector("summary")).toHaveTextContent("Active connections · Not connected");
+    expect(screen.getAllByText("Not connected")).toHaveLength(1);
   });
 
   it.each(["popup", "activity"])("shows the actual gateway and follows reconnects in the %s", async (surface) => {
@@ -212,7 +237,7 @@ describe("Federation activity surfaces", () => {
     fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
     await screen.findByText("Not running · lease held by another instance");
     expect(screen.getByText("Configured on · gateway")).toBeInTheDocument();
-    expect(screen.getByText(/Holder: other-app · PID 123/)).toBeInTheDocument();
+    expect(screen.getByText(/runs in another PwrAgent window \(PID 123, \/fixture\/other\)/)).toBeInTheDocument();
     const toggle = screen.getByRole("switch", { name: "Federation enabled" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
@@ -254,8 +279,13 @@ describe("Federation activity surfaces", () => {
     const api: DesktopApi = { readFederationActivity, setFederationActivityTopmost };
     render(<FederationActivityScreen desktopApi={api} />);
     await screen.findByText("Running · connected");
-    expect(screen.getByText("2")).toBeInTheDocument();
-    expect(screen.getByText("24")).toBeInTheDocument();
+    // Mirrored axes: the peak above, zero on the axis, the same peak below.
+    const axes = [...document.querySelectorAll(".federation-activity__chart-axis")]
+      .map((axis) => [...axis.querySelectorAll("text")].map((text) => text.textContent));
+    expect(axes).toEqual([["KB", "1.6", "0", "1.6"], ["envelopes", "24", "0", "24"]]);
+    const minute = document.querySelector<HTMLElement>(".federation-activity__minute")!;
+    expect(within(minute).getAllByRole("definition").map((value) => value.textContent))
+      .toEqual(["1 KB", "2 KB", "15", "15"]);
     for (const name of ["Sent traffic", "Received traffic"]) {
       const table = within(screen.getByRole("table", { name }));
       for (const column of ["Last 1m", "Last 10m", "Last 1h", "Total"]) {
@@ -263,23 +293,27 @@ describe("Federation activity surfaces", () => {
       }
     }
     for (const period of ["1m", "10m", "1h"]) {
-      fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: period } });
-      expect(screen.getByLabelText("Chart window")).toHaveValue(period);
+      choose("Chart window", period);
+      expect(screen.getByRole("button", { name: period })).toHaveAttribute("aria-pressed", "true");
     }
-    fireEvent.change(screen.getByLabelText("Attribution"), { target: { value: "logical" } });
+    choose("Attribution", "Endpoints");
     await waitFor(() => expect(readFederationActivity).toHaveBeenLastCalledWith({
       historyPeerId: "remote", historyView: "logical", includeHistory: undefined,
     }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Always on top" }));
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Always on top" })).toBeChecked());
+    // Endpoints has no aggregate, so the filter offers no All chip there.
+    expect(within(screen.getByRole("group", { name: "Peer" })).getAllByRole("button").map((chip) => chip.textContent))
+      .toEqual(["remote"]);
+    expect(screen.getByRole("button", { name: "remote" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Always on top" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Always on top" })).toHaveAttribute("aria-pressed", "true"));
     expect(setFederationActivityTopmost).toHaveBeenCalledWith(true);
   });
 
   it("keeps numeric axes outside scrolling history in longer windows", async () => {
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
-    await screen.findByRole("img", { name: /Data and wire amounts/ });
+    await screen.findByRole("img", { name: /Wire byte amounts/ });
     for (const period of ["10m", "1h"]) {
-      fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: period } });
+      choose("Chart window", period);
       for (const plot of screen.getAllByRole("img")) {
         const scroller = plot.parentElement!;
         const axis = scroller.parentElement!.querySelector(".federation-activity__chart-axis")!;
@@ -294,11 +328,11 @@ describe("Federation activity surfaces", () => {
     let resolveActivity!: (snapshot: ReadFederationActivityResponse) => void;
     const activity = new Promise<ReadFederationActivityResponse>((resolve) => { resolveActivity = resolve; });
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: () => activity }} />);
-    expect(screen.queryByRole("img", { name: /Data and wire amounts/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Wire byte amounts/ })).not.toBeInTheDocument();
     // Flush the async mount and its initial selection-reset effect before focusing.
     // Finding the SVG alone can race that effect on a busy runner.
     await act(async () => { resolveActivity(fixture()); });
-    const chart = screen.getByRole("img", { name: /Data and wire amounts/ });
+    const chart = screen.getByRole("img", { name: /Wire byte amounts/ });
     fireEvent.focus(chart);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Sent wire: 800 bytes");
     expect(screen.getByRole("tooltip")).toHaveTextContent("In progress");
@@ -308,7 +342,7 @@ describe("Federation activity surfaces", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({ left: 0, width: 640 } as DOMRect);
     fireEvent.pointerMove(chart, { clientX: 100 });
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Received data: 4,000 bytes");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Received wire: 1,600 bytes");
     fireEvent.pointerLeave(chart);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
@@ -336,7 +370,7 @@ describe("Federation activity surfaces", () => {
     const row = table.getByRole("row", { name: /Wire · encoded/ });
     expect(within(row).getAllByRole("cell").map((cell) => cell.textContent?.trim()))
       .toEqual(["50 MB", "1 GB", "2 GB", "50 GB"]);
-    fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: "1h" } });
+    choose("Chart window", "1h");
     expect(within(row).getAllByRole("cell").map((cell) => cell.textContent?.trim()))
       .toEqual(["50 MB", "1 GB", "2 GB", "50 GB"]);
     expect(within(row).getByText("50 MB")).toHaveAttribute("title", "50,000,000 bytes");
@@ -355,7 +389,7 @@ describe("Federation activity surfaces", () => {
       .toEqual(["5", "10 MB", "1 KB", "1 KB", "50 MB"]);
     expect(within(table.getByRole("row", { name: /Sent requests/ })).getAllByRole("cell").map((cell) => cell.textContent))
       .toEqual(["0", "—", "—", "—", "—"]);
-    fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: "10m" } });
+    choose("Chart window", "10m");
     expect(table.getByText("50 MB")).toBeInTheDocument();
   });
 
@@ -376,12 +410,12 @@ describe("Activity report controls", () => {
     await screen.findByText("Running · connected");
     expect(screen.getByRole("switch")).toHaveClass("settings-switch", "is-on");
     expect(screen.getByRole("switch").querySelector(".settings-switch__thumb")).not.toBeNull();
-    fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "gateway" } });
+    choose("Peer", "gateway");
     const sizes = within(screen.getByRole("table", { name: "Lifetime request/response sizes · uncompressed" }));
     const requestCells = within(sizes.getByRole("row", { name: /Sent requests/ })).getAllByRole("cell");
     expect(requestCells[1]).toHaveAttribute("title", "543 bytes");
     expect(requestCells[2]).toHaveAttribute("title", "540 bytes");
-    fireEvent.click(screen.getByRole("button", { name: "Copy Federation activity" }));
+    await activityAction("Copy Federation activity");
     await waitFor(() => expect(copyText).toHaveBeenCalledTimes(1));
     const text = copyText.mock.calls[0][0];
     expect(text).toContain("Physical connections: gateway");
@@ -405,11 +439,11 @@ describe("Activity report controls", () => {
     const resetFederationActivity = vi.fn(async () => cleared);
     render(<FederationActivityScreen desktopApi={{ readFederationActivity, resetFederationActivity }} />);
     await screen.findByText("Running · connected");
-    fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "gateway" } });
-    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    choose("Peer", "gateway");
+    await activityAction("Reset all activity");
     await waitFor(() => expect(resetFederationActivity).toHaveBeenCalledOnce());
     await act(async () => finishRead(data));
-    fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "" } });
+    choose("Peer", /^All connections/);
     const row = within(screen.getByRole("table", { name: "Sent traffic" })).getByRole("row", { name: /^Requests / });
     expect(within(row).getAllByRole("cell").at(-1)).toHaveTextContent("0");
   });
@@ -418,8 +452,100 @@ describe("Activity report controls", () => {
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture(),
       resetFederationActivity: async () => { throw new Error("Reset failed"); } }} />);
     await screen.findByText("Running · connected");
-    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    await activityAction("Reset all activity");
     expect(await screen.findByRole("alert")).toHaveTextContent("Reset failed");
     expect(screen.getByRole("table", { name: "Sent traffic" })).toHaveTextContent("12");
   });
+  it("asks for one minute of history and draws it as the popover's traffic card", async () => {
+    const readFederationActivity = vi.fn(async () => fixture());
+    const openFederationActivity = vi.fn(async () => {});
+    render(<FederationStatusControl desktopApi={{ readFederationActivity, openFederationActivity }} onOpen={vi.fn()} />);
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    const card = await screen.findByRole("button", { name: "Open Federation Activity" });
+    expect(readFederationActivity).toHaveBeenCalledWith(expect.objectContaining({ includeHistory: true, historySeconds: 60 }));
+    expect(card).toHaveAccessibleDescription("↑ 1 KB sent ↓ 2 KB received");
+    fireEvent.click(card);
+    await waitFor(() => expect(openFederationActivity).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows instances as chips that fly the Star Map to them, and the map preview opens it", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "local";
+    snapshot.health.peers = [
+      { id: "laptop", label: "Laptop", role: "client", status: "connected", capabilities: [] },
+      { id: "travel", label: "Travel laptop", role: "client", status: "connected", capabilities: [] },
+      { id: "vm", label: "Build VM", role: "client", status: "disconnected", capabilities: [] },
+    ];
+    snapshot.health.activeConnections = [
+      { peerId: "laptop", direction: "incoming", remoteAddress: "192.168.1.20:54321", localAddress: "192.168.1.10:47830" },
+      { peerId: "travel", direction: "incoming", remoteAddress: "127.0.0.1:61876", localAddress: "127.0.0.1:47831",
+        via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" },
+    ];
+    const openStarMapWindow = vi.fn(async () => {});
+    const onOpen = vi.fn();
+    render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => structuredClone(snapshot), openStarMapWindow }}
+      onOpen={onOpen} />);
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    const chips = within(await screen.findByRole("list", { name: "Federation instances" }));
+    expect(chips.getAllByRole("button").map((chip) => chip.textContent))
+      .toEqual(["LaptopLAN", "Travel laptopCloudflare", "Build VM"]);
+    expect(screen.getByText("2 of 3 connected")).toBeInTheDocument();
+    fireEvent.click(chips.getByRole("button", { name: "Open Travel laptop on the Star Map" }));
+    await waitFor(() => expect(openStarMapWindow).toHaveBeenCalledWith({ instanceId: "travel" }));
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the Star Map" }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the Activity window's menu when the pointer goes down outside it", async () => {
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "More Federation Activity actions" }));
+    expect(await screen.findByRole("menu", { name: "Federation Activity actions" })).toBeInTheDocument();
+    fireEvent.pointerDown(within(screen.getByRole("menu")).getAllByRole("menuitem")[0]);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "1h" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens Settings at Federation from the popover's menu and closes the popover", async () => {
+    const onOpenSettings = vi.fn();
+    render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => fixture() }}
+      onOpen={vi.fn()} onOpenSettings={onOpenSettings} />);
+    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    fireEvent.click(await screen.findByRole("button", { name: "More Federation actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Federation settings…" }));
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "Federation activity" })).not.toBeInTheDocument();
+  });
+
+  it("filters the Activity window by the same instance chips, named and tagged", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "local";
+    snapshot.health.peers = [
+      { id: "gateway", label: "Studio Mac", role: "gateway", status: "connected", capabilities: [] },
+      { id: "vm", label: "Build VM", role: "client", status: "disconnected", capabilities: [] },
+    ];
+    snapshot.health.activeConnections = [
+      { peerId: "gateway", direction: "incoming", remoteAddress: "127.0.0.1:61876", localAddress: "127.0.0.1:47830",
+        via: "tailscale-funnel" },
+    ];
+    const series = snapshot.activity.peers[0].series;
+    snapshot.activity.peers.push({ peerId: "Other peers (attribution limit)", series });
+    const readFederationActivity = vi.fn(async () => structuredClone(snapshot));
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity }} />);
+    const filter = within(await screen.findByRole("group", { name: "Peer" }));
+    // Only peers with a series get a chip: Build VM has none in this view.
+    expect(filter.getAllByRole("button").map((chip) => chip.textContent))
+      .toEqual(["All connections · 2", "Studio MacTS Funnel", "Other peers (attribution limit)"]);
+    expect(filter.getByRole("button", { name: /^All connections/ })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(filter.getByRole("button", { name: "Studio Mac" }));
+    await waitFor(() => expect(readFederationActivity).toHaveBeenLastCalledWith({
+      historyPeerId: "gateway", historyView: "physical", includeHistory: undefined,
+    }));
+    expect(filter.getByRole("button", { name: "Studio Mac" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.focus(filter.getByRole("button", { name: "Studio Mac" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Through Tailscale Funnel");
+  });
+
 });

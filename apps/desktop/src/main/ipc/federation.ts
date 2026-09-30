@@ -111,6 +111,9 @@ export function registerFederationIpcHandlers(): void {
         ? request.historyPeerId.slice(0, 256)
         : undefined,
       historyView: request?.historyView === "logical" ? "logical" : "physical",
+      historySeconds: Number.isInteger(request?.historySeconds)
+        ? Math.min(3_600, Math.max(1, request!.historySeconds!))
+        : undefined,
     }));
   ipcMain.handle(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL, (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");

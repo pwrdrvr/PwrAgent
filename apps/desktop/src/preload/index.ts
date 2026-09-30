@@ -431,6 +431,7 @@ import type {
   SetStarMapCardPositionRequest,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
+  OpenStarMapWindowRequest,
   StarMapCommand,
   StarMapCommandResult,
   StarMapIntakeResponse,
@@ -1434,8 +1435,8 @@ const desktopApi = Object.freeze({
   },
   resolveStarMapCommand: async (result: StarMapCommandResult): Promise<void> =>
     await ipcRenderer.invoke(STAR_MAP_COMMAND_RESULT_CHANNEL, result),
-  openStarMapWindow: async (): Promise<void> => {
-    await ipcRenderer.invoke(STAR_MAP_OPEN_WINDOW_CHANNEL);
+  openStarMapWindow: async (request?: OpenStarMapWindowRequest): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_OPEN_WINDOW_CHANNEL, request);
   },
   openStarMapThreadInMainWindow: async (
     request: WindowShowThreadRequest,
