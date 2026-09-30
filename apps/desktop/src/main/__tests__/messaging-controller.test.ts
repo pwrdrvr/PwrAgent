@@ -3538,12 +3538,13 @@ describe("MessagingController", () => {
     );
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
-        attribution: {
-          label: "Agent: Signals Agent",
-          hint:
-            "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation",
-        },
-        kind: "message",
+        title: "Agent: Signals Agent",
+        body: expect.stringContaining("Can you approve the AWS SSO login?"),
+        kind: "confirmation",
+        actions: [
+          expect.objectContaining({ label: "I did it" }),
+          expect.objectContaining({ label: "Cancel" }),
+        ],
       }),
     );
 
@@ -3700,6 +3701,154 @@ describe("MessagingController", () => {
       revokedAt: expect.any(Number),
     });
     expect(harness.onBindingChanged).toHaveBeenCalled();
+  });
+
+  it("routes a private request button through the saved continuation", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      args: {
+        awaitReply: true,
+        replyInstructions: "Verify the login, then report in the source thread.",
+        replyOptions: [
+          { label: "I did it", text: "I completed the SSO login." },
+          { label: "Need more time", text: "I need more time for SSO." },
+        ],
+        text: "Approve the AWS SSO request.",
+      },
+    });
+    const request = harness.delivered.find(
+      (intent) => intent.kind === "confirmation" && intent.body.includes("Approve the AWS SSO request."),
+    );
+    if (request?.kind !== "confirmation") throw new Error("Expected private request buttons");
+    expect(request.actions.map((action) => action.label)).toEqual([
+      "I did it",
+      "Need more time",
+      "Cancel",
+    ]);
+    const continuationBinding = (await harness.store.findActiveBindingsForThread({
+      backend: "codex",
+      threadId: "thread-1",
+    })).find((binding) => binding.privateReplyContinuation);
+    if (!continuationBinding) throw new Error("Expected the private reply continuation binding");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: request.actions[0]!.id,
+      channel: {
+        channel: "slack",
+        conversation: { id: "D012HAROLD", kind: "dm" },
+      },
+      sourceSurface: continuationBinding.privateReplyContinuation?.requestSurface,
+    }));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: [
+        expect.objectContaining({
+          text: expect.stringContaining("Your final answer will be delivered to the originating messaging surface"),
+        }),
+        { type: "text", text: "I completed the SSO login." },
+      ],
+    }));
+    expect(await harness.store.getBinding(continuationBinding.id)).toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "confirmation",
+      body: expect.stringContaining("original conversation"),
+      actions: [],
+    }));
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          item: {
+            id: "button-reply-final",
+            type: "agentMessage",
+            text: "The AWS login is ready.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      bindingId: "binding-slack-signals",
+      kind: "message",
+      parts: [expect.objectContaining({ text: "The AWS login is ready." })],
+    }));
+    harness.controller.dispose();
+  });
+
+  it("cancels a private request button without starting a turn", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      args: {
+        awaitReply: true,
+        replyInstructions: "Resume after approval.",
+        text: "Approve the AWS SSO request.",
+      },
+    });
+    const request = harness.delivered.find(
+      (intent) => intent.kind === "confirmation" && intent.body.includes("Approve the AWS SSO request."),
+    );
+    if (request?.kind !== "confirmation") throw new Error("Expected private request buttons");
+    const continuationBinding = (await harness.store.findActiveBindingsForThread({
+      backend: "codex",
+      threadId: "thread-1",
+    })).find((binding) => binding.privateReplyContinuation);
+    if (!continuationBinding) throw new Error("Expected the private reply continuation binding");
+    const cancelAction = request.actions.find((action) => action.label === "Cancel");
+    if (!cancelAction) throw new Error("Expected a Cancel button");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+    const cancelEvent = buildCallbackEvent({
+      actionId: cancelAction.id,
+      channel: {
+        channel: "slack",
+        conversation: { id: "D012HAROLD", kind: "dm" },
+      },
+      sourceSurface: continuationBinding.privateReplyContinuation?.requestSurface,
+    });
+    await harness.controller.handleInboundEvent(cancelEvent);
+
+    expect(await harness.store.getBinding(continuationBinding.id)).toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "confirmation",
+      body: "Private request cancelled. The Agent will not resume from this request.",
+      actions: [],
+    }));
+    await harness.controller.handleInboundEvent(cancelEvent);
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    harness.controller.dispose();
   });
 
   it("keeps a private request from a later debounced message private", async () => {

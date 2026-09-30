@@ -893,6 +893,10 @@ type QueuedTurnAction = {
   kind: "cancel" | "steer";
 };
 
+type PrivateReplyAction =
+  | { kind: "cancel"; requestId: string }
+  | { kind: "reply"; optionIndex: number; requestId: string };
+
 /**
  * Per-binding tracking of a posted "permissions queued" audit message so
  * we can edit it in place when the queue resolves (cancelled / applied).
@@ -1052,6 +1056,7 @@ export class MessagingController {
     Set<Promise<void>>
   >();
   private readonly privateReplyCompletionTurnKeys = new Set<string>();
+  private readonly privateReplyButtonClaims = new Set<string>();
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly privateResponseFallbackTurnKeys = new Set<string>();
   private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
@@ -5467,6 +5472,11 @@ export class MessagingController {
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
+    const privateReplyAction = readPrivateReplyAction(event);
+    if (privateReplyAction) {
+      await this.handlePrivateReplyCallback(event, privateReplyAction);
+      return;
+    }
     if (event.actionId === "agent-default:set") {
       await this.presentDefaultAgentAssignmentBrowser(event, "conversation");
       return;
@@ -8274,6 +8284,7 @@ export class MessagingController {
     this.startingAgentMessagingOriginsByThreadKey.clear();
     this.pendingTurnFailureHandlersByThreadKey.clear();
     this.privateReplyCompletionTurnKeys.clear();
+    this.privateReplyButtonClaims.clear();
     this.terminalPrivateResponseTurnKeys.clear();
     this.privateResponseFallbackTurnKeys.clear();
     this.attemptedPrivateResponseFallbackTurnKeys.clear();
@@ -16288,6 +16299,111 @@ export class MessagingController {
     this.notifyBindingChanged("private-reply-completed");
   }
 
+  private async handlePrivateReplyCallback(
+    event: MessagingInboundCallbackEvent,
+    action: PrivateReplyAction,
+  ): Promise<void> {
+    if (this.privateReplyButtonClaims.has(action.requestId)) {
+      return;
+    }
+    const binding = (await this.options.store.findActiveBindings()).find((candidate) =>
+      candidate.privateReplyContinuation?.requestId === action.requestId
+    );
+    const continuation = binding?.privateReplyContinuation;
+    if (
+      !binding
+      || !continuation
+      || continuation.expiresAt <= this.now()
+      || !binding.authorizedActorIds.includes(event.actor.platformUserId)
+      || binding.channel.channel !== event.channel.channel
+      || binding.channel.conversation.id !== event.channel.conversation.id
+      || (
+        continuation.requestSurface
+        && event.sourceSurface
+        && continuation.requestSurface.id !== event.sourceSurface.id
+      )
+    ) {
+      await this.deliverPrivateReplyButtonState(event, "This private request is no longer available.");
+      return;
+    }
+
+    if (action.kind === "cancel") {
+      rememberBoundedKey(this.privateReplyButtonClaims, action.requestId);
+      try {
+        await this.completePrivateReplyContinuation(binding.id);
+      } catch (error) {
+        this.privateReplyButtonClaims.delete(action.requestId);
+        throw error;
+      }
+      await this.deliverPrivateReplyButtonState(
+        event,
+        "Private request cancelled. The Agent will not resume from this request.",
+      );
+      return;
+    }
+
+    const option = continuation.replyOptions?.[action.optionIndex];
+    if (!option) {
+      await this.deliverPrivateReplyButtonState(event, "This private reply option is no longer available.");
+      return;
+    }
+    if (
+      !(await this.requirePermission(event, "message.reply", "private-reply:button", { notify: false }))
+      || !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        "private-reply:button:remote-instance",
+        { notify: false },
+      ))
+    ) {
+      return;
+    }
+
+    const responseEvent: MessagingInboundTextEvent = {
+      ...event,
+      id: `${event.id}:private-reply:${action.optionIndex}`,
+      kind: "text",
+      channel: binding.channel,
+      routingState: binding.routingState,
+      receivedAt: this.now(),
+      text: option.text,
+    };
+    rememberBoundedKey(this.privateReplyButtonClaims, action.requestId);
+    try {
+      await this.admitTurnInput({ binding, event: responseEvent });
+    } catch (error) {
+      this.privateReplyButtonClaims.delete(action.requestId);
+      throw error;
+    }
+    await this.deliverPrivateReplyButtonState(
+      event,
+      "Response received. The Agent will continue in the original conversation.",
+    );
+  }
+
+  private async deliverPrivateReplyButtonState(
+    event: MessagingInboundCallbackEvent,
+    body: string,
+  ): Promise<void> {
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("private-reply-button-state"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "present_new",
+        },
+        title: "Private request",
+        body,
+        targetSurface: event.sourceSurface,
+      }),
+      undefined,
+      event,
+    );
+  }
+
   private rememberQueuedAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
@@ -18018,6 +18134,10 @@ export class MessagingController {
     const replyInstructions = typeof request.args?.replyInstructions === "string"
       ? request.args.replyInstructions.trim()
       : "";
+    const suppliedReplyOptions = request.args?.replyOptions;
+    const replyOptions = suppliedReplyOptions === undefined
+      ? [{ label: "I did it", text: "I did it." }]
+      : suppliedReplyOptions;
     if (!text.trim() || text.length > 40_000) {
       return {
         ok: false,
@@ -18038,6 +18158,60 @@ export class MessagingController {
           code: "invalid_arguments",
           message:
             "send_private_response requires replyInstructions between 1 and 4,000 characters when awaitReply is true.",
+        },
+      };
+    }
+    if (
+      suppliedReplyOptions !== undefined
+      && (
+        !awaitReply
+        || !Array.isArray(suppliedReplyOptions)
+        || suppliedReplyOptions.length < 1
+        || suppliedReplyOptions.length > 3
+        || suppliedReplyOptions.some((option) =>
+          !option
+          || typeof option.label !== "string"
+          || option.label.trim().length < 1
+          || option.label.length > 40
+          || typeof option.text !== "string"
+          || option.text.trim().length < 1
+          || option.text.length > 500
+        )
+      )
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "replyOptions requires awaitReply and one to three buttons with a label (1–40 characters) and text (1–500 characters).",
+        },
+      };
+    }
+    const actionCapabilities = this.capabilityProfile.actions;
+    const actionCapacity = actionCapabilities
+      ? Math.min(
+          actionCapabilities.maxActions,
+          (actionCapabilities.maxRows ?? Number.POSITIVE_INFINITY)
+            * actionCapabilities.maxActionsPerRow,
+        )
+      : 0;
+    if (
+      awaitReply
+      && actionCapacity >= 2
+      && (
+        replyOptions.length + 1 > actionCapacity
+        || replyOptions.some((option) =>
+          option.label.length > (actionCapabilities?.maxLabelLength ?? 40)
+        )
+      )
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            `This messaging provider supports at most ${actionCapacity - 1} private reply option(s) plus Cancel; labels must fit its button limit.`,
         },
       };
     }
@@ -18122,27 +18296,66 @@ export class MessagingController {
       routingState: privateConversation.routingState,
     };
     const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+    if (awaitReply && !sourceBinding) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message: "A private reply needs an originating conversation for its completion.",
+        },
+      };
+    }
     const sourceThread = sourceBinding
       ? await this.resolveBoundThreadSummary(sourceBinding)
       : undefined;
     const attributionLabel = sourceBinding
       ? responseAttributionLabel(sourceBinding, sourceThread)
       : "PwrAgent Agent";
+    const requestId = awaitReply ? randomUUID() : undefined;
+    // Interactive cards use one provider text block. Keep long private content
+    // on the ordinary message path so provider block limits cannot clip it.
+    const buttonActions = awaitReply && requestId && actionCapacity >= 2 && text.length <= 2_000
+      ? [
+          ...replyOptions.map((option, index) => ({
+            id: `private-reply:${requestId}:reply:${index}`,
+            label: option.label,
+            style: "primary" as const,
+          })),
+          {
+            id: `private-reply:${requestId}:cancel`,
+            label: "Cancel",
+            style: "secondary" as const,
+          },
+        ]
+      : [];
     const result = await this.deliver(
-      {
-        id: this.newIntentId("private-response"),
-        kind: "message",
-        bindingId: sourceBinding?.id,
-        createdAt: this.now(),
-        role: "assistant",
-        attribution: {
-          label: attributionLabel,
-          hint: awaitReply
-            ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
-            : "Private Request · Reply in Thread to Respond to this Agent",
-        },
-        parts: [{ type: "text", text, markdown: "markdown" }],
-      },
+      buttonActions.length > 0
+        ? {
+            ...buildConfirmationIntent({
+              id: this.newIntentId("private-response"),
+              capabilityProfile: this.capabilityProfile,
+              createdAt: this.now(),
+              title: attributionLabel,
+              body: `${text}\n\nChoose a button or reply in this message's thread. Completion returns to the original conversation.`,
+              actions: buttonActions,
+            }),
+            allowedActorIds: [origin.origin.event.actor.platformUserId],
+            bindingId: sourceBinding?.id,
+          }
+        : {
+            id: this.newIntentId("private-response"),
+            kind: "message",
+            bindingId: sourceBinding?.id,
+            createdAt: this.now(),
+            role: "assistant",
+            attribution: {
+              label: attributionLabel,
+              hint: awaitReply
+                ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
+                : "Private Request · Reply in Thread to Respond to this Agent",
+            },
+            parts: [{ type: "text", text, markdown: "markdown" }],
+          },
       undefined,
       privateEvent,
     );
@@ -18231,6 +18444,12 @@ export class MessagingController {
               createdAt: this.now(),
               expiresAt: this.now() + PRIVATE_REPLY_CONTINUATION_TTL_MS,
               instructions: replyInstructions,
+              ...(requestId ? { requestId } : {}),
+              ...(result.surface ? { requestSurface: result.surface } : {}),
+              replyOptions: replyOptions.map((option) => ({
+                label: option.label.trim(),
+                text: option.text.trim(),
+              })),
               source: privateReplySourceFromBinding(sourceBinding),
             },
             updatedAt: this.now(),
@@ -20211,6 +20430,27 @@ function readQueuedTurnAction(
     };
   }
 
+  return undefined;
+}
+
+function readPrivateReplyAction(
+  event: MessagingInboundCallbackEvent,
+): PrivateReplyAction | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  const parts = actionId.split(":");
+  if (parts[0] !== "private-reply" || !parts[1] || parts.length < 3) {
+    return undefined;
+  }
+  if (parts[2] === "cancel" && parts.length === 3) {
+    return { kind: "cancel", requestId: parts[1] };
+  }
+  if (parts[2] === "reply" && parts.length === 4 && /^[0-2]$/.test(parts[3] ?? "")) {
+    return {
+      kind: "reply",
+      optionIndex: Number(parts[3]),
+      requestId: parts[1],
+    };
+  }
   return undefined;
 }
 

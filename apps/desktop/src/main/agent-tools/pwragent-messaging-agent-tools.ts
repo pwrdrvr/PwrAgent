@@ -121,7 +121,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "rename_current_messaging_conversation":
       return "Rename the current messaging conversation or thread that started this Agent turn. Use when the user asks to name the current Slack thread, Agent Session, Telegram topic, or equivalent surface. Use this PwrAgent operation instead of Browser or Computer Use. This cannot target another conversation and does not rename the PwrAgent Agent thread.";
     case "send_private_response":
-      return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to start a continuation from one private reply. Only the continuation's final response returns to the source surface. This tool works only in an active messaging turn and cannot target another user.";
+      return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to start a continuation from one private reply. When buttons are supported, PwrAgent adds I did it and Cancel; set replyOptions to offer up to three specific replies instead. The user can also reply in the private message's thread. Only the continuation's final response returns to the source surface. This tool works only in an active messaging turn and cannot target another user.";
     case "send_messaging_file":
       return "Send a local file that is not already in the response. Use this for a rendered PDF, zip, or installer. Do not use it for an image you will embed in the final reply. Those images already go to this messaging surface. Do not use this tool to inspect a file. Requires an absolute filesystem path. Optional caption, filename, mediaKind, and private. private=true DMs the requesting user without suppressing the source reply. Call get_current_messaging_surface for this surface's outboundAttachments limits before sending a large file. Works only on the active messaging origin.";
     case "attach_thread_here":
@@ -178,6 +178,22 @@ function inputSchemaForOperation(
             maxLength: 4_000,
             description:
               "Explain how to turn the private reply into the final source response. Include content that must stay private. Use only with awaitReply=true.",
+          },
+          replyOptions: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            description:
+              "Optional buttons for awaitReply. Each sends its text as the private reply. PwrAgent adds Cancel. Use short, nonsecret labels and text; for example I did it / I completed the login.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["label", "text"],
+              properties: {
+                label: { type: "string", minLength: 1, maxLength: 40 },
+                text: { type: "string", minLength: 1, maxLength: 500 },
+              },
+            },
           },
           text: {
             type: "string",

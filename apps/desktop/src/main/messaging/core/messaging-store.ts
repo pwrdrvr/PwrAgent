@@ -980,6 +980,13 @@ function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecor
     privateReplyContinuation: binding.privateReplyContinuation
       ? {
           ...binding.privateReplyContinuation,
+          requestSurface: sanitizeSurfaceRef(
+            binding.privateReplyContinuation.requestSurface,
+          ),
+          replyOptions: binding.privateReplyContinuation.replyOptions?.map((option) => ({
+            label: option.label,
+            text: option.text,
+          })),
           source: {
             ...binding.privateReplyContinuation.source,
             authorizedActorIds: [
