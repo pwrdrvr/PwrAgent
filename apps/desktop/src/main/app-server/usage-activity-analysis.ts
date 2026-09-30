@@ -1,6 +1,8 @@
-import type {
-  AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse,
-  AppServerReadThreadRequest, AppServerReadThreadResponse, AppServerThreadEntry,
+import {
+  USAGE_ANALYSIS_MODEL_BACKENDS,
+  type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse,
+  type AppServerReadThreadRequest, type AppServerReadThreadResponse, type AppServerThreadEntry,
+  type UsageAnalysisModelBackend,
 } from "@pwragent/shared";
 import type { ThreadTitleAdapterResult } from "./thread-title-generation-service";
 
@@ -10,6 +12,20 @@ type Generate = (params: {
   isMatch: (value: Record<string, unknown>) => boolean;
   turnTimeoutMs: number;
 }) => Promise<ThreadTitleAdapterResult>;
+
+/**
+ * The backend a request asks to run its analysis. Absent is Codex, which is
+ * all an older viewer sends. Anything this owner cannot run is refused before
+ * a transcript is read.
+ */
+export function usageAnalysisModelBackend(request: Pick<AnalyzeUsageActivityRequest, "modelBackend">): UsageAnalysisModelBackend {
+  const value: unknown = request.modelBackend;
+  if (value === undefined) return "codex";
+  if (typeof value === "string" && (USAGE_ANALYSIS_MODEL_BACKENDS as readonly string[]).includes(value)) {
+    return value as UsageAnalysisModelBackend;
+  }
+  throw new Error(`Analysis cannot run on ${typeof value === "string" ? value.slice(0, 40) : "that backend"} here.`);
+}
 
 export async function analyzeUsageActivity(
   request: AnalyzeUsageActivityRequest,
@@ -23,6 +39,7 @@ export async function analyzeUsageActivity(
     || (request.turnId !== undefined && (typeof request.turnId !== "string" || !request.turnId || request.turnId.length > 200))) {
     throw new Error("Select 1–100 entries and 1,000–40,000 characters with a valid model.");
   }
+  const modelBackend = usageAnalysisModelBackend(request);
   // Owner-local protocol reads only, never Federation fanout. A requested turn
   // is sought through at most MAX_TURN_PAGES pages of ten turns, newest first.
   let response = await read({ backend: request.backend, threadId: request.threadId, limit: 10, viewOnly: true });
@@ -79,7 +96,7 @@ export async function analyzeUsageActivity(
   if (typeof object?.analysis !== "string") throw new Error("Analysis returned no text.");
   return { analysis: object.analysis.slice(0, 20_000), model: result.model ?? request.model,
     entries, characters, truncated, hasEarlierHistory: response.replay.pagination.hasPreviousPage,
-    scope, pagesRead };
+    scope, pagesRead, modelBackend };
 }
 
 const MAX_TURN_PAGES = 5;

@@ -26273,6 +26273,91 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("runs Usage Activity analysis on Grok on an agent process of its own, never the pooled client", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    let say: (text: string) => void = () => undefined;
+    const transport = {
+      request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method === "initialize") {
+          return { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {} } } };
+        }
+        if (method === "session/new") {
+          return { sessionId: "grok-analysis", models: { currentModelId: "grok-4.7", availableModels: [{ modelId: "grok-4.7" }] } };
+        }
+        if (method === "session/prompt") {
+          say('{"analysis":"Two identical rg dumps."}');
+          return { stopReason: "end_turn", _meta: { modelId: "grok-4.7" } };
+        }
+        return {};
+      }),
+      notify: vi.fn(async () => undefined),
+      onNotification: (listener: (method: string, params: Record<string, unknown>) => void) => {
+        say = (text) => listener("session/update", {
+          sessionId: "grok-analysis",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+        });
+        return () => undefined;
+      },
+      onRequest: () => () => undefined,
+      close: vi.fn(async () => undefined),
+    };
+    const pooledClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      sendControlPrompt: vi.fn(),
+    };
+    const overlayStore = Object.assign(createOverlayStoreMock(), {
+      readUsageActivity: vi.fn(async () => ({ rows: [], truncated: false, limitHistory: [] })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        { ...createKimiAgentRecord(acpBackendId), registryId: "grok", name: "Grok" },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([]),
+      createAcpClient: () => pooledClient as never,
+      createAcpTransport: () => transport,
+      resolveAcpHelperWorkspace: async () => "/profile/state/acp-helper-workspace",
+    });
+    vi.spyOn(registry, "readThread").mockResolvedValue({
+      backend: "codex", threadId: "thread", fetchedAt: 1,
+      replay: {
+        entries: [{ type: "message", id: "m1", role: "assistant", text: "Ran rg twice." }],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+    } as unknown as Awaited<ReturnType<typeof registry.readThread>>);
+
+    await expect(registry.readUsageActivity({ from: 1, to: 2 }))
+      .resolves.toMatchObject({ analysisModelBackends: ["codex", "acp:grok"] });
+    await expect(registry.analyzeUsageActivity({
+      backend: "codex", threadId: "thread", model: "grok-4.7", modelBackend: "acp:grok",
+      entryLimit: 10, characterLimit: 1000,
+    })).resolves.toMatchObject({ analysis: "Two identical rg dumps.", model: "grok-4.7", modelBackend: "acp:grok" });
+
+    expect(calls.map((call) => call.method)).toEqual([
+      "initialize", "session/new", "session/prompt", "session/close", "_x.ai/session/delete",
+    ]);
+    expect(calls[1]?.params).toMatchObject({
+      cwd: "/profile/state/acp-helper-workspace",
+      mcpServers: [],
+      _meta: {
+        agentProfile: expect.objectContaining({
+          disallowedTools: ["read_file", "search_tool", "use_tool"],
+        }),
+      },
+    });
+    expect(transport.close).toHaveBeenCalledOnce();
+    expect(pooledClient.startSession).not.toHaveBeenCalled();
+    expect(pooledClient.sendControlPrompt).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("reports the generated candidate when an ACP durable title arrives first", async () => {
     const acpBackendId = "acp:grok" as AcpBackendId;
     const prompt = "What is your favorite cereal?";

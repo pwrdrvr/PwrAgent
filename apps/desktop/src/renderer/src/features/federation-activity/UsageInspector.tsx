@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AnalyzeUsageActivityResponse, BackendModelOption } from "@pwragent/shared";
+import type { AnalyzeUsageActivityResponse, UsageAnalysisModelBackend } from "@pwragent/shared";
 import { Select } from "../../components/Select";
 import { usageClock, usageMoney } from "./usage-activity-presentation";
 import type { OwnedUsageRow, UsageGroup } from "./usage-activity-summary";
@@ -12,6 +12,17 @@ const cacheShare = (row: OwnedUsageRow) => {
 };
 
 export type AnalysisScope = "turn" | "recent";
+
+/** A model the owner can run analysis on, and the agent that serves it. */
+export type AnalysisModelChoice = { backend: UsageAnalysisModelBackend; id: string; label: string; agent: string };
+
+/** One picker value per backend and model. Model IDs never contain a space. */
+export const analysisModelKey = (backend: UsageAnalysisModelBackend, id: string) => `${backend} ${id}`;
+export function parseAnalysisModelKey(key: string): { backend: UsageAnalysisModelBackend; id: string } {
+  const space = key.indexOf(" ");
+  return { backend: key.slice(0, space) as UsageAnalysisModelBackend, id: key.slice(space + 1) };
+}
+export const DEFAULT_ANALYSIS_MODEL = analysisModelKey("codex", "gpt-6-luna");
 
 /** An analysis request and where it got to. `key` names the thread and turn it read. */
 export type UsageAnalysis = { key: string; startedAt: number; owner: string; modelLabel: string } & (
@@ -43,7 +54,8 @@ export function UsageInspector(props: {
   onOpenThread?: () => void;
   scope: AnalysisScope;
   onScope: (scope: AnalysisScope) => void;
-  models: BackendModelOption[];
+  models: AnalysisModelChoice[];
+  /** An `analysisModelKey`. */
   model: string;
   onModel: (model: string) => void;
   entryLimit: string;
@@ -74,8 +86,10 @@ export function UsageInspector(props: {
   const largest = Math.max(1, ...turns.map((row) => priced(row) ? row.line.totalCostMicros : 0));
   const target = turn ?? lead;
   const turnScope = props.scope === "turn" && target.line.turnId !== undefined && !target.rollup;
-  const models = [{ value: "gpt-6-luna", label: "GPT-6-Luna" },
-    ...props.models.filter((item) => item.id !== "gpt-6-luna").map((item) => ({ value: item.id, label: item.label ?? item.id }))];
+  // Each model names the agent it runs in, since the owner may offer several.
+  const models = [{ value: DEFAULT_ANALYSIS_MODEL, label: "GPT-6-Luna", description: "Codex" },
+    ...props.models.map((item) => ({ value: analysisModelKey(item.backend, item.id), label: item.label, description: item.agent }))
+      .filter((item) => item.value !== DEFAULT_ANALYSIS_MODEL)];
 
   const turnList = group ? <div className="usage-turns">
     <div className="usage-eyebrow">Turns in window <span className="usage-subtle">· cached · cost</span></div>
@@ -112,7 +126,7 @@ export function UsageInspector(props: {
     <p className="usage-analysis__scope">{turnScope
       ? `Reads the turn from ${usageClock(target.line.startedAt ?? target.line.createdAt)} on ${target.owner}. If it is older than the last 50 turns, the recent entries are read instead.`
       : `Reads the thread's most recent entries on ${target.owner}. They may not include the turns in this window.`}
-      {" "}This is a model call of its own, and it uses your limit. Analysis runs on Codex models.</p>
+      {" "}This is a model call of its own, and it uses your limit with that model's provider. The model reads only this excerpt and gets no tools.</p>
   </section>;
 
   const outcome = analysis?.status === "done" ? <div className="usage-analysis__result" role="status">

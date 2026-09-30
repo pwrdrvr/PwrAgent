@@ -1,10 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import type { BackendSummary, ListBackendsResponse, ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { UsageActivity } from "./UsageActivity";
 import { usageFixture } from "./usage-activity-fixture";
-import { chooseSelectOption } from "../../test/select";
+import { chooseSelectOption, selectListbox, selectOptionLabels } from "../../test/select";
 
 const HOUR = 3_600_000;
 
@@ -71,6 +71,47 @@ it("reads on open, skips offline peers, names outdated ones, and analyzes the se
   await waitFor(() => expect(analyzeUsageActivity).toHaveBeenCalledTimes(2));
   expect(analyzeUsageActivity).toHaveBeenLastCalledWith({ backend: "codex", threadId: "thread",
     federationTarget: { scope: "remote", instanceId: "owner" }, model: "gpt-6-luna", entryLimit: 40, characterLimit: 20000 });
+});
+
+it("offers the owner's Grok models by agent and sends the one chosen, only to an owner that runs them", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const row = usageFixture({ createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR });
+  const backend = (kind: string, label: string, available: boolean, models: Array<{ id: string; label: string }>) =>
+    ({ kind, label, available, launchpadOptions: { models } }) as unknown as BackendSummary;
+  const listBackends = vi.fn(async () => ({ backends: [
+    backend("codex", "Codex", true, [{ id: "gpt-6-luna", label: "GPT-6-Luna" }, { id: "gpt-6", label: "GPT-6" }]),
+    backend("acp:grok", "Grok", true, [{ id: "grok-4.7", label: "Grok 4.7" }, { id: "grok-4.7-build-fast", label: "Grok 4.7 Fast" }]),
+    backend("acp:kimi", "Kimi Code", true, [{ id: "k3", label: "K3" }]),
+  ] }) as unknown as ListBackendsResponse);
+  let owner: "current" | "older" = "current";
+  const readUsageActivity = vi.fn(async () => ({ rows: [row], readAt: now, rateLimits: [], truncated: false,
+    ...owner === "current" ? { analysisModelBackends: ["codex" as const, "acp:grok" as const] } : {} }));
+  const analyzeUsageActivity = vi.fn(async () => ({ analysis: "Grok's diagnosis.", model: "grok-4.7", entries: 4, characters: 8000,
+    truncated: false, hasEarlierHistory: false, scope: "turn" as const, pagesRead: 1, modelBackend: "acp:grok" as const }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, analyzeUsageActivity, listBackends }} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Inspect Fixture thread" }));
+  const picker = screen.getByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(selectOptionLabels(picker)).toContain("Grok 4.7"));
+  // Codex first, then each agent the owner runs; an agent it cannot run is not offered.
+  expect(selectOptionLabels(picker)).toEqual(["GPT-6-Luna", "GPT-6", "Grok 4.7", "Grok 4.7 Fast"]);
+  fireEvent.click(picker);
+  expect(within(selectListbox(picker)).getByRole("option", { name: /^Grok 4\.7 Fast/ })).toHaveTextContent("Grok");
+  fireEvent.click(picker);
+  expect(screen.getByText(/The model reads only this excerpt and gets no tools\./)).toBeInTheDocument();
+
+  chooseSelectOption(picker, /^Grok 4\.7(?! Fast)/);
+  fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
+  await screen.findByText("Grok's diagnosis.");
+  expect(analyzeUsageActivity).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread", turnId: "turn",
+    federationTarget: { scope: "local" }, model: "grok-4.7", modelBackend: "acp:grok", entryLimit: 40, characterLimit: 20000 });
+
+  // An owner that predates the field lists no backends, so Grok is not offered
+  // and the choice returns to the default.
+  owner = "older";
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  await waitFor(() => expect(selectOptionLabels(screen.getByRole("combobox", { name: "Model" }))).toEqual(["GPT-6-Luna", "GPT-6"]));
+  expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("GPT-6-Luna");
 });
 
 it("keeps the list usable while an analysis runs, and keeps its answer with the turn it read", async () => {

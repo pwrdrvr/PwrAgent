@@ -145,18 +145,36 @@ result says so. **Recent entries** reads the newest page only. Entries are then
 trimmed to the operator's 1–100 entry and 1,000–40,000 character bounds.
 
 Remote analysis requires `turn_control`; transcript-read permission alone
-cannot start this model call. The owner supplies its available Codex model
-choices. Analysis runs on Codex only: ACP agents such as Grok have no one-shot
-structured call yet, though a Grok thread's transcript can be analyzed by a
-Codex model. Only text and activity descriptions enter the prompt. Images,
-full-history walks, automatic analysis fanout and Codex storage-file reads are
-excluded. While it runs, the inspector shows the owner, the model and the
-elapsed time; the thread list stays usable, and only a second analysis waits.
-The answer, or the failure, stays with the thread and turn it read, and the
-inspector scrolls to it when it arrives. The existing ephemeral structured helper disables execution,
-delegation, web search and configured MCP tools. Analysis consumes model usage
-from the owner's limit, reports unavailable transcripts/providers, and does not
-persist its answer.
+cannot start this model call. The owner supplies its model choices, and each
+names the agent that runs it. Codex models are always offered. Grok models are
+offered when the owner has Grok available and lists `acp:grok` in its
+`analysisModelBackends`; an older owner lists none, so it is offered Codex
+only. The model need not match the thread's agent: a Codex thread can be
+analyzed by Grok, and a Grok thread by Codex. The request names the runner in
+`modelBackend`, which is absent for Codex, and the owner refuses a backend it
+cannot run before it reads the transcript. Only text and activity descriptions
+enter the prompt. Images, full-history walks, automatic analysis fanout and
+Codex storage-file reads are excluded. While it runs, the inspector shows the
+owner, the model and the elapsed time; the thread list stays usable, and only a
+second analysis waits. The answer, or the failure, stays with the thread and
+turn it read, and the inspector scrolls to it when it arrives.
+
+Neither runner can act. Codex uses its ephemeral structured helper, which
+disables execution, delegation, web search and configured MCP tools. Grok runs
+on an agent process of its own, started for the call and stopped after it, in
+a PwrAgent-owned directory (`state/acp-helper-workspace` in the profile), never
+the thread's workspace. Its agent profile removes every tool, including the MCP
+meta-tools that would otherwise reach the servers in the operator's Grok
+config; Grok runs read-only tools without asking, so refusing permission
+requests alone would not be enough. Every permission request is refused all the
+same. The call is bounded to 90 seconds, agent start included, and to 32,000
+answer characters. The answer must be the requested JSON object; prose is
+reported as a failure. Afterwards Grok is asked to close and delete the
+session, so it appears in no Grok or PwrAgent session list. Grok still keeps
+each prompt in that directory's prompt history, which it caps itself.
+Analysis consumes model usage from the owner's limit with the model's
+provider, reports unavailable transcripts/providers, and does not persist its
+answer.
 
 Validation covers ledger reads with zero SQLite commits, the limit reading's
 zero added commits, timing boundaries, cumulative and monitor deduplication,
