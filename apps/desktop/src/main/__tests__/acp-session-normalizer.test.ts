@@ -772,6 +772,35 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("/repo/project");
   });
 
+  it("replays a cancelled turn as interrupted and a finished one as completed", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const runTurn = (turnId: string, at: number, stopReason?: string) => {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: at,
+        update: { kind: "pwragent_user_prompt", prompt: "Go", turnId },
+      });
+      return normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: at + 100,
+        update: {
+          kind: "turn_finished",
+          turnId,
+          ...(stopReason ? { stopReason } : {}),
+        },
+      });
+    };
+
+    runTurn("pending:session-1:1000", 1000);
+    const replay = runTurn("pending:session-1:2000", 2000, "cancelled");
+
+    const statusOf = (turnId: string) => replay.entries.find(
+      (entry) => entry.turn?.id === turnId,
+    )?.turn;
+    expect(statusOf("pending:session-1:1000")).toMatchObject({ status: "completed", completedAt: 1100 });
+    expect(statusOf("pending:session-1:2000")).toMatchObject({ status: "interrupted", completedAt: 2100 });
+  });
+
   it("upserts plans and tool activities", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

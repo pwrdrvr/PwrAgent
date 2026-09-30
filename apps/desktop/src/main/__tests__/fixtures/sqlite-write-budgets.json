@@ -846,6 +846,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "usage-turn-shutdown-interrupt": {
+    "commits": 2,
+    "note": "Quit with a Codex and an ACP turn running, both answering their stop request: one ledger commit per turn, from its own terminal; no shutdown stamp",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "usage-turn-startup-repair": {
     "commits": 1,
     "note": "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",

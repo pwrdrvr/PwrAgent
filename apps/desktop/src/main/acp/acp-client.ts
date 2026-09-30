@@ -785,11 +785,20 @@ export class AcpAgentClient {
       .then((result) => {
         this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
-        const finished = this.finishTrackedTurn(params.sessionId, receivedAt);
+        // A prompt that session/cancel stopped settles normally, with
+        // stopReason cancelled. Carry that through, so the transcript and
+        // the terminal event say the turn was interrupted, not completed.
+        const cancelled = promptWasCancelled(result);
+        const finished = this.finishTrackedTurn(
+          params.sessionId,
+          receivedAt,
+          cancelled ? "interrupted" : "completed",
+        );
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
           kind: "turn_finished",
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
           outputText: finished.assistantText,
+          ...(cancelled ? { stopReason: "cancelled" } : {}),
         });
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
@@ -798,6 +807,7 @@ export class AcpAgentClient {
           update: {
             kind: "turn_finished",
             outputText: finished.assistantText,
+            ...(cancelled ? { stopReason: "cancelled" } : {}),
           },
         });
       })
@@ -1752,7 +1762,11 @@ export class AcpAgentClient {
     ]);
   }
 
-  private finishTrackedTurn(sessionId: string, completedAt: number): {
+  private finishTrackedTurn(
+    sessionId: string,
+    completedAt: number,
+    status: "completed" | "interrupted" = "completed",
+  ): {
     assistantText: string;
     replay: AppServerThreadReplay;
     turnId?: string;
@@ -1762,6 +1776,7 @@ export class AcpAgentClient {
     const replay = this.normalizerFor(sessionId).recordTurnFinished(
       activeTurn?.turnId,
       completedAt,
+      status,
     );
     this.updateSessionStatus(sessionId, "idle");
     return {
@@ -1775,11 +1790,7 @@ export class AcpAgentClient {
     sessionId: string,
     result: unknown,
   ): void {
-    const resultRecord = asRecord(result);
-    if (
-      resultRecord?.stopReason === "cancelled"
-      || resultRecord?.stop_reason === "cancelled"
-    ) {
+    if (promptWasCancelled(result)) {
       return;
     }
     const activeTurn = this.activeTurns.get(sessionId);
@@ -2260,6 +2271,12 @@ function selectPermissionOptionId(
 
 function textPrompt(text: string): AcpPromptContentBlock[] {
   return [{ type: "text", text }];
+}
+
+function promptWasCancelled(result: unknown): boolean {
+  const resultRecord = asRecord(result);
+  return resultRecord?.stopReason === "cancelled"
+    || resultRecord?.stop_reason === "cancelled";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
