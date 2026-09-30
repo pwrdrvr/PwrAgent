@@ -6,6 +6,7 @@ import {
   assertOnboardingSeedTook,
   closeElectronApplication,
   configureElectronE2eSecretStorageEnv,
+  configureElectronE2eReleaseEnv,
   nextRendererViewportRequest,
   resolveSeedConfigPath,
   selectWindowsElectronCleanupPids,
@@ -19,6 +20,14 @@ import {
 } from "../settings/desktop-secret-store";
 
 describe("Electron E2E fixture teardown", () => {
+  it("enforces release isolation after spec overrides and preserves other Node options", () => {
+    const env = { PWRAGENT_E2E: "0", NODE_OPTIONS: "--max-old-space-size=2048" };
+    configureElectronE2eReleaseEnv(env);
+    expect(env.PWRAGENT_E2E).toBe("1");
+    expect(env.NODE_OPTIONS).toMatch(/^--max-old-space-size=2048 --require "/);
+    expect(env.NODE_OPTIONS).toContain("github-release-stubs.cjs");
+  });
+
   it("kills only the identified Windows main process or its owned direct children", () => {
     const mainProcess = { pid: 120, startedAt: 10_000 };
     expect(selectWindowsElectronCleanupPids([

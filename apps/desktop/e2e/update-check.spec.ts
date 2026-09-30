@@ -18,6 +18,37 @@ import {
 } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
+test("main-process release transports are isolated before startup", async () => {
+  const app = await launchElectronApp({ requiresReplayDriver: false });
+  try {
+    const observed = await app.electronApp.evaluate(async ({ net }) => {
+      const urls = [
+        "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30",
+        "https://api.github.com/repos/pwrdrvr/PwrGit/releases/latest",
+        "https://api.github.com/repos/pwrdrvr/PwrSnap/releases/latest",
+        "https://api.github.com/repos/cloudflare/cloudflared/releases/latest",
+      ];
+      const responses = await Promise.all(urls.map(async (url) => {
+        const response = await fetch(url);
+        return [response.status, response.headers.get("x-pwragent-e2e")];
+      }));
+      let electronRequestBlocked = false;
+      try {
+        net.request(urls[0]);
+      } catch (error) {
+        electronRequestBlocked = String(error).includes("must be stubbed");
+      }
+      return { responses, electronRequestBlocked };
+    });
+    expect(observed).toEqual({
+      responses: [[200, "release-stub"], [404, "release-stub"], [404, "release-stub"], [404, "release-stub"]],
+      electronRequestBlocked: true,
+    });
+  } finally {
+    await app.close();
+  }
+});
+
 const FAKE_VERSION = "420.0.0";
 /** Slow enough that the mid-download card is a target, not a race. Seven
  *  percent ticks at this pace give roughly six seconds to act. */

@@ -57,6 +57,14 @@ import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
+/** Apply after spec overrides; profile helper processes inherit both values. */
+export function configureElectronE2eReleaseEnv(env: Record<string, string>): void {
+  env.PWRAGENT_E2E = "1";
+  const preload = path.join(fixtureDir, "github-release-stubs.cjs");
+  env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require ${JSON.stringify(preload)}`]
+    .filter(Boolean).join(" ");
+}
+
 /**
  * The built main-process entry every E2E launch runs. Exported so callers
  * that need to check for a build (the pre-flight canary) cannot drift from
@@ -344,6 +352,7 @@ export async function launchElectronApp(
       env[key] = value;
     }
   }
+  configureElectronE2eReleaseEnv(env);
   anchorWindowsPwragentRoot(env);
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {

@@ -293,7 +293,7 @@ describe("profile IPC helpers", () => {
     expect(fs.existsSync(response.profileDir)).toBe(true);
   });
 
-  it("openDesktopPwrAgentProfile normalizes and preserves the E2E secret-storage opt-out", async () => {
+  it("openDesktopPwrAgentProfile normalizes and preserves E2E network and secret-storage isolation", async () => {
     const root = createRoot();
     const env = {
       [PWRAGENT_HOME_ENV]: root,
@@ -304,6 +304,8 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
     vi.stubEnv(SECRET_STORAGE_DISABLED_ENV, "1");
+    vi.stubEnv("PWRAGENT_E2E", "1");
+    vi.stubEnv("NODE_OPTIONS", '--require "/fixture/github-release-stubs.cjs"');
     const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
 
     const response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
@@ -316,6 +318,8 @@ describe("profile IPC helpers", () => {
         env: expect.objectContaining({
           [PWRAGENT_PROFILE_ENV]: "my-work-profile",
           [SECRET_STORAGE_DISABLED_ENV]: "1",
+          PWRAGENT_E2E: "1",
+          NODE_OPTIONS: '--require "/fixture/github-release-stubs.cjs"',
         }),
       }),
     );

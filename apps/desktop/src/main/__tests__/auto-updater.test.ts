@@ -1202,7 +1202,9 @@ describe("auto updater", () => {
       });
     });
 
-    it("walks the whole machine without reaching GitHub", async () => {
+    it.each(["development", "production"])("walks the fake without GitHub under NODE_ENV=%s", async (nodeEnv) => {
+      process.env.NODE_ENV = nodeEnv;
+      process.env.PWRAGENT_E2E = "1";
       const updater = await importAutoUpdater();
 
       await expect(runFakeCheck(updater, "menu")).resolves.toEqual({
@@ -1687,7 +1689,9 @@ describe("auto updater", () => {
 
     updater.initAutoUpdater();
     const result = await updater.checkForAppUpdatesNow("startup");
-    await vi.advanceTimersByTimeAsync(updater.APP_UPDATE_CHECK_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(2 * updater.APP_UPDATE_CHECK_INTERVAL_MS);
+    await updater.checkForAppUpdatesNow("manual");
+    await updater.readAppUpdateReleaseVersions();
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
