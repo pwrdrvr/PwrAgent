@@ -131,6 +131,8 @@ import {
   type PrSummary,
   type PrAutoDispatchBudgetConfig,
   type PrAutoDispatchBudgetStatus,
+  type CodexAppServerRestartResult,
+  type CodexAppServerRestartStatus,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
@@ -260,6 +262,9 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
+  APP_SERVER_RESTART_CODEX_CHANNEL,
+  CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
@@ -8212,6 +8217,7 @@ const prPollingFocusCleanupSenderIds = new Set<number>();
 const transcriptPrCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
+let unsubscribeCodexRestartStatus: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
 function invalidateNavigationEvent(event: AgentEvent): void {
@@ -8307,6 +8313,37 @@ export function registerAppServerIpcHandlers(): void {
     APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
     async (): Promise<PrAutoDispatchBudgetStatus> =>
       await appServerService.resumePrAutoDispatchBudget(),
+  );
+
+  // Only local windows see or restart this machine's Codex process.
+  unsubscribeCodexRestartStatus?.();
+  unsubscribeCodexRestartStatus =
+    getDesktopBackendRegistry().onCodexAppServerRestartStatusChanged((status) => {
+      for (const webContents of subscribersForChannel(
+        CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+      )) {
+        if (!webContents.isDestroyed()) {
+          webContents.send(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, status);
+        }
+      }
+    });
+  ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
+    (event): CodexAppServerRestartStatus =>
+      isFederationWindowWebContents(event?.sender)
+        ? { stopped: false }
+        : getDesktopBackendRegistry().getCodexAppServerRestartStatus(),
+  );
+  ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESTART_CODEX_CHANNEL,
+    async (event): Promise<CodexAppServerRestartResult> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("A remote window cannot restart this machine's Codex.");
+      }
+      return await getDesktopBackendRegistry().restartCodexAppServer();
+    },
   );
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
@@ -9389,6 +9426,10 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents = undefined;
   unsubscribeNavigationRemoteEvents?.();
   unsubscribeNavigationRemoteEvents = undefined;
+  unsubscribeCodexRestartStatus?.();
+  unsubscribeCodexRestartStatus = undefined;
+  ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

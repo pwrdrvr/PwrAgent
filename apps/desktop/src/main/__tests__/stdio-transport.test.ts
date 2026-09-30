@@ -104,8 +104,19 @@ describe("StdioJsonRpcTransport", () => {
     const crashed = new MockCodexChildProcess();
     spawnMock.mockReturnValue(crashed);
     await transport.connect();
-    crashed.emit("close");
+    for (let line = 1; line <= 25; line += 1) {
+      crashed.stderr.write(`ERROR codex_core::panic: line ${line}\n`);
+    }
+    crashed.stderr.write(`${"x".repeat(600)}\n`);
+    await new Promise((resolve) => setImmediate(resolve));
+    crashed.emit("close", null, "SIGSEGV");
     expect(exited).toHaveBeenCalledTimes(1);
+    const exit = exited.mock.calls[0]![0];
+    expect(exit).toMatchObject({ code: null, signal: "SIGSEGV" });
+    // A bounded tail, oldest first, with each line capped.
+    expect(exit.stderrPreview).toHaveLength(20);
+    expect(exit.stderrPreview[0]).toBe("ERROR codex_core::panic: line 7");
+    expect(exit.stderrPreview.at(-1)).toBe(`${"x".repeat(500)}…[truncated]`);
 
     const stopped = new MockCodexChildProcess();
     spawnMock.mockReturnValue(stopped);

@@ -216,6 +216,7 @@ class MockTransport implements JsonRpcTransport {
   mcpServerStatusResponse?: () => void;
   readonly options?: unknown;
   closeCount = 0;
+  connectCount = 0;
   readonly loadedThreads = new Set<string>();
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -226,13 +227,25 @@ class MockTransport implements JsonRpcTransport {
   }
 
   async connect(): Promise<void> {
-    return;
+    this.connectCount += 1;
   }
 
   async close(): Promise<void> {
     this.closeCount += 1;
     this.loadedThreads.clear();
     this.closeHandler();
+  }
+
+  /** What the stdio transport does when the process ends without close(). */
+  exitUnexpectedly(exit: { code: number | null; signal: NodeJS.Signals | null } = {
+    code: 1,
+    signal: null,
+  }): void {
+    this.loadedThreads.clear();
+    this.closeHandler();
+    (this.options as {
+      onUnexpectedExit: (exit: { code: number | null; signal: NodeJS.Signals | null; stderrPreview: string[] }) => void;
+    }).onUnexpectedExit({ ...exit, stderrPreview: [] });
   }
 
   send(message: string): void {
@@ -1439,7 +1452,7 @@ describe("CodexAppServerClient", () => {
     await vi.waitFor(() => expect(notifications.some((n) => n.method === "turn/completed")).toBe(true));
     const exitedAt = Date.now();
 
-    (transport.options as { onUnexpectedExit: () => void }).onUnexpectedExit();
+    transport.exitUnexpectedly();
 
     await vi.waitFor(() => expect(notifications.some((n) => n.method === "turn/failed")).toBe(true));
     const failures = notifications.filter((n) => n.method === "turn/failed");
@@ -1459,6 +1472,152 @@ describe("CodexAppServerClient", () => {
     expect((failures[0]!.params as { turn: { completedAt: number } }).turn.completedAt)
       .toBeGreaterThanOrEqual(exitedAt);
     await client.close();
+  });
+
+  it("restarts the app server after an unexpected exit once the backoff passes", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    const initializeCount = () => transport.sentMessages
+      .filter((message) => JSON.parse(message).method === "initialize").length;
+    transport.emitInbound({ method: "turn/started", params: {
+      threadId: "running-thread", turn: { id: "running-turn", status: "inProgress" },
+    } });
+    vi.useFakeTimers();
+    try {
+      transport.exitUnexpectedly({ code: null, signal: "SIGSEGV" });
+      expect(codexClientLogWarn).toHaveBeenCalledWith(
+        "Codex app server exited unexpectedly",
+        expect.objectContaining({ signal: "SIGSEGV", restartAttempt: 1, restartDelayMs: 1_000 }),
+      );
+
+      let settled = false;
+      const request = client.readRateLimits();
+      void request.finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+      expect(transport.connectCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(request).resolves.toBeDefined();
+      expect(transport.connectCount).toBe(2);
+      expect(initializeCount()).toBe(2);
+
+      // The new process runs no turn, so nothing fails a second time.
+      transport.exitUnexpectedly();
+      const second = client.readRateLimits();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(second).resolves.toBeDefined();
+      expect(transport.connectCount).toBe(3);
+      expect(notifications.filter((n) => n.method === "turn/failed")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({ threadId: "running-thread", turnId: "running-turn" }),
+        }),
+      ]);
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes the thread on a restarted app server before starting a turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.requireLoadedThreads = true;
+    const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
+    const turn = { threadId: "thread-2", input: [{ type: "text" as const, text: "Continue" }] };
+    await client.startTurn(turn);
+    const transport = MockTransport.instances.at(-1)!;
+    vi.useFakeTimers();
+    try {
+      transport.exitUnexpectedly();
+      const restarted = client.startTurn(turn);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(restarted).resolves.toMatchObject({ threadId: "thread-2" });
+      const methods = transport.sentMessages.map((message) => JSON.parse(message).method);
+      const secondInitialize = methods.lastIndexOf("initialize");
+      expect(methods.slice(secondInitialize)).toEqual(
+        expect.arrayContaining(["initialize", "thread/resume", "turn/start"]),
+      );
+      expect(methods.slice(secondInitialize).indexOf("thread/resume"))
+        .toBeLessThan(methods.slice(secondInitialize).indexOf("turn/start"));
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops restarting a crash-looping app server until the operator asks", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
+    const statuses: unknown[] = [];
+    client.onAppServerRestartStatusChanged((status) => { statuses.push(status); });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    vi.useFakeTimers();
+    try {
+      // Four exits restart after 1, 2, 4, and 8 seconds.
+      for (const delayMs of [1_000, 2_000, 4_000, 8_000]) {
+        transport.exitUnexpectedly();
+        const request = client.readRateLimits();
+        await vi.advanceTimersByTimeAsync(delayMs);
+        await expect(request).resolves.toBeDefined();
+      }
+      expect(transport.connectCount).toBe(5);
+      expect(statuses).toEqual([]);
+
+      transport.exitUnexpectedly({ code: 101, signal: null });
+      expect(statuses).toEqual([{
+        stopped: true,
+        stoppedAt: expect.any(Number),
+        exits: 5,
+        windowMs: 600_000,
+        lastExit: { code: 101, signal: null },
+      }]);
+      expect(client.getAppServerRestartStatus()).toMatchObject({ stopped: true });
+      await expect(client.readRateLimits()).rejects.toThrow(
+        "Codex stopped unexpectedly 5 times in 10 minutes, so PwrAgent stopped restarting it.",
+      );
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      await expect(client.readRateLimits()).rejects.toThrow("stopped restarting it");
+      expect(transport.connectCount).toBe(5);
+
+      await client.restartAppServer();
+      expect(transport.connectCount).toBe(6);
+      expect(statuses.at(-1)).toEqual({ stopped: false });
+      await expect(client.readRateLimits()).resolves.toBeDefined();
+
+      // The exit history is gone: the next exit backs off from one second.
+      transport.exitUnexpectedly();
+      const afterRestart = client.readRateLimits();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(afterRestart).resolves.toBeDefined();
+      expect(transport.connectCount).toBe(7);
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up a pending restart when the client is closed", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    vi.useFakeTimers();
+    try {
+      transport.exitUnexpectedly();
+      const waiting = client.readRateLimits();
+      const failure = expect(waiting).rejects.toThrow("codex app server client closed");
+      // close() must not wait out the backoff.
+      await client.close();
+      await failure;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(transport.connectCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails active turns and blocks probes until the rejected profile is verified", async () => {

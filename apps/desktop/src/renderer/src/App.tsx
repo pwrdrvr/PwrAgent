@@ -155,6 +155,10 @@ import {
   CODEX_VERSION_NOTICE_ID_PREFIXES,
   CodexVersionNotice,
 } from "./features/notifications/CodexVersionNotice";
+import {
+  CODEX_RESTART_NOTICE_ID_PREFIXES,
+  CodexRestartNotice,
+} from "./features/notifications/CodexRestartNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
@@ -847,6 +851,16 @@ function DesktopAppShell(props: {
     // A notice whose condition cleared (Codex updated, or the managed build
     // took over) must leave the screen, so sweep before showing the current one.
     for (const prefix of CODEX_VERSION_NOTICE_ID_PREFIXES) {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix });
+    }
+    if (notice) {
+      showAppNotice(notice);
+    }
+  }, [showAppNotice]);
+  const syncCodexRestartNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    for (const prefix of CODEX_RESTART_NOTICE_ID_PREFIXES) {
       dispatchAppNotice({ type: "dismiss-prefix", prefix });
     }
     if (notice) {
@@ -3384,6 +3398,10 @@ function DesktopAppShell(props: {
           snapshot={settings.snapshot}
           onNoticeChanged={syncCodexVersionNotice}
           onOpenCodexSettings={openCodexSettings}
+        />
+        <CodexRestartNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={syncCodexRestartNotice}
         />
         <AppNoticeStack
           desktopApi={desktopApi}
