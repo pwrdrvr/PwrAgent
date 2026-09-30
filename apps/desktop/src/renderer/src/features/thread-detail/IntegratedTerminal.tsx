@@ -90,7 +90,11 @@ export function IntegratedTerminal({
     let disposed = false;
     let cleanupTerminal: (() => void) | undefined;
 
-    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")])
+    void Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+      loadTerminalFonts(cssVariable("--font-mono")),
+    ])
       .then(([xtermModule, fitModule]) => {
         if (disposed) return;
 
@@ -396,6 +400,23 @@ function cssVariable(name: string): string {
   return getComputedStyle(document.documentElement)
     .getPropertyValue(name)
     .trim();
+}
+
+/**
+ * xterm measures its cell width once, at `open()`, and never re-measures when
+ * a web font arrives. A bundled face downloads only when text first asks for
+ * it, so without this the terminal could open on the fallback's metrics and
+ * draw Geist Mono glyphs into Menlo-sized cells. Loads the regular and bold
+ * faces xterm draws with; a failed load leaves xterm on the fallback, as
+ * before, rather than blocking the terminal.
+ */
+function loadTerminalFonts(family: string): Promise<unknown> {
+  const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
+  if (!family || !fonts?.load) return Promise.resolve();
+  return Promise.all([
+    fonts.load(`12px ${family}`),
+    fonts.load(`bold 12px ${family}`),
+  ]).catch(() => undefined);
 }
 
 function clampTerminalHeight(value: number): number {

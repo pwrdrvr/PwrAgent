@@ -16,11 +16,13 @@ function ruleBody(selector: string): string {
 /**
  * Rows that put a bare glyph beside a label in a flex container.
  *
- * The app names four fonts it does not ship (`--font-sans` lists Geist, IBM
- * Plex Sans, SF Pro Text, Inter) and declares no `@font-face`, so on any
- * machine without them installed every glyph is drawn by an OS substitute —
- * and an arrow like `←` gets a DIFFERENT substitute from the letters beside
- * it, because the substitute chosen for a character is per-character.
+ * When this was written the app named four fonts it did not ship and declared
+ * no `@font-face`, so on a machine without them every glyph was drawn by an OS
+ * substitute — and an arrow like `←` got a DIFFERENT substitute from the
+ * letters beside it, because the substitute chosen for a character is
+ * per-character. The app now bundles Geist Sans (fonts.css), but only its
+ * latin subset: a glyph outside it still falls through the stack to an OS
+ * font beside Geist letters, so the rule below still holds.
  *
  * `align-items: center` equalises each flex item's box, so two fonts with
  * different ascent/descent put the glyph off the label's baseline. Measured in

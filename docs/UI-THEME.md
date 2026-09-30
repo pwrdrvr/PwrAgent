@@ -405,8 +405,12 @@ Used by `.thread-row.is-selected` and its derivatives. Do not lend the bar to a 
 
 Use a restrained desktop typography system:
 
-- primary sans: `Geist`, `IBM Plex Sans`, `SF Pro Text`, `Inter`, `system-ui`, `sans-serif`
-- utility mono: `IBM Plex Mono`, `SFMono-Regular`, `SF Mono`, `Consolas`, `monospace`
+- primary sans: `Geist Sans`, `Geist`, `SF Pro Text`, `Inter`, `system-ui`, `sans-serif`
+- utility mono: `Geist Mono`, `SF Mono`, `JetBrains Mono`, `Consolas`, `monospace`
+
+The renderer bundles Geist Sans and Geist Mono from `@fontsource/geist-sans` and `@fontsource/geist-mono` (`styles/fonts.css`), the same packages PwrGit and PwrSnap ship. The package registers the sans as `Geist Sans`, not upstream's `Geist`, and a face loads only when a rule names it exactly, so each stack leads with the registered name. `styles/__tests__/bundled-fonts.test.ts` holds that lead. Every monospace rule reads `--font-mono`; do not hard-code a mono stack.
+
+To prove which font drew a node, use CDP `CSS.getPlatformFontsForNode`. `document.fonts.check()` answers true for a family no face in the set matches.
 
 Rules:
 

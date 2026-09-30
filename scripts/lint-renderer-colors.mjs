@@ -201,6 +201,12 @@ function collectFindings(text) {
       }
       stack.pop();
       segmentStart = i + 1;
+    } else if (c === ";" && stack.length === 0) {
+      // A top-level `;` ends a statement at-rule (`@import "./fonts.css";`),
+      // which is not part of the next rule's selector. Without this, the
+      // `:root` block after app.css's @import read as `@import ...; :root`
+      // and every token literal in it was flagged.
+      segmentStart = i + 1;
     }
   }
 
@@ -309,7 +315,14 @@ function runSelfTests() {
     );
   }
 
-  // 10. Selector-substring allowlist exempts illustration assets.
+  // 10. A top-level statement at-rule does not become part of the next
+  //     rule's selector.
+  const imported = findings('@import "./fonts.css";\n:root { --bg: #000000; }');
+  if (imported.length !== 0) {
+    throw new Error("self-test: @import leaked into the :root selector");
+  }
+
+  // 11. Selector-substring allowlist exempts illustration assets.
   const exempt = findings(".context-window-moon__disc { color: #abc; }");
   if (exempt.length !== 0) {
     throw new Error(

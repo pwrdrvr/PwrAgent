@@ -1,0 +1,26 @@
+/* Self-hosted Geist Sans / Geist Mono via @fontsource, the same packages
+   PwrGit and PwrSnap ship. Vite emits the woff2/woff files into
+   out/renderer/assets, so they load from inside the asar: no CDN, and
+   offline-safe.
+
+   The family names are the package's, "Geist Sans" and "Geist Mono", not
+   upstream's "Geist" for the sans. A face loads only when a rule asks for it
+   by exactly that name, and nothing warns when none does, so --font-sans and
+   --font-mono in app.css must lead with them.
+   __tests__/bundled-fonts.test.ts reads the names out of these imports and
+   fails when a token stops leading with one.
+
+   Weights are the ones app.css asks for. The faces are static, so the 550
+   and 650 rules draw in the next face up (600 and 700). Geist Sans has no
+   italic face; Chromium slants the upright one. A face downloads only when
+   text first asks for it. */
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/geist-sans/800.css";
+
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+@import "@fontsource/geist-mono/600.css";
+@import "@fontsource/geist-mono/700.css";

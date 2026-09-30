@@ -1,8 +1,18 @@
+@import "./fonts.css";
+
 :root {
   color-scheme: dark;
-  --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
+  /* Each stack leads with the family its bundled @font-face registers
+     (fonts.css). For the sans that is @fontsource's "Geist Sans", not
+     upstream's "Geist": until the bundle landed this asked for "Geist",
+     nothing supplied it, and every sans node drew in the platform UI font
+     (`.SF NS` on macOS) and every mono node in Menlo. "Geist" stays second,
+     so a system-wide install of upstream Geist is tried for glyphs outside
+     the bundled latin subset. The stacks match PwrGit and PwrSnap.
+     __tests__/bundled-fonts.test.ts holds the lead. */
+  --font-sans: "Geist Sans", "Geist", "SF Pro Text", "Inter", system-ui, sans-serif;
   font-family: var(--font-sans);
-  --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+  --font-mono: "Geist Mono", "SF Mono", "JetBrains Mono", Consolas, monospace;
   /* Painted title-bar strip height. Matches TITLE_BAR_OVERLAY_HEIGHT
      (appearance-bootstrap.ts) so the painted menu bar and the OS caption
      buttons sit on the same line. Consumed by the two platforms that paint
@@ -1824,6 +1834,17 @@ textarea,
   :root[data-platform="darwin"]:not([data-fullscreen="true"])
     .sidebar__masthead .brand-lockup__mark {
     display: none;
+  }
+}
+
+/* The wordmark in Geist Sans Bold measures 82.41px, 3.91px wider than it drew
+   in `.SF NS` Bold. With the 8px gap, the three remaining buttons then need a
+   283.41px rail, and at the 280px minimum they sat 3.41px past their inset.
+   Below a 283px rail (251px of content inside the 16px padding) the gap
+   tightens to 4px, which fits them at the minimum with 0.59px to spare. */
+@container sidebar (max-width: 251px) {
+  .sidebar__masthead {
+    gap: 4px;
   }
 }
 
@@ -6351,7 +6372,7 @@ a.button {
 
 .thread-row__chip--mono,
 .context-grid__mono {
-  font-family: "IBM Plex Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .directory-list {
@@ -18951,7 +18972,7 @@ a.button {
   padding: 6px 8px;
   background: var(--bg-input);
   border-radius: 4px;
-  font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-primary);
@@ -18977,7 +18998,7 @@ a.button {
 }
 
 .environment-setup-choice__path {
-  font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
   word-break: break-all;
@@ -31104,7 +31125,7 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
-  font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
@@ -31125,7 +31146,7 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
-  font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-primary);
