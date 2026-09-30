@@ -15,7 +15,7 @@ function when(at: number, now: number) {
 function duration(ms: number) {
   const hours = Math.floor(ms / HOUR);
   const minutes = Math.round((ms % HOUR) / 60_000);
-  if (hours >= 48) return `${Math.round(hours / 24)} days`;
+  if (hours >= 36) return `${Math.round(hours / 24)} days`;
   return hours ? `${hours} h ${minutes} m` : `${minutes} m`;
 }
 
@@ -27,10 +27,14 @@ function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
   const lastReset = series.resets.at(-1);
   let pace: ReactNode = null;
   if (series.pacePerHour !== undefined && projection) {
-    pace = <span className="usage-pace"><span>+{percent(series.pacePerHour)}%/h</span>
-      {projection.kind === "full"
-        ? `At this pace, 100% in about ${duration(projection.at - latest.at)} (${when(projection.at, now)})`
-        : `At this pace, about ${Math.round(projection.percent)}% by the ${when(projection.resetAt, now)} reset`}</span>;
+    // Running out before the reset is the one outcome worth a warning.
+    const short = projection.kind === "full" && latest.resetAt !== undefined;
+    pace = <span className={`usage-pace${short ? " is-short" : ""}`}><span>+{percent(series.pacePerHour)}%/h</span>
+      {projection.kind === "atReset"
+        ? `On pace for about ${Math.round(projection.percent)}% at the ${when(projection.resetAt, now)} reset`
+        : short
+          ? `On pace to reach 100% ${when(projection.at, now)}, ${duration(latest.resetAt! - projection.at)} before the reset`
+          : `At this pace, 100% in about ${duration(projection.at - latest.at)} (${when(projection.at, now)})`}</span>;
   }
   return <div className="usage-limit">
     <span className="usage-eyebrow">{limitLabel(series)}</span>

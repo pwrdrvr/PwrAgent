@@ -1,5 +1,10 @@
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
+import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
+import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
+import { showUsageActivityWindow } from "../usage-activity-window";
+import { primaryMainWindowWebContents } from "../primary-main-window";
+import { requestShowThread } from "../window-show-thread";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
@@ -8364,6 +8369,16 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(USAGE_ACTIVITY_ANALYZE_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_ANALYZE_CHANNEL, async (_event, request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await appServerService.analyzeUsageActivity(request));
+  ipcMain.removeHandler(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL);
+  ipcMain.handle(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL, (event) => {
+    showUsageActivityWindow({ sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined });
+  });
+  ipcMain.removeHandler(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL);
+  ipcMain.handle(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, (_event, request: WindowShowThreadRequest) => {
+    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") return;
+    const target = primaryMainWindowWebContents();
+    if (target) requestShowThread(request, { preferWebContents: target });
+  });
   ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
   ipcMain.handle(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
     async (_event, request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> =>

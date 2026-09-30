@@ -796,3 +796,7 @@ export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-att
 export const USAGE_ACTIVITY_READ_CHANNEL = "usage-activity:readUsageActivity";
 
 export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";
+/** Spawn or focus the dedicated Usage Activity window. */
+export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
+/** From the Usage Activity window: focus the main window and open a thread there. */
+export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";

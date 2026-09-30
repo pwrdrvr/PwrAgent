@@ -261,6 +261,8 @@ type SidebarProps = {
   ) => Promise<void>;
   onOpenSettings?: () => void;
   onOpenProfile?: (profile: string) => Promise<void>;
+  /** Opens the Usage Activity window: account limits and spend across instances. */
+  onOpenUsageActivity?: () => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
@@ -2045,6 +2047,25 @@ export function Sidebar(props: SidebarProps) {
                   </span>
                 </button>
               ))}
+              {props.onOpenUsageActivity ? (
+                <>
+                  <div className="thread-context-menu__separator" role="separator" />
+                  <button
+                    className="sidebar__menu-item"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      props.onOpenUsageActivity?.();
+                    }}
+                  >
+                    <span className="sidebar__menu-item-title">Usage Activity</span>
+                    <span className="sidebar__menu-item-detail">
+                      Account limits and spend across instances
+                    </span>
+                  </button>
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>

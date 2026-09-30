@@ -812,6 +812,10 @@ export type DesktopApi = {
   ) => Promise<AppServerReadThreadResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   analyzeUsageActivity?: (request: AnalyzeUsageActivityRequest) => Promise<AnalyzeUsageActivityResponse>;
+  /** Spawns or focuses the dedicated Usage Activity window. */
+  openUsageActivity?: () => Promise<void>;
+  /** From the Usage Activity window: focus the main window and open a thread there. */
+  openUsageThreadInMainWindow?: (request: WindowShowThreadRequest) => Promise<void>;
   inspectTokenMiserOutput?: (
     request: InspectTokenMiserOutputRequest,
   ) => Promise<InspectTokenMiserOutputResponse>;

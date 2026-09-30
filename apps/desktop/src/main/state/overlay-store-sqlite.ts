@@ -1,4 +1,4 @@
-import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRow, type UsageLimitObservation } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
@@ -2223,32 +2223,60 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
   }> {
     validateUsageActivityWindow(request);
-    // Read PwrAgent's ledger once, without parent-thread joins that duplicate
-    // helper costs. Candidate timestamps are not used to apportion turn cost.
-    const rows = this.stateDb.raw.prepare(`
-      SELECT l.*, t.started_at AS activity_started_at,
-             COALESCE(t.completed_at, l.completed_at) AS activity_completed_at,
-             t.rate_limit_snapshot AS activity_rate_limit_snapshot
-        FROM thread_usage_lines l
-        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
-       WHERE l.status != 'superseded'
-         AND COALESCE(t.started_at, l.created_at) < ?
-         AND (COALESCE(t.completed_at, l.completed_at) IS NULL
-           OR COALESCE(t.completed_at, l.completed_at) >= ?)
-       ORDER BY l.updated_at DESC, l.usage_line_id
-       LIMIT 5001
-    `).all(request.to, request.from) as Array<ThreadUsageLineRow & {
+    type ActivityRow = ThreadUsageLineRow & {
       activity_started_at: number | null; activity_completed_at: number | null;
       activity_rate_limit_snapshot: string | null;
-    }>;
+    };
+    // Read PwrAgent's ledger once, without parent-thread joins that duplicate
+    // helper costs. Candidate timestamps are not used to apportion turn cost.
+    //
+    // A monitor line is written already finalized and never gets a completion
+    // time, so its write time is its completion. An open row whose last update
+    // predates the window recorded no usage inside it: a turn whose completion
+    // was never observed would otherwise match every later window.
+    //
+    // Background helpers (Token Miser, title generation) write one monitor
+    // line per run, hundreds a day, each worth a fraction of a cent. The
+    // contained ones are read separately and rolled up per parent thread, so
+    // they cannot spend the row bound meant for turns.
+    const bounds = `
+        FROM thread_usage_lines l
+        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id`;
+    const started = "COALESCE(t.started_at, l.created_at)";
+    const completed = `COALESCE(t.completed_at, l.completed_at,
+      CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END)`;
+    const backgroundHelper = `(l.scope = 'monitor' AND l.status = 'finalized'
+      AND COALESCE(l.source_item_id, '') LIKE 'system:%'
+      AND ${started} >= @from AND ${completed} < @to)`;
+    const columns = `SELECT l.*, ${started} AS activity_started_at,
+             ${completed} AS activity_completed_at,
+             t.rate_limit_snapshot AS activity_rate_limit_snapshot`;
+    const rows = this.stateDb.raw.prepare(`
+      ${columns}${bounds}
+       WHERE l.status != 'superseded'
+         AND ${started} < @to
+         AND CASE WHEN ${completed} IS NULL THEN l.updated_at >= @from
+                  ELSE ${completed} >= @from END
+         AND NOT ${backgroundHelper}
+       ORDER BY l.updated_at DESC, l.usage_line_id
+       LIMIT 5001
+    `).all({ from: request.from, to: request.to }) as ActivityRow[];
+    const helperRows = this.stateDb.raw.prepare(`
+      ${columns}${bounds}
+       WHERE ${backgroundHelper}
+    `).all({ from: request.from, to: request.to }) as ActivityRow[];
     const visibleRows = rows.slice(0, 5000);
-    const identityFor = (row: ThreadUsageLineRow) => buildLegacyEncodedThreadIdentityKey(
+    const identityFor = (row: { backend: string; thread_id: string }) => buildLegacyEncodedThreadIdentityKey(
       row.backend as AppServerBackendKind, row.thread_id,
     );
+    const rollups = rollUpBackgroundHelperRows(helperRows, request);
     // Resolve titles only after bounding the ledger result. The document's
     // primary key makes this one indexed lookup per distinct thread, rather
     // than a backend-wide scan repeated for every usage row.
-    const identities = [...new Set(visibleRows.map(identityFor))];
+    const identities = [...new Set([
+      ...visibleRows.map(identityFor),
+      ...rollups.map(({ line }) => identityFor({ backend: line.backend, thread_id: line.threadId })),
+    ])];
     const titleRows = identities.length ? this.stateDb.raw.prepare(`
       SELECT identity_key, title FROM thread_search_documents
        WHERE identity_key IN (SELECT value FROM json_each(?))
@@ -2325,13 +2353,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return {
       limitHistory: [...readings.values()].sort((a, b) => a.observedAt - b.observedAt),
       truncated: rows.length > 5000,
-      rows: visibleRows.map((row) => ({
-        line: { ...threadUsageLineFromRow(row),
-          startedAt: row.activity_started_at ?? row.created_at,
-          completedAt: row.activity_completed_at ?? undefined },
-        title: titles.get(identityFor(row)) || row.thread_id,
-        updatedAt: row.updated_at,
-      })),
+      rows: [
+        ...visibleRows.map((row) => ({
+          line: { ...threadUsageLineFromRow(row),
+            startedAt: row.activity_started_at ?? row.created_at,
+            completedAt: row.activity_completed_at ?? undefined },
+          title: titles.get(identityFor(row)) || row.thread_id,
+          updatedAt: row.updated_at,
+        })),
+        ...rollups.map(({ line, rollup, updatedAt }) => ({
+          line, rollup, updatedAt,
+          title: titles.get(identityFor({ backend: line.backend, thread_id: line.threadId })) || line.threadId,
+        })),
+      ],
     };
   }
 
@@ -8704,6 +8738,74 @@ function toThreadToolInvocationAlertRowParams(
     worstInvocationId: alert.worstInvocationId ?? null,
     worstOutputChars: alert.worstOutputChars ?? null,
   };
+}
+
+/**
+ * Sum background-helper monitor lines contained in a window into one line per
+ * parent thread, helper kind, model, price status and rollup step (see
+ * `usageRollupStep`), so no rollup straddles a chart bar. The parent
+ * is the thread the helper worked for, so the rollup is that thread's spend.
+ * The line id is derived from the window, so two owners sharing one ledger
+ * produce the same rollup and the viewer counts it once.
+ */
+function rollUpBackgroundHelperRows(
+  rows: Array<ThreadUsageLineRow & { activity_started_at: number | null; activity_completed_at: number | null }>,
+  window: { from: number; to: number },
+): Array<{ line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }> {
+  const step = usageRollupStep(window.from, window.to);
+  const groups = new Map<string, { line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }>();
+  for (const row of rows) {
+    const started = row.activity_started_at ?? row.created_at;
+    const completed = row.activity_completed_at ?? row.created_at;
+    const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
+    const threadId = row.parent_thread_id ?? row.thread_id;
+    const bucket = Math.floor(completed / step) * step;
+    const usageLineId = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
+      row.price_status, row.currency, window.from, window.to, bucket].join(":");
+    const line = threadUsageLineFromRow(row);
+    const existing = groups.get(usageLineId);
+    if (!existing) {
+      groups.set(usageLineId, {
+        line: {
+          backend: line.backend, provider: line.provider, threadId, usageLineId,
+          scope: "monitor", source: line.source, status: "finalized",
+          ...(line.model ? { model: line.model } : {}),
+          ...(line.modelLabel ? { modelLabel: line.modelLabel } : {}),
+          createdAt: started, startedAt: started, completedAt: completed,
+          currency: line.currency, priceStatus: line.priceStatus,
+          inputTokens: line.inputTokens, cachedInputTokens: line.cachedInputTokens,
+          uncachedInputTokens: line.uncachedInputTokens, cacheWriteInputTokens: line.cacheWriteInputTokens,
+          outputTokens: line.outputTokens, reasoningOutputTokens: line.reasoningOutputTokens,
+          totalTokens: line.totalTokens,
+          cachedInputCostMicros: line.cachedInputCostMicros, uncachedInputCostMicros: line.uncachedInputCostMicros,
+          cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
+          totalCostMicros: line.totalCostMicros,
+        } as ThreadUsageLineRecord,
+        rollup: { kind, count: 1 },
+        updatedAt: row.updated_at,
+      });
+      continue;
+    }
+    const sum = existing.line;
+    sum.startedAt = Math.min(sum.startedAt ?? started, started);
+    sum.createdAt = Math.min(sum.createdAt, started);
+    sum.completedAt = Math.max(sum.completedAt ?? completed, completed);
+    sum.inputTokens += line.inputTokens;
+    sum.cachedInputTokens += line.cachedInputTokens;
+    sum.uncachedInputTokens += line.uncachedInputTokens;
+    sum.cacheWriteInputTokens = (sum.cacheWriteInputTokens ?? 0) + (line.cacheWriteInputTokens ?? 0);
+    sum.outputTokens += line.outputTokens;
+    sum.reasoningOutputTokens += line.reasoningOutputTokens;
+    sum.totalTokens += line.totalTokens;
+    sum.cachedInputCostMicros += line.cachedInputCostMicros;
+    sum.uncachedInputCostMicros += line.uncachedInputCostMicros;
+    sum.cacheWriteInputCostMicros = (sum.cacheWriteInputCostMicros ?? 0) + (line.cacheWriteInputCostMicros ?? 0);
+    sum.outputCostMicros += line.outputCostMicros;
+    sum.totalCostMicros += line.totalCostMicros;
+    existing.rollup.count += 1;
+    existing.updatedAt = Math.max(existing.updatedAt, row.updated_at);
+  }
+  return [...groups.values()];
 }
 
 function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {

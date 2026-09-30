@@ -58,6 +58,7 @@ function buildTemplate(
       showLicenseWindow: vi.fn(),
       showLogsWindow: vi.fn(),
       showThirdPartyNoticesWindow: vi.fn(),
+      showUsageActivityWindow: vi.fn(),
     },
   });
 }
@@ -233,17 +234,18 @@ describe("buildApplicationMenuTemplate", () => {
   });
 
   describe("Settings menu item placement", () => {
-    it("places Settings… under About on the macOS app menu with separators", () => {
+    it("places Settings… and Usage Activity under About on the macOS app menu with separators", () => {
       const items = submenuItems(buildTemplate(false), "PwrAgent");
       const labels = items.map((item) => item.label ?? item.role ?? item.type);
 
-      // About → separator → Settings… → separator → services …
+      // About → separator → Settings… → Usage Activity → separator → services …
       const aboutIndex = labels.indexOf("About PwrAgent");
       const settingsIndex = labels.indexOf("Settings…");
       expect(aboutIndex).toBeGreaterThanOrEqual(0);
       expect(settingsIndex).toBe(aboutIndex + 2);
       expect(items[aboutIndex + 1]?.type).toBe("separator");
-      expect(items[settingsIndex + 1]?.type).toBe("separator");
+      expect(labels[settingsIndex + 1]).toBe("Usage Activity");
+      expect(items[settingsIndex + 2]?.type).toBe("separator");
     });
 
     it("gives the Mac Settings item the universal ⌘, accelerator", () => {
@@ -291,6 +293,7 @@ describe("buildApplicationMenuTemplate", () => {
           showLicenseWindow: vi.fn(),
           showLogsWindow: vi.fn(),
           showThirdPartyNoticesWindow: vi.fn(),
+          showUsageActivityWindow: vi.fn(),
         },
       });
       const quitItem = submenuItems(template, "PwrAgent").find(
@@ -312,9 +315,10 @@ describe("buildApplicationMenuTemplate", () => {
       const settingsIndex = labels.indexOf("Settings…");
       expect(aboutIndex).toBeGreaterThanOrEqual(0);
       expect(settingsIndex).toBeGreaterThan(aboutIndex);
-      // About → separator → Settings… → separator → Check for Updates …
+      // About → separator → Settings… → Usage Activity → separator → Check for Updates …
       expect(helpItems[aboutIndex + 1]?.type).toBe("separator");
-      expect(helpItems[settingsIndex + 1]?.type).toBe("separator");
+      expect(labels[settingsIndex + 1]).toBe("Usage Activity");
+      expect(helpItems[settingsIndex + 2]?.type).toBe("separator");
     });
 
     it("does NOT add Settings to the PwrAgent menu on non-Mac (no app menu there)", () => {
