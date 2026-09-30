@@ -41,6 +41,41 @@ vi.mock("../log", () => ({
   })),
 }));
 
+/**
+ * Lets a test hold the Windows Job launcher back before its wrapper script
+ * runs, reproducing a cold hosted-runner start without depending on one. Zero
+ * leaves every launch exactly as production builds it.
+ */
+const windowsJobLaunchDelay = vi.hoisted(() => ({ ms: 0 }));
+
+vi.mock("../windows-job-wrapper", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../windows-job-wrapper")>();
+  return {
+    ...actual,
+    wrapCommandInWindowsJob: (
+      params: Parameters<typeof actual.wrapCommandInWindowsJob>[0],
+    ) => {
+      const launch = actual.wrapCommandInWindowsJob(params);
+      if (windowsJobLaunchDelay.ms <= 0) {
+        return launch;
+      }
+      const scriptPath = launch.args.at(-1)!;
+      return {
+        ...launch,
+        args: [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          `Start-Sleep -Milliseconds ${windowsJobLaunchDelay.ms}; & '${scriptPath.replace(/'/g, "''")}'; exit $LASTEXITCODE`,
+        ],
+      };
+    },
+  };
+});
+
 const isWindows = process.platform === "win32";
 
 /**
@@ -1267,6 +1302,47 @@ describe("codex environment runtime", () => {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
+
+  it("does not charge a slow Windows Job launch to the setup timeout", async () => {
+    if (!isWindows) {
+      return;
+    }
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-job-start-"));
+    const markerName = "setup-ran.txt";
+    // Federation E2E runs setup under a 15s budget; hosted runners have spent
+    // longer than that entering the wrapper. Hold the launcher past the whole
+    // budget: the setup must still run, then get its full budget.
+    windowsJobLaunchDelay.ms = 6_000;
+
+    try {
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: {
+          ...process.env,
+          [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "5000",
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            shell: "powershell",
+            setupScript: `New-Item -ItemType File -Force -Path '${markerName}' | Out-Null`,
+            actions: [],
+          },
+          executionTarget: "local",
+          runSetup: true,
+        },
+      });
+
+      expect(runtime).toMatchObject({ setupStatus: "completed" });
+      await expect(readFile(path.join(root, markerName), "utf8")).resolves.toBe("");
+    } finally {
+      windowsJobLaunchDelay.ms = 0;
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30_000);
 
   it("waits for timed-out setup commands to exit before reporting failure", async () => {
     if (process.platform === "win32") {
