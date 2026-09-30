@@ -147,14 +147,21 @@ describe("PwrSuiteInstallerService", () => {
     });
   }
 
-  it("reads the offer once and serves it from cache", async () => {
+  it("answers at once, then publishes the offer, and reads GitHub once", async () => {
     const fetchFn = releaseFetch();
     const service = createService(fetchFn);
+    const offered = new Promise<PwrSuiteInstallerState>((resolve) => {
+      service.subscribe((state) => {
+        if (state.offer) resolve(state);
+      });
+    });
 
-    const first = await service.readState("pwrgit");
-    await service.readState("pwrgit");
-
-    expect(first).toEqual({
+    expect(service.readState("pwrgit")).toEqual({
+      app: "pwrgit",
+      platform: "mac",
+      phase: "idle",
+    });
+    const expected = {
       app: "pwrgit",
       platform: "mac",
       phase: "idle",
@@ -164,7 +171,22 @@ describe("PwrSuiteInstallerService", () => {
         assetName: "PwrGit-0.25.0-arm64.dmg",
         sizeBytes: INSTALLER_BYTES.length,
       },
-    });
+    };
+    await expect(offered).resolves.toEqual(expected);
+    expect(service.readState("pwrgit")).toEqual(expected);
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("does not ask GitHub again right after a failed read", async () => {
+    const fetchFn = vi.fn(async () => new Response("", { status: 503 }));
+    const service = createService(fetchFn as never);
+
+    service.readState("pwrgit");
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
+    // Let the failed read settle before asking again.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    service.readState("pwrgit");
+
     expect(fetchFn).toHaveBeenCalledOnce();
   });
 
@@ -172,7 +194,7 @@ describe("PwrSuiteInstallerService", () => {
     const fetchFn = releaseFetch();
     const service = createService(fetchFn, { platform: "linux" });
 
-    await expect(service.readState("pwrsnap")).resolves.toEqual({
+    expect(service.readState("pwrsnap")).toEqual({
       app: "pwrsnap",
       phase: "idle",
     });

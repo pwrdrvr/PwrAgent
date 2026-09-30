@@ -35,12 +35,18 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * pass while proving nothing.
  */
 
-// Short enough that the two connection cards plus a composer holding three
+// Short enough that the two connection tiles plus a composer holding three
 // pasted images cannot all fit. The precondition assertion below re-checks
 // that on the machine actually running this rather than trusting the
 // number, because a window that quietly grew past the crowding would make
 // every assertion here pass while proving nothing.
-const WINDOW = { width: 1280, height: 600 };
+//
+// The cards became 68px tiles that sit side by side in a wide thread area,
+// and 1280x600 stopped crowding them. At 900px wide the sidebar leaves the
+// thread area under the stacking width, so the tiles stack. At 460px tall
+// the composer (its attachment strip is capped at 24vh) plus two stacked
+// tiles is about 500px of content.
+const WINDOW = { width: 900, height: 460 };
 
 // Sub-pixel rounding on HiDPI. A real regression moves the send row by
 // tens of pixels (56 and 142 above), so this is nowhere near it.

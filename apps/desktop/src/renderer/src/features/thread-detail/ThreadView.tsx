@@ -3534,66 +3534,68 @@ export function ThreadView(props: ThreadViewProps) {
               role="group"
               tabIndex={0}
             >
-              {!launchpadMaterializing ? (
-                <PwrGitConnectionPrompt
-                  backend={selectedLaunchpad.backend}
-                  desktopApi={props.desktopApi}
-                  enabled={
-                    selectedLaunchpad.mcpConnectionIds?.includes(
-                      PWRGIT_MCP_CONNECTION_ID,
-                    ) === true
-                  }
-                  remoteOwnerLabel={
-                    props.activeFederationTarget
-                      ? props.activeFederationOwnerLabel ?? "the remote machine"
-                      : undefined
-                  }
-                  onEnabledChange={async (enabled) => {
-                    await props.onUpdateLaunchpad?.(
-                      selectedLaunchpad.directoryKey,
-                      {
-                        mcpConnectionIds: pwrGitConnectionIds(
-                          selectedLaunchpad.mcpConnectionIds,
-                          enabled,
-                        ),
-                      },
-                    );
-                  }}
-                />
-              ) : null}
-              {/* Both PwrSuite apps get a card, so each can be discovered,
-                  downloaded, and paired from here; per-thread selection also
-                  lives in the composer's MCP access panel, which reaches an
-                  existing thread too. The remote card offers access from the
-                  machine that owns the thread, and the local panel refuses to
-                  edit a remote thread's selection. */}
-              {!launchpadMaterializing ? (
-                <PwrSnapConnectionPrompt
-                  backend={selectedLaunchpad.backend}
-                  desktopApi={props.desktopApi}
-                  enabled={
-                    selectedLaunchpad.mcpConnectionIds?.includes(
-                      PWRSNAP_MCP_CONNECTION_ID,
-                    ) === true
-                  }
-                  remoteOwnerLabel={
-                    props.activeFederationTarget
-                      ? props.activeFederationOwnerLabel ?? "the remote machine"
-                      : undefined
-                  }
-                  onEnabledChange={async (enabled) => {
-                    await props.onUpdateLaunchpad?.(
-                      selectedLaunchpad.directoryKey,
-                      {
-                        mcpConnectionIds: pwrSnapConnectionIds(
-                          selectedLaunchpad.mcpConnectionIds,
-                          enabled,
-                        ),
-                      },
-                    );
-                  }}
-                />
-              ) : null}
+              <div className="pwrsuite-tiles">
+                {!launchpadMaterializing ? (
+                  <PwrGitConnectionPrompt
+                    backend={selectedLaunchpad.backend}
+                    desktopApi={props.desktopApi}
+                    enabled={
+                      selectedLaunchpad.mcpConnectionIds?.includes(
+                        PWRGIT_MCP_CONNECTION_ID,
+                      ) === true
+                    }
+                    remoteOwnerLabel={
+                      props.activeFederationTarget
+                        ? props.activeFederationOwnerLabel ?? "the remote machine"
+                        : undefined
+                    }
+                    onEnabledChange={async (enabled) => {
+                      await props.onUpdateLaunchpad?.(
+                        selectedLaunchpad.directoryKey,
+                        {
+                          mcpConnectionIds: pwrGitConnectionIds(
+                            selectedLaunchpad.mcpConnectionIds,
+                            enabled,
+                          ),
+                        },
+                      );
+                    }}
+                  />
+                ) : null}
+                {/* Both PwrSuite apps get a card, so each can be discovered,
+                    downloaded, and paired from here; per-thread selection also
+                    lives in the composer's MCP access panel, which reaches an
+                    existing thread too. The remote card offers access from the
+                    machine that owns the thread, and the local panel refuses to
+                    edit a remote thread's selection. */}
+                {!launchpadMaterializing ? (
+                  <PwrSnapConnectionPrompt
+                    backend={selectedLaunchpad.backend}
+                    desktopApi={props.desktopApi}
+                    enabled={
+                      selectedLaunchpad.mcpConnectionIds?.includes(
+                        PWRSNAP_MCP_CONNECTION_ID,
+                      ) === true
+                    }
+                    remoteOwnerLabel={
+                      props.activeFederationTarget
+                        ? props.activeFederationOwnerLabel ?? "the remote machine"
+                        : undefined
+                    }
+                    onEnabledChange={async (enabled) => {
+                      await props.onUpdateLaunchpad?.(
+                        selectedLaunchpad.directoryKey,
+                        {
+                          mcpConnectionIds: pwrSnapConnectionIds(
+                            selectedLaunchpad.mcpConnectionIds,
+                            enabled,
+                          ),
+                        },
+                      );
+                    }}
+                  />
+                ) : null}
+              </div>
             </div>
             {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
               <McpAccessPanel

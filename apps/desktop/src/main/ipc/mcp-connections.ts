@@ -427,7 +427,7 @@ function registerPwrSuiteInstallerHandlers(
   ipcMain.handle(
     PWRSUITE_INSTALLER_READ_CHANNEL,
     async (event, app: unknown): Promise<PwrSuiteInstallerState> =>
-      await service.readState(requireLocalApp(event, app)),
+      service.readState(requireLocalApp(event, app)),
   );
   ipcMain.removeHandler(PWRSUITE_INSTALLER_START_CHANNEL);
   ipcMain.handle(

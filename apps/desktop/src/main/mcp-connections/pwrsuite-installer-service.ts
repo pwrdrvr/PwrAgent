@@ -24,6 +24,8 @@ const REPOSITORIES: Record<PwrSuiteAppId, string> = {
 
 /** One release read answers every tile for half an hour; GitHub allows 60 unauthenticated reads an hour. */
 const OFFER_TTL_MS = 30 * 60_000;
+/** After a failed read, the next launchpad waits this long before asking again. */
+const OFFER_RETRY_MS = 5 * 60_000;
 const RELEASE_READ_TIMEOUT_MS = 10_000;
 /** A download that receives nothing for this long is abandoned rather than left looking alive. */
 const DEFAULT_STALL_TIMEOUT_MS = 60_000;
@@ -166,6 +168,8 @@ function describeDownloadFailure(error: unknown): string {
 export class PwrSuiteInstallerService {
   private readonly states = new Map<PwrSuiteAppId, PwrSuiteInstallerState>();
   private readonly offers = new Map<PwrSuiteAppId, CachedOffer>();
+  private readonly offerReads = new Map<PwrSuiteAppId, Promise<void>>();
+  private readonly offerFailures = new Map<PwrSuiteAppId, number>();
   private readonly jobs = new Map<PwrSuiteAppId, Job>();
   private readonly readyPaths = new Map<PwrSuiteAppId, string>();
   private readonly listeners = new Set<InstallerListener>();
@@ -179,21 +183,48 @@ export class PwrSuiteInstallerService {
     };
   }
 
-  /** The current state, with an offer read from GitHub if one is due. */
-  async readState(app: PwrSuiteAppId): Promise<PwrSuiteInstallerState> {
+  /**
+   * The current state, answered at once. When the tile could offer a
+   * download and the release has not been read recently, GitHub is asked in
+   * the background and the offer arrives as an event: a slow or unreachable
+   * api.github.com must not hold the tile on "Checking…".
+   */
+  readState(app: PwrSuiteAppId): PwrSuiteInstallerState {
     const state = this.state(app);
     if (state.platform && (state.phase === "idle" || state.phase === "failed")) {
+      void this.refreshOffer(app);
+    }
+    return this.state(app);
+  }
+
+  private async refreshOffer(app: PwrSuiteAppId): Promise<void> {
+    const now = (this.options.now ?? Date.now)();
+    const cached = this.offers.get(app);
+    const failedAt = this.offerFailures.get(app);
+    if (
+      this.offerReads.has(app)
+      || (cached && now - cached.readAt < OFFER_TTL_MS)
+      || (failedAt !== undefined && now - failedAt < OFFER_RETRY_MS)
+    ) {
+      return;
+    }
+    const read = (async () => {
       try {
         const offer = await this.resolveOffer(app);
-        return this.update(app, { offer: offer ? publicOffer(offer) : undefined }, false);
+        this.offerFailures.delete(app);
+        if (offer) this.update(app, { offer: publicOffer(offer) });
       } catch (error) {
+        this.offerFailures.set(app, now);
         installerLog.warn("could not read the latest release", {
           app,
           error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        this.offerReads.delete(app);
       }
-    }
-    return this.state(app);
+    })();
+    this.offerReads.set(app, read);
+    await read;
   }
 
   async start(app: PwrSuiteAppId): Promise<PwrSuiteInstallerState> {
