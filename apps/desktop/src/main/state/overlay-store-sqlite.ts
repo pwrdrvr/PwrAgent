@@ -2307,7 +2307,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                 WHERE next.provider = turn.provider
                   AND next.backend = turn.backend
                   AND next.thread_id = turn.thread_id
-                  AND next.observed_at > turn.observed_at) AS next_started_at
+                  AND COALESCE(next.started_at, next.observed_at)
+                    > COALESCE(turn.started_at, turn.observed_at)) AS next_started_at
          FROM thread_usage_turns AS turn
          JOIN thread_usage_lines AS line ON line.usage_turn_id = turn.usage_turn_id
         WHERE turn.completed_at IS NULL

@@ -361,6 +361,16 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     await seedLiveTurn("interrupted", "thread-1", start);
     await seedLiveTurn("next", "thread-1", start + 30_000);
     await seedLiveTurn("recent", "thread-2", start);
+    // A row written later for an older turn in the same thread must not cap
+    // `next`, which it did not follow.
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true, threadId: "thread-1",
+      turnId: "backfilled-earlier", startedAt: start - 60_000, createdAt: start + 120_000,
+      usageLineId: "line-backfilled-earlier",
+    }) });
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "backfilled-earlier", completedAt: start - 1_000,
+    });
     await seedLiveTurn("finished", "thread-3", start);
     await store.completeThreadUsageTurn({
       backend: "codex", threadId: "thread-3", turnId: "finished", completedAt: start + 5_000,
@@ -392,6 +402,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       note: "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",
     });
     expect(readTurns()).toEqual([
+      { turn_id: "backfilled-earlier", completed_at: start - 1_000, completed_at_inferred: null },
       { turn_id: "finished", completed_at: start + 5_000, completed_at_inferred: null },
       { turn_id: "helper-turn", completed_at: null, completed_at_inferred: null },
       { turn_id: "interrupted", completed_at: start + 30_000, completed_at_inferred: 1 },
