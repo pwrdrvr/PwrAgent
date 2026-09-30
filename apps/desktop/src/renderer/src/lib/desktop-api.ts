@@ -22,6 +22,11 @@ import type {
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
+import type {
+  PwrSuiteAppId,
+  PwrSuiteInstallerActionResult,
+  PwrSuiteInstallerState,
+} from "../../../shared/pwrsuite-installer";
 import type { BundledGitLfsAdvisoryEvent } from "../../../shared/bundled-git-lfs";
 import type {
   GithubPrAuthenticationFailureEvent,
@@ -581,6 +586,18 @@ export type DesktopApi = {
   connectPwrGit?: () => Promise<ConnectPwrGitResponse>;
   openPwrGit?: () => Promise<OpenPwrGitResponse>;
   openPwrGitDownload?: () => Promise<OpenPwrGitResponse>;
+  readPwrSuiteInstaller?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
+  startPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
+  cancelPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
+  openPwrSuiteInstaller?: (
+    app: PwrSuiteAppId,
+  ) => Promise<PwrSuiteInstallerActionResult>;
+  revealPwrSuiteInstaller?: (
+    app: PwrSuiteAppId,
+  ) => Promise<PwrSuiteInstallerActionResult>;
+  onPwrSuiteInstaller?: (
+    callback: (state: PwrSuiteInstallerState) => void,
+  ) => () => void;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (

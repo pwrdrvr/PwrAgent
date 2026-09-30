@@ -65,6 +65,14 @@ export function scopeDesktopApiToFederationTarget(
     connectPwrGit: undefined,
     openPwrGit: undefined,
     openPwrGitDownload: undefined,
+    // Installers download onto the viewer's machine, which is never where a
+    // remote thread's tools run.
+    readPwrSuiteInstaller: undefined,
+    startPwrSuiteDownload: undefined,
+    cancelPwrSuiteDownload: undefined,
+    openPwrSuiteInstaller: undefined,
+    revealPwrSuiteInstaller: undefined,
+    onPwrSuiteInstaller: undefined,
     openPath: undefined,
     revealPath: undefined,
     readMarkdownFile: readMarkdownFile

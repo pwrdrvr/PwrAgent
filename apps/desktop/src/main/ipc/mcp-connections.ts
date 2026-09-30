@@ -54,7 +54,18 @@ import {
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
   MCP_CONNECTION_UPDATE_CHANNEL,
   MCP_CONNECTION_PROBE_CHANNEL,
+  PWRSUITE_INSTALLER_CANCEL_CHANNEL,
+  PWRSUITE_INSTALLER_EVENT_CHANNEL,
+  PWRSUITE_INSTALLER_OPEN_CHANNEL,
+  PWRSUITE_INSTALLER_READ_CHANNEL,
+  PWRSUITE_INSTALLER_REVEAL_CHANNEL,
+  PWRSUITE_INSTALLER_START_CHANNEL,
 } from "../../shared/ipc";
+import type {
+  PwrSuiteAppId,
+  PwrSuiteInstallerActionResult,
+  PwrSuiteInstallerState,
+} from "../../shared/pwrsuite-installer";
 import {
   getMcpConnectionGatewayService,
   type McpConnectionGatewayService,
@@ -63,15 +74,25 @@ import {
   getPwrGitConnectionService,
   type PwrGitConnectionService,
 } from "../mcp-connections/pwrgit-connection-service";
+import {
+  getPwrSuiteInstallerService,
+  isPwrSuiteAppId,
+  type PwrSuiteInstallerService,
+} from "../mcp-connections/pwrsuite-installer-service";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { federationWindowTargetForWebContents } from "../window";
+import { subscribersForChannel } from "../window-channels";
+
+let unsubscribeInstallerEvents: (() => void) | undefined;
 
 export function registerMcpConnectionIpcHandlers(
   service: McpConnectionGatewayService = getMcpConnectionGatewayService(),
   pwrGit: PwrGitConnectionService = getPwrGitConnectionService(),
+  installer: PwrSuiteInstallerService = getPwrSuiteInstallerService(),
 ): void {
   registerPwrGitHandlers(pwrGit);
+  registerPwrSuiteInstallerHandlers(installer);
   const requireLocalOwner = (event: Electron.IpcMainInvokeEvent): void => {
     if (federationWindowTargetForWebContents(event.sender)) {
       throw new Error(
@@ -372,7 +393,76 @@ function registerPwrGitHandlers(service: PwrGitConnectionService): void {
   );
 }
 
+/**
+ * The launchpad tiles' installer downloads. They land in this machine's
+ * Downloads folder, so a federation window, which fronts another machine, is
+ * refused: the owner would need the app, not the viewer.
+ */
+function registerPwrSuiteInstallerHandlers(
+  service: PwrSuiteInstallerService,
+): void {
+  const requireLocalApp = (
+    event: Electron.IpcMainInvokeEvent,
+    app: unknown,
+  ): PwrSuiteAppId => {
+    if (federationWindowTargetForWebContents(event.sender)) {
+      throw new Error("Install PwrSuite apps on the machine that owns this thread.");
+    }
+    if (!isPwrSuiteAppId(app)) {
+      throw new Error("Unknown PwrSuite app.");
+    }
+    return app;
+  };
+  unsubscribeInstallerEvents?.();
+  unsubscribeInstallerEvents = service.subscribe((state) => {
+    for (const webContents of subscribersForChannel(
+      PWRSUITE_INSTALLER_EVENT_CHANNEL,
+    )) {
+      if (!webContents.isDestroyed()) {
+        webContents.send(PWRSUITE_INSTALLER_EVENT_CHANNEL, state);
+      }
+    }
+  });
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_READ_CHANNEL);
+  ipcMain.handle(
+    PWRSUITE_INSTALLER_READ_CHANNEL,
+    async (event, app: unknown): Promise<PwrSuiteInstallerState> =>
+      await service.readState(requireLocalApp(event, app)),
+  );
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_START_CHANNEL);
+  ipcMain.handle(
+    PWRSUITE_INSTALLER_START_CHANNEL,
+    async (event, app: unknown): Promise<PwrSuiteInstallerState> =>
+      await service.start(requireLocalApp(event, app)),
+  );
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_CANCEL_CHANNEL);
+  ipcMain.handle(
+    PWRSUITE_INSTALLER_CANCEL_CHANNEL,
+    async (event, app: unknown): Promise<PwrSuiteInstallerState> =>
+      service.cancel(requireLocalApp(event, app)),
+  );
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_OPEN_CHANNEL);
+  ipcMain.handle(
+    PWRSUITE_INSTALLER_OPEN_CHANNEL,
+    async (event, app: unknown): Promise<PwrSuiteInstallerActionResult> =>
+      await service.openInstaller(requireLocalApp(event, app)),
+  );
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_REVEAL_CHANNEL);
+  ipcMain.handle(
+    PWRSUITE_INSTALLER_REVEAL_CHANNEL,
+    async (event, app: unknown): Promise<PwrSuiteInstallerActionResult> =>
+      service.revealInstaller(requireLocalApp(event, app)),
+  );
+}
+
 export function disposeMcpConnectionIpcHandlers(): void {
+  unsubscribeInstallerEvents?.();
+  unsubscribeInstallerEvents = undefined;
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_READ_CHANNEL);
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_START_CHANNEL);
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_CANCEL_CHANNEL);
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_OPEN_CHANNEL);
+  ipcMain.removeHandler(PWRSUITE_INSTALLER_REVEAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);

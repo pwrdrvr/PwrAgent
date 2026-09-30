@@ -103,6 +103,15 @@ describe("MCP connection IPC", () => {
     openDownload: vi.fn(),
   };
 
+  const installer = {
+    subscribe: vi.fn(() => () => undefined),
+    readState: vi.fn(async () => ({ app: "pwrgit", phase: "idle" })),
+    start: vi.fn(async () => ({ app: "pwrgit", phase: "downloading" })),
+    cancel: vi.fn(),
+    openInstaller: vi.fn(),
+    revealInstaller: vi.fn(),
+  };
+
   beforeEach(() => {
     mocks.handlers.clear();
     mocks.readRemoteStatus.mockClear();
@@ -127,7 +136,11 @@ describe("MCP connection IPC", () => {
     const { MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL } = await import(
       "../../shared/ipc"
     );
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
 
     const response = await mocks.handlers.get(
       MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
@@ -153,7 +166,11 @@ describe("MCP connection IPC", () => {
       disposeMcpConnectionIpcHandlers,
       registerMcpConnectionIpcHandlers,
     } = await import("../ipc/mcp-connections");
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
     expect(mocks.handlers.size).toBeGreaterThan(0);
 
     disposeMcpConnectionIpcHandlers();
@@ -173,7 +190,11 @@ describe("MCP connection IPC", () => {
       outcome: "connected",
       status: { ...localStatus, availability: "running", configured: true },
     });
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
 
     await expect(mocks.handlers.get(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL)?.(
       { sender: { id: 18 } },
@@ -197,7 +218,11 @@ describe("MCP connection IPC", () => {
       MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
       MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
     } = await import("../../shared/ipc");
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
     const event = { sender: remoteSender };
 
     await expect(
@@ -225,7 +250,11 @@ describe("MCP connection IPC", () => {
       MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
       MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
     } = await import("../../shared/ipc");
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
     const remote = { sender: remoteSender };
 
     await expect(
@@ -264,7 +293,11 @@ describe("MCP connection IPC", () => {
       MCP_CONNECTION_LIST_CHANNEL,
       MCP_CONNECTION_REMOVE_CHANNEL,
     } = await import("../../shared/ipc");
-    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
     const localEvent = { sender: { id: 18 } };
 
     await expect(
@@ -303,5 +336,30 @@ describe("MCP connection IPC", () => {
         ),
       ).rejects.toThrow(/machine that owns this window/i);
     }
+  });
+  it("refuses installer downloads from a remote window and unknown apps", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import(
+      "../ipc/mcp-connections"
+    );
+    const { PWRSUITE_INSTALLER_START_CHANNEL } = await import("../../shared/ipc");
+    installer.start.mockClear();
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
+    const start = mocks.handlers.get(PWRSUITE_INSTALLER_START_CHANNEL)!;
+
+    await expect(start({ sender: remoteSender }, "pwrgit")).rejects.toThrow(
+      /machine that owns this thread/,
+    );
+    await expect(start({ sender: { id: 18 } }, "../../etc")).rejects.toThrow(
+      /Unknown PwrSuite app/,
+    );
+    await expect(start({ sender: { id: 18 } }, "pwrgit")).resolves.toMatchObject({
+      phase: "downloading",
+    });
+    expect(installer.start).toHaveBeenCalledOnce();
+    expect(installer.start).toHaveBeenCalledWith("pwrgit");
   });
 });
