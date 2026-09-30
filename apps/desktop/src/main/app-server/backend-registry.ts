@@ -995,6 +995,7 @@ type BackendClient = {
     listener: (status: CodexAppServerRestartStatus) => void,
   ): () => void;
   restartAppServer?(): Promise<void>;
+  resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -30414,6 +30415,9 @@ export class DesktopBackendRegistry {
       this.codexRuntimeRestartPending = false;
       this.managedCodexRuntimeSwitchPending = false;
       await this.codexClient.close();
+      // Exits counted against the old binary say nothing about the new one.
+      // Clear the breaker; the next request starts the selected Codex.
+      this.codexClient.resetAppServerRestarts?.("Codex runtime changed");
       this.tokenMiserServerCapabilities.delete(this.codexClient);
       this.tokenMiserReducerCapabilityState = undefined;
       this.tokenMiserCodeModeGroupingVersion = undefined;

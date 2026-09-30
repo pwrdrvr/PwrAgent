@@ -7887,10 +7887,20 @@ export class CodexAppServerClient {
    * open breaker, and start the server now.
    */
   async restartAppServer(): Promise<void> {
+    this.resetAppServerRestarts("operator restart");
+    await this.ensureInitialized();
+  }
+
+  /**
+   * Forget the exit history, including an open breaker, without starting the
+   * server. The exits it counted belong to a binary that is no longer
+   * selected, so a new Codex version starts with a clean slate.
+   */
+  resetAppServerRestarts(reason: string): void {
+    const wasStopped = this.restartStatus.stopped;
     this.restartPolicy.reset();
     this.setRestartStatus({ stopped: false });
-    codexClientLog.info("Codex app server restart requested");
-    await this.ensureInitialized();
+    codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
   }
 
   private setRestartStatus(status: CodexAppServerRestartStatus): void {

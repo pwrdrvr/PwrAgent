@@ -1600,6 +1600,29 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("clears an open breaker for a new Codex version without starting it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      appServerRestartPolicy: { random: () => 0, breakerExitCount: 1 },
+    });
+    const statuses: unknown[] = [];
+    client.onAppServerRestartStatusChanged((status) => { statuses.push(status); });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    transport.exitUnexpectedly();
+    await expect(client.readRateLimits()).rejects.toThrow("stopped restarting it");
+
+    await client.close();
+    client.resetAppServerRestarts("Codex runtime changed");
+    expect(statuses.at(-1)).toEqual({ stopped: false });
+    expect(client.getAppServerRestartStatus()).toEqual({ stopped: false });
+    // The switch only clears the history; the next request starts Codex.
+    expect(transport.connectCount).toBe(1);
+    await expect(client.readRateLimits()).resolves.toBeDefined();
+    expect(transport.connectCount).toBe(2);
+    await client.close();
+  });
+
   it("gives up a pending restart when the client is closed", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
