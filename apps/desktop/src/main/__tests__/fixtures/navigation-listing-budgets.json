@@ -19,5 +19,9 @@
     "providerListings": 3,
     "paginatedRpcs": 9,
     "pagesPerListing": 3
+  },
+  "concurrent-enriched-navigation-and-title-lookup": {
+    "logicalRequests": 2,
+    "providerListings": 1
   }
 }
