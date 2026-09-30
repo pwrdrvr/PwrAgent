@@ -258,6 +258,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
 }) {
   const gestures = useLightboxGestures();
   const [svgDocument, setSvgDocument] = useState<string>();
+  const [svgColorScheme, setSvgColorScheme] = useState<"light" | "dark">("light");
   const [svgActive, setSvgActive] = useState(false);
   const [svgSearchOpen, setSvgSearchOpen] = useState(false);
   const [svgSearchTerm, setSvgSearchTerm] = useState("");
@@ -274,14 +275,19 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     if (!interactiveSvg) return;
     const controller = new AbortController();
     setSvgDocument(undefined);
+    // Read once per image: a theme change while the frame is open leaves the
+    // frame on its old scheme, which still matches the frame element's pin.
+    const colorScheme = getComputedStyle(document.documentElement).colorScheme === "dark" ? "dark" : "light";
     void (async () => {
       try {
         const blob = await loadImageBlob(src, controller.signal);
         if (blob.type !== "image/svg+xml" || blob.size > 16 * 1024 * 1024) {
           throw new Error("SVG format or size is not supported");
         }
-        const document = interactiveSvgDocument(await blob.text());
-        if (!controller.signal.aborted) setSvgDocument(document);
+        const document = interactiveSvgDocument(await blob.text(), colorScheme);
+        if (controller.signal.aborted) return;
+        setSvgColorScheme(colorScheme);
+        setSvgDocument(document);
       } catch (error) {
         if (!controller.signal.aborted) console.error("Failed to inspect SVG", error);
       }
@@ -329,6 +335,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
         <iframe ref={frame} className="image-lightbox__interactive-svg"
           title={`Interactive SVG: ${alt}`}
           sandbox="allow-scripts" referrerPolicy="no-referrer"
+          style={{ colorScheme: svgColorScheme }}
           srcDoc={svgDocument} />
       ) : (
         <TranscriptImage className="image-lightbox__image" src={src} alt={alt}

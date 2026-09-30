@@ -15,6 +15,13 @@ describe("interactiveSvgDocument", () => {
     expect(document).toContain("function init() {}");
   });
 
+  it("declares the owner's color scheme so the frame stays transparent", () => {
+    const source = '<svg xmlns="http://www.w3.org/2000/svg"><script>function init() {}</script></svg>';
+
+    expect(interactiveSvgDocument(source)).toContain(":root { color-scheme: light; }");
+    expect(interactiveSvgDocument(source, "dark")).toContain(":root { color-scheme: dark; }");
+  });
+
   it("rejects non-SVG documents", () => {
     expect(() => interactiveSvgDocument("<html/>"))
       .toThrow("Interactive SVG could not be parsed");

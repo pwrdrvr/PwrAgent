@@ -8,8 +8,16 @@ const INTERACTIVE_SVG_CSP = [
   "frame-src 'none'",
 ].join("; ");
 
-/** Return a sandbox document only when the SVG has user-facing interactions. */
-export function interactiveSvgDocument(source: string): string | undefined {
+/** Return a sandbox document only when the SVG has user-facing interactions.
+ *
+ *  `colorScheme` must be the scheme the owning `<iframe>` element uses, and the
+ *  caller pins the same value on it. Chromium paints an opaque canvas — white
+ *  for a light document — behind a frame whose scheme differs from its owner's,
+ *  and `light dark` would follow the OS preference rather than the app theme. */
+export function interactiveSvgDocument(
+  source: string,
+  colorScheme: "light" | "dark" = "light",
+): string | undefined {
   const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
   const svg = parsed.documentElement;
   if (
@@ -31,7 +39,7 @@ export function interactiveSvgDocument(source: string): string | undefined {
   return `<!doctype html><html><head>
     <meta http-equiv="Content-Security-Policy" content="${INTERACTIVE_SVG_CSP}">
     <meta name="referrer" content="no-referrer">
-    <style>html, body { width: 100%; height: 100%; margin: 0; overflow: auto; } svg { display: block; width: 100%; }</style>
+    <style>:root { color-scheme: ${colorScheme}; } html { height: 100%; overflow: auto; } body { display: flex; flex-direction: column; min-height: 100%; margin: 0; } svg { display: block; flex: none; max-width: 100%; height: auto; margin: auto; background: Canvas; border-radius: 4px; }</style>
     <script>
       (function() {
         const replaceState = history.replaceState.bind(history);
