@@ -227,6 +227,12 @@ export const MCP_CONNECTION_PWRGIT_OPEN_CHANNEL =
   "mcp-connection:pwrgit-open";
 export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrgit-download";
+export const PWRSUITE_INSTALLER_READ_CHANNEL = "pwrsuite-installer:read";
+export const PWRSUITE_INSTALLER_START_CHANNEL = "pwrsuite-installer:start";
+export const PWRSUITE_INSTALLER_CANCEL_CHANNEL = "pwrsuite-installer:cancel";
+export const PWRSUITE_INSTALLER_OPEN_CHANNEL = "pwrsuite-installer:open";
+export const PWRSUITE_INSTALLER_REVEAL_CHANNEL = "pwrsuite-installer:reveal";
+export const PWRSUITE_INSTALLER_EVENT_CHANNEL = "pwrsuite-installer:event";
 export const MCP_CONNECTION_LIST_CHANNEL = "mcp-connection:list";
 export const MCP_CONNECTION_CREATE_CHANNEL = "mcp-connection:create";
 export const MCP_CONNECTION_AUTHORIZE_CHANNEL = "mcp-connection:authorize";

@@ -66,11 +66,23 @@ describe("launchpad connection card bounds", () => {
     );
   });
 
-  it("keeps each card at its natural height inside the scrolling list", () => {
-    // Shrinkable cards inside a scroller squeeze rather than scroll, which
-    // is the same unreachable-content trap one level down.
-    expect(ruleBody(".thread-view__connections > .mcp-connection")).toMatch(
+  it("keeps the tile row at its natural height inside the scrolling list", () => {
+    // Shrinkable tiles inside a scroller squeeze rather than scroll, which
+    // is the same unreachable-content trap one level down. The tiles sit in
+    // one grid row, so the row is the list's flex item.
+    expect(ruleBody(".thread-view__connections > .pwrsuite-tiles")).toMatch(
       /flex:\s*0\s+0\s+auto;/,
+    );
+  });
+
+  it("stacks the tiles by the thread area's width, not the window's", () => {
+    // A pinned context rail narrows the thread area without the viewport
+    // changing, so a media query would keep two squeezed tiles side by side.
+    expect(ruleBody(".thread-view__connections")).toMatch(
+      /container:\s*pwrsuite-launchpad\s*\/\s*inline-size;/,
+    );
+    expect(appCss).toMatch(
+      /@container pwrsuite-launchpad \(max-width: \d+px\) \{\s*\.pwrsuite-tiles \{\s*grid-template-columns: minmax\(0, 1fr\);/,
     );
   });
 

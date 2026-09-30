@@ -2223,8 +2223,7 @@ describe("ThreadView", () => {
     const launchpadRail = screen.getByLabelText("New thread context");
     expect(launchpadRail.parentElement).toHaveClass("thread-view__layout");
     expect(launchpadRail.parentElement?.parentElement).toHaveClass("thread-view");
-    // PwrSuite cards render into ONE list (only PwrGit here, since local
-    // PwrSnap is offered in MCP access), and that list is
+    // Both PwrSuite cards render into ONE list, and that list is
     // a sibling of the composer inside `.thread-view__primary`. The list is
     // the only box in that column allowed to shrink and scroll; while the
     // cards were direct siblings of the composer, nothing in the column
@@ -2235,7 +2234,7 @@ describe("ThreadView", () => {
     // against a real render in `e2e/launchpad-composer-bounds.spec.ts`.
     const connectionList = document.querySelector(".thread-view__connections");
     expect(connectionList).not.toBeNull();
-    expect(connectionList?.querySelectorAll(".mcp-connection")).toHaveLength(1);
+    expect(connectionList?.querySelectorAll(".mcp-connection")).toHaveLength(2);
     expect(connectionList?.parentElement).toHaveClass("thread-view__primary");
     expect(connectionList?.nextElementSibling).toHaveClass(
       "thread-view__launchpad-composer",
@@ -2253,6 +2252,70 @@ describe("ThreadView", () => {
     expect(await screen.findByRole("listbox", {
       name: "Threads and pull requests",
     })).toHaveTextContent("#Bob's Best Thread 3000");
+  });
+
+  it("offers both PwrSuite apps on a local launchpad, whichever is connected", async () => {
+    // Only PwrGit rendered here once PwrSnap's card moved into MCP access,
+    // so a connected PwrGit read as having replaced PwrSnap for good.
+    const selectedDirectory = {
+      key: "directory:/repo",
+      kind: "directory",
+      label: "Repo",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      createdAt: 1_000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "default",
+      prompt: "",
+      updatedAt: 1_000,
+      workMode: "local",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          readPwrGitConnectionStatus: async () => ({
+            connectionId: "pwrgit" as const,
+            displayName: "PwrGit" as const,
+            availability: "running" as const,
+            configured: true,
+          }),
+          readPwrSnapConnectionStatus: async () => ({
+            connectionId: "pwrsnap" as const,
+            displayName: "PwrSnap" as const,
+            availability: "not_installed" as const,
+            configured: false,
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("switch", { name: "Use PwrGit in this thread" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Get PwrSnap" }),
+    ).toBeInTheDocument();
   });
 
   it("treats a main-window launchpad as remote from the active federation target", async () => {

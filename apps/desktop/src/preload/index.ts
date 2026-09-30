@@ -501,6 +501,11 @@ import type {
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
+import type {
+  PwrSuiteAppId,
+  PwrSuiteInstallerActionResult,
+  PwrSuiteInstallerState,
+} from "../shared/pwrsuite-installer";
 import type { BundledGitLfsAdvisoryEvent } from "../shared/bundled-git-lfs";
 import type {
   GithubPrAuthenticationFailureEvent,
@@ -725,6 +730,12 @@ import {
   MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
   MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
   MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
+  PWRSUITE_INSTALLER_CANCEL_CHANNEL,
+  PWRSUITE_INSTALLER_EVENT_CHANNEL,
+  PWRSUITE_INSTALLER_OPEN_CHANNEL,
+  PWRSUITE_INSTALLER_READ_CHANNEL,
+  PWRSUITE_INSTALLER_REVEAL_CHANNEL,
+  PWRSUITE_INSTALLER_START_CHANNEL,
   MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
@@ -1101,6 +1112,38 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL),
   openPwrGitDownload: async (): Promise<OpenPwrGitResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL),
+  readPwrSuiteInstaller: async (
+    app: PwrSuiteAppId,
+  ): Promise<PwrSuiteInstallerState> =>
+    await ipcRenderer.invoke(PWRSUITE_INSTALLER_READ_CHANNEL, app),
+  startPwrSuiteDownload: async (
+    app: PwrSuiteAppId,
+  ): Promise<PwrSuiteInstallerState> =>
+    await ipcRenderer.invoke(PWRSUITE_INSTALLER_START_CHANNEL, app),
+  cancelPwrSuiteDownload: async (
+    app: PwrSuiteAppId,
+  ): Promise<PwrSuiteInstallerState> =>
+    await ipcRenderer.invoke(PWRSUITE_INSTALLER_CANCEL_CHANNEL, app),
+  openPwrSuiteInstaller: async (
+    app: PwrSuiteAppId,
+  ): Promise<PwrSuiteInstallerActionResult> =>
+    await ipcRenderer.invoke(PWRSUITE_INSTALLER_OPEN_CHANNEL, app),
+  revealPwrSuiteInstaller: async (
+    app: PwrSuiteAppId,
+  ): Promise<PwrSuiteInstallerActionResult> =>
+    await ipcRenderer.invoke(PWRSUITE_INSTALLER_REVEAL_CHANNEL, app),
+  onPwrSuiteInstaller: (
+    callback: (state: PwrSuiteInstallerState) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: PwrSuiteInstallerState,
+    ) => callback(payload);
+    ipcRenderer.on(PWRSUITE_INSTALLER_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(PWRSUITE_INSTALLER_EVENT_CHANNEL, listener);
+    };
+  },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
   readLicenseDocument: async (

@@ -1292,7 +1292,20 @@ export class McpConnectionGatewayService {
           finish(error instanceof Error ? error : new Error(String(error)));
         }
       });
-      socket.on("error", (error) => finish(error));
+      socket.on("error", (error: NodeJS.ErrnoException) => {
+        // A refused or missing socket is an owner that exited without
+        // releasing its lease. The lease stays with it for the dead-owner
+        // grace, so the raw error — a temp socket path — reaches every
+        // screen that lists connections until another instance takes over.
+        if (error.code === "ECONNREFUSED" || error.code === "ENOENT") {
+          finish(new Error(
+            "Another PwrAgent instance manages MCP connections for this profile and is not responding.",
+            { cause: error },
+          ));
+          return;
+        }
+        finish(error);
+      });
       socket.on("close", () => {
         finish(new Error("The MCP connection owner closed unexpectedly."));
       });

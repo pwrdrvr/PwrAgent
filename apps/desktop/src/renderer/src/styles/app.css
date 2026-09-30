@@ -18346,9 +18346,9 @@ a.button {
   min-height: 0;
   /* A shrink with no scroller just moves the clip one level down. */
   overflow-y: auto;
-  /* `align-items: center` and the cards' `calc(100% - 32px)` both resolve
-     against the content box, which a space-taking scrollbar narrows — so
-     without a symmetric gutter the card column would sit half a scrollbar
+  /* `align-items: center` and the tile row's `calc(100% - 32px)` both
+     resolve against the content box, which a space-taking scrollbar narrows
+     — so without a symmetric gutter the tile row would sit half a scrollbar
      left of the composer column directly below it, on Windows and Linux
      and on macOS set to "Show scroll bars: Always". `both-edges` keeps the
      centring honest; it costs nothing where scrollbars are overlays. */
@@ -18357,6 +18357,8 @@ a.button {
      bottom pays too: scrolled to its end, the last card's border would
      otherwise land straight on the composer's top edge. */
   padding: clamp(16px, 5vh, 56px) 0 14px;
+  /* The tiles stack by the width of the thread area, not the window. */
+  container: pwrsuite-launchpad / inline-size;
 }
 
 /* Both cards return `null` against a remote launchpad whose owner has not
@@ -18367,144 +18369,350 @@ a.button {
   display: none;
 }
 
-.mcp-connection {
+/* The PwrSuite tiles: ads for the sister apps, one line each, side by side
+   in the chat column. Everything the old cards said in a paragraph lives
+   behind each tile's Info button now, which is what buys the row back for
+   the composer. The pair stacks when the thread area is too narrow for two
+   tiles to keep their one-line layout; see the container query below. */
+.pwrsuite-tiles {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   width: calc(100% - 32px);
   max-width: var(--chat-column-max);
-  padding: 14px 0;
-  /* One rule per card plus the closing rule below reads as a single list:
-     between two cards the pair collapses to the one hairline that
-     separates them, rather than the doubled border two self-contained
-     cards used to stack. */
-  border-top: 1px solid var(--border-subtle);
 }
 
-/* Shrinkable cards inside the scroller would squeeze instead of scroll —
+/* Shrinkable tiles inside the scroller would squeeze instead of scroll —
    the same unreachable-content trap one level down. */
-.thread-view__connections > .mcp-connection {
+.thread-view__connections > .pwrsuite-tiles {
   flex: 0 0 auto;
 }
 
-.thread-view__connections > .mcp-connection:last-child {
-  border-bottom: 1px solid var(--border-subtle);
+/* A remote launchpad can show one tile alone; it takes the row. */
+.pwrsuite-tiles > .mcp-connection:only-child {
+  grid-column: 1 / -1;
+}
+
+.mcp-connection {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 68px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  /* The glow sits behind the icon, so each tile carries its own light
+     without a gradient across the whole surface. */
+  background:
+    radial-gradient(
+      140px 90px at 34px 50%,
+      color-mix(in srgb, var(--accent) 16%, transparent),
+      transparent 72%
+    ),
+    var(--bg-panel);
+}
+
+.mcp-connection:hover {
+  border-color: var(--border-strong);
+}
+
+/* Connected is the resting state: the tile stops advertising. */
+.pwrsuite-tile--connected {
+  background: var(--bg-panel);
 }
 
 .mcp-connection__icon {
   display: block;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 8px;
+  box-shadow: 0 6px 16px var(--shadow-tint-medium);
 }
 
 .mcp-connection__copy {
   min-width: 0;
 }
 
-.mcp-connection__copy .eyebrow,
-.mcp-connection__copy h2,
-.mcp-connection__copy p {
-  margin: 0;
+.pwrsuite-tile__head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 
-.mcp-connection__copy h2 {
-  margin-top: 2px;
+.pwrsuite-tile__head h2 {
+  margin: 0 4px 0 0;
   color: var(--text-primary);
-  font-size: 16px;
-  line-height: 1.25;
-  letter-spacing: -0.02em;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 
-.mcp-connection__copy > p:not(.eyebrow) {
-  max-width: 620px;
-  margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.mcp-connection__copy .mcp-connection__detail {
+.pwrsuite-tile__tag {
+  overflow: hidden;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.mcp-connection__copy .mcp-connection__error {
-  color: var(--danger-text);
+/* 24px: the WCAG 2.2 target size the a11y gate holds. Info and Website sit
+   side by side, so neither may rely on spacing to pass. */
+.pwrsuite-tile__icon-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pwrsuite-tile__icon-button:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pwrsuite-tile__icon-button.is-open {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
+.pwrsuite-tile__icon-button:focus-visible,
+.pwrsuite-about__link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pwrsuite-tile__line {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pwrsuite-tile__line b {
+  color: var(--text-primary);
+  font-weight: 550;
+}
+
+.pwrsuite-tile__line--state {
+  color: var(--text-muted);
+}
+
+.pwrsuite-tile__line--error {
+  color: var(--danger-text);
 }
 
 .mcp-connection__action {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  min-width: 150px;
+  gap: 6px;
 }
 
-.mcp-connection__toggle {
-  display: flex;
+.mcp-connection__action .button {
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
-  color: var(--text-secondary);
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 11px;
   font-size: 12px;
+  font-weight: 550;
   white-space: nowrap;
 }
 
-.mcp-connection__checking {
+.pwrsuite-tile__size {
   color: var(--text-muted);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
 }
 
-/* Short windows: the list already scrolls, but a two-card list you have to
-   scroll to read is worse than two cards that fit. Buy the fit back out of
-   air and type scale rather than out of the copy — truncating the
-   description would hide the only thing that explains what the connection
-   is for. The app's own minimum window is 640px tall, so this is the size
-   the cards actually have to work at, not an edge case. */
+.button--primary:hover:not([disabled]) .pwrsuite-tile__size {
+  color: inherit;
+}
+
+.pwrsuite-tile__switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.pwrsuite-tile__state {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* The byte meter, in the update banner's bar language. It moves only
+   because bytes arrived; the phase with no known size is a static
+   half-tone bar, the form the banner already uses under reduced motion. */
+.pwrsuite-meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  align-items: center;
+  width: 190px;
+}
+
+.pwrsuite-meter__track {
+  display: block;
+  overflow: hidden;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.pwrsuite-meter__track i {
+  display: block;
+  width: 0;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.pwrsuite-meter__track--unknown i {
+  width: 100%;
+  opacity: 0.5;
+}
+
+.pwrsuite-meter__cancel {
+  grid-row: 1;
+  grid-column: 2;
+}
+
+.pwrsuite-meter__line {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Info: the paragraph the tile no longer prints. Portalled to the body so
+   the scrolling tile list cannot clip it. */
+.pwrsuite-about {
+  position: fixed;
+  z-index: 95;
+  box-sizing: border-box;
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.pwrsuite-about__eyebrow {
+  margin: 0;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.pwrsuite-about__title {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.pwrsuite-about__body,
+.pwrsuite-about__note {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.pwrsuite-about__note {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.pwrsuite-about__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pwrsuite-about__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.pwrsuite-about__link:hover {
+  text-decoration: underline;
+}
+
+/* Two tiles each need about 400px to keep the pitch readable beside a
+   "Download for Windows" button, so below that the pair stacks. The query
+   is on the thread area, not the window: a pinned context rail or a wide
+   sidebar narrows it without the viewport changing. */
+@container pwrsuite-launchpad (max-width: 860px) {
+  .pwrsuite-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Side by side a tile is never wider than half the chat column, and the
+   size would push the pitch into an ellipsis. It shows once they stack;
+   the button's tooltip carries it either way. */
+@container pwrsuite-launchpad (min-width: 861px) {
+  .pwrsuite-tile__size {
+    display: none;
+  }
+}
+
+/* Short windows: the list already scrolls; give its air back first. */
 @media (max-height: 780px) {
   .thread-view__connections {
     padding-top: 12px;
-  }
-
-  .mcp-connection {
-    grid-template-columns: 32px minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 10px 0;
-  }
-
-  .mcp-connection__icon {
-    width: 32px;
-    height: 32px;
-  }
-
-  .mcp-connection__copy h2 {
-    font-size: 14px;
-  }
-
-  .mcp-connection__copy > p:not(.eyebrow) {
-    font-size: 12px;
-  }
-}
-
-/* Placed after the short-window block on purpose: both rules touch
-   `grid-template-columns` and the icon size, and at a viewport that is both
-   narrow and short the stacked two-column layout is the one that has to
-   win — the short-window rule only wants the row smaller, not wider. */
-@media (max-width: 760px) {
-  .mcp-connection {
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 12px;
-  }
-
-  .mcp-connection__icon {
-    width: 36px;
-    height: 36px;
-  }
-
-  .mcp-connection__action {
-    grid-column: 2;
-    justify-content: flex-start;
   }
 }
 
