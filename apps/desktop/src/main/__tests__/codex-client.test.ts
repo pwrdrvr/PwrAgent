@@ -3959,6 +3959,47 @@ describe("CodexAppServerClient", () => {
         await client.close();
       });
 
+      it("repairs after a restart when the app server dies while recovery waits", async () => {
+        const { client, transport, repair } = await fixture({
+          appServerRestartPolicy: { random: () => 0 },
+        });
+        await client.getInitializeResult();
+        const notifications: AppServerNotification[] = [];
+        client.onNotification((notification) => { notifications.push(notification); });
+        const waits: Array<Array<{ threadId: string; turnId?: string }>> = [];
+        transport.loadedThreads.add("thread-busy");
+        transport.emitInbound({ method: "turn/started", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+        } });
+        const recovery = client.recoverInvalidPersistedResponseMessageIds({
+          ...recoveryParams,
+          onWaitingForTurns: (turns) => { waits.push(turns); },
+        });
+        await vi.waitFor(() => expect(waits).toHaveLength(1));
+        vi.useFakeTimers();
+        try {
+          // The crash ends the busy turn: the wait wakes, and the next attempt
+          // starts Codex again through the restart backoff.
+          transport.exitUnexpectedly();
+          await vi.advanceTimersByTimeAsync(999);
+          expect(transport.connectCount).toBe(1);
+          expect(repair).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          vi.useRealTimers();
+          await recovery;
+        } finally {
+          vi.useRealTimers();
+        }
+        expect(repair).toHaveBeenCalledOnce();
+        expect(waits).toHaveLength(1);
+        expect(notifications.filter((n) => n.method === "turn/failed")).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ threadId: "thread-busy", turnId: "turn-busy" }),
+          }),
+        ]);
+        await client.close();
+      });
+
       it("trusts Codex's report of a running turn this client never saw start", async () => {
         const { client, transport, repair, recover, waits } = await startBusyFixture();
         transport.loadedThreads.add("thread-quiet");

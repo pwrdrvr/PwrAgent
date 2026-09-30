@@ -102,9 +102,9 @@ export function buildCodexRestartNotice(params: {
   const minutes = status.stopped ? Math.round(status.windowMs / 60_000) : 0;
   const lastExit = status.stopped
     ? status.lastExit.signal
-      ? `Last exit: signal ${status.lastExit.signal}.`
+      ? `signal ${status.lastExit.signal}`
       : status.lastExit.code !== null
-        ? `Last exit: code ${status.lastExit.code}.`
+        ? `code ${status.lastExit.code}`
         : undefined
     : undefined;
   return {
@@ -117,7 +117,7 @@ export function buildCodexRestartNotice(params: {
         + " so PwrAgent stopped restarting it. Codex threads can't run until it"
         + " starts again."
       : "Codex did not start again.",
-    ...(lastExit ? { detail: lastExit } : {}),
+    ...(lastExit ? { facts: [{ label: "Last exit", value: lastExit }] } : {}),
     ...(attempt.state === "restarting"
       ? { status: { label: "Restarting Codex…", state: "progress" as const } }
       : attempt.state === "failed"

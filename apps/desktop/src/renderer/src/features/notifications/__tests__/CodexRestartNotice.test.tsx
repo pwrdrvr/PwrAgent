@@ -31,7 +31,7 @@ describe("buildCodexRestartNotice", () => {
       autoDismiss: false,
       id: "codex-restart-stopped:1000",
       title: "Codex stopped",
-      detail: "Last exit: signal SIGSEGV.",
+      facts: [{ label: "Last exit", value: "signal SIGSEGV" }],
       tone: "error",
     });
     expect(notice?.message).toBe(
