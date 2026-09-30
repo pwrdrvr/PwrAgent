@@ -38356,6 +38356,9 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-connections ul { margin: 6px 0; padding-left: 18px; max-height: 240px; overflow-y: auto; }
 .federation-connections li + li { margin-top: 10px; }
 .federation-connections p { margin: 4px 0; }
+.federation-connections--collapsible summary { cursor: pointer; }
+.federation-connections--collapsible summary span { color: var(--text-secondary); }
+.federation-connections--collapsible summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
 .federation-status-control__details p { margin: 6px 0; }
 .federation-status-control__title { display: flex; align-items: center; gap: 4px; }

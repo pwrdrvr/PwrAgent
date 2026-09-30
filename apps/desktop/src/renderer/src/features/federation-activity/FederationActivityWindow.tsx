@@ -236,7 +236,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
       </button>
       <span role="status" className="federation-activity__muted">{copied ? "Federation activity copied" : ""}</span>
     </div>
-    {snapshot ? <FederationConnections health={snapshot.health} /> : null}
+    {snapshot ? <FederationConnections health={snapshot.health} collapsible /> : null}
     {snapshot?.health.leaseHolder ? <p>Lease holder: {snapshot.health.leaseHolder.instanceId}
       {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
       {snapshot.health.leaseHolder.cwdHint ? ` · ${snapshot.health.leaseHolder.cwdHint}` : ""}</p> : null}
@@ -255,10 +255,6 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
         {PERIODS.map((value) => <option key={value} value={value}>{value}</option>)}
       </select></label>
     </div>
-    <p className="federation-activity__muted">{view === "physical"
-      ? "Each direct or gateway connection counts its own transfers. A relayed envelope crosses two connections at a gateway."
-      : "Only traffic sent or received by this instance as an endpoint; transit forwarding is excluded. This is an alternate view, not extra traffic."}</p>
-    <p className="federation-activity__muted">Sent counts bytes accepted by the local socket; it does not confirm delivery.</p>
     {series && (view === "physical" || peerId) ? <>
       <FederationAmountChart history={series.history} period={period} bytes />
       <FederationAmountChart history={series.history} period={period} bytes={false} />
@@ -268,6 +264,10 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
     {snapshot ? <p className="federation-activity__muted">Totals since {new Date(snapshot.activity.since).toLocaleString()}.
       Charts show amounts recorded in each second for up to one hour. The latest second is still in progress.</p> : null}
     <details className="federation-activity__boundaries"><summary>What is measured</summary>
+      <p>{view === "physical"
+        ? "Each direct or gateway connection counts its own transfers. A relayed envelope crosses two connections at a gateway."
+        : "Only traffic sent or received by this instance as an endpoint; transit forwarding is excluded. This is an alternate view, not extra traffic."}
+        {" "}Sent counts bytes accepted by the local socket; it does not confirm delivery.</p>
       <p>Data is the serialized envelope before compression and encryption, including its protocol metadata and binary blob data.
         Wire is the encoded WebSocket application-message payload, including Noise authentication tags when present.
         It excludes WebSocket headers, TCP/TLS overhead, handshake/authentication messages and WebSocket ping, pong and close frames.</p>

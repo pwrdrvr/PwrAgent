@@ -137,6 +137,24 @@ describe("Federation activity surfaces", () => {
     expect(screen.queryByText(/incoming tunnels or proxies may appear as the remote/)).not.toBeInTheDocument();
   });
 
+  it("folds the Activity window's connection list behind a count so it cannot push the charts down", () => {
+    const health = fixture().health;
+    health.role = "gateway";
+    health.peers = [{ id: "client", label: "Laptop", role: "client", status: "connected", capabilities: [] }];
+    health.activeConnections = [
+      { peerId: "client", direction: "incoming", remoteAddress: "192.168.1.20:54321", localAddress: "192.168.1.10:47830" },
+    ];
+    const { container, rerender } = render(<FederationConnections health={health} collapsible />);
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent("Active connections · 1");
+    expect(screen.getByText("192.168.1.20:54321")).toBeInTheDocument();
+    rerender(<FederationConnections health={{ ...health, activeConnections: [] }} collapsible />);
+    expect(container.querySelector("summary")).toHaveTextContent("Active connections · Not connected");
+    expect(screen.getAllByText("Not connected")).toHaveLength(1);
+  });
+
   it.each(["popup", "activity"])("shows the actual gateway and follows reconnects in the %s", async (surface) => {
     const snapshot = fixture();
     snapshot.configuredMode = "client";
