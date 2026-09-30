@@ -1999,8 +1999,9 @@ describe("AcpBackendAdapter", () => {
   // terminal event both carry it, so the pricing ledger row can be completed.
   // The terminal comes from the session/prompt request settling, whatever the
   // agent does or does not send when the turn is cancelled or its process ends.
+  // A cancelled prompt ends as turn/cancelled, never as a completed turn.
   it.each([
-    ["cancelled prompt", "turn/completed"],
+    ["cancelled prompt", "turn/cancelled"],
     ["agent process exit", "turn/failed"],
   ] as const)("ends a %s under the pending turn id its usage carried", async (ending, terminal) => {
     const backendId = "acp:qwen" as AcpBackendId;
@@ -2069,6 +2070,13 @@ describe("AcpBackendAdapter", () => {
       expect(events.some((event) => event.notification.method === "thread/tokenUsage/updated")).toBe(true);
     });
     if (ending === "cancelled prompt") {
+      // The quit path: session/cancel through the running client only.
+      await expect(adapter.cancelRunningSession(backendId, session.sessionId))
+        .resolves.toBe(true);
+      expect(transport.notifications).toContainEqual({
+        method: "session/cancel",
+        params: { sessionId: session.sessionId },
+      });
       settlePrompt.resolve({ stopReason: "cancelled" });
     } else {
       settlePrompt.reject(new Error("json-rpc transport closed"));
@@ -2082,8 +2090,11 @@ describe("AcpBackendAdapter", () => {
       .map((event) => (event.notification.params as { turnId?: string }).turnId);
     expect(new Set(turnIdsFor("thread/tokenUsage/updated"))).toEqual(new Set([turnId]));
     expect(turnIdsFor(terminal)).toEqual([turnId]);
+    expect(turnIdsFor("turn/completed")).toEqual([]);
 
     await adapter.close();
+    await expect(adapter.cancelRunningSession(backendId, session.sessionId))
+      .resolves.toBe(false);
   });
 
   it("reports Grok model-call usage while a turn is still running", async () => {

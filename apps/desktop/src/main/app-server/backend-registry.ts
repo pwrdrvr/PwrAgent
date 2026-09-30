@@ -8195,6 +8195,35 @@ const USAGE_TURN_REPAIR_PEER_QUIET_MS = 24 * 60 * 60_000;
 // Bounds one startup transaction. A real profile had 1,177 open turns
 // (21 ms to select); anything past the limit is repaired at the next start.
 const USAGE_TURN_REPAIR_BATCH_LIMIT = 2_000;
+// One deadline for every turn a quit stops. Codex holds an interrupted task
+// for at most 100 ms before aborting it, then flushes and answers; a backend
+// that has not ended its turn by then is left to the shutdown stamp.
+const RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS = 2_000;
+
+/**
+ * The registry's running turns. Removal is observable, so a quit can wait for
+ * each turn it stopped to end, whichever terminal path removes it.
+ */
+class ActiveTurnKeySet extends Set<string> {
+  private readonly deleteListeners = new Set<() => void>();
+
+  override delete(key: string): boolean {
+    const deleted = super.delete(key);
+    if (deleted) {
+      for (const listener of this.deleteListeners) {
+        listener();
+      }
+    }
+    return deleted;
+  }
+
+  onDelete(listener: () => void): () => void {
+    this.deleteListeners.add(listener);
+    return () => {
+      this.deleteListeners.delete(listener);
+    };
+  }
+}
 
 type PendingLiveThreadUsageLine = {
   backend: AppServerBackendKind;
@@ -8496,7 +8525,7 @@ export class DesktopBackendRegistry {
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
-  private readonly activeTurnKeys = new Set<string>();
+  private readonly activeTurnKeys = new ActiveTurnKeySet();
   /**
    * Codex runtime activity recovered from `thread/list` / `thread/read`.
    * The long-lived Codex registry keeps this truth across a desktop
@@ -8664,6 +8693,13 @@ export class DesktopBackendRegistry {
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
   private readonly subAgentStartupReconciliation: Promise<void>;
   private readonly usageTurnStartupRepair: Promise<void>;
+  private readonly runningTurnShutdownStopTimeoutMs: number;
+  private runningTurnsShutdownStop?: Promise<void>;
+  private runningTurnsShutdownStopSettled = false;
+  /** Set once a quit starts stopping turns; the queue starts nothing after. */
+  private stoppingRunningTurnsForShutdown = false;
+  /** Terminal events still reaching listeners while a quit waits on them. */
+  private readonly shutdownTerminalEmits = new Set<Promise<void>>();
   /**
    * Streamed command-output accounting waiting to be written, keyed by
    * invocation id. Deltas fold together here instead of each one paying a
@@ -9136,6 +9172,7 @@ export class DesktopBackendRegistry {
     runtimeInstanceId?: string;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
+    runningTurnShutdownStopTimeoutMs?: number;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
@@ -9145,6 +9182,9 @@ export class DesktopBackendRegistry {
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
+    this.runningTurnShutdownStopTimeoutMs =
+      options?.runningTurnShutdownStopTimeoutMs
+      ?? RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS;
     this.resolveLiveProfileRuntimeInstanceIdsFn =
       options?.resolveLiveProfileRuntimeInstanceIds ??
       (() =>
@@ -9853,8 +9893,11 @@ export class DesktopBackendRegistry {
     });
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
+      // A turn a quit stopped releases its thread; the next queued turn must
+      // not start in its place, so every thread reads as busy from then on.
       isThreadActive: ({ backend, threadId }) =>
-        this.threadHasActiveTurn(threadId, backend)
+        this.stoppingRunningTurnsForShutdown
+        || this.threadHasActiveTurn(threadId, backend)
         || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
@@ -10020,6 +10063,172 @@ export class DesktopBackendRegistry {
         soleRuntime,
       });
     }
+  }
+
+  /**
+   * Stop every running turn through its own protocol before quitting.
+   *
+   * Closing kills the app-server and ACP agent processes, which ends their
+   * turns with no terminal event. Asked first, each backend ends its turn
+   * itself: Codex answers turn/interrupt with turn/completed, status
+   * interrupted, and session/cancel settles an ACP prompt with stopReason
+   * cancelled. That terminal takes the normal path, so the pricing ledger,
+   * transcript, queue, and every listener record an interrupted turn with
+   * the backend's own end time.
+   *
+   * The requests go out together under one deadline. A turn that has not
+   * ended by then, or that started afterwards, keeps the shutdown stamp
+   * close() records. Runs once; close() waits for it too, so a close outside
+   * the quit sequence still asks before it kills.
+   */
+  stopRunningTurnsForShutdown(
+    options: { timeoutMs?: number } = {},
+  ): Promise<void> {
+    this.runningTurnsShutdownStop ??= this.stopRunningTurnsForShutdownOnce(
+      options.timeoutMs ?? this.runningTurnShutdownStopTimeoutMs,
+    ).finally(() => {
+      this.runningTurnsShutdownStopSettled = true;
+    });
+    return this.runningTurnsShutdownStop;
+  }
+
+  private async stopRunningTurnsForShutdownOnce(timeoutMs: number): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.stoppingRunningTurnsForShutdown = true;
+    const keys = [...this.activeTurnKeys];
+    if (keys.length === 0) {
+      return;
+    }
+    const startedAt = Date.now();
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<"deadline">((resolve) => {
+      timer = setTimeout(() => resolve("deadline"), Math.max(0, timeoutMs));
+    });
+    let unsubscribe: (() => void) | undefined;
+    const ended = new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (keys.every((key) => !this.activeTurnKeys.has(key))) {
+          resolve();
+        }
+      };
+      unsubscribe = this.activeTurnKeys.onDelete(check);
+      check();
+    });
+    const requests = { requested: 0, unsupported: 0, failed: 0 };
+    const sent = this.requestShutdownTurnStops(keys, requests);
+    // No backend could be asked, so no terminal is coming: skip the wait.
+    const nothingSent = new Promise<"nothing-sent">((resolve) => {
+      void sent.then(async () => {
+        if (requests.requested === 0) {
+          // A turn that ended on its own meanwhile still reaches listeners.
+          await Promise.all([...this.shutdownTerminalEmits]);
+          resolve("nothing-sent");
+        }
+      });
+    });
+    try {
+      const outcome = await Promise.race([
+        ended.then(async () => {
+          // A turn leaves the running set before its listeners run. Let
+          // messaging and the renderer see each terminal before they stop.
+          await Promise.all([...this.shutdownTerminalEmits]);
+          return "ended" as const;
+        }),
+        nothingSent,
+        deadline,
+      ]);
+      const detail = {
+        durationMs: Date.now() - startedAt,
+        requests: { ...requests },
+        turns: keys.length,
+        unanswered: keys.filter((key) => this.activeTurnKeys.has(key)).length,
+      };
+      if (outcome === "ended") {
+        backendRegistryLog.info("running turns stopped for shutdown", detail);
+      } else if (outcome === "nothing-sent") {
+        backendRegistryLog.info("no running turn could be asked to stop", detail);
+      } else {
+        backendRegistryLog.warn(
+          "running turns still unanswered at the shutdown deadline",
+          detail,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+      unsubscribe?.();
+    }
+  }
+
+  /**
+   * Ask each backend to stop its turns, counting each request's outcome as it
+   * answers. The caller's deadline, not these requests, bounds the wait.
+   */
+  private async requestShutdownTurnStops(
+    keys: string[],
+    counts: Record<"requested" | "unsupported" | "failed", number>,
+  ): Promise<void> {
+    const cancelledAcpSessions = new Set<string>();
+    // One session/cancel stops whatever the session is running.
+    const cancelAcpSession = async (
+      backend: AcpBackendId,
+      sessionId: string,
+    ): Promise<void> => {
+      const session = buildThreadIdentityKey(backend, sessionId);
+      if (cancelledAcpSessions.has(session)) {
+        return;
+      }
+      cancelledAcpSessions.add(session);
+      const sent = await this.acpBackend.cancelRunningSession(backend, sessionId);
+      counts[sent ? "requested" : "unsupported"] += 1;
+    };
+    let codexInterruptSupported: Promise<boolean> | undefined;
+    await Promise.all(keys.map(async (key) => {
+      const turn = parseActiveTurnKey(key);
+      if (!turn) {
+        counts.unsupported += 1;
+        return;
+      }
+      try {
+        if (isAcpBackendId(turn.backend)) {
+          await cancelAcpSession(turn.backend, turn.threadId);
+          return;
+        }
+        // interruptTurn reaches an ACP review through getClientForSession,
+        // which may prepare or launch a client. Cancel it in place instead.
+        const review = this.findReviewForParentTurn({
+          backend: turn.backend,
+          parentThreadId: turn.threadId,
+          turnId: turn.turnId,
+        });
+        if (review && isAcpBackendId(review.backend)) {
+          await cancelAcpSession(review.backend, review.reviewThreadId);
+          return;
+        }
+        codexInterruptSupported ??= this.codexClient
+          .getInitializeResult()
+          .then((result) =>
+            buildCapabilities(result.methods ?? [], "codex").interruptTurn
+          );
+        if (!(await codexInterruptSupported)) {
+          counts.unsupported += 1;
+          return;
+        }
+        await this.interruptTurn(turn);
+        counts.requested += 1;
+      } catch (error) {
+        // A turn that ended on its own rejects the request. Either way the
+        // deadline decides; a turn still running keeps the shutdown stamp.
+        counts.failed += 1;
+        backendRegistryLog.info("shutdown turn stop request failed", {
+          backend: turn.backend,
+          message: error instanceof Error ? error.message : String(error),
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+        });
+      }
+    }));
   }
 
   /**
@@ -23528,6 +23737,16 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    // Before anything unsubscribes or closes, so each turn's own terminal
+    // still reaches every consumer. A quit has normally done this already,
+    // while messaging was still running. Wait only when there is a turn to
+    // wait for: with none, `closed` below must hold from the call itself.
+    const runningTurnsStopPending = this.runningTurnsShutdownStop
+      ? !this.runningTurnsShutdownStopSettled
+      : this.activeTurnKeys.size > 0;
+    if (runningTurnsStopPending) {
+      await this.stopRunningTurnsForShutdown();
+    }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
     // `closed` rejects observations that enter from this point forward. The
@@ -40640,6 +40859,24 @@ export class DesktopBackendRegistry {
   }
 
   private emit(event: AgentEvent): Promise<void> {
+    const emitted = this.emitEvent(event);
+    const method = event.notification.method;
+    if (
+      this.stoppingRunningTurnsForShutdown
+      && (
+        method === "turn/completed"
+        || method === "turn/failed"
+        || method === "turn/cancelled"
+      )
+    ) {
+      const delivered = emitted.catch(() => undefined);
+      this.shutdownTerminalEmits.add(delivered);
+      void delivered.finally(() => this.shutdownTerminalEmits.delete(delivered));
+    }
+    return emitted;
+  }
+
+  private emitEvent(event: AgentEvent): Promise<void> {
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {
         params: { threadId: string; turnId?: string; turn: { id: string } };

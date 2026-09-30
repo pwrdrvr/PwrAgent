@@ -1846,6 +1846,27 @@ export class AcpBackendAdapter {
     }
   }
 
+  /**
+   * Send session/cancel through the process already running the session, for
+   * a quit that must not launch or prepare anything. Returns false when no
+   * live client can own the session.
+   */
+  async cancelRunningSession(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
+    const owner =
+      this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend);
+    if (!owner) {
+      return false;
+    }
+    await owner.client.cancelSession(sessionId);
+    return true;
+  }
+
   async getClientForSession(
     backend: AcpBackendId,
     sessionId: string,
@@ -2967,21 +2988,38 @@ export class AcpBackendAdapter {
             turnId,
           });
           const outputText = readAcpUpdateText(update);
+          // session/cancel settles the prompt with stopReason cancelled: the
+          // turn stopped, it did not complete. An operator stop has already
+          // emitted turn/cancelled as it sent the cancel, so this repeats it;
+          // a quit sends the cancel alone and takes its end from this one.
           await this.emit({
             backend: agent.backendId,
-            notification: {
-              method: "turn/completed",
-              params: {
-                threadId: sessionId,
-                turnId,
-                turn: {
-                  id: turnId,
-                  status: "completed",
-                  completedAt: Date.now(),
-                  output: outputText ? [{ type: "text", text: outputText }] : [],
+            notification: update.stopReason === "cancelled"
+              ? {
+                  method: "turn/cancelled",
+                  params: {
+                    threadId: sessionId,
+                    turnId,
+                    turn: {
+                      id: turnId,
+                      status: "cancelled",
+                      completedAt: Date.now(),
+                    },
+                  },
+                }
+              : {
+                  method: "turn/completed",
+                  params: {
+                    threadId: sessionId,
+                    turnId,
+                    turn: {
+                      id: turnId,
+                      status: "completed",
+                      completedAt: Date.now(),
+                      output: outputText ? [{ type: "text", text: outputText }] : [],
+                    },
+                  },
                 },
-              },
-            },
           });
         }
         await this.emit({

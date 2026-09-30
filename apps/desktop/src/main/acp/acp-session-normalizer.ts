@@ -283,11 +283,12 @@ export class AcpSessionReplayNormalizer {
   recordTurnFinished(
     turnId?: string,
     completedAt = Date.now(),
+    status: "completed" | "interrupted" = "completed",
   ): AppServerThreadReplay {
     const completedTurnId = turnId ?? this.currentTurnId;
     if (completedTurnId) {
       this.removeAgentWaitingActivity(completedTurnId);
-      this.completeTurnEntries(completedTurnId, "completed", completedAt);
+      this.completeTurnEntries(completedTurnId, status, completedAt);
     } else {
       this.removeCurrentAgentWaitingActivity();
     }
@@ -456,7 +457,11 @@ export class AcpSessionReplayNormalizer {
       // session/prompt request resolves. The client defers the live idle
       // transition until prompt resolution so queued work cannot overlap.
       if (!update.deferTurnCompletion) {
-        this.recordTurnFinished(undefined, createdAt);
+        this.recordTurnFinished(
+          undefined,
+          createdAt,
+          update.update.stopReason === "cancelled" ? "interrupted" : "completed",
+        );
       }
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
@@ -890,7 +895,7 @@ export class AcpSessionReplayNormalizer {
 
   private completeTurnEntries(
     turnId: string,
-    status: "completed" | "failed",
+    status: "completed" | "failed" | "interrupted",
     completedAt: number,
   ): void {
     this.entries = this.entries.map((entry) => {

@@ -22816,9 +22816,11 @@ function turnLifecycleForBackendEvent(
       if (!turnId) {
         return undefined;
       }
+      // Codex answers turn/interrupt with turn/completed, status
+      // interrupted: the turn stopped, it did not finish.
       return {
         turnId,
-        status: "completed",
+        status: params.turn?.status === "interrupted" ? "interrupted" : "completed",
         startedAt: params.turn?.startedAt ?? undefined,
         updatedAt: now,
       };
@@ -22859,6 +22861,7 @@ type TurnLifecycleParams = {
   turn?: {
     id?: string | null;
     startedAt?: number | null;
+    status?: string | null;
   };
 };
 
