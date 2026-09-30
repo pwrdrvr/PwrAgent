@@ -8,8 +8,8 @@ const INTERACTIVE_SVG_CSP = [
   "frame-src 'none'",
 ].join("; ");
 
-/** Runs the SVG as a document in an opaque-origin sandbox, never in our DOM. */
-export function interactiveSvgDocument(source: string): string {
+/** Return a sandbox document only when the SVG has user-facing interactions. */
+export function interactiveSvgDocument(source: string): string | undefined {
   const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
   const svg = parsed.documentElement;
   if (
@@ -19,6 +19,13 @@ export function interactiveSvgDocument(source: string): string {
   ) {
     throw new Error("Interactive SVG could not be parsed");
   }
+
+  const interactive = [svg, ...svg.querySelectorAll("*")].some((element) =>
+    element.localName === "script"
+    || (element.localName === "style" && /:(?:hover|active|focus)\b/i.test(element.textContent ?? ""))
+    || [...element.attributes].some((attribute) => /^on[a-z]+$/i.test(attribute.name))
+  );
+  if (!interactive) return undefined;
 
   const serialized = new XMLSerializer().serializeToString(svg);
   return `<!doctype html><html><head>

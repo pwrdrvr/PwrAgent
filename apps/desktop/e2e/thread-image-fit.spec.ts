@@ -392,6 +392,7 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
   try {
     await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
     await app.window.getByAltText("Interactive flamegraph").click();
+    await expect(app.window.getByText("This SVG has interactive controls")).toBeVisible();
     await app.window.getByRole("button", { name: "Interact with SVG" }).click();
     const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
     await expect(frame.locator("#state")).toHaveText("Ready");

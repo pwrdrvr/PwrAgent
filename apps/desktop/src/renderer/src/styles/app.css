@@ -31524,9 +31524,23 @@ button.pricing-token-miser__folded:focus-visible {
   font-size: 12px;
 }
 
-.image-lightbox__interactive-error {
-  color: var(--danger-text);
+.image-lightbox__interactive-hint {
+  padding: 0 6px 0 8px;
+  color: var(--text-secondary);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .image-lightbox__interactive-hint {
+    display: none;
+  }
+}
+
+.image-lightbox__tool--interactive-available {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .image-lightbox__tool {

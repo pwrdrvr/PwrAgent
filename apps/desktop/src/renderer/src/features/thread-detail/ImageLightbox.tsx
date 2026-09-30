@@ -259,21 +259,35 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   const gestures = useLightboxGestures();
   const [svgDocument, setSvgDocument] = useState<string>();
   const [svgActive, setSvgActive] = useState(false);
-  const [svgLoading, setSvgLoading] = useState(false);
-  const [svgError, setSvgError] = useState(false);
   const [svgSearchOpen, setSvgSearchOpen] = useState(false);
   const [svgSearchTerm, setSvgSearchTerm] = useState("");
   const [svgSearchError, setSvgSearchError] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
   const search = useRef<HTMLFormElement>(null);
-  const loadController = useRef<AbortController>(null);
   useDismissableLayer({
     open: svgActive && svgSearchOpen,
     onDismiss: () => setSvgSearchOpen(false),
     surfaceRef: search,
   });
 
-  useEffect(() => () => loadController.current?.abort(), []);
+  useEffect(() => {
+    if (!interactiveSvg) return;
+    const controller = new AbortController();
+    setSvgDocument(undefined);
+    void (async () => {
+      try {
+        const blob = await loadImageBlob(src, controller.signal);
+        if (blob.type !== "image/svg+xml" || blob.size > 16 * 1024 * 1024) {
+          throw new Error("SVG format or size is not supported");
+        }
+        const document = interactiveSvgDocument(await blob.text());
+        if (!controller.signal.aborted) setSvgDocument(document);
+      } catch (error) {
+        if (!controller.signal.aborted) console.error("Failed to inspect SVG", error);
+      }
+    })();
+    return () => controller.abort();
+  }, [interactiveSvg, src]);
   useEffect(() => {
     if (!svgActive) return;
     const handleMessage = (event: MessageEvent) => {
@@ -293,38 +307,9 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     return () => window.removeEventListener("message", handleMessage);
   }, [onClose, svgActive, svgSearchOpen]);
 
-  const toggleInteractiveSvg = async (): Promise<void> => {
-    if (svgActive) {
-      setSvgActive(false);
-      setSvgSearchOpen(false);
-      return;
-    }
-    if (svgDocument) {
-      setSvgActive(true);
-      return;
-    }
-
-    const controller = new AbortController();
-    loadController.current = controller;
-    setSvgLoading(true);
-    setSvgError(false);
-    try {
-      const blob = await loadImageBlob(src, controller.signal);
-      if (blob.type !== "image/svg+xml" || blob.size > 16 * 1024 * 1024) {
-        throw new Error("SVG format or size is not supported");
-      }
-      const document = interactiveSvgDocument(await blob.text());
-      if (controller.signal.aborted) return;
-      setSvgDocument(document);
-      setSvgActive(true);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        console.error("Failed to open interactive SVG", error);
-        setSvgError(true);
-      }
-    } finally {
-      if (!controller.signal.aborted) setSvgLoading(false);
-    }
+  const toggleInteractiveSvg = (): void => {
+    setSvgActive((active) => !active);
+    setSvgSearchOpen(false);
   };
 
   return <>
@@ -398,19 +383,20 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
         </button>
         </>}
         <span className="image-lightbox__tool-divider" aria-hidden="true" />
-        {interactiveSvg ? (
-          <button type="button" className="image-lightbox__tool image-lightbox__tool--labelled"
+        {svgDocument && !svgActive ? (
+          <span className="image-lightbox__interactive-hint">This SVG has interactive controls</span>
+        ) : null}
+        {svgDocument ? (
+          <button type="button" className={`image-lightbox__tool image-lightbox__tool--labelled${svgActive ? "" : " image-lightbox__tool--interactive-available"}`}
             aria-label={svgActive ? "Show image preview" : "Interact with SVG"}
-            disabled={svgLoading}
-            onClick={() => { void toggleInteractiveSvg(); }}
+            onClick={toggleInteractiveSvg}
             {...tooltipHandlers(tooltip, svgActive ? "Show image preview" : "Use SVG hover, zoom, and search controls in an isolated view")}>
-            {svgActive ? "Preview" : svgLoading ? "Loading" : "Interact"}
+            {svgActive ? "Preview" : "Interact"}
           </button>
         ) : null}
         <ImageCopyButton src={src} appearance="pill" />
         {actions}
       </div>
-      {svgError ? <span className="image-lightbox__interactive-error" role="alert">Interactive SVG could not be opened.</span> : null}
     </div>
   </>;
 }

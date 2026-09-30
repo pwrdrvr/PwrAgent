@@ -19,4 +19,16 @@ describe("interactiveSvgDocument", () => {
     expect(() => interactiveSvgDocument("<html/>"))
       .toThrow("Interactive SVG could not be parsed");
   });
+
+  it("leaves inert SVGs in the image preview", () => {
+    expect(interactiveSvgDocument('<svg xmlns="http://www.w3.org/2000/svg"><rect width="20" height="20"/></svg>'))
+      .toBeUndefined();
+  });
+
+  it("recognizes event handlers and CSS hover interactions", () => {
+    expect(interactiveSvgDocument('<svg xmlns="http://www.w3.org/2000/svg"><rect onclick="zoom()" width="20" height="20"/></svg>'))
+      .toContain("onclick=");
+    expect(interactiveSvgDocument('<svg xmlns="http://www.w3.org/2000/svg"><style>rect:hover { fill: red; }</style><rect width="20" height="20"/></svg>'))
+      .toContain("rect:hover");
+  });
 });

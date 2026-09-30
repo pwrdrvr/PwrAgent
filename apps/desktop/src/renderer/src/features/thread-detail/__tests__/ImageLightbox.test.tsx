@@ -30,7 +30,7 @@ describe("ImageLightbox", () => {
   });
 
   it("opens SVG interaction in a sandboxed frame while keeping the image preview", async () => {
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"/>';
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" onload="init()"><script>function init() {}</script></svg>';
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       blob: async () => new Blob([svg], { type: "image/svg+xml" }),
@@ -39,6 +39,7 @@ describe("ImageLightbox", () => {
       alt="Flamegraph" interactiveSvg onClose={() => {}} />);
 
     expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+    expect(await screen.findByText("This SVG has interactive controls")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
     const frame = await screen.findByTitle("Interactive SVG: Flamegraph");
     expect(frame).toHaveAttribute("sandbox", "allow-scripts");
@@ -48,6 +49,21 @@ describe("ImageLightbox", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Show image preview" }));
     await waitFor(() => expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument());
+  });
+
+  it("does not offer interaction for an inert SVG", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"/>';
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([svg], { type: "image/svg+xml" }),
+    }));
+    render(<ImageLightbox src="data:image/svg+xml,static"
+      alt="Static SVG" interactiveSvg onClose={() => {}} />);
+
+    await act(async () => {});
+    expect(screen.getByRole("img", { name: "Static SVG" })).toBeInTheDocument();
+    expect(screen.queryByText("This SVG has interactive controls")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Interact with SVG" })).toBeNull();
   });
 
   it("closes via the accent cookie button", () => {
