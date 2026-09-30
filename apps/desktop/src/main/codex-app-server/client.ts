@@ -282,6 +282,7 @@ const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
 // An allowlist here would silently hide every newly released model on refresh.
 const PREFERRED_CODEX_MODEL_ORDER = [
   "gpt-6-astra",
+  "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",

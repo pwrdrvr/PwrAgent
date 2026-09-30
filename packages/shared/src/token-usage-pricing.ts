@@ -295,6 +295,9 @@ const OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 4);
 // https://developers.openai.com/api/docs/pricing
 const OPENAI_GPT6_SOL_LUNA_PRICING_CATALOG_VERSION = "2026-09-22";
 const OPENAI_GPT6_SOL_LUNA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 22);
+// https://developers.openai.com/api/docs/models/gpt-6.1-sol
+const OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION = "2026-09-29";
+const OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 29);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
@@ -328,6 +331,72 @@ const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   // Codex App Server reports cache-write tokens separately. They remain a
   // subset of uncached input tokens and are charged at the write rate below.
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-sol",
+    displayModel: "GPT-6.1 Sol",
+    displayTier: "Standard (<=272K input)",
+    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 2.5,
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    maximumInputTokens: 272_000,
+    rateBandId: "input-lte-272k",
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-sol",
+    displayModel: "GPT-6.1 Sol",
+    displayTier: "Standard (>272K input)",
+    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 5,
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 15,
+    minimumInputTokens: 272_001,
+    rateBandId: "input-gt-272k",
+    requiresRequestInputTokens: true,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-sol",
+    displayModel: "GPT-6.1 Sol",
+    displayTier: "Fast (<=272K input)",
+    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    cacheWriteInputUsdPerMillion: 5,
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 20,
+    maximumInputTokens: 272_000,
+    rateBandId: "input-lte-272k",
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-sol",
+    displayModel: "GPT-6.1 Sol",
+    displayTier: "Fast (>272K input)",
+    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    cacheWriteInputUsdPerMillion: 10,
+    inputUsdPerMillion: 8,
+    cachedInputUsdPerMillion: 0.4,
+    outputUsdPerMillion: 30,
+    minimumInputTokens: 272_001,
+    rateBandId: "input-gt-272k",
+    requiresRequestInputTokens: true,
+  },
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
