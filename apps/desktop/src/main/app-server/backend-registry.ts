@@ -10109,8 +10109,10 @@ export class DesktopBackendRegistry {
     const sent = this.requestShutdownTurnStops(keys, requests);
     // No backend could be asked, so no terminal is coming: skip the wait.
     const nothingSent = new Promise<"nothing-sent">((resolve) => {
-      void sent.then(() => {
+      void sent.then(async () => {
         if (requests.requested === 0) {
+          // A turn that ended on its own meanwhile still reaches listeners.
+          await Promise.all([...this.shutdownTerminalEmits]);
           resolve("nothing-sent");
         }
       });
@@ -10157,6 +10159,19 @@ export class DesktopBackendRegistry {
     counts: Record<"requested" | "unsupported" | "failed", number>,
   ): Promise<void> {
     const cancelledAcpSessions = new Set<string>();
+    // One session/cancel stops whatever the session is running.
+    const cancelAcpSession = async (
+      backend: AcpBackendId,
+      sessionId: string,
+    ): Promise<void> => {
+      const session = buildThreadIdentityKey(backend, sessionId);
+      if (cancelledAcpSessions.has(session)) {
+        return;
+      }
+      cancelledAcpSessions.add(session);
+      const sent = await this.acpBackend.cancelRunningSession(backend, sessionId);
+      counts[sent ? "requested" : "unsupported"] += 1;
+    };
     let codexInterruptSupported: Promise<boolean> | undefined;
     await Promise.all(keys.map(async (key) => {
       const turn = parseActiveTurnKey(key);
@@ -10166,17 +10181,18 @@ export class DesktopBackendRegistry {
       }
       try {
         if (isAcpBackendId(turn.backend)) {
-          // One session/cancel stops whatever the session is running.
-          const session = buildThreadIdentityKey(turn.backend, turn.threadId);
-          if (cancelledAcpSessions.has(session)) {
-            return;
-          }
-          cancelledAcpSessions.add(session);
-          const sent = await this.acpBackend.cancelRunningSession(
-            turn.backend,
-            turn.threadId,
-          );
-          counts[sent ? "requested" : "unsupported"] += 1;
+          await cancelAcpSession(turn.backend, turn.threadId);
+          return;
+        }
+        // interruptTurn reaches an ACP review through getClientForSession,
+        // which may prepare or launch a client. Cancel it in place instead.
+        const review = this.findReviewForParentTurn({
+          backend: turn.backend,
+          parentThreadId: turn.threadId,
+          turnId: turn.turnId,
+        });
+        if (review && isAcpBackendId(review.backend)) {
+          await cancelAcpSession(review.backend, review.reviewThreadId);
           return;
         }
         codexInterruptSupported ??= this.codexClient
