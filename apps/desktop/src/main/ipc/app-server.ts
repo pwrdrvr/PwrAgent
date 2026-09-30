@@ -1,5 +1,10 @@
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
+import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
+import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
+import { showUsageActivityWindow } from "../usage-activity-window";
+import { primaryMainWindowWebContents } from "../primary-main-window";
+import { requestShowThread } from "../window-show-thread";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
@@ -126,6 +131,8 @@ import {
   type PrSummary,
   type PrAutoDispatchBudgetConfig,
   type PrAutoDispatchBudgetStatus,
+  type CodexAppServerRestartResult,
+  type CodexAppServerRestartStatus,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
@@ -255,6 +262,9 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
+  APP_SERVER_RESTART_CODEX_CHANNEL,
+  CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
@@ -8207,6 +8217,7 @@ const prPollingFocusCleanupSenderIds = new Set<number>();
 const transcriptPrCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
+let unsubscribeCodexRestartStatus: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
 function invalidateNavigationEvent(event: AgentEvent): void {
@@ -8304,6 +8315,37 @@ export function registerAppServerIpcHandlers(): void {
       await appServerService.resumePrAutoDispatchBudget(),
   );
 
+  // Only local windows see or restart this machine's Codex process.
+  unsubscribeCodexRestartStatus?.();
+  unsubscribeCodexRestartStatus =
+    getDesktopBackendRegistry().onCodexAppServerRestartStatusChanged((status) => {
+      for (const webContents of subscribersForChannel(
+        CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+      )) {
+        if (!webContents.isDestroyed()) {
+          webContents.send(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, status);
+        }
+      }
+    });
+  ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
+    (event): CodexAppServerRestartStatus =>
+      isFederationWindowWebContents(event?.sender)
+        ? { stopped: false }
+        : getDesktopBackendRegistry().getCodexAppServerRestartStatus(),
+  );
+  ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESTART_CODEX_CHANNEL,
+    async (event): Promise<CodexAppServerRestartResult> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("A remote window cannot restart this machine's Codex.");
+      }
+      return await getDesktopBackendRegistry().restartCodexAppServer();
+    },
+  );
+
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_LIST_SKILLS_CHANNEL,
@@ -8364,6 +8406,16 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(USAGE_ACTIVITY_ANALYZE_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_ANALYZE_CHANNEL, async (_event, request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await appServerService.analyzeUsageActivity(request));
+  ipcMain.removeHandler(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL);
+  ipcMain.handle(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL, (event) => {
+    showUsageActivityWindow({ sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined });
+  });
+  ipcMain.removeHandler(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL);
+  ipcMain.handle(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, (_event, request: WindowShowThreadRequest) => {
+    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") return;
+    const target = primaryMainWindowWebContents();
+    if (target) requestShowThread(request, { preferWebContents: target });
+  });
   ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
   ipcMain.handle(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
     async (_event, request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> =>
@@ -9374,6 +9426,10 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents = undefined;
   unsubscribeNavigationRemoteEvents?.();
   unsubscribeNavigationRemoteEvents = undefined;
+  unsubscribeCodexRestartStatus?.();
+  unsubscribeCodexRestartStatus = undefined;
+  ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

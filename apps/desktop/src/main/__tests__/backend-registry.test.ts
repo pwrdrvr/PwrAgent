@@ -1885,6 +1885,8 @@ class MockBackendClient {
       };
       invalidIdRecoveryDelay?: Promise<unknown>;
       invalidIdRecoveryError?: Error;
+      invalidIdRecoveryBlockingTurns?: Array<{ threadId: string; turnId?: string }>;
+      invalidIdRecoveryWaitsForAbort?: boolean;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
       setThreadPermissionsDelay?: Promise<unknown>;
@@ -2191,6 +2193,10 @@ class MockBackendClient {
   async recoverInvalidPersistedResponseMessageIds(params: {
     failureMessage: string;
     forkLineageThreadIds?: string[];
+    onWaitingForTurns?: (
+      turns: Array<{ threadId: string; turnId?: string }>,
+    ) => void | Promise<void>;
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<{
     backupPath: string;
@@ -2198,7 +2204,18 @@ class MockBackendClient {
     rolloutPath: string;
     threadId: string;
   }> {
-    this.invalidIdRecoveryCalls.push(params);
+    const { onWaitingForTurns, signal, ...call } = params;
+    this.invalidIdRecoveryCalls.push(call);
+    if (this.options.invalidIdRecoveryBlockingTurns) {
+      await onWaitingForTurns?.(this.options.invalidIdRecoveryBlockingTurns);
+    }
+    if (this.options.invalidIdRecoveryWaitsForAbort) {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw new Error("abandoned while waiting");
+    }
     await this.options.invalidIdRecoveryDelay;
     if (this.options.invalidIdRecoveryError) {
       throw this.options.invalidIdRecoveryError;
@@ -3021,6 +3038,11 @@ describe("DesktopBackendRegistry", () => {
 
   it("reconnects idle Codex when managed runtime selection changes", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
+    const resetAppServerRestarts = vi.fn(() => {
+      // The breaker clears only once the old binary's process is gone.
+      expect(codexClient.closeCallCount).toBe(1);
+    });
+    Object.assign(codexClient, { resetAppServerRestarts });
     let selectionListener:
       | ((change: ManagedCodexSelectionChange) => void)
       | undefined;
@@ -3039,6 +3061,7 @@ describe("DesktopBackendRegistry", () => {
     selectionListener?.({ enabled: true, reason: "availability" });
     await vi.waitFor(() => expect(codexClient.closeCallCount).toBe(1));
     expect(markSwitchComplete).toHaveBeenCalledOnce();
+    expect(resetAppServerRestarts).toHaveBeenCalledExactlyOnceWith("Codex runtime changed");
 
     await registry.close();
     expect(stopWatching).toHaveBeenCalledOnce();
@@ -3046,6 +3069,8 @@ describe("DesktopBackendRegistry", () => {
 
   it("disconnects idle Codex after its configured path changes", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
+    const resetAppServerRestarts = vi.fn();
+    Object.assign(codexClient, { resetAppServerRestarts });
     const markSwitchComplete = vi.fn();
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -3059,6 +3084,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.closeCallCount).toBe(1);
+    expect(resetAppServerRestarts).toHaveBeenCalledOnce();
     expect(markSwitchComplete).not.toHaveBeenCalled();
     await registry.close();
   });
@@ -15646,6 +15672,204 @@ script = "echo setup"
     await registry.close();
   });
 
+  describe("invalid message-ID recovery beside live turns on other threads", () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const invalidIdFailure =
+      "[ApiIdParam] [input[3].id] [invalid_id_prefix] "
+      + "Invalid 'input[3].id': 'review_rollout_user'. "
+      + "Expected an ID that begins with 'msg'.";
+
+    async function startFailingThread(
+      options: ConstructorParameters<typeof MockBackendClient>[0] = {},
+    ) {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        startTurnResults: [
+          { threadId, turnId: "turn-failed-invalid-id" },
+          { threadId, turnId: "turn-retried-once" },
+        ],
+        ...options,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            [`codex:${threadId}`]: {
+              backend: "codex",
+              threadId,
+              executionMode: "default",
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+      const fail = async () => {
+        await registry.startTurn({
+          backend: "codex",
+          threadId,
+          input: [{ type: "text", text: "continue after repair" }],
+        });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId,
+            turnId: "turn-failed-invalid-id",
+            turn: {
+              id: "turn-failed-invalid-id",
+              status: "failed",
+              error: { message: invalidIdFailure },
+            },
+          },
+        });
+      };
+      const recoveryUpdates = () => events.flatMap((event) =>
+        event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          ? [event.notification.params]
+          : [],
+      );
+      return { codexClient, events, fail, recoveryUpdates, registry };
+    }
+
+    it("waits for another thread's live turn to end before repairing", async () => {
+      const busyThreadId = "thread-busy-during-repair";
+      const { codexClient, events, fail, recoveryUpdates, registry } =
+        await startFailingThread();
+      await codexClient.emit({
+        method: "turn/started",
+        params: {
+          threadId: busyThreadId,
+          turnId: "turn-busy",
+          turn: { id: "turn-busy", status: "inProgress" },
+        },
+      });
+
+      await fail();
+      await waitForCondition(() => recoveryUpdates().length > 0);
+      await flushAsync();
+      expect(recoveryUpdates()).toEqual([
+        expect.objectContaining({
+          status: "waiting",
+          threadId,
+          turnId: "turn-failed-invalid-id",
+          waitingForThreadIds: [busyThreadId],
+        }),
+      ]);
+      // Nothing stops Codex while the other turn runs.
+      expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: busyThreadId,
+          turnId: "turn-busy",
+          turn: { id: "turn-busy", status: "completed", output: [] },
+        },
+      });
+      await waitForCondition(() =>
+        recoveryUpdates().some((update) => update.status === "succeeded"),
+      );
+      expect(recoveryUpdates().map((update) => update.status)).toEqual([
+        "waiting",
+        "repairing",
+        "succeeded",
+      ]);
+      expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+      expect(codexClient.startTurnCallCount).toBe(2);
+      // The busy turn reached its own terminal before the repair began.
+      const busyTerminalIndex = events.findIndex((event) =>
+        event.notification.method === "turn/completed"
+        && event.notification.params.threadId === busyThreadId
+      );
+      const repairingIndex = events.findIndex((event) =>
+        event.notification.method === "thread/codexInvalidIdRecovery/updated"
+        && event.notification.params.status === "repairing"
+      );
+      expect(busyTerminalIndex).toBeGreaterThanOrEqual(0);
+      expect(busyTerminalIndex).toBeLessThan(repairingIndex);
+      await registry.close();
+    });
+
+    it("tells the operator when the client waits for turns only it can see", async () => {
+      const { codexClient, fail, recoveryUpdates, registry } =
+        await startFailingThread({
+          invalidIdRecoveryBlockingTurns: [
+            { threadId: "helper-thread", turnId: "helper-turn" },
+            { threadId: "review-thread" },
+          ],
+        });
+
+      await fail();
+      await waitForCondition(() =>
+        recoveryUpdates().some((update) => update.status === "succeeded"),
+      );
+      expect(recoveryUpdates()).toEqual([
+        expect.objectContaining({ status: "repairing", threadId }),
+        expect.objectContaining({
+          status: "waiting",
+          threadId,
+          waitingForThreadIds: ["helper-thread", "review-thread"],
+        }),
+        expect.objectContaining({ status: "succeeded", threadId }),
+      ]);
+      expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+      await registry.close();
+    });
+  });
+
+  it("closes promptly while the client waits for another thread's turn", async () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
+      invalidIdRecoveryBlockingTurns: [{ threadId: "thread-busy" }],
+      invalidIdRecoveryWaitsForAbort: true,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`codex:${threadId}`]: {
+            backend: "codex",
+            threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue after repair" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[3].id] [invalid_id_prefix] "
+              + "Invalid 'input[3].id': 'bad'. Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    await waitForCondition(() => codexClient.invalidIdRecoveryCalls.length === 1);
+    await registry.close();
+    expect(codexClient.startTurnCallCount).toBe(1);
+  });
+
   it("drains an in-flight repair before the final Codex close", async () => {
     const threadId = "thread-close-during-invalid-id-repair";
     const recoveryDelay = createDeferred<void>();
@@ -26245,6 +26469,7 @@ command = "pnpm dev"
             injectDefaultTools: false,
             mcpInheritance: "none",
             tools: ["read_file"],
+            disallowedTools: ["read_file", "search_tool", "use_tool"],
           }),
           systemPromptOverride: expect.stringContaining(
             "do not use tools",
@@ -26268,6 +26493,91 @@ command = "pnpm dev"
         status: "success",
       }),
     });
+
+    await registry.close();
+  });
+
+  it("runs Usage Activity analysis on Grok on an agent process of its own, never the pooled client", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    let say: (text: string) => void = () => undefined;
+    const transport = {
+      request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method === "initialize") {
+          return { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {} } } };
+        }
+        if (method === "session/new") {
+          return { sessionId: "grok-analysis", models: { currentModelId: "grok-4.7", availableModels: [{ modelId: "grok-4.7" }] } };
+        }
+        if (method === "session/prompt") {
+          say('{"analysis":"Two identical rg dumps."}');
+          return { stopReason: "end_turn", _meta: { modelId: "grok-4.7" } };
+        }
+        return {};
+      }),
+      notify: vi.fn(async () => undefined),
+      onNotification: (listener: (method: string, params: Record<string, unknown>) => void) => {
+        say = (text) => listener("session/update", {
+          sessionId: "grok-analysis",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+        });
+        return () => undefined;
+      },
+      onRequest: () => () => undefined,
+      close: vi.fn(async () => undefined),
+    };
+    const pooledClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      sendControlPrompt: vi.fn(),
+    };
+    const overlayStore = Object.assign(createOverlayStoreMock(), {
+      readUsageActivity: vi.fn(async () => ({ rows: [], truncated: false, limitHistory: [] })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        { ...createKimiAgentRecord(acpBackendId), registryId: "grok", name: "Grok" },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([]),
+      createAcpClient: () => pooledClient as never,
+      createAcpTransport: () => transport,
+      resolveAcpHelperWorkspace: async () => "/profile/state/acp-helper-workspace",
+    });
+    vi.spyOn(registry, "readThread").mockResolvedValue({
+      backend: "codex", threadId: "thread", fetchedAt: 1,
+      replay: {
+        entries: [{ type: "message", id: "m1", role: "assistant", text: "Ran rg twice." }],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+    } as unknown as Awaited<ReturnType<typeof registry.readThread>>);
+
+    await expect(registry.readUsageActivity({ from: 1, to: 2 }))
+      .resolves.toMatchObject({ analysisModelBackends: ["codex", "acp:grok"] });
+    await expect(registry.analyzeUsageActivity({
+      backend: "codex", threadId: "thread", model: "grok-4.7", modelBackend: "acp:grok",
+      entryLimit: 10, characterLimit: 1000,
+    })).resolves.toMatchObject({ analysis: "Two identical rg dumps.", model: "grok-4.7", modelBackend: "acp:grok" });
+
+    expect(calls.map((call) => call.method)).toEqual([
+      "initialize", "session/new", "session/prompt", "session/close", "_x.ai/session/delete",
+    ]);
+    expect(calls[1]?.params).toMatchObject({
+      cwd: "/profile/state/acp-helper-workspace",
+      mcpServers: [],
+      _meta: {
+        agentProfile: expect.objectContaining({
+          disallowedTools: ["read_file", "search_tool", "use_tool"],
+        }),
+      },
+    });
+    expect(transport.close).toHaveBeenCalledOnce();
+    expect(pooledClient.startSession).not.toHaveBeenCalled();
+    expect(pooledClient.sendControlPrompt).not.toHaveBeenCalled();
 
     await registry.close();
   });

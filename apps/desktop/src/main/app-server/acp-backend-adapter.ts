@@ -99,6 +99,11 @@ import {
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
+  runAcpEphemeralPrompt,
+  type AcpEphemeralPromptRequest,
+  type AcpEphemeralPromptResult,
+} from "../acp/acp-ephemeral-prompt";
+import {
   recordWithSessionRuntimeCapabilities,
   shouldProbeAcpCapabilitiesAtStartup,
 } from "../acp/acp-capability-freshness";
@@ -1841,6 +1846,27 @@ export class AcpBackendAdapter {
     }
   }
 
+  /**
+   * Send session/cancel through the process already running the session, for
+   * a quit that must not launch or prepare anything. Returns false when no
+   * live client can own the session.
+   */
+  async cancelRunningSession(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
+    const owner =
+      this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend);
+    if (!owner) {
+      return false;
+    }
+    await owner.client.cancelSession(sessionId);
+    return true;
+  }
+
   async getClientForSession(
     backend: AcpBackendId,
     sessionId: string,
@@ -2176,6 +2202,34 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
     return agent;
+  }
+
+  /**
+   * One prompt in a session on an agent process of its own, closed when the
+   * run ends. See acp-ephemeral-prompt.ts for why the pooled client cannot
+   * host it. The process is killed on every outcome, a timeout included.
+   */
+  async runEphemeralPrompt(
+    backend: AcpBackendId,
+    request: AcpEphemeralPromptRequest,
+  ): Promise<AcpEphemeralPromptResult> {
+    if (this.closed) {
+      throw new Error("ACP backend adapter is closed");
+    }
+    const agent = await this.resolveInstalledAgent(backend);
+    if (!agent.launchDescriptor) {
+      throw new Error(`ACP backend ${backend} has no launch descriptor`);
+    }
+    const transport = this.createAcpTransport?.(agent)
+      ?? new AcpStdioJsonRpcTransport({
+        launchDescriptor: agent.launchDescriptor,
+        observer: createProtocolLogObserverFromEnv({ backend }),
+      });
+    try {
+      return await runAcpEphemeralPrompt(transport, request);
+    } finally {
+      await transport.close?.().catch(() => undefined);
+    }
   }
 
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {
@@ -2934,21 +2988,38 @@ export class AcpBackendAdapter {
             turnId,
           });
           const outputText = readAcpUpdateText(update);
+          // session/cancel settles the prompt with stopReason cancelled: the
+          // turn stopped, it did not complete. An operator stop has already
+          // emitted turn/cancelled as it sent the cancel, so this repeats it;
+          // a quit sends the cancel alone and takes its end from this one.
           await this.emit({
             backend: agent.backendId,
-            notification: {
-              method: "turn/completed",
-              params: {
-                threadId: sessionId,
-                turnId,
-                turn: {
-                  id: turnId,
-                  status: "completed",
-                  completedAt: Date.now(),
-                  output: outputText ? [{ type: "text", text: outputText }] : [],
+            notification: update.stopReason === "cancelled"
+              ? {
+                  method: "turn/cancelled",
+                  params: {
+                    threadId: sessionId,
+                    turnId,
+                    turn: {
+                      id: turnId,
+                      status: "cancelled",
+                      completedAt: Date.now(),
+                    },
+                  },
+                }
+              : {
+                  method: "turn/completed",
+                  params: {
+                    threadId: sessionId,
+                    turnId,
+                    turn: {
+                      id: turnId,
+                      status: "completed",
+                      completedAt: Date.now(),
+                      output: outputText ? [{ type: "text", text: outputText }] : [],
+                    },
+                  },
                 },
-              },
-            },
           });
         }
         await this.emit({

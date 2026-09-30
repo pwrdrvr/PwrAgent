@@ -1,9 +1,17 @@
 # Usage Activity
 
-Open **Federation Activity → Usage**, select instances and a period, then
-choose **Load activity** (or **Refresh**). This is an on-demand view of
-PwrAgent's pricing ledger beside the account limits Codex reports. It is not a
-billing report, and it never converts spend into a share of a quota.
+Usage Activity is its own window. Open it from **PwrAgent → Usage Activity**
+(Help → Usage Activity on Windows and Linux), the profile menu at the bottom
+of the sidebar, **Usage Activity** in a thread's Pricing panel, or by clicking
+the context moon beside the composer. It shows PwrAgent's pricing ledger beside
+the account limits Codex reports. It is not a billing report, and it never
+converts spend into a share of a quota.
+
+The window reads as soon as it opens, again whenever the period or the
+selected instances change, and again when it regains focus with data more than
+a minute old. **Refresh** rereads at any time. A custom range reads once typing
+pauses. Offline peers are shown but not selectable, so a read never waits on
+them.
 
 ## Periods
 
@@ -16,10 +24,11 @@ billing report, and it never converts spend into a share of a quota.
   limit states no window length; its window is taken as the calendar month
   before its reset.
 - Before limits are known, the limit presets read a provisional window (8
-  days, or 5 hours) and narrow it on the client. When the start lies earlier
-  than what was read, the view reads once more from the start. Every read is
-  bounded to 31 days. Turns that finished before a narrowed start are outside
-  the window and are dropped, not listed as excluded.
+  days, or 5 hours). When the limit's start differs from what was read, the
+  view reads once more over the limit's window, so helper rollups and bars
+  fit it rather than straddling its start. Every read is
+  bounded to 31 days. Turns that finished before the start are outside
+  the window and are dropped, not listed as not counted.
 
 ## Totals
 
@@ -29,10 +38,14 @@ billing report, and it never converts spend into a share of a quota.
   turn. Cumulative counters, fork baselines, historical summaries and
   superseded rows do not contribute.
 - Boundary-crossing, unfinished and unattributed rows remain inspectable
-  through the **excluded intervals** link. Their whole-row prices are never
-  assigned to the window or prorated. A missing completion remains an open
-  interval even when its last ledger update predates the window. Missing
-  records do not imply zero usage.
+  through the **not counted** link, each with its reason. Their whole-row
+  prices are never assigned to the window or prorated.
+- A row with no recorded completion is read only while its last ledger update
+  falls inside the window. A turn whose end was never observed (an interrupted
+  turn, or an ACP turn that never reported one) recorded nothing after that
+  update, so it no longer matches every later window.
+- Monitor lines are written already finalized and carry no completion time;
+  their write time is their completion.
 - Cached input remains separate from uncached input. Cache-write tokens are
   a subset of uncached input; reasoning tokens are a subset of output.
   Unpriced rows contribute tokens, but not a fabricated dollar estimate.
@@ -42,6 +55,14 @@ billing report, and it never converts spend into a share of a quota.
 - A helper thread's turns roll up into the root thread present in the window,
   following `parentThreadId` transitively. The row states how many helpers it
   includes and what they cost; the inspector marks each helper turn.
+- Background helpers (Token Miser, title generation) write one monitor line
+  per run: thousands a week, each worth a fraction of a cent. The owner sums
+  the ones contained in the window into one line per parent thread, helper
+  kind, model and rollup step, so they count toward the thread they worked
+  for and cannot spend the row bound. The rollup step is the chart's bar
+  width capped at an hour, on epoch boundaries, so a rollup never straddles a
+  bar in any whole-hour time zone. The line id is derived from the window,
+  so two owners sharing one ledger return the same rollup and it counts once.
 - Each owner reads its own PwrAgent SQLite ledger. The read returns at most
   5,000 recent candidate rows for windows up to 31 days. Four owner reads may
   run concurrently. Capped results, unavailable peers and older peers lacking
@@ -71,8 +92,9 @@ billing report, and it never converts spend into a share of a quota.
   seen and restarts the window from there.
 - Pace is the current percent divided by the hours since the window began.
   With no known start, it is the slope across readings at least 30 minutes
-  apart. The projection states when the limit would reach 100% at that pace,
-  or the percent expected at the next reset.
+  apart. The projection states the percent expected at the next reset, or,
+  as a warning, when the limit would reach 100% and how long before the reset
+  that is.
 - Pay-per-token accounts report an **Individual limit** of credits used out of
   a limit, resetting at month end, plus a **Credits** row. Both are shown as
   reported.
@@ -80,21 +102,42 @@ billing report, and it never converts spend into a share of a quota.
 ## Chart and ranking
 
 The chart stacks each completed turn's API-equivalent cost at its completion
-time, in 24 buckets. The five costliest threads each keep one color across the
+time, by **Thread**, **Model**, **Provider** (OpenAI, xAI, …) or, with more
+than one instance read, **Instance**. Bars are clock steps (15 or 30 minutes, 1, 2, 3, 6 or 12 hours, or a
+day), the finest that keeps the window within 40 bars, starting on local
+quarter hours, hours or midnight; only the first and last bar can be partial,
+and a bar's width is its span. The readout and time filter name a bar by its
+hours ("3 PM–4 PM"), with the day when it is not today. The five costliest threads each keep one color across the
 chart, the ranking's swatch and its **When** strip; everything else is
-**Other**. The focused account's observed limit is drawn over the bars on its
-own percent axis, broken at each reset, and resets are marked. Bars are not
+**Other**. A legend entry opens its thread in the main window, on the instance
+that owns it, as does **Open thread** in the inspector. The focused account's observed limit is drawn over the bars on its
+own percent axis, broken at each reset, and resets are marked. On **Since
+reset** and **5-hour window** the chart continues past **Now** toward the
+reset with the pace as a dashed line, marking 100% where it gets there first.
+The future takes at most 40% of the width, so the bars stay selectable; an
+outcome beyond that edge is labelled at the edge. Clock periods show history
+only. Bars are not
 estimates of spend rate within a bucket. Selecting a bar filters the ranking
-while the totals keep the full window.
+while the totals keep the full window. With Model, Provider or Instance chosen,
+a legend entry narrows the ranking to that model, provider or instance's spend
+instead of opening a thread. The grip under the ranking drags it taller or
+shorter; the height is kept in this machine's local storage, never synced, and
+a double-click returns it to filling the window.
 
 Rows carry signals when the ledger observed them: cold replays (a warning at
 three or more), peak context share (noted at 75%, a warning at 90%), fast mode
-and included helpers. Search and cost/token/time sorting operate on the loaded
+and included helpers. Unavailable instances are summed up in one line: peers running a
+PwrAgent from before usage activity, offline peers, and owners that hit the
+row bound. The raw errors sit under **Details**. Dismissing the line hides it
+until a different set of instances is missing. Search and cost/token/time sorting operate on the loaded
 snapshot and do not request more data or invoke analysis.
 
 ## Analysis
 
-Selecting a thread opens its turns in the window. **Analyze turn** makes one
+Selecting a thread opens its turns in the window. Once a turn has been
+analyzed, the inspector splits into **Details** (the turns) and **Analysis**
+(the answer, then the settings to run it again), and moves to Analysis when
+the answer lands. **Analyze turn** makes one
 explicit model call on the turn's owner, defaulting to GPT-6-Luna. It pages
 back through thread history for that turn, at most five pages of ten turns.
 If the turn is out of reach it reads the recent entries instead, and the
@@ -102,13 +145,36 @@ result says so. **Recent entries** reads the newest page only. Entries are then
 trimmed to the operator's 1–100 entry and 1,000–40,000 character bounds.
 
 Remote analysis requires `turn_control`; transcript-read permission alone
-cannot start this model call. The owner supplies its available Codex model
-choices. Only text and activity descriptions enter the prompt. Images,
-full-history walks, automatic analysis fanout and Codex storage-file reads are
-excluded. The existing ephemeral structured helper disables execution,
-delegation, web search and configured MCP tools. Analysis consumes model usage
-from the owner's limit, reports unavailable transcripts/providers, and does not
-persist its answer.
+cannot start this model call. The owner supplies its model choices, and each
+names the agent that runs it. Codex models are always offered. Grok models are
+offered when the owner has Grok available and lists `acp:grok` in its
+`analysisModelBackends`; an older owner lists none, so it is offered Codex
+only. The model need not match the thread's agent: a Codex thread can be
+analyzed by Grok, and a Grok thread by Codex. The request names the runner in
+`modelBackend`, which is absent for Codex, and the owner refuses a backend it
+cannot run before it reads the transcript. Only text and activity descriptions
+enter the prompt. Images, full-history walks, automatic analysis fanout and
+Codex storage-file reads are excluded. While it runs, the inspector shows the
+owner, the model and the elapsed time; the thread list stays usable, and only a
+second analysis waits. The answer, or the failure, stays with the thread and
+turn it read, and the inspector scrolls to it when it arrives.
+
+Neither runner can act. Codex uses its ephemeral structured helper, which
+disables execution, delegation, web search and configured MCP tools. Grok runs
+on an agent process of its own, started for the call and stopped after it, in
+a PwrAgent-owned directory (`state/acp-helper-workspace` in the profile), never
+the thread's workspace. Its agent profile removes every tool, including the MCP
+meta-tools that would otherwise reach the servers in the operator's Grok
+config; Grok runs read-only tools without asking, so refusing permission
+requests alone would not be enough. Every permission request is refused all the
+same. The call is bounded to 90 seconds, agent start included, and to 32,000
+answer characters. The answer must be the requested JSON object; prose is
+reported as a failure. Afterwards Grok is asked to close and delete the
+session, so it appears in no Grok or PwrAgent session list. Grok still keeps
+each prompt in that directory's prompt history, which it caps itself.
+Analysis consumes model usage from the owner's limit with the model's
+provider, reports unavailable transcripts/providers, and does not persist its
+answer.
 
 Validation covers ledger reads with zero SQLite commits, the limit reading's
 zero added commits, timing boundaries, cumulative and monitor deduplication,

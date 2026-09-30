@@ -620,82 +620,54 @@ describe("Tangerine Terminal theme contract", () => {
     expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
   });
 
-  it("keeps warning notices distinct from dark app surfaces", () => {
-    const warningNoticeRule = extractRuleBody(
-      css,
-      '.app-notice-toast[data-tone="warning"]',
-    );
-    const successNoticeRule = extractRuleBody(
-      css,
-      '.app-notice-toast[data-tone="success"]',
-    );
-    const errorNoticeRule = extractRuleBody(
-      css,
-      '.app-notice-toast[data-tone="error"]',
-    );
-
-    expect(warningNoticeRule).toContain(
-      "border-color: color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));",
-    );
-    expect(warningNoticeRule).toContain(
-      "background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);",
-    );
-    expect(css).toMatch(
-      /\.app-notice-toast\[data-tone="warning"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-warning\);[\s\S]*?\}/,
-    );
-    expect(successNoticeRule).toContain("var(--status-ok)");
-    expect(errorNoticeRule).toContain("var(--status-error)");
-    expect(css).toMatch(
-      /\.app-notice-toast\[data-tone="success"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-ok\);[\s\S]*?\}/,
-    );
-    expect(css).toMatch(
-      /\.app-notice-toast\[data-tone="error"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-error\);[\s\S]*?\}/,
-    );
+  it("carries notice tone on the title-row dot, not the card", () => {
+    // State by emphasis and badges, not colored panels (desktop style guide):
+    // the card is neutral in every tone, and the dot and countdown carry it.
+    const noticeRule = extractRuleBody(css, ".app-notice-toast");
+    expect(noticeRule).toContain("border: 1px solid var(--border-subtle);");
+    expect(noticeRule).toContain("background: var(--bg-panel-elevated);");
+    expect(css).not.toMatch(/\.app-notice-toast\[data-tone="[a-z]+"\]\s*\{/);
+    expect(css).not.toContain("app-notice-toast__eyebrow");
+    expect(
+      extractRuleBody(css, ".app-notice-toast__dot.status-dot--neutral"),
+    ).toContain("background: var(--text-muted);");
+    for (const [tone, token] of [
+      ["warning", "--status-warning"],
+      ["success", "--status-ok"],
+      ["error", "--status-error"],
+    ]) {
+      expect(
+        extractRuleBody(css, `.app-notice-toast[data-tone="${tone}"] .app-notice-toast__timer`),
+      ).toContain(`var(${token})`);
+    }
   });
 
-  it("keeps standalone toast actions from collapsing the message column", () => {
-    const customActionsRule = extractRuleBody(
-      css,
-      ".app-notice-toast > .app-notice-toast__custom-actions",
-    );
-
-    expect(customActionsRule).toContain("grid-column: 1 / -1;");
-    expect(customActionsRule).toContain("justify-content: flex-end;");
+  it("sizes a notice to its content and scrolls only the text", () => {
+    // A paged notice was a fixed 208px, which clipped a long one mid-line
+    // and left blank space under a short one.
+    const noticeRule = extractRuleBody(css, ".app-notice-toast");
+    const contentRule = extractRuleBody(css, ".app-notice-toast__content");
+    expect(noticeRule).toContain("width: fit-content;");
+    expect(noticeRule).toContain("max-height: min(360px, calc(100vh - 96px));");
+    expect(noticeRule).not.toContain("height: min(208px");
+    expect(css).not.toContain('.app-notice-toast[data-navigable="true"] {');
+    expect(contentRule).toContain("min-height: 0;");
+    expect(contentRule).toContain("overflow-y: auto;");
   });
 
-  it("lets long durable toast actions wrap without compressing labels", () => {
-    const durableToastRule = extractRuleBody(
-      css,
-      '.app-notice-toast[data-navigable="true"]',
-    );
-    const footerRule = extractRuleBody(
-      css,
-      ".app-notice-toast__footer",
-    );
-    const customActionsRule = extractRuleBody(
-      css,
-      ".app-notice-toast__footer .app-notice-toast__custom-actions",
-    );
-    const actionButtonRule = extractRuleBody(
-      css,
-      ".app-notice-toast__footer .app-notice-toast__custom-actions .button",
-    );
-    const navigationRule = extractRuleBody(
-      css,
-      ".app-notice-toast__navigation",
-    );
-
-    expect(durableToastRule).toContain(
-      "height: min(208px, calc(100vh - 32px));",
-    );
-    expect(footerRule).toContain(
-      "grid-template-columns: auto minmax(0, 1fr) auto;",
-    );
-    expect(customActionsRule).toContain("min-width: 0;");
-    expect(customActionsRule).toContain("flex-wrap: wrap;");
-    expect(customActionsRule).toContain("grid-column: 2;");
-    expect(actionButtonRule).toContain("white-space: nowrap;");
-    expect(navigationRule).toContain("grid-column: 3;");
+  it("keeps notice controls compact and at the WCAG 2.5.8 target size", () => {
+    const iconRule = extractRuleBody(css, ".app-notice-toast__icon-button");
+    const buttonRule = extractRuleBody(css, ".app-notice-toast__button");
+    const actionsRule = extractRuleBody(css, ".app-notice-toast__custom-actions");
+    expect(iconRule).toContain("width: 24px;");
+    expect(iconRule).toContain("height: 24px;");
+    expect(iconRule).toContain("border: 0;");
+    // `.button` sets no font size; without one the label inherits 16px.
+    expect(buttonRule).toContain("min-height: 24px;");
+    expect(buttonRule).toContain("font-size: 12px;");
+    expect(buttonRule).toContain("white-space: nowrap;");
+    expect(actionsRule).toContain("flex-wrap: wrap;");
+    expect(actionsRule).toContain("margin-left: auto;");
   });
 
   it("lets transcript scroll restoration own scroll anchoring", () => {

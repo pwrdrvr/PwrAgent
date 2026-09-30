@@ -922,7 +922,16 @@ function runShellCommand(
       });
     };
 
-    if (params.mode === "wait" && params.timeoutMs && params.timeoutMs > 0) {
+    const armWaitTimeout = () => {
+      if (
+        params.mode !== "wait"
+        || !params.timeoutMs
+        || params.timeoutMs <= 0
+        || settled
+        || closed
+      ) {
+        return;
+      }
       timeoutHandle = setTimeout(() => {
         const durationMs = Date.now() - startedAt;
         environmentRuntimeLog.error("codex-environment-command-timeout", {
@@ -954,6 +963,10 @@ function runShellCommand(
           }
         }, 2_000);
       }, params.timeoutMs);
+    };
+
+    if (!windowsJobLaunch) {
+      armWaitTimeout();
     }
 
     // Throttled snapshot for detach-mode live output streaming. Coalesces
@@ -1189,6 +1202,44 @@ function runShellCommand(
         windowsJobLaunch?.cleanup();
       });
       return;
+    }
+
+    if (windowsJobLaunch) {
+      // The command's timeout is the script's budget, not the launcher's. A
+      // cold Job launch (first PowerShell host plus the helper compile) has
+      // its own phased startup contract; charging it to the script let a
+      // 15-second setup budget expire before the setup script ever ran.
+      child.once("spawn", () => {
+        windowsJobReadyPoll = startWindowsJobReadyPoll({
+          launch: windowsJobLaunch,
+          onReady: (startupTelemetry) => {
+            windowsJobReadyPoll = undefined;
+            if (settled || closed) return;
+            environmentRuntimeLog.info("codex-environment-windows-job-ready", {
+              processId,
+              durationMs: Date.now() - startedAt,
+              startupPhases: startupTelemetry.phases,
+            });
+            armWaitTimeout();
+          },
+          onTimeout: (startupTimeout) => {
+            windowsJobReadyPoll = undefined;
+            if (settled || closed) return;
+            terminateChild("SIGKILL");
+            settle(() => {
+              reject(
+                new CodexEnvironmentCommandError(
+                  formatWindowsJobStartupTimeout(startupTimeout),
+                  {
+                    durationMs: Date.now() - startedAt,
+                    output: combinedOutput.trimEnd(),
+                  },
+                ),
+              );
+            });
+          },
+        });
+      });
     }
 
     child.once("close", (code, signal) => {

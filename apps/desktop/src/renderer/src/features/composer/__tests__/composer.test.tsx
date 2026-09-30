@@ -4441,6 +4441,42 @@ describe("Composer", () => {
     );
   });
 
+  it("opens Usage Activity from the context moon when the app can", () => {
+    const openUsageActivity = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        contextWindow={{
+          modelContextWindow: 128_000,
+          phase: 2,
+          remainingPercent: 75,
+          remainingTokens: 96_000,
+          totalTokens: 32_000,
+          usedPercent: 25,
+        }}
+        desktopApi={{ openUsageActivity }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Context usage",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const moon = screen.getByRole("button", { name: /^Context window 25% full/ });
+    fireEvent.mouseEnter(moon);
+    expect(within(screen.getByRole("tooltip")).getByText(/Usage Activity/)).toBeInTheDocument();
+    fireEvent.click(moon);
+    expect(openUsageActivity).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("shows an orange moon for reported context window usage", () => {
     render(
       <Composer

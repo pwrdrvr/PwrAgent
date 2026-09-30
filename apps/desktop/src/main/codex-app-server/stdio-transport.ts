@@ -31,13 +31,29 @@ const codexTransportLog = getMainLogger("pwragent:codex-transport");
 const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
 const STDERR_LOG_WINDOW_MS = 10_000;
 const STDERR_LOG_MAX_LINE_LENGTH = 4000;
+// The last stderr lines are kept regardless of the rate limit above, so an
+// unexpected exit can say what the server printed on its way down.
+const STDERR_EXIT_PREVIEW_LINES = 20;
+const STDERR_EXIT_PREVIEW_LINE_LENGTH = 500;
 const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
 const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
+
+export type CodexAppServerExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  /** The last stderr lines, oldest first. */
+  stderrPreview: string[];
+};
 
 export type StdioJsonRpcTransportOptions = {
   command: string;
   authenticationRecovery?: boolean;
   onAuthenticationRejected?: (home: string) => void;
+  /**
+   * The app-server process ended without `close()` asking it to. Any turn it
+   * was running ended with it, and no terminal notification will follow.
+   */
+  onUnexpectedExit?: (exit: CodexAppServerExit) => void;
 
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -232,6 +248,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     // collection) since severity isn't parseable from raw passthrough;
     // length-capped so a pathological line can't bloat the log file.
     const stderrReader = readline.createInterface({ input: child.stderr });
+    const stderrPreview: string[] = [];
     let stderrWindowStartedAt = Date.now();
     let stderrLinesThisWindow = 0;
     let stderrSuppressedThisWindow = 0;
@@ -246,6 +263,12 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       if (trimmed.length === 0) {
         return;
       }
+      stderrPreview.push(
+        trimmed.length > STDERR_EXIT_PREVIEW_LINE_LENGTH
+          ? `${trimmed.slice(0, STDERR_EXIT_PREVIEW_LINE_LENGTH)}…[truncated]`
+          : trimmed,
+      );
+      if (stderrPreview.length > STDERR_EXIT_PREVIEW_LINES) stderrPreview.shift();
       const now = Date.now();
       if (now - stderrWindowStartedAt > STDERR_LOG_WINDOW_MS) {
         if (stderrSuppressedThisWindow > 0) {
@@ -276,11 +299,25 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       }
       this.closeHandler(error);
     });
-    child.on("close", () => {
+    child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
       if (this.childProcess === child) {
         this.childProcess = null;
       }
       this.closeHandler();
+      if (!this.closeRequested && generation === this.lifecycleGeneration) {
+        const exit: CodexAppServerExit = {
+          code: code ?? null,
+          signal: signal ?? null,
+          stderrPreview: [...stderrPreview],
+        };
+        codexTransportLog.warn("app-server exited unexpectedly", {
+          pid: child.pid ?? null,
+          code: exit.code,
+          signal: exit.signal,
+          stderrPreview: exit.stderrPreview.join("\n"),
+        });
+        this.options.onUnexpectedExit?.(exit);
+      }
     });
   }
 

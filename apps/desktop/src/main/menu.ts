@@ -39,6 +39,7 @@ export type ApplicationMenuActions = {
   showLicenseWindow: () => void;
   showLogsWindow: () => void;
   showThirdPartyNoticesWindow: () => void;
+  showUsageActivityWindow: () => void;
 };
 
 export type ApplicationMenuWindow = {
@@ -94,6 +95,12 @@ function buildMacAppMenu(
         label: "Settings…",
         accelerator: "CmdOrCtrl+,",
         click: options.actions.openSettings,
+      },
+      // Account limits and spend across instances. It sits beside Settings
+      // because it is about the account, not about any one window.
+      {
+        label: "Usage Activity",
+        click: options.actions.showUsageActivityWindow,
       },
       { type: "separator" },
       { role: "services" },
@@ -315,6 +322,10 @@ function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
               label: "Settings…",
               accelerator: "CmdOrCtrl+," as const,
               click: options.actions.openSettings,
+            },
+            {
+              label: "Usage Activity",
+              click: options.actions.showUsageActivityWindow,
             },
             { type: "separator" as const },
           ]

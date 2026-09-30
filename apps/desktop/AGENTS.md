@@ -668,7 +668,21 @@ node apps/desktop/scripts/capture-acp-transcript.mjs \
 
 Flags: `--cmd` (required), `--args` (comma-separated), `--cwd`, `--prompt`,
 `--quiet-ms` (drain window after the prompt resolves), `--timeout-ms`,
-`--allow-tools`. Exit code is 0 only on a completed capture.
+`--allow-tools`. Exit code is 0 only on a completed capture. For helper
+sessions: `--session-meta <json>` (the `_meta` of `session/new`, such as a
+Grok agent profile), `--config model=<id>,reasoning_effort=<level>`
+(`session/set_config_option` writes before the prompt), `--deny-cancelled`
+(answer permission requests `cancelled`, as a `deny-all` session does),
+`--after session/close,_x.ai/session/delete` (methods called with
+`{ sessionId }` after the answer), and `--list-sessions` (`session/list` for
+the cwd, last).
+
+Grok 1.0.44 findings those flags established, which a helper must respect:
+`tools: []` in an agent profile means the default toolset; the MCP meta-tools
+`search_tool` and `use_tool` survive an allowlist and reach the operator's own
+Grok MCP servers; read-only tools run without a permission request in every
+mode; and a closed session stays listed until `_x.ai/session/delete`. See
+`src/main/acp/minimal-helper-session.ts`.
 
 Reach for this whenever a question about an agent's wire behavior would
 otherwise be answered by reading its source or guessing. **The committed

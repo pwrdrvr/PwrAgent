@@ -28,10 +28,18 @@ export type UsageLimitObservation = {
   limits: UsageLimitReading[];
 };
 
+/**
+ * Several background-helper runs (Token Miser, title generation) summed into
+ * one line for the thread they worked for. Absent from older peers, which
+ * return each run as its own monitor line.
+ */
+export type UsageActivityRollup = { kind: string; count: number };
+
 export type UsageActivityRow = {
   line: ThreadUsageLineRecord;
   title: string;
   updatedAt: number;
+  rollup?: UsageActivityRollup;
 };
 
 export type ReadUsageActivityResponse = {
@@ -46,7 +54,19 @@ export type ReadUsageActivityResponse = {
    * A reading can predate its turn's completion; readings are never per-thread.
    */
   limitHistory?: UsageLimitObservation[];
+  /**
+   * Backends this owner can run usage analysis on. Absent from older peers,
+   * which run it on Codex only and ignore `modelBackend`.
+   */
+  analysisModelBackends?: UsageAnalysisModelBackend[];
 };
+
+/**
+ * Backends an owner can run usage analysis on. An ACP agent is listed only
+ * once it has a tool-less, ephemeral structured helper.
+ */
+export const USAGE_ANALYSIS_MODEL_BACKENDS = ["codex", "acp:grok"] as const;
+export type UsageAnalysisModelBackend = typeof USAGE_ANALYSIS_MODEL_BACKENDS[number];
 
 export type AnalyzeUsageActivityRequest = {
   backend: AppServerBackendKind;
@@ -57,6 +77,13 @@ export type AnalyzeUsageActivityRequest = {
    */
   turnId?: string;
   model: string;
+  /**
+   * The backend that runs the analysis, which need not be the thread's.
+   * Absent means Codex, as for older peers. Send another value only to an
+   * owner that lists it in `analysisModelBackends`: an older owner ignores
+   * this field and would ask Codex for `model`.
+   */
+  modelBackend?: UsageAnalysisModelBackend;
   /** Entry and character bounds; the server also enforces these. */
   entryLimit: number;
   characterLimit: number;
@@ -73,6 +100,8 @@ export type AnalyzeUsageActivityResponse = {
   /** "turn" when the requested turn was found; absent from older peers. */
   scope?: "turn" | "recent";
   pagesRead?: number;
+  /** The backend that ran the analysis; absent from older peers (Codex). */
+  modelBackend?: UsageAnalysisModelBackend;
 };
 
 const LIMIT_WINDOW_KEYS = new Set(["primary", "secondary", "individual", "credits"]);
@@ -120,6 +149,32 @@ export function validateUsageActivityWindow(request: ReadUsageActivityRequest): 
     || request.from >= request.to || request.to - request.from > 31 * 86_400_000) {
     throw new Error("Select a usage window of at most 31 days.");
   }
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+/** Bar widths a reader can place on a clock, finest first. */
+const USAGE_CHART_STEPS = [15 * MINUTE, 30 * MINUTE, HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, 24 * HOUR];
+const USAGE_CHART_MAX_BARS = 40;
+
+/**
+ * The width of one Usage Activity chart bar for a window: the finest clock
+ * step that keeps the window within 40 bars, counting a partial bar at each
+ * end. Bars start on local clock boundaries (quarter hours, hours, midnight).
+ */
+export function usageChartStep(from: number, to: number): number {
+  return USAGE_CHART_STEPS.find((step) => Math.ceil((to - from) / step) + 1 <= USAGE_CHART_MAX_BARS)
+    ?? USAGE_CHART_STEPS.at(-1)!;
+}
+
+/**
+ * The step an owner sums background helpers at: the chart's, capped at an
+ * hour. Every chart step is a whole number of these, and they sit on epoch
+ * boundaries, which are local boundaries in any whole-hour time zone, so a
+ * rollup never straddles a bar.
+ */
+export function usageRollupStep(from: number, to: number): number {
+  return Math.min(HOUR, usageChartStep(from, to));
 }
 
 /** Never add cumulative snapshots, inherited context, or unattributed history. */

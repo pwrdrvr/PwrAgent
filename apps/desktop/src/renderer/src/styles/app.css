@@ -7796,11 +7796,11 @@ a.button {
   left: var(--app-toast-stack-edge);
   bottom: var(--app-toast-stack-edge);
   display: flex;
-  width: min(420px, calc(100vw - 32px));
-  max-width: min(420px, calc(100vw - 32px));
+  width: min(380px, calc(100vw - 32px));
+  max-width: min(380px, calc(100vw - 32px));
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   pointer-events: none;
 }
 
@@ -7816,72 +7816,33 @@ a.button {
   pointer-events: auto;
 }
 
-.app-notice-toast,
+/* Full stack width in every phase, the same as the notices it hands off to.
+   A `max-content` card changed size at each step of one check: 266px while
+   checking, 420px while downloading, 303px once the update was ready. */
 .app-update-banner {
   position: relative;
   display: grid;
-  width: max-content;
+  width: 100%;
   max-width: 100%;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
+  border: 1px solid var(--accent-border);
   border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
   box-shadow: var(--shadow-popover);
   animation: app-update-banner-enter 160ms ease-out;
   -webkit-app-region: no-drag;
 }
 
-.app-notice-toast {
-  overflow: hidden;
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto;
-  border: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-panel-elevated) 96%, var(--text-muted) 4%);
-}
-
-.app-notice-toast[data-navigable="true"] {
-  height: min(208px, calc(100vh - 32px));
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-
-.app-notice-toast[data-navigable="true"] .app-notice-toast__content {
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.app-notice-toast[data-tone="warning"] {
-  border-color: color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
-}
-
-.app-notice-toast[data-tone="success"] {
-  border-color: color-mix(in srgb, var(--status-ok) 52%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--status-ok) 6%);
-}
-
-.app-notice-toast[data-tone="error"] {
-  border-color: color-mix(in srgb, var(--status-error) 52%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--status-error) 6%);
-}
-
-/* Full stack width in every phase, the same as the notices it hands off to.
-   A `max-content` card changed size at each step of one check: 266px while
-   checking, 420px while downloading, 303px once the update was ready. */
-.app-update-banner {
-  width: 100%;
-  border: 1px solid var(--accent-border);
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
-}
-
-.app-notice-toast__content,
 .app-update-banner__content {
   min-width: 0;
   user-select: text;
 }
 
-.app-notice-toast__eyebrow,
 .app-update-banner__eyebrow {
   margin: 0 0 4px;
+  color: var(--accent-bright);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -7889,28 +7850,6 @@ a.button {
   text-transform: uppercase;
 }
 
-.app-notice-toast__eyebrow {
-  color: var(--text-secondary);
-}
-
-.app-notice-toast[data-tone="warning"] .app-notice-toast__eyebrow {
-  color: var(--status-warning);
-}
-
-.app-notice-toast[data-tone="success"] .app-notice-toast__eyebrow {
-  color: var(--status-ok);
-}
-
-.app-notice-toast[data-tone="error"] .app-notice-toast__eyebrow {
-  color: var(--status-error);
-}
-
-.app-update-banner__eyebrow {
-  color: var(--accent-bright);
-}
-
-.app-notice-toast__message,
-.app-notice-toast__detail,
 .app-update-banner__message,
 .app-update-banner__error {
   margin: 0;
@@ -7920,20 +7859,134 @@ a.button {
   line-height: 1.35;
 }
 
-.app-notice-toast__message,
 .app-update-banner__message {
   color: var(--text-primary);
 }
 
-.app-notice-toast__detail {
-  margin-top: 8px;
+/* A notice fits its content, up to the stack's width, and grows with it: a
+   paged notice used to be a fixed 208px that clipped a long one mid-line.
+   The card stays neutral and the dot in the title row carries the tone —
+   state by emphasis and badges, not colored panels (desktop style guide).
+   Only the content scrolls, past `max-height`. */
+.app-notice-toast {
+  position: relative;
+  display: flex;
+  width: fit-content;
+  min-width: min(288px, 100%);
+  max-width: 100%;
+  max-height: min(360px, calc(100vh - 96px));
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  padding: 7px 6px 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: app-update-banner-enter 160ms ease-out;
+  -webkit-app-region: no-drag;
+}
+
+/* Copy and Dismiss sit in the title row. As a column beside the text they
+   cost 80px of its width for the card's whole height. */
+.app-notice-toast__head {
+  display: flex;
+  flex: none;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Two classes: `.status-dot` is declared far below and sets 8px. */
+.app-notice-toast .app-notice-toast__dot {
+  width: 7px;
+  height: 7px;
+}
+
+.app-notice-toast__dot.status-dot--neutral {
+  background: var(--text-muted);
+}
+
+.app-notice-toast__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.app-notice-toast__actions {
+  display: flex;
+  flex: none;
+  margin-left: 8px;
+}
+
+/* Indented past the dot, so the text lines up under the title. */
+.app-notice-toast__content {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 0 15px;
+  user-select: text;
+}
+
+.app-notice-toast__status {
+  margin: 0 0 2px;
   color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.app-notice-toast__message,
+.app-notice-toast__detail {
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
+.app-notice-toast__detail {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Machine state is mono, as paths and ids are everywhere else. */
+.app-notice-toast__facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.app-notice-toast__fact {
+  display: contents;
+}
+
+.app-notice-toast__fact dt {
+  color: var(--text-muted);
+}
+
+.app-notice-toast__fact dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .app-notice-toast__thread-link {
   display: flex;
   min-width: 0;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .app-notice-toast__thread-menu {
@@ -7943,7 +7996,7 @@ a.button {
 /* Two classes: `.composer__checkbox` is declared far below this rule and
    would otherwise win the equal-specificity tie on `font-size`. */
 .app-notice-toast .app-notice-toast__suppress {
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -7956,8 +8009,10 @@ a.button {
 }
 
 .app-notice-toast__body {
+  flex: none;
   min-width: 0;
-  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding-right: 6px;
 }
 
 .quit-blocker-queue__list {
@@ -8053,92 +8108,90 @@ a.button {
   margin: 0;
 }
 
-.app-notice-toast__status {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.app-notice-toast__status .status-dot {
-  margin-top: 4px;
-}
-
 .app-update-banner__error {
   margin-top: 8px;
   color: var(--danger-text);
 }
 
-.app-notice-toast__actions,
-.app-notice-toast__custom-actions,
 .app-update-banner__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.app-notice-toast__actions {
-  align-self: start;
-}
-
-.app-notice-toast > .app-notice-toast__custom-actions {
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-}
-
+/* One row: the pager leads, the actions trail, and the way out stays last.
+   No rule above it; the gap separates it from the text. */
 .app-notice-toast__footer {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.app-notice-toast__footer .app-notice-toast__custom-actions {
-  grid-column: 2;
-  min-width: 0;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.app-notice-toast__footer .app-notice-toast__custom-actions .button {
-  white-space: nowrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 2px 0 8px;
 }
 
 .app-notice-toast__navigation {
   display: flex;
-  grid-column: 3;
   align-items: center;
-  justify-self: end;
-  gap: 6px;
+  margin-left: -6px;
 }
 
 .app-notice-toast__position {
+  min-width: 44px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   line-height: 1.2;
+  text-align: center;
 }
 
-.app-notice-toast__icon-button {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+.app-notice-toast__custom-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* `.button` sets no font size, so its label inherits the 16px document
+   default, three sizes above the message. */
+.app-notice-toast__button {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.app-notice-toast__dismiss-all {
   background: transparent;
   color: var(--text-secondary);
 }
 
-.app-notice-toast__icon-button:hover,
+.app-notice-toast__dismiss-all:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
+   checks; Copy and Dismiss sit edge to edge, so neither can be smaller. */
+.app-notice-toast__icon-button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.app-notice-toast__icon-button:hover:not(:disabled),
 .app-notice-toast__icon-button:focus-visible {
-  border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
@@ -8149,11 +8202,8 @@ a.button {
 }
 
 .app-notice-toast__icon-button:disabled {
-  border-color: var(--border-subtle);
-  background: transparent;
-  color: var(--text-muted);
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
 .app-notice-toast__timer {
@@ -29403,6 +29453,11 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: pointer;
 }
 
+.pricing-panel__usage-action {
+  align-self: flex-start;
+  margin: 8px 0 4px;
+}
+
 .context-panel__section-action:hover {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
@@ -34562,6 +34617,20 @@ button.pricing-token-miser__folded:focus-visible {
   margin-right: 4px;
 }
 
+/* The same moon as a button that opens Usage Activity: no chrome of its own. */
+.context-window-moon--button {
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.context-window-moon--button:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
 .context-window-moon__sprite {
   display: inline-flex;
   width: 26px;
@@ -34781,6 +34850,14 @@ button.pricing-token-miser__folded:focus-visible {
   margin-top: 6px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.context-usage-card__hint {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -38397,15 +38474,12 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 /* Usage Activity reads top to bottom: the account's limits beside the
    API-equivalent cost, spend over time with the limit drawn on it, then the
    threads that spent it, with an inspector for one thread's turns. */
-.federation-activity-content--usage { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
-.usage-window-tabs { display: flex; flex: none; gap: 22px; padding: 0 18px; border-bottom: 1px solid var(--border-subtle); }
-.usage-window-tabs button { padding: 10px 2px 9px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.usage-window-tabs button[aria-pressed="true"] { color: var(--text-primary); border-bottom-color: var(--accent); }
+.usage-activity-content { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
 .usage-workspace { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; color: var(--text-primary); font-size: 12px; }
 .usage-workspace button, .usage-workspace input { font: inherit; }
 .usage-workspace button { cursor: pointer; }
 .usage-workspace button:disabled { cursor: default; opacity: 0.55; }
-.usage-workspace :focus-visible, .usage-window-tabs :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.usage-workspace :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .usage-workspace p { line-height: 1.5; }
 .usage-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .usage-subtle { color: var(--text-muted); font-weight: 400; }
@@ -38441,8 +38515,15 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-date { display: flex; gap: 5px; align-items: center; color: var(--text-secondary); font-size: 11px; }
 .usage-date input { max-width: 178px; }
 .usage-error { flex: none; max-height: 90px; overflow: auto; margin: 0; padding: 8px 18px; color: var(--text-primary); background: var(--accent-soft); border-bottom: 1px solid var(--accent-border); font-size: 11px; }
-.usage-coverage { display: flex; flex: none; gap: 10px; align-items: baseline; padding: 8px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--warning-surface-faint); color: var(--text-secondary); font-size: 11px; }
-.usage-coverage strong { color: var(--text-primary); font-weight: 600; }
+.usage-coverage { display: flex; flex: none; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 7px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--warning-surface-faint); color: var(--text-secondary); font-size: 11px; }
+.usage-coverage__text { flex: 1; min-width: 0; }
+.usage-coverage__details > summary { cursor: pointer; color: var(--text-muted); font-size: 10px; }
+/* Details sits before the dismiss button until it opens onto a row of its own. */
+.usage-coverage__details { order: 1; }
+.usage-coverage__details[open] { order: 3; flex-basis: 100%; }
+.usage-coverage__dismiss { order: 2; align-self: center; font-size: 15px !important; }
+.usage-coverage__details ul { max-height: 120px; margin: 6px 0 0; padding-left: 16px; overflow: auto; color: var(--text-muted); font: 10px var(--font-mono); overflow-wrap: anywhere; }
+.usage-coverage__details strong { color: var(--text-secondary); font-family: var(--font-sans); font-weight: 600; }
 .usage-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex: none; }
 .usage-status-dot.is-partial { background: var(--status-warning); }
 
@@ -38468,6 +38549,8 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-limit__meter--cache i { background: var(--text-muted); }
 .usage-pace { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--text-secondary); font-size: 11px; }
 .usage-pace > span { padding: 1px 5px; border-radius: 3px; background: var(--bg-panel-hover); color: var(--text-primary); font: 10px var(--font-mono); }
+.usage-pace.is-short { color: var(--status-warning); font-weight: 600; }
+.usage-pace.is-short > span { background: var(--warning-surface-faint); color: var(--status-warning); }
 .usage-limit__sub { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-muted); font-size: 10px; }
 .usage-limit__sub strong { color: var(--text-secondary); font-weight: 600; }
 .usage-limit__reset { color: var(--status-warning); }
@@ -38480,12 +38563,15 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__spacer { flex: 1; }
 .usage-timeline__key { display: inline-flex; align-items: center; gap: 6px; }
 .usage-timeline__key-line { width: 14px; height: 0; border-top: 2px solid var(--text-primary); }
+.usage-timeline__key-line.is-forecast { border-top-style: dashed; border-top-color: var(--text-secondary); }
+.usage-timeline__key-line.is-short { border-top-color: var(--status-warning); }
 .usage-timeline__frame { display: grid; grid-template-columns: 44px minmax(0, 1fr) 36px; gap: 8px; margin-top: 10px; }
 .usage-timeline__axis-y { display: flex; flex-direction: column; justify-content: space-between; height: 110px; color: var(--text-muted); font: 9px var(--font-mono); text-align: right; }
 .usage-timeline__axis-y--right { text-align: left; }
 .usage-timeline__plot { position: relative; height: 110px; border-bottom: 1px solid var(--border-subtle); }
 .usage-timeline__bars { display: flex; align-items: flex-end; gap: 3px; height: 100%; }
-.usage-timeline__bar { display: flex; align-items: flex-end; flex: 1; height: 100%; min-width: 0; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; }
+/* Each bar's flex-grow is its span, so a partial first or last bar is narrower. */
+.usage-timeline__bar { display: flex; align-items: flex-end; flex: 1 1 0; height: 100%; min-width: 0; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; }
 .usage-timeline__bar:hover { background: var(--bg-panel-hover); }
 .usage-timeline__bar.is-selected { border-bottom-color: var(--text-primary); background: var(--bg-row-active); }
 .usage-timeline__stack { display: flex; flex-direction: column-reverse; width: 100%; min-height: 0; opacity: 0.85; }
@@ -38493,19 +38579,40 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__bar:hover .usage-timeline__stack, .usage-timeline__bar:focus-visible .usage-timeline__stack, .usage-timeline__bar.is-selected .usage-timeline__stack { opacity: 1; }
 .usage-timeline__line { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .usage-timeline__line polyline { fill: none; stroke: var(--text-primary); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.usage-timeline__line polyline.is-forecast { stroke: var(--text-secondary); stroke-dasharray: 5 4; stroke-linecap: butt; }
+.usage-timeline__line polyline.is-short { stroke: var(--status-warning); }
+/* Past now: no bars, only the pace carried forward to the reset. */
+.usage-timeline__future { position: absolute; top: 0; right: 0; bottom: 0; border-left: 1px dashed var(--text-muted); background: color-mix(in srgb, var(--text-muted) 6%, transparent); pointer-events: none; }
+.usage-timeline__full { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--status-warning); pointer-events: none; }
+.usage-timeline__outcome { position: absolute; top: -2px; right: 4px; color: var(--text-secondary); font: 9px var(--font-mono); white-space: nowrap; pointer-events: none; }
+.usage-timeline__outcome.is-short { color: var(--status-warning); }
+.usage-timeline__full span { position: absolute; top: 12px; right: 5px; color: var(--status-warning); font: 9px var(--font-mono); white-space: nowrap; }
 .usage-timeline__reset { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--text-muted); pointer-events: none; }
 .usage-timeline__reset.is-unscheduled { border-left-color: var(--status-warning); }
 .usage-timeline__reset span { position: absolute; top: -2px; left: 3px; color: var(--text-muted); font: 9px var(--font-mono); white-space: nowrap; }
 .usage-timeline__reset.is-unscheduled span { color: var(--status-warning); }
-.usage-timeline__axis { display: flex; justify-content: space-between; padding: 5px 44px 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
+.usage-timeline__axis { padding: 5px 44px 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
+.usage-timeline__ticks { position: relative; height: 12px; }
+.usage-timeline__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.usage-timeline__ticks span.is-end { transform: translateX(-100%); }
 .usage-timeline__legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--text-secondary); font-size: 10px; }
-.usage-timeline__legend-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-timeline__legend-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 300px; padding: 1px 3px; margin-left: -3px; border: 0; border-radius: 3px; background: transparent; color: inherit; font-size: 10px; white-space: nowrap; }
+.usage-timeline__legend-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .usage-timeline__legend-item i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+button.usage-timeline__legend-item:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+button.usage-timeline__legend-item:hover > span { text-decoration: underline; }
+button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-row-active); color: var(--text-primary); }
+.usage-timeline__dimension button { padding: 2px 8px; font-size: 10px; }
 .usage-timeline__readout { min-height: 16px; margin: 6px 0 0; color: var(--text-secondary); font: 10px var(--font-mono); }
 
 /* Thread list */
 .usage-results { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1 0 280px; min-height: 280px; margin: 8px 18px 0; }
 .usage-results.has-inspector { grid-template-columns: minmax(0, 1fr) 330px; }
+/* Pulls the thread list taller or shorter; the height persists per machine. */
+.usage-results-grip { position: relative; flex: none; height: 14px; margin: 0 18px 10px; border-top: 1px solid var(--border-subtle); cursor: row-resize; touch-action: none; }
+.usage-results-grip span { position: absolute; top: 5px; left: 50%; width: 36px; height: 3px; margin-left: -18px; border-radius: 999px; background: var(--border-strong); }
+.usage-results-grip:hover span, .usage-results-grip:focus-visible span { background: var(--accent); }
+.usage-results-grip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .usage-results__main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .usage-results__toolbar { display: flex; flex: none; align-items: center; gap: 10px; min-height: 36px; }
 .usage-results__title { font-size: 11px; }
@@ -38515,7 +38622,8 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-search input:focus { border-color: var(--border-subtle); background: var(--bg-input); }
 .usage-results__toolbar .select-trigger { max-width: 150px; }
 .usage-list-head, .usage-thread { display: grid; grid-template-columns: minmax(0, 1fr) 120px 150px 84px 84px; gap: 14px; align-items: center; }
-.usage-thread--excluded { grid-template-columns: minmax(0, 1fr) 150px 84px; }
+.usage-thread--excluded { grid-template-columns: minmax(0, 1fr) 190px 84px; }
+.usage-thread__reason { color: var(--text-secondary); font-size: 11px; }
 .usage-list-head { flex: none; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 10px; }
 .usage-list-head > span:nth-child(n + 4) { text-align: right; }
 .usage-thread-list { flex: 1; min-height: 0; overflow-y: auto; }
@@ -38544,11 +38652,18 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; margin-left: 16px; padding-left: 16px; border-left: 1px solid var(--border-subtle); }
 .usage-inspector__body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 14px; }
 .usage-inspector__footer { flex: none; padding: 10px 0; border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
+.usage-inspector__tabs { display: flex; gap: 16px; margin: 12px 0 10px; border-bottom: 1px solid var(--border-subtle); }
+.usage-inspector__tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; margin-bottom: -1px; padding: 6px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.usage-inspector__tabs [role="tab"]:hover { color: var(--text-primary); }
+.usage-inspector__tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text-primary); }
+.usage-analysis__waiting { margin: 0 0 12px; color: var(--text-secondary); font-size: 12px; }
+.usage-inspector__progress { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: var(--text-secondary); font-size: 11px; }
 .usage-inspector__heading { display: flex; justify-content: space-between; align-items: center; }
 .usage-icon-button { padding: 2px 6px; border: 0; background: transparent; color: var(--text-muted); font-size: 20px !important; line-height: 1; }
 .usage-icon-button:hover { color: var(--text-primary); }
 .usage-inspector h2 { margin: 6px 0; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
 .usage-inspector__owner { margin: 0; color: var(--text-muted); font-size: 11px; }
+.usage-inspector__open { display: inline-block; margin: 0 0 6px; font-size: 11px; }
 .usage-inspector__cost { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 12px 0; }
 .usage-inspector__cost strong { font: 600 22px var(--font-mono); }
 .usage-inspector__cost span { color: var(--text-muted); font-size: 10px; }
@@ -38570,8 +38685,12 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-analysis__limits label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: 10px; }
 .usage-analysis__scope { margin: 0; color: var(--text-muted); font-size: 10px; }
 .usage-analysis__result { padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+/* On the Analysis tab the answer leads and the settings to run it again follow. */
+.usage-inspector [role="tabpanel"] > .usage-analysis__result:first-child { padding-top: 0; border-top: 0; }
+.usage-analysis__result + .usage-analysis { margin-top: 14px; border-top: 1px solid var(--border-subtle); }
 .usage-analysis__result > p { color: var(--text-muted); font: 10px var(--font-mono); }
 .usage-analysis__result pre { font: inherit; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.usage-analysis__result--failed .usage-eyebrow, .usage-analysis__result--failed pre { color: var(--status-error); }
 .usage-button--primary { width: 100%; border-color: var(--accent); background: var(--accent); color: var(--button-text); font-weight: 600 !important; }
 .usage-button--primary:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
 
@@ -38595,7 +38714,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   .usage-results .usage-list-head, .usage-results .usage-thread:not(.usage-thread--excluded),
   .usage-results.has-inspector .usage-list-head, .usage-results.has-inspector .usage-thread:not(.usage-thread--excluded) { grid-template-columns: minmax(0, 1fr) 84px; }
   .usage-thread--excluded { grid-template-columns: minmax(0, 1fr) 84px; }
-  .usage-thread__strip, .usage-thread__tokens, .usage-thread .usage-signals, .usage-list-head > span:nth-child(-n + 4):not(:first-child) { display: none; }
+  .usage-thread__strip, .usage-thread__tokens, .usage-thread__reason, .usage-thread .usage-signals, .usage-list-head > span:nth-child(-n + 4):not(:first-child) { display: none; }
   .usage-results, .usage-results.has-inspector { grid-template-columns: minmax(0, 1fr); flex: none; }
   .usage-inspector { margin: 10px 0 0; padding: 14px 0; border-left: 0; border-top: 1px solid var(--border-subtle); overflow: visible; }
   .usage-thread-list { min-height: 160px; max-height: 320px; }

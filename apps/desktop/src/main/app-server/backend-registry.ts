@@ -1,5 +1,6 @@
-import { analyzeUsageActivity } from "./usage-activity-analysis";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
+import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
+import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import {
   buildMonitorJobHeuristicPrompt,
@@ -166,6 +167,8 @@ import {
   type BackendRateLimitSummary,
   type BackendRuntimeBuild,
   type BackendSummary,
+  type CodexAppServerRestartResult,
+  type CodexAppServerRestartStatus,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
   type DesktopSpendAlertPolicy,
@@ -417,6 +420,7 @@ import {
   type AcpRuntimeClient,
   type AcpSessionMetadata,
   type AcpSessionStoreLike,
+  type AcpTransportFactory,
   type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
 import {
@@ -431,6 +435,7 @@ import {
 import {
   isCodexInvalidResponseMessageIdError,
   type CodexInvalidResponseMessageIdRecoveryResult,
+  type CodexRecoveryBlockingTurn,
 } from "../codex-app-server/invalid-response-message-id-recovery";
 import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
@@ -625,6 +630,7 @@ import {
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
+import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
 import { getMainLogger } from "../log";
 import {
   getDesktopConfigStore,
@@ -960,6 +966,10 @@ type BackendClient = {
   recoverInvalidPersistedResponseMessageIds?(params: {
     failureMessage: string;
     forkLineageThreadIds?: string[];
+    onWaitingForTurns?: (
+      turns: CodexRecoveryBlockingTurn[],
+    ) => void | Promise<void>;
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult>;
   startReview?(params: {
@@ -980,6 +990,12 @@ type BackendClient = {
     ownerId?: string;
   }): Promise<BackendModelOption[]>;
   isAuthenticationRequired?(): boolean;
+  getAppServerRestartStatus?(): CodexAppServerRestartStatus;
+  onAppServerRestartStatusChanged?(
+    listener: (status: CodexAppServerRestartStatus) => void,
+  ): () => void;
+  restartAppServer?(): Promise<void>;
+  resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -8133,6 +8149,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
+    | "completeThreadUsageTurns"
+    | "repairUnfinishedThreadUsageTurns"
     | "readUsageActivity"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
@@ -8150,6 +8168,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
 type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
   audit: ThreadCodexInvalidIdRecovery;
   failureMessage: string;
+  /** The last status told to the operator was `waiting`. */
+  reportedWaiting: boolean;
   completion: Promise<{
     backend: "codex";
     threadId: string;
@@ -8183,6 +8203,42 @@ const TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS = 250;
 // and turn terminals flush immediately; one second keeps pricing UI responsive
 // while allowing concurrent turns to share one sqlite transaction.
 const LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS = 1_000;
+// A turn owned by another live runtime is left open until it has written no
+// usage for this long. Every model response writes usage, so a quiet turn is
+// waiting on a person or is dead; a live one still replaces the inferred end.
+const USAGE_TURN_REPAIR_PEER_QUIET_MS = 24 * 60 * 60_000;
+// Bounds one startup transaction. A real profile had 1,177 open turns
+// (21 ms to select); anything past the limit is repaired at the next start.
+const USAGE_TURN_REPAIR_BATCH_LIMIT = 2_000;
+// One deadline for every turn a quit stops. Codex holds an interrupted task
+// for at most 100 ms before aborting it, then flushes and answers; a backend
+// that has not ended its turn by then is left to the shutdown stamp.
+const RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS = 2_000;
+
+/**
+ * The registry's running turns. Removal is observable, so a quit can wait for
+ * each turn it stopped to end, whichever terminal path removes it.
+ */
+class ActiveTurnKeySet extends Set<string> {
+  private readonly deleteListeners = new Set<() => void>();
+
+  override delete(key: string): boolean {
+    const deleted = super.delete(key);
+    if (deleted) {
+      for (const listener of this.deleteListeners) {
+        listener();
+      }
+    }
+    return deleted;
+  }
+
+  onDelete(listener: () => void): () => void {
+    this.deleteListeners.add(listener);
+    return () => {
+      this.deleteListeners.delete(listener);
+    };
+  }
+}
 
 type PendingLiveThreadUsageLine = {
   backend: AppServerBackendKind;
@@ -8352,6 +8408,7 @@ export class DesktopBackendRegistry {
   private readonly archivedMessagingCleanupCompleted = new Set<string>();
   private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
   private readonly createScratchProjectDirectory: () => Promise<string>;
+  private readonly resolveAcpHelperWorkspace: () => Promise<string>;
   private createScheduledThreadActionFn?: (
     request: CreateScheduledThreadActionRequest,
     options: { id: string },
@@ -8443,6 +8500,8 @@ export class DesktopBackendRegistry {
     PendingCodexInvalidIdRecovery[] = [];
   private readonly codexInvalidIdRecoveryAttemptedAt = new Map<string, number>();
   private codexInvalidIdRecoveryDrain?: Promise<void>;
+  // Aborted by close(): a drain waiting for other turns must not hold shutdown.
+  private readonly codexInvalidIdRecoveryAbort = new AbortController();
   private codexInvalidIdRecoveryBarrier?: Promise<void>;
   private resolveCodexInvalidIdRecoveryBarrier?: () => void;
   /**
@@ -8483,7 +8542,7 @@ export class DesktopBackendRegistry {
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
-  private readonly activeTurnKeys = new Set<string>();
+  private readonly activeTurnKeys = new ActiveTurnKeySet();
   /**
    * Codex runtime activity recovered from `thread/list` / `thread/read`.
    * The long-lived Codex registry keeps this truth across a desktop
@@ -8650,6 +8709,14 @@ export class DesktopBackendRegistry {
   private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
   private readonly subAgentStartupReconciliation: Promise<void>;
+  private readonly usageTurnStartupRepair: Promise<void>;
+  private readonly runningTurnShutdownStopTimeoutMs: number;
+  private runningTurnsShutdownStop?: Promise<void>;
+  private runningTurnsShutdownStopSettled = false;
+  /** Set once a quit starts stopping turns; the queue starts nothing after. */
+  private stoppingRunningTurnsForShutdown = false;
+  /** Terminal events still reaching listeners while a quit waits on them. */
+  private readonly shutdownTerminalEmits = new Set<Promise<void>>();
   /**
    * Streamed command-output accounting waiting to be written, keyed by
    * invocation id. Deltas fold together here instead of each one paying a
@@ -9062,6 +9129,10 @@ export class DesktopBackendRegistry {
     useMachineAcpDiscovery?: boolean;
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
+    /** The transport of an ACP helper's own agent process. */
+    createAcpTransport?: AcpTransportFactory;
+    /** The cwd of ACP helper sessions; defaults to the profile's helper workspace. */
+    resolveAcpHelperWorkspace?: () => Promise<string>;
     agentToolMcpServer?: AgentToolMcpServerLike | null;
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
     mcpConnectionService?: BackendRegistryMcpConnectionService | null;
@@ -9118,6 +9189,7 @@ export class DesktopBackendRegistry {
     runtimeInstanceId?: string;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
+    runningTurnShutdownStopTimeoutMs?: number;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
@@ -9127,6 +9199,9 @@ export class DesktopBackendRegistry {
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
+    this.runningTurnShutdownStopTimeoutMs =
+      options?.runningTurnShutdownStopTimeoutMs
+      ?? RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS;
     this.resolveLiveProfileRuntimeInstanceIdsFn =
       options?.resolveLiveProfileRuntimeInstanceIds ??
       (() =>
@@ -9685,6 +9760,7 @@ export class DesktopBackendRegistry {
       agentToolMcpServer,
       captureStores: this.captureStores,
       createAcpClient: options?.createAcpClient,
+      createAcpTransport: options?.createAcpTransport,
       discoverLocalAcpAgents:
         options?.discoverLocalAcpAgents
         ?? (options?.useMachineAcpDiscovery
@@ -9767,6 +9843,8 @@ export class DesktopBackendRegistry {
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
       });
+    this.resolveAcpHelperWorkspace =
+      options?.resolveAcpHelperWorkspace ?? ensureAcpHelperWorkspace;
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
     this.createScheduledThreadActionFn = options?.createScheduledThreadAction;
@@ -9832,8 +9910,11 @@ export class DesktopBackendRegistry {
     });
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
+      // A turn a quit stopped releases its thread; the next queued turn must
+      // not start in its place, so every thread reads as busy from then on.
       isThreadActive: ({ backend, threadId }) =>
-        this.threadHasActiveTurn(threadId, backend)
+        this.stoppingRunningTurnsForShutdown
+        || this.threadHasActiveTurn(threadId, backend)
         || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
@@ -9878,6 +9959,12 @@ export class DesktopBackendRegistry {
     this.subAgentStartupReconciliation =
       this.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
         backendRegistryLog.warn("sub-agent-startup-reconciliation-failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.usageTurnStartupRepair =
+      this.repairUnfinishedThreadUsageTurnsAtStartup().catch((error) => {
+        backendRegistryLog.warn("usage-turn-startup-repair-failed", {
           message: error instanceof Error ? error.message : String(error),
         });
       });
@@ -9951,6 +10038,240 @@ export class DesktopBackendRegistry {
     if (result.repairedSubAgents > 0) {
       backendRegistryLog.info("sub-agent-startup-reconciliation", result);
       this.invalidateThreadListCache();
+    }
+  }
+
+  /**
+   * Record an end for pricing-ledger turns that no process will ever finish.
+   *
+   * Each turn runs in an app-server or ACP agent process that one registry
+   * owns, and only that registry receives its events. When this is the
+   * profile's only live runtime, no process can still report an end for a
+   * turn written before this session started, so every such open turn is
+   * over. Another live runtime may be running one of its own, and a turn
+   * waiting on an approval writes no usage at all, so then only turns with no
+   * usage write for a day qualify. The repair marks each end as inferred, so
+   * if such a turn is still live, its terminal event replaces the estimate.
+   */
+  private async repairUnfinishedThreadUsageTurnsAtStartup(): Promise<void> {
+    const repair = this.overlayStore.repairUnfinishedThreadUsageTurns;
+    if (!repair) {
+      return;
+    }
+    const liveRuntimeInstanceIds = this.liveProfileRuntimeInstanceIds();
+    if (!liveRuntimeInstanceIds) {
+      return;
+    }
+    const soleRuntime = liveRuntimeInstanceIds.every(
+      (instanceId) => instanceId === this.runtimeInstanceId,
+    );
+    const result = await repair.call(this.overlayStore, {
+      lastWriteBefore: soleRuntime
+        ? this.registrySessionStartedAt
+        : Math.min(
+            this.registrySessionStartedAt,
+            Date.now() - USAGE_TURN_REPAIR_PEER_QUIET_MS,
+          ),
+      limit: USAGE_TURN_REPAIR_BATCH_LIMIT,
+    });
+    if (result.repaired > 0) {
+      backendRegistryLog.info("usage-turn-startup-repair", {
+        ...result,
+        soleRuntime,
+      });
+    }
+  }
+
+  /**
+   * Stop every running turn through its own protocol before quitting.
+   *
+   * Closing kills the app-server and ACP agent processes, which ends their
+   * turns with no terminal event. Asked first, each backend ends its turn
+   * itself: Codex answers turn/interrupt with turn/completed, status
+   * interrupted, and session/cancel settles an ACP prompt with stopReason
+   * cancelled. That terminal takes the normal path, so the pricing ledger,
+   * transcript, queue, and every listener record an interrupted turn with
+   * the backend's own end time.
+   *
+   * The requests go out together under one deadline. A turn that has not
+   * ended by then, or that started afterwards, keeps the shutdown stamp
+   * close() records. Runs once; close() waits for it too, so a close outside
+   * the quit sequence still asks before it kills.
+   */
+  stopRunningTurnsForShutdown(
+    options: { timeoutMs?: number } = {},
+  ): Promise<void> {
+    this.runningTurnsShutdownStop ??= this.stopRunningTurnsForShutdownOnce(
+      options.timeoutMs ?? this.runningTurnShutdownStopTimeoutMs,
+    ).finally(() => {
+      this.runningTurnsShutdownStopSettled = true;
+    });
+    return this.runningTurnsShutdownStop;
+  }
+
+  private async stopRunningTurnsForShutdownOnce(timeoutMs: number): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.stoppingRunningTurnsForShutdown = true;
+    const keys = [...this.activeTurnKeys];
+    if (keys.length === 0) {
+      return;
+    }
+    const startedAt = Date.now();
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<"deadline">((resolve) => {
+      timer = setTimeout(() => resolve("deadline"), Math.max(0, timeoutMs));
+    });
+    let unsubscribe: (() => void) | undefined;
+    const ended = new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (keys.every((key) => !this.activeTurnKeys.has(key))) {
+          resolve();
+        }
+      };
+      unsubscribe = this.activeTurnKeys.onDelete(check);
+      check();
+    });
+    const requests = { requested: 0, unsupported: 0, failed: 0 };
+    const sent = this.requestShutdownTurnStops(keys, requests);
+    // No backend could be asked, so no terminal is coming: skip the wait.
+    const nothingSent = new Promise<"nothing-sent">((resolve) => {
+      void sent.then(async () => {
+        if (requests.requested === 0) {
+          // A turn that ended on its own meanwhile still reaches listeners.
+          await Promise.all([...this.shutdownTerminalEmits]);
+          resolve("nothing-sent");
+        }
+      });
+    });
+    try {
+      const outcome = await Promise.race([
+        ended.then(async () => {
+          // A turn leaves the running set before its listeners run. Let
+          // messaging and the renderer see each terminal before they stop.
+          await Promise.all([...this.shutdownTerminalEmits]);
+          return "ended" as const;
+        }),
+        nothingSent,
+        deadline,
+      ]);
+      const detail = {
+        durationMs: Date.now() - startedAt,
+        requests: { ...requests },
+        turns: keys.length,
+        unanswered: keys.filter((key) => this.activeTurnKeys.has(key)).length,
+      };
+      if (outcome === "ended") {
+        backendRegistryLog.info("running turns stopped for shutdown", detail);
+      } else if (outcome === "nothing-sent") {
+        backendRegistryLog.info("no running turn could be asked to stop", detail);
+      } else {
+        backendRegistryLog.warn(
+          "running turns still unanswered at the shutdown deadline",
+          detail,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+      unsubscribe?.();
+    }
+  }
+
+  /**
+   * Ask each backend to stop its turns, counting each request's outcome as it
+   * answers. The caller's deadline, not these requests, bounds the wait.
+   */
+  private async requestShutdownTurnStops(
+    keys: string[],
+    counts: Record<"requested" | "unsupported" | "failed", number>,
+  ): Promise<void> {
+    const cancelledAcpSessions = new Set<string>();
+    // One session/cancel stops whatever the session is running.
+    const cancelAcpSession = async (
+      backend: AcpBackendId,
+      sessionId: string,
+    ): Promise<void> => {
+      const session = buildThreadIdentityKey(backend, sessionId);
+      if (cancelledAcpSessions.has(session)) {
+        return;
+      }
+      cancelledAcpSessions.add(session);
+      const sent = await this.acpBackend.cancelRunningSession(backend, sessionId);
+      counts[sent ? "requested" : "unsupported"] += 1;
+    };
+    let codexInterruptSupported: Promise<boolean> | undefined;
+    await Promise.all(keys.map(async (key) => {
+      const turn = parseActiveTurnKey(key);
+      if (!turn) {
+        counts.unsupported += 1;
+        return;
+      }
+      try {
+        if (isAcpBackendId(turn.backend)) {
+          await cancelAcpSession(turn.backend, turn.threadId);
+          return;
+        }
+        // interruptTurn reaches an ACP review through getClientForSession,
+        // which may prepare or launch a client. Cancel it in place instead.
+        const review = this.findReviewForParentTurn({
+          backend: turn.backend,
+          parentThreadId: turn.threadId,
+          turnId: turn.turnId,
+        });
+        if (review && isAcpBackendId(review.backend)) {
+          await cancelAcpSession(review.backend, review.reviewThreadId);
+          return;
+        }
+        codexInterruptSupported ??= this.codexClient
+          .getInitializeResult()
+          .then((result) =>
+            buildCapabilities(result.methods ?? [], "codex").interruptTurn
+          );
+        if (!(await codexInterruptSupported)) {
+          counts.unsupported += 1;
+          return;
+        }
+        await this.interruptTurn(turn);
+        counts.requested += 1;
+      } catch (error) {
+        // A turn that ended on its own rejects the request. Either way the
+        // deadline decides; a turn still running keeps the shutdown stamp.
+        counts.failed += 1;
+        backendRegistryLog.info("shutdown turn stop request failed", {
+          backend: turn.backend,
+          message: error instanceof Error ? error.message : String(error),
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+        });
+      }
+    }));
+  }
+
+  /**
+   * Closing stops the app-server and ACP agent processes, which ends every
+   * turn still running in them, and no terminal event will arrive for any of
+   * them. Record the stop as their end.
+   */
+  private async completeRunningThreadUsageTurnsAtShutdown(): Promise<void> {
+    const complete = this.overlayStore.completeThreadUsageTurns;
+    if (!complete) {
+      return;
+    }
+    const turns = Array.from(this.activeTurnKeys).flatMap((key) => {
+      const parsed = parseActiveTurnKey(key);
+      return parsed ? [parsed] : [];
+    });
+    if (turns.length === 0) {
+      return;
+    }
+    try {
+      await complete.call(this.overlayStore, { completedAt: Date.now(), turns });
+    } catch (error) {
+      backendRegistryLog.warn("usage-turn-shutdown-completion-failed", {
+        message: error instanceof Error ? error.message : String(error),
+        turns: turns.length,
+      });
     }
   }
 
@@ -10664,6 +10985,31 @@ export class DesktopBackendRegistry {
       ...(result.configPath ? { configPath: result.configPath } : {}),
       trusted: true,
     };
+  }
+
+  getCodexAppServerRestartStatus(): CodexAppServerRestartStatus {
+    return this.codexClient.getAppServerRestartStatus?.() ?? { stopped: false };
+  }
+
+  onCodexAppServerRestartStatusChanged(
+    listener: (status: CodexAppServerRestartStatus) => void,
+  ): () => void {
+    return this.codexClient.onAppServerRestartStatusChanged?.(listener) ?? (() => undefined);
+  }
+
+  /**
+   * Start Codex again after the client stopped restarting it. A failed start
+   * is returned with the status it leaves, so the notice can say what happened.
+   */
+  async restartCodexAppServer(): Promise<CodexAppServerRestartResult> {
+    try {
+      await this.codexClient.restartAppServer?.();
+      return { status: this.getCodexAppServerRestartStatus() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("Codex app server restart failed", { error: message });
+      return { status: this.getCodexAppServerRestartStatus(), error: message };
+    }
   }
 
   async listBackends(
@@ -14749,7 +15095,9 @@ export class DesktopBackendRegistry {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
     return { ...await this.overlayStore.readUsageActivity(request), readAt: Date.now(),
       rateLimits: this.codexBackendSummary?.rateLimits ?? [],
-      limitObservation: this.codexLimitObservation() };
+      limitObservation: this.codexLimitObservation(),
+      analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
+        backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
 
   /**
@@ -14779,9 +15127,21 @@ export class DesktopBackendRegistry {
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
     this.assertNotBootstrap("analyzeUsageActivity");
-    if (!this.codexClient.generateStructuredObject) throw new Error("Codex analysis unavailable on this instance.");
-    return await analyzeUsageActivity(request, (read) => this.readThread(read),
-      (params) => this.codexClient.generateStructuredObject!(params));
+    const modelBackend = usageAnalysisModelBackend(request);
+    const read = (params: AppServerReadThreadRequest) => this.readThread(params);
+    if (modelBackend === "codex") {
+      if (!this.codexClient.generateStructuredObject) throw new Error("Codex analysis unavailable on this instance.");
+      return await analyzeUsageActivity(request, read, (params) => this.codexClient.generateStructuredObject!(params));
+    }
+    // An ACP agent answers in a tool-less session on a process of its own,
+    // which it forgets afterwards; see acp-structured-generation.ts.
+    return await analyzeUsageActivity(request, read, async (params) => await generateAcpStructuredObject({
+      backend: modelBackend,
+      cwd: await this.resolveAcpHelperWorkspace(),
+      run: (prompt) => this.acpBackend.runEphemeralPrompt(modelBackend, prompt),
+      model: params.model, reasoningEffort: params.reasoningEffort, system: params.system, prompt: params.prompt,
+      schema: params.schema, isMatch: params.isMatch, turnTimeoutMs: params.turnTimeoutMs,
+    }));
   }
 
   async inspectTokenMiserOutput(
@@ -23419,8 +23779,21 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    // Before anything unsubscribes or closes, so each turn's own terminal
+    // still reaches every consumer. A quit has normally done this already,
+    // while messaging was still running. Wait only when there is a turn to
+    // wait for: with none, `closed` below must hold from the call itself.
+    const runningTurnsStopPending = this.runningTurnsShutdownStop
+      ? !this.runningTurnsShutdownStopSettled
+      : this.activeTurnKeys.size > 0;
+    if (runningTurnsStopPending) {
+      await this.stopRunningTurnsForShutdown();
+    }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
+    // A recovery drain waiting for other Codex turns gives up now; the final
+    // Codex close below still waits for that drain before it runs.
+    this.codexInvalidIdRecoveryAbort.abort();
     // `closed` rejects observations that enter from this point forward. The
     // snapshot was registered synchronously at each earlier usage emit's
     // entry, so waiting it cannot miss work still deriving its sqlite row.
@@ -23462,6 +23835,8 @@ export class DesktopBackendRegistry {
     await this.tokenMiserLedgerReconciliation;
     this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
+    await this.usageTurnStartupRepair;
+    await this.completeRunningThreadUsageTurnsAtShutdown();
     // A command streaming at quit time has accounting worth up to one flush
     // window sitting in memory; write it before the store goes away. The flush
     // owns the timer, and `closed` above stops anything re-arming it.
@@ -24446,12 +24821,17 @@ export class DesktopBackendRegistry {
       resolve = promiseResolve;
       reject = promiseReject;
     });
+    // Repair stops the Codex app-server, so it waits for every other Codex
+    // turn to finish first. Say so rather than claiming a repair is underway.
+    const waitingForThreadIds = this.listActiveCodexWorkThreadIds()
+      .filter((activeThreadId) => activeThreadId !== threadId);
     const recovery: PendingCodexInvalidIdRecovery = {
       ...candidate,
       audit,
       completion,
       failureMessage,
       reject,
+      reportedWaiting: waitingForThreadIds.length > 0,
       resolve,
     };
     this.codexRetryableTurnStarts.delete(candidate.params.threadId);
@@ -24467,9 +24847,10 @@ export class DesktopBackendRegistry {
     });
     await this.emitCodexInvalidIdRecoveryUpdate({
       failureMessage,
-      status: "repairing",
+      status: recovery.reportedWaiting ? "waiting" : "repairing",
       threadId,
       turnId,
+      ...(recovery.reportedWaiting ? { waitingForThreadIds } : {}),
     });
     return recovery;
   }
@@ -24541,15 +24922,39 @@ export class DesktopBackendRegistry {
       const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
       let retrySubmitted = false;
       try {
+        if (recovery.reportedWaiting) {
+          recovery.reportedWaiting = false;
+          await this.emitCodexInvalidIdRecoveryUpdate({
+            failureMessage: recovery.failureMessage,
+            status: "repairing",
+            threadId: recovery.params.threadId,
+            ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+          });
+        }
         const forkLineageThreadIds =
           await this.resolveCodexInvalidIdRecoveryForkLineage(
             recovery.params.threadId,
           );
+        // The registry's idle check above can miss turns the client alone
+        // owns (helper turns) and turns admitted after it ran (reviews, task
+        // monitors). The client re-checks where the stop actually happens and
+        // waits there; relay that wait to the operator.
         const repaired = await recover({
           ...(forkLineageThreadIds.length > 0
             ? { forkLineageThreadIds }
             : {}),
           failureMessage: recovery.failureMessage,
+          onWaitingForTurns: async (turns) => {
+            recovery.reportedWaiting = true;
+            await this.emitCodexInvalidIdRecoveryUpdate({
+              failureMessage: recovery.failureMessage,
+              status: "waiting",
+              threadId: recovery.params.threadId,
+              ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+              waitingForThreadIds: [...new Set(turns.map((turn) => turn.threadId))],
+            });
+          },
+          signal: this.codexInvalidIdRecoveryAbort.signal,
           threadId: recovery.params.threadId,
         });
         if (this.closed) {
@@ -24739,6 +25144,19 @@ export class DesktopBackendRegistry {
       lineage.push(sourceThreadId);
       currentThreadId = sourceThreadId;
     }
+  }
+
+  private listActiveCodexWorkThreadIds(): string[] {
+    const threadIds = new Set(this.reservedCodexStartThreadIds);
+    for (const key of this.activeCodexTurnModes.keys()) {
+      const parsed = parseThreadTurnKeyBody(key);
+      if (parsed) threadIds.add(parsed.threadId);
+    }
+    for (const key of this.activeTurnKeys) {
+      const parsed = parseActiveTurnKey(key);
+      if (parsed?.backend === "codex") threadIds.add(parsed.threadId);
+    }
+    return [...threadIds];
   }
 
   private hasActiveCodexWork(): boolean {
@@ -29997,6 +30415,9 @@ export class DesktopBackendRegistry {
       this.codexRuntimeRestartPending = false;
       this.managedCodexRuntimeSwitchPending = false;
       await this.codexClient.close();
+      // Exits counted against the old binary say nothing about the new one.
+      // Clear the breaker; the next request starts the selected Codex.
+      this.codexClient.resetAppServerRestarts?.("Codex runtime changed");
       this.tokenMiserServerCapabilities.delete(this.codexClient);
       this.tokenMiserReducerCapabilityState = undefined;
       this.tokenMiserCodeModeGroupingVersion = undefined;
@@ -40529,6 +40950,24 @@ export class DesktopBackendRegistry {
   }
 
   private emit(event: AgentEvent): Promise<void> {
+    const emitted = this.emitEvent(event);
+    const method = event.notification.method;
+    if (
+      this.stoppingRunningTurnsForShutdown
+      && (
+        method === "turn/completed"
+        || method === "turn/failed"
+        || method === "turn/cancelled"
+      )
+    ) {
+      const delivered = emitted.catch(() => undefined);
+      this.shutdownTerminalEmits.add(delivered);
+      void delivered.finally(() => this.shutdownTerminalEmits.delete(delivered));
+    }
+    return emitted;
+  }
+
+  private emitEvent(event: AgentEvent): Promise<void> {
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {
         params: { threadId: string; turnId?: string; turn: { id: string } };

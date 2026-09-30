@@ -155,6 +155,10 @@ import {
   CODEX_VERSION_NOTICE_ID_PREFIXES,
   CodexVersionNotice,
 } from "./features/notifications/CodexVersionNotice";
+import {
+  CODEX_RESTART_NOTICE_ID_PREFIXES,
+  CodexRestartNotice,
+} from "./features/notifications/CodexRestartNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
@@ -853,6 +857,16 @@ function DesktopAppShell(props: {
       showAppNotice(notice);
     }
   }, [showAppNotice]);
+  const syncCodexRestartNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    for (const prefix of CODEX_RESTART_NOTICE_ID_PREFIXES) {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix });
+    }
+    if (notice) {
+      showAppNotice(notice);
+    }
+  }, [showAppNotice]);
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
@@ -931,26 +945,31 @@ function DesktopAppShell(props: {
       showAppNotice({
         autoDismiss: false,
         copyText: buildHotCpuProfileHandoffMessage(event),
-        detail: [
-          `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
-          `Captured: ${new Date(event.capturedAt).toLocaleString(undefined, {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-            second: "2-digit",
-            timeZoneName: "short",
-          })}`,
-          `Session: ${event.sessionDirectoryName}`,
-        ].join("\n"),
+        facts: [
+          {
+            label: "Source",
+            value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
+          },
+          {
+            label: "Captured",
+            value: new Date(event.capturedAt).toLocaleString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+              second: "2-digit",
+              timeZoneName: "short",
+            }),
+          },
+          { label: "Session", value: event.sessionDirectoryName },
+        ],
         dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
         title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
         message: [
           `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
           heapSnapshotSummary,
-          " Copy this notice to hand off the profile path.",
         ].join(""),
       });
     });
@@ -980,7 +999,9 @@ function DesktopAppShell(props: {
       showAppNotice({
         autoDismiss: false,
         copyText: buildHeapSnapshotHandoffMessage(result),
-        detail: failed ? undefined : `Session: ${result.sessionDirectoryName}`,
+        facts: failed
+          ? undefined
+          : [{ label: "Session", value: result.sessionDirectoryName }],
         id: `heap-snapshot:${result.capturedAt}`,
         title,
         message,
@@ -1375,9 +1396,10 @@ function DesktopAppShell(props: {
         const params = event.notification.params as {
           threadId: string;
           turnId?: string;
-          status: "repairing" | "succeeded" | "failed";
+          status: "waiting" | "repairing" | "succeeded" | "failed";
           failureMessage: string;
           recoveryError?: string;
+          waitingForThreadIds?: string[];
         };
         dispatchAppNotice({
           type: "backend-error",
@@ -1387,6 +1409,9 @@ function DesktopAppShell(props: {
             ...(instanceId ? { instanceId } : {}),
             recoveryError: params.recoveryError,
             status: params.status,
+            ...(params.waitingForThreadIds
+              ? { waitingForThreadCount: params.waitingForThreadIds.length }
+              : {}),
             threadId: params.threadId,
             threadLabel: labelForThread("codex", params.threadId),
             turnId: params.turnId ?? "unknown",
@@ -3009,6 +3034,9 @@ function DesktopAppShell(props: {
             openSettingsSection(undefined);
           }}
           onOpenProfile={profiles.openProfile}
+          onOpenUsageActivity={desktopApi?.openUsageActivity
+            ? () => void desktopApi.openUsageActivity?.()
+            : undefined}
           onSelectThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
@@ -3370,6 +3398,10 @@ function DesktopAppShell(props: {
           snapshot={settings.snapshot}
           onNoticeChanged={syncCodexVersionNotice}
           onOpenCodexSettings={openCodexSettings}
+        />
+        <CodexRestartNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={syncCodexRestartNotice}
         />
         <AppNoticeStack
           desktopApi={desktopApi}

@@ -1,4 +1,4 @@
-import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRow, type UsageLimitObservation } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
@@ -104,6 +104,10 @@ import type {
 } from "./remote-thread-target-store.js";
 
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
+// A live usage flush stamps one `updated_at` per batch, one line per turn
+// running at that moment. On a real 22,000-line profile no flush stamp was
+// shared by more than 2 lines; one migration stamp was shared by 7,251.
+const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
 class UnsupportedStarMapWorkspaceVersionError extends Error {}
 
@@ -1891,6 +1895,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
               ELSE MIN(thread_usage_turns.started_at, excluded.started_at)
             END,
             completed_at = COALESCE(excluded.completed_at, thread_usage_turns.completed_at),
+            completed_at_inferred = CASE
+              WHEN excluded.completed_at IS NULL THEN thread_usage_turns.completed_at_inferred
+            END,
             observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
             -- Observation-derived tallies are absent on transcript-hydration
             -- lines (the Codex transcript can't reproduce them). COALESCE keeps a
@@ -2177,6 +2184,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   // Record timing separately from finalizing accounting: Codex may send a
   // legitimate token update after the terminal turn notification.
+  //
+  // The first observed end wins. An end the startup repair inferred is only a
+  // placeholder, so an observed one replaces it.
   async completeThreadUsageTurn(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -2186,7 +2196,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
     const turn = this.stateDb.raw.prepare(
-      `SELECT turn.completed_at FROM thread_usage_turns AS turn
+      `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
         WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
           AND EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
@@ -2198,16 +2208,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           )`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
+      completed_at_inferred: number | null;
     } | undefined;
-    if (!turn || turn.completed_at !== null) {
+    if (!turn || (turn.completed_at !== null && turn.completed_at_inferred !== 1)) {
       return false;
     }
     const result = this.stateDb.raw.prepare(
       `UPDATE thread_usage_turns
-          SET completed_at = ?, updated_at = ?,
+          SET completed_at = ?, completed_at_inferred = NULL, updated_at = ?,
               rate_limit_snapshot = COALESCE(?, rate_limit_snapshot)
         WHERE backend = ? AND thread_id = ? AND turn_id = ?
-          AND completed_at IS NULL`,
+          AND (completed_at IS NULL OR completed_at_inferred = 1)`,
     ).run(
       params.completedAt,
       Date.now(),
@@ -2219,36 +2230,194 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return result.changes > 0;
   }
 
+  /**
+   * Record one end time for turns their owner stopped, such as every turn
+   * still running when the app shuts its agent processes down. That stop is
+   * the observed end, so this replaces only a missing or inferred one.
+   *
+   * One transaction however many turns; none when no turn has a ledger row.
+   */
+  async completeThreadUsageTurns(params: {
+    completedAt: number;
+    turns: ReadonlyArray<{
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+      turnId: string;
+    }>;
+  }): Promise<number> {
+    const findOpen = this.stateDb.raw.prepare(
+      `SELECT turn.usage_turn_id FROM thread_usage_turns AS turn
+        WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
+          AND (turn.completed_at IS NULL OR turn.completed_at_inferred = 1)
+          AND EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live'
+               AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL
+               AND line.status != 'superseded'
+          )`,
+    );
+    const usageTurnIds = params.turns.flatMap((turn) =>
+      (findOpen.all(turn.backend, turn.threadId, turn.turnId) as Array<{
+        usage_turn_id: string;
+      }>).map((row) => row.usage_turn_id));
+    if (usageTurnIds.length === 0) {
+      return 0;
+    }
+    const complete = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET completed_at = ?, completed_at_inferred = NULL, updated_at = ?
+        WHERE usage_turn_id = ?
+          AND (completed_at IS NULL OR completed_at_inferred = 1)`,
+    );
+    const now = Date.now();
+    return this.stateDb.raw.transaction(() => usageTurnIds.reduce(
+      (changed, usageTurnId) =>
+        changed + complete.run(params.completedAt, now, usageTurnId).changes,
+      0,
+    ))();
+  }
+
+  /**
+   * Close ledger turns whose end was never observed: the process running them
+   * quit or crashed, or its app-server died, before a terminal event arrived.
+   * The caller picks `lastWriteBefore` so no live turn can qualify.
+   *
+   * The end is the turn's last dated usage write, which is when its spend was
+   * last observed. It is capped at the next turn's start in the same thread,
+   * since one thread runs one turn at a time. A migration or repricing stamps
+   * `updated_at` on thousands of rows at once, so a stamp shared that widely
+   * dates the rewrite, not the usage; those rows fall back to the first write.
+   * Every repaired end is marked inferred, so an observed terminal replaces it.
+   *
+   * Idempotent, bounded to `limit` turns, and one transaction.
+   */
+  async repairUnfinishedThreadUsageTurns(params: {
+    lastWriteBefore: number;
+    limit: number;
+  }): Promise<{ repaired: number; remaining: boolean; datedByFirstWrite: number }> {
+    const candidates = this.stateDb.raw.prepare(
+      `SELECT turn.usage_turn_id,
+              COALESCE(turn.started_at, turn.observed_at) AS started_at,
+              MIN(line.created_at) AS first_write_at,
+              MAX(line.updated_at) AS last_write_at,
+              (SELECT MIN(COALESCE(next.started_at, next.observed_at))
+                 FROM thread_usage_turns AS next
+                WHERE next.provider = turn.provider
+                  AND next.backend = turn.backend
+                  AND next.thread_id = turn.thread_id
+                  AND COALESCE(next.started_at, next.observed_at)
+                    > COALESCE(turn.started_at, turn.observed_at)) AS next_started_at
+         FROM thread_usage_turns AS turn
+         JOIN thread_usage_lines AS line ON line.usage_turn_id = turn.usage_turn_id
+        WHERE turn.completed_at IS NULL
+          AND line.source = 'live'
+          AND line.scope = 'turn'
+          AND line.parent_thread_id IS NULL
+          AND line.status != 'superseded'
+        GROUP BY turn.usage_turn_id
+       HAVING MAX(line.updated_at) < ?
+        ORDER BY turn.observed_at, turn.usage_turn_id
+        LIMIT ?`,
+    ).all(params.lastWriteBefore, params.limit + 1) as Array<{
+      usage_turn_id: string;
+      started_at: number;
+      first_write_at: number;
+      last_write_at: number;
+      next_started_at: number | null;
+    }>;
+    const repairs = candidates.slice(0, params.limit);
+    if (repairs.length === 0) {
+      return { repaired: 0, remaining: false, datedByFirstWrite: 0 };
+    }
+    const bulkRewrites = new Set((this.stateDb.raw.prepare(
+      `SELECT updated_at FROM thread_usage_lines
+        WHERE updated_at IN (SELECT value FROM json_each(?))
+        GROUP BY updated_at
+       HAVING COUNT(*) >= ?`,
+    ).all(
+      JSON.stringify([...new Set(repairs.map((row) => row.last_write_at))]),
+      THREAD_USAGE_BULK_REWRITE_MIN_LINES,
+    ) as Array<{ updated_at: number }>).map((row) => row.updated_at));
+    const complete = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET completed_at = ?, completed_at_inferred = 1, updated_at = ?
+        WHERE usage_turn_id = ? AND completed_at IS NULL`,
+    );
+    const now = Date.now();
+    let datedByFirstWrite = 0;
+    const repaired = this.stateDb.raw.transaction(() => repairs.reduce((changed, row) => {
+      const rewritten = bulkRewrites.has(row.last_write_at);
+      if (rewritten) datedByFirstWrite += 1;
+      const lastUsageAt = rewritten ? row.first_write_at : row.last_write_at;
+      const completedAt = Math.max(
+        row.started_at,
+        Math.min(lastUsageAt, row.next_started_at ?? lastUsageAt),
+      );
+      return changed + complete.run(completedAt, now, row.usage_turn_id).changes;
+    }, 0))();
+    return { repaired, remaining: candidates.length > params.limit, datedByFirstWrite };
+  }
+
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<{
     rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
   }> {
     validateUsageActivityWindow(request);
-    // Read PwrAgent's ledger once, without parent-thread joins that duplicate
-    // helper costs. Candidate timestamps are not used to apportion turn cost.
-    const rows = this.stateDb.raw.prepare(`
-      SELECT l.*, t.started_at AS activity_started_at,
-             COALESCE(t.completed_at, l.completed_at) AS activity_completed_at,
-             t.rate_limit_snapshot AS activity_rate_limit_snapshot
-        FROM thread_usage_lines l
-        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
-       WHERE l.status != 'superseded'
-         AND COALESCE(t.started_at, l.created_at) < ?
-         AND (COALESCE(t.completed_at, l.completed_at) IS NULL
-           OR COALESCE(t.completed_at, l.completed_at) >= ?)
-       ORDER BY l.updated_at DESC, l.usage_line_id
-       LIMIT 5001
-    `).all(request.to, request.from) as Array<ThreadUsageLineRow & {
+    type ActivityRow = ThreadUsageLineRow & {
       activity_started_at: number | null; activity_completed_at: number | null;
       activity_rate_limit_snapshot: string | null;
-    }>;
+    };
+    // Read PwrAgent's ledger once, without parent-thread joins that duplicate
+    // helper costs. Candidate timestamps are not used to apportion turn cost.
+    //
+    // A monitor line is written already finalized and never gets a completion
+    // time, so its write time is its completion. An open row whose last update
+    // predates the window recorded no usage inside it: a turn whose completion
+    // was never observed would otherwise match every later window.
+    //
+    // Background helpers (Token Miser, title generation) write one monitor
+    // line per run, hundreds a day, each worth a fraction of a cent. The
+    // contained ones are read separately and rolled up per parent thread, so
+    // they cannot spend the row bound meant for turns.
+    const bounds = `
+        FROM thread_usage_lines l
+        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id`;
+    const started = "COALESCE(t.started_at, l.created_at)";
+    const completed = `COALESCE(t.completed_at, l.completed_at,
+      CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END)`;
+    const backgroundHelper = `(l.scope = 'monitor' AND l.status = 'finalized'
+      AND COALESCE(l.source_item_id, '') LIKE 'system:%'
+      AND ${started} >= @from AND ${completed} < @to)`;
+    const columns = `SELECT l.*, ${started} AS activity_started_at,
+             ${completed} AS activity_completed_at,
+             t.rate_limit_snapshot AS activity_rate_limit_snapshot`;
+    const rows = this.stateDb.raw.prepare(`
+      ${columns}${bounds}
+       WHERE l.status != 'superseded'
+         AND ${started} < @to
+         AND CASE WHEN ${completed} IS NULL THEN l.updated_at >= @from
+                  ELSE ${completed} >= @from END
+         AND NOT ${backgroundHelper}
+       ORDER BY l.updated_at DESC, l.usage_line_id
+       LIMIT 5001
+    `).all({ from: request.from, to: request.to }) as ActivityRow[];
+    const helperRows = this.stateDb.raw.prepare(`
+      ${columns}${bounds}
+       WHERE ${backgroundHelper}
+    `).all({ from: request.from, to: request.to }) as ActivityRow[];
     const visibleRows = rows.slice(0, 5000);
-    const identityFor = (row: ThreadUsageLineRow) => buildLegacyEncodedThreadIdentityKey(
+    const identityFor = (row: { backend: string; thread_id: string }) => buildLegacyEncodedThreadIdentityKey(
       row.backend as AppServerBackendKind, row.thread_id,
     );
+    const rollups = rollUpBackgroundHelperRows(helperRows, request);
     // Resolve titles only after bounding the ledger result. The document's
     // primary key makes this one indexed lookup per distinct thread, rather
     // than a backend-wide scan repeated for every usage row.
-    const identities = [...new Set(visibleRows.map(identityFor))];
+    const identities = [...new Set([
+      ...visibleRows.map(identityFor),
+      ...rollups.map(({ line }) => identityFor({ backend: line.backend, thread_id: line.threadId })),
+    ])];
     const titleRows = identities.length ? this.stateDb.raw.prepare(`
       SELECT identity_key, title FROM thread_search_documents
        WHERE identity_key IN (SELECT value FROM json_each(?))
@@ -2325,13 +2494,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return {
       limitHistory: [...readings.values()].sort((a, b) => a.observedAt - b.observedAt),
       truncated: rows.length > 5000,
-      rows: visibleRows.map((row) => ({
-        line: { ...threadUsageLineFromRow(row),
-          startedAt: row.activity_started_at ?? row.created_at,
-          completedAt: row.activity_completed_at ?? undefined },
-        title: titles.get(identityFor(row)) || row.thread_id,
-        updatedAt: row.updated_at,
-      })),
+      rows: [
+        ...visibleRows.map((row) => ({
+          line: { ...threadUsageLineFromRow(row),
+            startedAt: row.activity_started_at ?? row.created_at,
+            completedAt: row.activity_completed_at ?? undefined },
+          title: titles.get(identityFor(row)) || row.thread_id,
+          updatedAt: row.updated_at,
+        })),
+        ...rollups.map(({ line, rollup, updatedAt }) => ({
+          line, rollup, updatedAt,
+          title: titles.get(identityFor({ backend: line.backend, thread_id: line.threadId })) || line.threadId,
+        })),
+      ],
     };
   }
 
@@ -8704,6 +8879,74 @@ function toThreadToolInvocationAlertRowParams(
     worstInvocationId: alert.worstInvocationId ?? null,
     worstOutputChars: alert.worstOutputChars ?? null,
   };
+}
+
+/**
+ * Sum background-helper monitor lines contained in a window into one line per
+ * parent thread, helper kind, model, price status and rollup step (see
+ * `usageRollupStep`), so no rollup straddles a chart bar. The parent
+ * is the thread the helper worked for, so the rollup is that thread's spend.
+ * The line id is derived from the window, so two owners sharing one ledger
+ * produce the same rollup and the viewer counts it once.
+ */
+function rollUpBackgroundHelperRows(
+  rows: Array<ThreadUsageLineRow & { activity_started_at: number | null; activity_completed_at: number | null }>,
+  window: { from: number; to: number },
+): Array<{ line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }> {
+  const step = usageRollupStep(window.from, window.to);
+  const groups = new Map<string, { line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }>();
+  for (const row of rows) {
+    const started = row.activity_started_at ?? row.created_at;
+    const completed = row.activity_completed_at ?? row.created_at;
+    const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
+    const threadId = row.parent_thread_id ?? row.thread_id;
+    const bucket = Math.floor(completed / step) * step;
+    const usageLineId = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
+      row.price_status, row.currency, window.from, window.to, bucket].join(":");
+    const line = threadUsageLineFromRow(row);
+    const existing = groups.get(usageLineId);
+    if (!existing) {
+      groups.set(usageLineId, {
+        line: {
+          backend: line.backend, provider: line.provider, threadId, usageLineId,
+          scope: "monitor", source: line.source, status: "finalized",
+          ...(line.model ? { model: line.model } : {}),
+          ...(line.modelLabel ? { modelLabel: line.modelLabel } : {}),
+          createdAt: started, startedAt: started, completedAt: completed,
+          currency: line.currency, priceStatus: line.priceStatus,
+          inputTokens: line.inputTokens, cachedInputTokens: line.cachedInputTokens,
+          uncachedInputTokens: line.uncachedInputTokens, cacheWriteInputTokens: line.cacheWriteInputTokens,
+          outputTokens: line.outputTokens, reasoningOutputTokens: line.reasoningOutputTokens,
+          totalTokens: line.totalTokens,
+          cachedInputCostMicros: line.cachedInputCostMicros, uncachedInputCostMicros: line.uncachedInputCostMicros,
+          cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
+          totalCostMicros: line.totalCostMicros,
+        } as ThreadUsageLineRecord,
+        rollup: { kind, count: 1 },
+        updatedAt: row.updated_at,
+      });
+      continue;
+    }
+    const sum = existing.line;
+    sum.startedAt = Math.min(sum.startedAt ?? started, started);
+    sum.createdAt = Math.min(sum.createdAt, started);
+    sum.completedAt = Math.max(sum.completedAt ?? completed, completed);
+    sum.inputTokens += line.inputTokens;
+    sum.cachedInputTokens += line.cachedInputTokens;
+    sum.uncachedInputTokens += line.uncachedInputTokens;
+    sum.cacheWriteInputTokens = (sum.cacheWriteInputTokens ?? 0) + (line.cacheWriteInputTokens ?? 0);
+    sum.outputTokens += line.outputTokens;
+    sum.reasoningOutputTokens += line.reasoningOutputTokens;
+    sum.totalTokens += line.totalTokens;
+    sum.cachedInputCostMicros += line.cachedInputCostMicros;
+    sum.uncachedInputCostMicros += line.uncachedInputCostMicros;
+    sum.cacheWriteInputCostMicros = (sum.cacheWriteInputCostMicros ?? 0) + (line.cacheWriteInputCostMicros ?? 0);
+    sum.outputCostMicros += line.outputCostMicros;
+    sum.totalCostMicros += line.totalCostMicros;
+    existing.rollup.count += 1;
+    existing.updatedAt = Math.max(existing.updatedAt, row.updated_at);
+  }
+  return [...groups.values()];
 }
 
 function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {

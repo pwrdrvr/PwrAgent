@@ -103,6 +103,8 @@ import type {
   PersistThreadUsageActivityRequest,
   PersistThreadUsageActivityResponse,
   PrAutoDispatchBudgetStatus,
+  CodexAppServerRestartResult,
+  CodexAppServerRestartStatus,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
@@ -804,6 +806,8 @@ export type DesktopApi = {
   getPrActivity?: () => Promise<PrActivitySnapshot>;
   getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
+  getCodexRestartStatus?: () => Promise<CodexAppServerRestartStatus>;
+  restartCodex?: () => Promise<CodexAppServerRestartResult>;
   analyzeFocusedDiff?: (
     request: FocusedDiffAnalysisRequest
   ) => Promise<FocusedDiffAnalysisResponse>;
@@ -812,6 +816,10 @@ export type DesktopApi = {
   ) => Promise<AppServerReadThreadResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   analyzeUsageActivity?: (request: AnalyzeUsageActivityRequest) => Promise<AnalyzeUsageActivityResponse>;
+  /** Spawns or focuses the dedicated Usage Activity window. */
+  openUsageActivity?: () => Promise<void>;
+  /** From the Usage Activity window: focus the main window and open a thread there. */
+  openUsageThreadInMainWindow?: (request: WindowShowThreadRequest) => Promise<void>;
   inspectTokenMiserOutput?: (
     request: InspectTokenMiserOutputRequest,
   ) => Promise<InspectTokenMiserOutputResponse>;
@@ -1414,6 +1422,9 @@ export type DesktopApi = {
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onPrAutoDispatchBudgetChanged?: (
     callback: (status: PrAutoDispatchBudgetStatus) => void,
+  ) => () => void;
+  onCodexRestartStatusChanged?: (
+    callback: (status: CodexAppServerRestartStatus) => void,
   ) => () => void;
   onGithubPrSamlEnforcement?: (
     callback: (event: GithubPrSamlEnforcementEvent) => void,

@@ -679,6 +679,10 @@ const resolveEditCommitStates = vi.fn(
   },
 );
 const registryEventListeners: Array<(event: unknown) => void> = [];
+const codexRestartStatus = vi.hoisted(() => ({
+  listeners: new Set<(status: unknown) => void>(),
+  restart: vi.fn(async () => ({ status: { stopped: false } })),
+}));
 const onEvent = vi.fn((listener: (event: unknown) => void) => {
   registryEventListeners.push(listener);
   return () => {
@@ -1155,6 +1159,12 @@ vi.mock("../app-server/backend-registry", () => {
     getStartupProviderRefreshStatus,
     rememberCompleteNavigationSnapshot,
     rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
+    getCodexAppServerRestartStatus: () => ({ stopped: false }),
+    onCodexAppServerRestartStatusChanged: (listener: (status: unknown) => void) => {
+      codexRestartStatus.listeners.add(listener);
+      return () => codexRestartStatus.listeners.delete(listener);
+    },
+    restartCodexAppServer: codexRestartStatus.restart,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
   return {
@@ -1605,6 +1615,37 @@ describe("app server ipc", () => {
     } finally {
       await rm(root, { force: true, recursive: true });
     }
+  });
+
+  it("pushes Codex restart status to local windows and restarts only for them", async () => {
+    const {
+      APP_SERVER_RESTART_CODEX_CHANNEL,
+      CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    // Re-registering replaces the subscription instead of stacking it.
+    registerAppServerIpcHandlers();
+    expect(codexRestartStatus.listeners.size).toBe(1);
+    prAutoDispatchBudgetStatusSend.mockClear();
+    const stopped = {
+      stopped: true,
+      stoppedAt: 1_000,
+      exits: 5,
+      windowMs: 600_000,
+      lastExit: { code: 1, signal: null },
+    };
+    for (const listener of codexRestartStatus.listeners) listener(stopped);
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenCalledExactlyOnceWith(
+      CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+      stopped,
+    );
+
+    const restart = handlers.get(APP_SERVER_RESTART_CODEX_CHANNEL);
+    await expect(restart?.({ sender: { id: 999 } })).rejects.toThrow("remote window");
+    expect(codexRestartStatus.restart).not.toHaveBeenCalled();
+    await expect(restart?.({ sender: { id: 1 } }))
+      .resolves.toEqual({ status: { stopped: false } });
+    expect(codexRestartStatus.restart).toHaveBeenCalledTimes(1);
   });
 
   it("registers main-process PR auto-dispatch handlers", async () => {

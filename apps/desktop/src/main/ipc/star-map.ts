@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type {
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
@@ -35,7 +35,6 @@ import {
   STAR_MAP_READ_WORKSPACE_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
   STAR_MAP_WRITE_WORKSPACE_CHANNEL,
-  WINDOW_SHOW_THREAD_CHANNEL,
 } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -46,9 +45,8 @@ import {
   type TurnInputAttachmentUpload,
 } from "../app-server/turn-input-attachment-files";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
-import { isFederationWindowWebContents } from "../window";
-import { subscribersForChannel } from "../window-channels";
 import { requestShowThread } from "../window-show-thread";
+import { primaryMainWindowWebContents } from "../primary-main-window";
 import {
   isStarMapWindowWebContents,
   showStarMapWindow,
@@ -56,18 +54,6 @@ import {
 import { publishStarMapView } from "../star-map/star-map-view-registry";
 import { resolveStarMapCommand } from "../star-map/star-map-command-bus";
 import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
-
-/**
- * The main window the Star Map window's cross-window actions target.
- * Federation remote-viewer windows subscribe to the same channel but
- * front another instance's threads, so they are never a valid target
- * for a local thread.
- */
-function primaryMainWindowWebContents(): WebContents | undefined {
-  return subscribersForChannel(WINDOW_SHOW_THREAD_CHANNEL).find(
-    (subscriber) => !isFederationWindowWebContents(subscriber),
-  );
-}
 
 function normalizeStarMapIntakeImageUploads(
   value: unknown,

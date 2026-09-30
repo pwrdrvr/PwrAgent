@@ -6,7 +6,10 @@ import {
 import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import {
+  getDesktopBackendRegistry,
+  getExistingDesktopBackendRegistry,
+} from "./app-server/backend-registry";
 import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
@@ -50,6 +53,7 @@ import {
 } from "./auto-updater";
 import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
+import { showUsageActivityWindow } from "./usage-activity-window";
 import {
   showLicenseWindow,
   showThirdPartyNoticesWindow,
@@ -255,6 +259,10 @@ const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
 const RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
+// The registry holds one 2s deadline for every turn it stops; the phase adds
+// room for it to log and hand the rest to the shutdown stamp.
+const RUNNING_TURNS_STOP_TIMEOUT_MS = 2_000;
+const RUNNING_TURNS_SHUTDOWN_TIMEOUT_MS = RUNNING_TURNS_STOP_TIMEOUT_MS + 500;
 const INTEGRATED_TERMINAL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
@@ -742,6 +750,18 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
   },
   phases: [
     {
+      // Ask each backend to stop its running turns while messaging and
+      // federation still listen, so chats and peers see those turns end as
+      // interrupted instead of never hearing that they ended.
+      name: "running-turns",
+      timeoutMs: RUNNING_TURNS_SHUTDOWN_TIMEOUT_MS,
+      run: async () => {
+        await getExistingDesktopBackendRegistry()?.stopRunningTurnsForShutdown({
+          timeoutMs: RUNNING_TURNS_STOP_TIMEOUT_MS,
+        });
+      },
+    },
+    {
       name: "integrated-terminal",
       timeoutMs: INTEGRATED_TERMINAL_SHUTDOWN_TIMEOUT_MS,
       run: async () => {
@@ -1171,6 +1191,9 @@ function installApplicationMenu(): void {
       showLicenseWindow,
       showLogsWindow: showAppLogWindow,
       showThirdPartyNoticesWindow,
+      showUsageActivityWindow: () => {
+        showUsageActivityWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
+      },
     },
   });
 

@@ -10017,6 +10017,52 @@ describe("MessagingController", () => {
     }));
   });
 
+  // Codex answers turn/interrupt, including the one a quit sends, with
+  // turn/completed, status interrupted. That turn stopped; it did not finish.
+  it("discards review artifacts when Codex reports the review turn interrupted", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-stopped",
+          item: {
+            id: "review-stopped",
+            type: "exited_review_mode",
+            review: "This output must not be published.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      // The shared contract types turn/completed as status completed only;
+      // Codex sends interrupted on the wire.
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-stopped",
+          turn: {
+            id: "turn-stopped",
+            status: "interrupted",
+            output: [],
+          },
+        },
+      } as never,
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.some(
+      (intent) => intent.kind === "message" && "artifactDelivery" in intent,
+    )).toBe(false);
+    expect(JSON.stringify(harness.delivered)).not.toContain("This output must not be published.");
+  });
+
   it("delivers a single added markdown file as attachment plus bounded preview", async () => {
     const harness = await createHarness();
     await bindThread(harness);

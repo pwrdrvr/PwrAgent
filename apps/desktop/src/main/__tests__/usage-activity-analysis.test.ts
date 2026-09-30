@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerReadThreadResponse } from "@pwragent/shared";
-import { analyzeUsageActivity } from "../app-server/usage-activity-analysis";
+import { analyzeUsageActivity, usageAnalysisModelBackend } from "../app-server/usage-activity-analysis";
 
 const request = { backend: "codex" as const, threadId: "thread", model: "gpt-6-luna", entryLimit: 2, characterLimit: 1000 };
 const replay = { entries: [1, 2, 3].map((id) => ({ type: "message" as const, id: String(id), role: "assistant" as const, text: String(id).repeat(800) })),
@@ -58,6 +58,25 @@ describe("bounded usage analysis", () => {
     const read = vi.fn(); const generate = vi.fn();
     await expect(analyzeUsageActivity({ ...request, characterLimit: 40001 }, read, generate)).rejects.toThrow("40,000");
     await expect(analyzeUsageActivity({ ...request, entryLimit: NaN }, read, generate)).rejects.toThrow();
+    expect(read).not.toHaveBeenCalled(); expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("runs on Codex unless a request names a backend this owner can run, and says which ran", async () => {
+    expect(usageAnalysisModelBackend({})).toBe("codex");
+    expect(usageAnalysisModelBackend({ modelBackend: "acp:grok" })).toBe("acp:grok");
+    const read = vi.fn(async () => ({ replay, backend: "codex", fetchedAt: 1, threadId: "thread" }) as AppServerReadThreadResponse);
+    const generate = vi.fn<Parameters<typeof analyzeUsageActivity>[2]>(async () => ({ status: "ok" as const, object: { analysis: "Grok read it." }, model: "grok-4.7" }));
+    await expect(analyzeUsageActivity({ ...request, model: "grok-4.7", modelBackend: "acp:grok" }, read, generate))
+      .resolves.toMatchObject({ analysis: "Grok read it.", model: "grok-4.7", modelBackend: "acp:grok" });
+    await expect(analyzeUsageActivity(request, read, generate)).resolves.toMatchObject({ modelBackend: "codex" });
+  });
+
+  it("refuses a runner this owner cannot use before reading or invoking a model", async () => {
+    const read = vi.fn(); const generate = vi.fn();
+    for (const modelBackend of ["acp:kimi", "grok", "", 7, null]) {
+      const malformed = { ...request, modelBackend } as unknown as Parameters<typeof analyzeUsageActivity>[0];
+      await expect(analyzeUsageActivity(malformed, read, generate)).rejects.toThrow(/^Analysis cannot run on /);
+    }
     expect(read).not.toHaveBeenCalled(); expect(generate).not.toHaveBeenCalled();
   });
 });

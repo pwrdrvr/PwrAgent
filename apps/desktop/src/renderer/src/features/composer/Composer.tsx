@@ -13070,7 +13070,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
         </fieldset>
         <div className="composer__actions">
-          <ContextWindowMoon contextWindow={props.contextWindow} />
+          <ContextWindowMoon
+            contextWindow={props.contextWindow}
+            onOpenUsage={props.desktopApi?.openUsageActivity
+              ? () => void props.desktopApi?.openUsageActivity?.()
+              : undefined}
+          />
           {preparingSend ? (
             <button
               className="button button--ghost composer__cancel-preparation"
@@ -13271,8 +13276,11 @@ function AttachmentTooltip({
 
 function ContextWindowMoon({
   contextWindow,
+  onOpenUsage,
 }: {
   contextWindow?: ThreadContextWindowState;
+  /** Opens Usage Activity; the moon is a button only when this is given. */
+  onOpenUsage?: () => void;
 }) {
   const { show, update, hide, visible, tooltipNode } = useViewportTooltip({
     className: "context-usage-card",
@@ -13297,10 +13305,11 @@ function ContextWindowMoon({
     update(
       <ContextWindowUsageCard
         contextWindow={contextWindow}
+        opensUsage={Boolean(onOpenUsage)}
         phaseLabel={CONTEXT_MOON_PHASES[phase]}
       />,
     );
-  }, [contextWindow, hide, update, visible]);
+  }, [contextWindow, hide, onOpenUsage, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -13314,10 +13323,44 @@ function ContextWindowMoon({
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
   const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
   const card = (
-    <ContextWindowUsageCard contextWindow={contextWindow} phaseLabel={phaseLabel} />
+    <ContextWindowUsageCard
+      contextWindow={contextWindow}
+      opensUsage={Boolean(onOpenUsage)}
+      phaseLabel={phaseLabel}
+    />
+  );
+  const face = (
+    <>
+      <span
+        aria-hidden="true"
+        className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
+      >
+        <span className="context-window-moon__disc" />
+      </span>
+      <span className="context-window-moon__label">{percentLabel}</span>
+      {tooltipNode}
+    </>
   );
 
-  return (
+  // Account limits and spend live in Usage Activity; the moon is the nearest
+  // usage signal in a thread, so it opens that window when it can.
+  return onOpenUsage ? (
+    <button
+      aria-label={label}
+      className="context-window-moon context-window-moon--button"
+      type="button"
+      onBlur={hide}
+      onClick={() => {
+        hide();
+        onOpenUsage();
+      }}
+      onFocus={(event) => show(event.currentTarget, card)}
+      onMouseEnter={(event) => show(event.currentTarget, card)}
+      onMouseLeave={hide}
+    >
+      {face}
+    </button>
+  ) : (
     <div
       aria-label={label}
       className="context-window-moon"
@@ -13328,23 +13371,18 @@ function ContextWindowMoon({
       onMouseEnter={(event) => show(event.currentTarget, card)}
       onMouseLeave={hide}
     >
-      <span
-        aria-hidden="true"
-        className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
-      >
-        <span className="context-window-moon__disc" />
-      </span>
-      <span className="context-window-moon__label">{percentLabel}</span>
-      {tooltipNode}
+      {face}
     </div>
   );
 }
 
 function ContextWindowUsageCard({
   contextWindow,
+  opensUsage,
   phaseLabel,
 }: {
   contextWindow: ThreadContextWindowState;
+  opensUsage?: boolean;
   phaseLabel: string;
 }) {
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
@@ -13440,6 +13478,11 @@ function ContextWindowUsageCard({
               value={formatCompactNumber(contextWindow.cumulativeReasoningOutputTokens)}
             />
           ) : null}
+        </div>
+      ) : null}
+      {opensUsage ? (
+        <div className="context-usage-card__hint">
+          Click for account limits and spend in Usage Activity
         </div>
       ) : null}
     </>

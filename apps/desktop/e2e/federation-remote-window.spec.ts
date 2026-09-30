@@ -1763,6 +1763,7 @@ test.describe("federation remote window", () => {
     };
     let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    let completed = false;
     try {
       // Real owner: executable-backed Kimi + Codex via production settings.
       // No PWRAGENT_REPLAY_FIXTURE_PATH — Codex discovery spawns fake-codex.
@@ -1974,24 +1975,41 @@ test.describe("federation remote window", () => {
       await reviewTarget.getByRole("button", { name: "Start review" }).click();
 
       // Owner retains environmentId=environment on the materialized child.
+      let ownerChildEnvironment:
+        | { environmentId: string; setupDurationMs?: number; setupOutput?: string; setupStatus?: string }
+        | undefined;
       await expect
         .poll(
-          async () => await owner!.window.evaluate(
-            async ({ parentThreadId }) => {
-              const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
-              const children = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar",
-                query: { kind: "children", parent: { backend: "acp:kimi", threadId: parentThreadId } }, pageSize: 10,
-              });
-              const child = children.entries.find(({ row }) => row.source === "codex")?.row;
-              if (!child) return undefined;
-              const detail = await api.getNavigationSelectedDetail!({ protocol: 2, ref: child.ref });
-              return detail.thread?.codexEnvironmentRuntime?.environmentId;
-            },
-            { parentThreadId: parent.threadId },
-          ),
+          async () => {
+            ownerChildEnvironment = await owner!.window.evaluate(
+              async ({ parentThreadId }) => {
+                const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+                const children = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar",
+                  query: { kind: "children", parent: { backend: "acp:kimi", threadId: parentThreadId } }, pageSize: 10,
+                });
+                const child = children.entries.find(({ row }) => row.source === "codex")?.row;
+                if (!child) return undefined;
+                const detail = await api.getNavigationSelectedDetail!({ protocol: 2, ref: child.ref });
+                const runtime = detail.thread?.codexEnvironmentRuntime;
+                return runtime && {
+                  environmentId: runtime.environmentId,
+                  setupDurationMs: runtime.setupDurationMs,
+                  setupOutput: runtime.setupOutput?.slice(-2_000),
+                  setupStatus: runtime.setupStatus,
+                };
+              },
+              { parentThreadId: parent.threadId },
+            );
+            return ownerChildEnvironment?.environmentId;
+          },
           { timeout: 60_000 },
         )
         .toBe("environment");
+      // A failed or timed-out setup still records the environment on the
+      // child, so name the owner's setup outcome before looking for its marker.
+      expect(ownerChildEnvironment, "owner environment setup outcome").toMatchObject({
+        setupStatus: "completed",
+      });
 
       // Setup marker proves environment setup actually ran on the owner worktree.
       await expect
@@ -2049,8 +2067,11 @@ test.describe("federation remote window", () => {
       expect(reviewStart).toBeTruthy();
       expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
       expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
+      completed = true;
     } finally {
-      if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach("navigation-diagnostics", {
+      // testInfo.status still reads "passed" while the body unwinds, so it
+      // cannot tell this block that an assertion failed.
+      if (!completed) await testInfo.attach("navigation-diagnostics", {
         body: navigationDiagnostics.join("\n"), contentType: "text/plain",
       });
       if (existsSync(requestLogPath)) {

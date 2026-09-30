@@ -16,7 +16,9 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
 export type BackendErrorSignal = (
   | {
       kind: "codex-invalid-id-recovery";
-      status: "repairing" | "succeeded" | "failed";
+      status: "waiting" | "repairing" | "succeeded" | "failed";
+      /** Other threads whose running Codex turns the repair waits for. */
+      waitingForThreadCount?: number;
       threadId: string;
       turnId: string;
       failureMessage: string;
@@ -74,6 +76,25 @@ export function resolveBackendErrorNotice(
         title: signal.threadLabel,
       },
     };
+    if (signal.status === "waiting") {
+      // The repair restarts Codex, which would end every running turn.
+      const others = signal.waitingForThreadCount === 1
+        ? "another thread finishes its turn"
+        : signal.waitingForThreadCount
+          ? `${signal.waitingForThreadCount} other threads finish their turns`
+          : "other threads finish their turns";
+      return {
+        ...baseNotice,
+        autoDismiss: false,
+        status: {
+          label:
+            `Repairing the saved thread history restarts Codex, so PwrAgent is waiting until ${others}. Your message will be retried after the repair.`,
+          state: "progress",
+        },
+        title: "Known Codex issue",
+        tone: "warning",
+      };
+    }
     if (signal.status === "repairing") {
       return {
         ...baseNotice,
