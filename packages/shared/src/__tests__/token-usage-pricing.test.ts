@@ -338,6 +338,10 @@ describe("token usage pricing", () => {
   });
 
   it.each([
+    ["gpt-6.1-sol", false, 272_000, 2, 0.1, 2.5, 10],
+    ["gpt-6.1-sol", false, 272_001, 4, 0.2, 5, 15],
+    ["gpt-6.1-sol", true, 272_000, 4, 0.2, 5, 20],
+    ["gpt-6.1-sol", true, 272_001, 8, 0.4, 10, 30],
     ["gpt-6-sol", false, 272_000, 2, 0.2, 2.5, 10],
     ["gpt-6-sol", false, 272_001, 4, 0.4, 5, 15],
     ["gpt-6-sol", true, 272_000, 4, 0.4, 5, 20],
@@ -349,8 +353,10 @@ describe("token usage pricing", () => {
   ] as const)("prices %s fast=%s with %s input tokens", (
     model, fastMode, inputTokens, inputRate, cachedRate, writeRate, outputRate,
   ) => {
+    const isGpt61Sol = model === "gpt-6.1-sol";
+    const effectiveFrom = Date.UTC(2026, 8, isGpt61Sol ? 29 : 22);
     const params = {
-      at: Date.UTC(2026, 8, 22),
+      at: effectiveFrom,
       model,
       fastMode,
       inputTokenScope: "request" as const,
@@ -361,7 +367,7 @@ describe("token usage pricing", () => {
     };
     const cost = estimateOpenAiTokenUsageCost(params);
     expect(cost).toMatchObject({
-      catalogVersion: "2026-09-22",
+      catalogVersion: isGpt61Sol ? "2026-09-29" : "2026-09-22",
       inputUsdPerMillion: inputRate,
       cachedInputUsdPerMillion: cachedRate,
       cacheWriteInputUsdPerMillion: writeRate,
@@ -372,7 +378,7 @@ describe("token usage pricing", () => {
     });
     expect(listOpenAiTokenUsagePricingRates().find((rate) => rate.rateId === cost?.rateId))
       .toMatchObject({ model, cacheWriteInputUsdPerMillion: writeRate });
-    expect(estimateOpenAiTokenUsageCost({ ...params, at: Date.UTC(2026, 8, 21) }))
+    expect(estimateOpenAiTokenUsageCost({ ...params, at: effectiveFrom - 1 }))
       .toBeUndefined();
     if (inputTokens > 272_000) {
       expect(estimateOpenAiTokenUsageCost({ ...params, inputTokenScope: "aggregate" }))
@@ -463,7 +469,8 @@ describe("token usage pricing", () => {
     ]);
     expect(
       listOpenAiTokenUsagePricingRates().find(
-        (rate) => rate.rateId.endsWith(":standard:input-gt-272k"),
+        (rate) => rate.model === "gpt-6-astra"
+          && rate.rateId.endsWith(":standard:input-gt-272k"),
       )?.cacheWriteInputMicrosPerMillion,
     ).toBe(25_000_000);
   });

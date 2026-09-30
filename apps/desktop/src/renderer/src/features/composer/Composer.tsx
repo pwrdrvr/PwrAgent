@@ -9577,6 +9577,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const prAutoDispatchAvailable =
     backgroundPrPollingEnabled && prAutoDispatchAllowed;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
+  const showOlderCodexModelsUnderOther = backend?.kind === "codex"
+    && modelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
+  const otherModelOptions = showOlderCodexModelsUnderOther
+    ? modelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    : [];
+  const visibleModelOptions = otherModelOptions.length
+    ? modelOptions.filter((model) => !/^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    : modelOptions;
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     getDefaultModelOption(backend);
@@ -12607,7 +12615,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={backend.launchpadOptions.models.map((model) => ({
+              options={visibleModelOptions.map((model) => ({
+                label: model.label ?? model.id,
+                value: model.id,
+              }))}
+              otherOptions={otherModelOptions.map((model) => ({
                 label: model.label ?? model.id,
                 value: model.id,
               }))}

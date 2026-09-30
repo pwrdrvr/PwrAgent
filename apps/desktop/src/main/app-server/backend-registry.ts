@@ -2010,6 +2010,15 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
     supportsSteering: true,
   },
   {
+    id: "gpt-6.1-sol",
+    label: "GPT-6.1-Sol",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_GPT56_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
     id: "gpt-6-sol",
     label: "GPT-6-Sol",
     defaultReasoningEffort: DEFAULT_REASONING_EFFORT,

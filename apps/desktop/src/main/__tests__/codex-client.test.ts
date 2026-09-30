@@ -3207,12 +3207,16 @@ describe("CodexAppServerClient", () => {
         createCodexModel({ id: "gpt-6-luna", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "hidden-model", hidden: true }),
         createCodexModel({ id: "gpt-6-sol", additionalSpeedTiers: ["fast"] }),
+        createCodexModel({ id: "gpt-6.1-sol", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "gpt-6-astra" }),
       ]);
       const refreshed = await client.listModels();
       expect(refreshed.map((model) => model.id)).toEqual([
-        "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "future-model",
+        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model",
       ]);
+      expect(refreshed.find((model) => model.id === "gpt-6.1-sol")).toMatchObject({
+        label: "GPT-6.1-Sol", supportsFast: true,
+      });
       expect(refreshed.find((model) => model.id === "gpt-6-sol")).toMatchObject({
         label: "GPT-6-Sol", supportsFast: true,
       });

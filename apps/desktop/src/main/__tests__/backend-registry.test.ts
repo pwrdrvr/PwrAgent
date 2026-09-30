@@ -6812,6 +6812,15 @@ describe("DesktopBackendRegistry", () => {
               supportsFast: true,
             },
             {
+              id: "gpt-6.1-sol",
+              label: "GPT-6.1-Sol",
+              defaultReasoningEffort: "medium",
+              reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+              supportsReasoning: true,
+              supportsFast: true,
+              supportsSteering: true,
+            },
+            {
               id: "gpt-6-sol",
               label: "GPT-6-Sol",
               defaultReasoningEffort: "medium",

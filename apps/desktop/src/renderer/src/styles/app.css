@@ -32160,6 +32160,14 @@ button.pricing-token-miser__folded:focus-visible {
   box-shadow: var(--shadow-popover);
 }
 
+.composer-dropdown__menu--other {
+  position: fixed;
+  z-index: 31;
+  bottom: auto;
+  width: min(260px, calc(100vw - 16px));
+  min-width: 0;
+}
+
 .composer-dropdown__option {
   width: 100%;
   min-height: 40px;
@@ -32211,6 +32219,11 @@ button.pricing-token-miser__folded:focus-visible {
 .composer-dropdown__option-label {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.composer-dropdown__option-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
 }
 
 /* A choice whose name does not explain it gets one line that does. Stays

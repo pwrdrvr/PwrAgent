@@ -4653,6 +4653,61 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.5");
     expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
+    openDropdown("Model");
+    expect(screen.getByRole("option", { name: "GPT-5.5" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Other" })).not.toBeInTheDocument();
+  });
+
+  it("keeps GPT-6 choices visible and puts GPT-5.6 and GPT-5.5 under Other", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              { id: "gpt-6-astra", label: "GPT-6-Astra" },
+              { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", current: true },
+              { id: "gpt-6-sol", label: "GPT-6-Sol" },
+              { id: "gpt-6-luna", label: "GPT-6-Luna" },
+              { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
+              { id: "gpt-5.5", label: "GPT-5.5" },
+            ],
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    const modelButton = screen.getByRole("button", { name: "Model" });
+    expect(modelButton).toHaveValue("gpt-6.1-sol");
+    fireEvent.click(modelButton);
+    expect(screen.getAllByRole("option").map((option) =>
+      option.querySelector(".composer-dropdown__option-label")?.textContent,
+    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6-Luna", "Other"]);
+    expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    fireEvent.click(screen.getByRole("option", { name: "GPT-5.6-Sol" }));
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({ model: "gpt-5.6-sol", fastMode: undefined }),
+        expect.anything(),
+      );
+    });
   });
 
   it("adopts the refreshed ACP default when the provider is selected", async () => {
