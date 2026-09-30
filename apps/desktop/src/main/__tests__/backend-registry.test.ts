@@ -1886,6 +1886,7 @@ class MockBackendClient {
       invalidIdRecoveryDelay?: Promise<unknown>;
       invalidIdRecoveryError?: Error;
       invalidIdRecoveryBlockingTurns?: Array<{ threadId: string; turnId?: string }>;
+      invalidIdRecoveryWaitsForAbort?: boolean;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
       setThreadPermissionsDelay?: Promise<unknown>;
@@ -2195,6 +2196,7 @@ class MockBackendClient {
     onWaitingForTurns?: (
       turns: Array<{ threadId: string; turnId?: string }>,
     ) => void | Promise<void>;
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<{
     backupPath: string;
@@ -2202,10 +2204,17 @@ class MockBackendClient {
     rolloutPath: string;
     threadId: string;
   }> {
-    const { onWaitingForTurns, ...call } = params;
+    const { onWaitingForTurns, signal, ...call } = params;
     this.invalidIdRecoveryCalls.push(call);
     if (this.options.invalidIdRecoveryBlockingTurns) {
       await onWaitingForTurns?.(this.options.invalidIdRecoveryBlockingTurns);
+    }
+    if (this.options.invalidIdRecoveryWaitsForAbort) {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw new Error("abandoned while waiting");
     }
     await this.options.invalidIdRecoveryDelay;
     if (this.options.invalidIdRecoveryError) {
@@ -15802,6 +15811,54 @@ script = "echo setup"
       expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
       await registry.close();
     });
+  });
+
+  it("closes promptly while the client waits for another thread's turn", async () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
+      invalidIdRecoveryBlockingTurns: [{ threadId: "thread-busy" }],
+      invalidIdRecoveryWaitsForAbort: true,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`codex:${threadId}`]: {
+            backend: "codex",
+            threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue after repair" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[3].id] [invalid_id_prefix] "
+              + "Invalid 'input[3].id': 'bad'. Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    await waitForCondition(() => codexClient.invalidIdRecoveryCalls.length === 1);
+    await registry.close();
+    expect(codexClient.startTurnCallCount).toBe(1);
   });
 
   it("drains an in-flight repair before the final Codex close", async () => {

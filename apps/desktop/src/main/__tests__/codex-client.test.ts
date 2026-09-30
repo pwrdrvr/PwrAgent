@@ -3809,6 +3809,26 @@ describe("CodexAppServerClient", () => {
         await client.close();
       });
 
+      it("an aborted signal abandons the wait without stopping Codex", async () => {
+        const { client, transport, repair, waits } = await startBusyFixture();
+        transport.loadedThreads.add("thread-busy");
+        transport.emitInbound({ method: "turn/started", params: {
+          threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+        } });
+        const abort = new AbortController();
+        const recovery = client.recoverInvalidPersistedResponseMessageIds({
+          ...recoveryParams,
+          onWaitingForTurns: (turns) => { waits.push(turns); },
+          signal: abort.signal,
+        }).catch((error: unknown) => error);
+        await vi.waitFor(() => expect(waits).toHaveLength(1));
+        abort.abort();
+        expect(await recovery).toBeInstanceOf(Error);
+        expect(repair).not.toHaveBeenCalled();
+        expect(transport.closeCount).toBe(0);
+        await client.close();
+      });
+
       it("close while waiting cancels the repair without stopping Codex for it", async () => {
         const { client, transport, repair, recover, waits } = await startBusyFixture();
         transport.loadedThreads.add("thread-busy");

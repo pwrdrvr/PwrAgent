@@ -7949,6 +7949,8 @@ export class CodexAppServerClient {
     onWaitingForTurns?: (
       turns: CodexRecoveryBlockingTurn[],
     ) => void | Promise<void>;
+    /** Abandons the repair while it waits; never after Codex is stopped. */
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult> {
     if (!isCodexInvalidResponseMessageIdError(params.failureMessage)) {
@@ -7963,8 +7965,20 @@ export class CodexAppServerClient {
         throw new Error("Codex history recovery cancelled because the client was closed");
       }
     };
+    const assertNotAbandoned = () => {
+      assertNotClosed();
+      if (params.signal?.aborted) {
+        throw new Error("Codex history recovery was abandoned while waiting for running turns");
+      }
+    };
+    const abandoned = params.signal
+      ? new Promise<void>((resolve) => {
+          params.signal!.addEventListener("abort", () => resolve(), { once: true });
+        })
+      : undefined;
     let reportedWaitKey: string | undefined;
     while (true) {
+      assertNotAbandoned();
       const attempt = await this.attemptInvalidIdRecovery(params, assertNotClosed);
       if ("recovered" in attempt) return attempt.recovered;
       // Other threads keep running while this waits: the lifecycle barrier is
@@ -7981,8 +7995,8 @@ export class CodexAppServerClient {
         });
         await params.onWaitingForTurns?.(attempt.blockingTurns);
       }
-      await this.waitForLiveTurnActivity(attempt.activitySequence);
-      assertNotClosed();
+      const activity = this.waitForLiveTurnActivity(attempt.activitySequence);
+      await (abandoned ? Promise.race([activity, abandoned]) : activity);
     }
   }
 

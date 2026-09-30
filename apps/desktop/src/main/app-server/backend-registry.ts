@@ -964,6 +964,7 @@ type BackendClient = {
     onWaitingForTurns?: (
       turns: CodexRecoveryBlockingTurn[],
     ) => void | Promise<void>;
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult>;
   startReview?(params: {
@@ -8458,6 +8459,8 @@ export class DesktopBackendRegistry {
     PendingCodexInvalidIdRecovery[] = [];
   private readonly codexInvalidIdRecoveryAttemptedAt = new Map<string, number>();
   private codexInvalidIdRecoveryDrain?: Promise<void>;
+  // Aborted by close(): a drain waiting for other turns must not hold shutdown.
+  private readonly codexInvalidIdRecoveryAbort = new AbortController();
   private codexInvalidIdRecoveryBarrier?: Promise<void>;
   private resolveCodexInvalidIdRecoveryBarrier?: () => void;
   /**
@@ -23511,6 +23514,9 @@ export class DesktopBackendRegistry {
   async close(): Promise<void> {
     this.mcpGatewayTools?.cancel();
     this.closed = true;
+    // A recovery drain waiting for other Codex turns gives up now; the final
+    // Codex close below still waits for that drain before it runs.
+    this.codexInvalidIdRecoveryAbort.abort();
     // `closed` rejects observations that enter from this point forward. The
     // snapshot was registered synchronously at each earlier usage emit's
     // entry, so waiting it cannot miss work still deriving its sqlite row.
@@ -24671,6 +24677,7 @@ export class DesktopBackendRegistry {
               waitingForThreadIds: [...new Set(turns.map((turn) => turn.threadId))],
             });
           },
+          signal: this.codexInvalidIdRecoveryAbort.signal,
           threadId: recovery.params.threadId,
         });
         if (this.closed) {
