@@ -1,7 +1,10 @@
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
+import { NavigationQueryError } from "./navigation-query-store";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
+// One initial scan plus two fresh attempts for mutations during replacement.
+const MAX_INVALIDATED_RETRIES = 2;
 
 /** Measure only enough of a snapshot to admit it. Native JSON serialization
  * runs on bounded row batches, avoiding one full temporary snapshot string.
@@ -85,6 +88,14 @@ export class NavigationIndexReadPool {
       this.physical.add(owned);
       this.joinable.set(key, owned);
       owned.promise = listingDiagnostics.trace("index", {}, async () => {
+        let invalidatedRetries = 0;
+        const retryInvalidated = (): void => {
+          if (invalidatedRetries >= MAX_INVALIDATED_RETRIES) {
+            throw new NavigationQueryError("navigation_busy", "Navigation changed repeatedly during its owner index read. Retry the operation.");
+          }
+          invalidatedRetries += 1;
+          listingDiagnostics.record("index", "retry", { reason: "owner-invalidated" });
+        };
         try {
           for (;;) {
             controller.signal.throwIfAborted();
@@ -95,14 +106,14 @@ export class NavigationIndexReadPool {
             } catch (error) {
               controller.signal.throwIfAborted();
               if (revision !== owned.revision) {
-                listingDiagnostics.record("index", "retry", { reason: "owner-invalidated" });
+                retryInvalidated();
                 continue;
               }
               throw error;
             }
             controller.signal.throwIfAborted();
             if (revision !== owned.revision) {
-              listingDiagnostics.record("index", "retry", { reason: "owner-invalidated" });
+              retryInvalidated();
               continue;
             }
             owned.done = true;

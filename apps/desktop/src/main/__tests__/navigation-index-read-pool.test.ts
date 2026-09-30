@@ -76,6 +76,51 @@ describe("shared owner index reads", () => {
     expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
   });
 
+  it("bounds repeated invalidation for readers without cancellation and permits a later retry", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const gates = [deferred(), deferred(), deferred()];
+    const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]?.promise ?? Promise.resolve(index));
+    const first = pool.read("owner", load);
+    const second = pool.read("owner", load);
+    const results = Promise.allSettled([first, second]);
+
+    for (let attempt = 0; attempt < gates.length; attempt++) {
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
+      pool.invalidate("owner");
+      gates[attempt]!.resolve({ ...index, localInstanceId: `obsolete-${attempt}` });
+    }
+
+    expect(await results).toEqual([
+      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) }),
+      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) }),
+    ]);
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    expect(pool.retainedUsage().entries).toBe(0);
+    await expect(pool.read("owner", load)).resolves.toBe(index);
+    expect(load).toHaveBeenCalledTimes(4);
+  });
+
+  it("bounds retries when every invalidated provider scan fails", async () => {
+    const pool = new NavigationIndexReadPool();
+    const gates = [deferred(), deferred(), deferred()];
+    const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]?.promise ?? Promise.resolve(index));
+    const result = pool.read("owner", load);
+    const settled = Promise.allSettled([result]);
+
+    for (let attempt = 0; attempt < gates.length; attempt++) {
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
+      pool.invalidate("owner");
+      gates[attempt]!.reject(new Error(`obsolete provider failure ${attempt}`));
+    }
+
+    expect(await settled).toEqual([
+      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) }),
+    ]);
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+  });
+
   it("retries a failed obsolete scan, but returns a current provider failure", async () => {
     const pool = new NavigationIndexReadPool();
     const old = deferred();
