@@ -408,6 +408,12 @@
 - Its copyleft binds the MPL-licensed files themselves.
 - It places no condition on the larger work that includes them.
 - Do not read that entry as permission for file-scoped copyleft in general.
+- PwrDrvr LLC approved `OFL-1.1` on 2026-09-29, on the condition that PwrGit
+  and PwrSnap already ship it. Both bundle `@fontsource/geist-sans` and
+  `@fontsource/geist-mono` under it.
+- `OFL-1.1` covers the Geist webfont assets that the renderer build emits.
+- Its copyleft binds a derived font, which must stay under the OFL.
+- It places no condition on software that embeds the font.
 - The seeded list records drift that existed before any policy was enforced.
 - `BlueOak-1.0.0` and `Python-2.0` were already in the shipped tree and documented nowhere.
 - `0BSD`, `CC0-1.0`, `MPL-2.0`, and `Unlicense` are approved ids that the production tree does not use today.

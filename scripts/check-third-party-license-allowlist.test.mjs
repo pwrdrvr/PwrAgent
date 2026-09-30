@@ -189,6 +189,7 @@ describe("npm dependency licenses", () => {
           "BSD-3-Clause": ["source-map"],
           "BlueOak-1.0.0": ["jackspeak"],
           "Python-2.0": ["argparse"],
+          "OFL-1.1": ["@fontsource/geist-sans"],
           "(MIT OR WTFPL)": ["expand-template"],
           "(BSD-2-Clause OR MIT OR Apache-2.0)": ["rc"],
         }),

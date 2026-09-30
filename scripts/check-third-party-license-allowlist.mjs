@@ -124,6 +124,12 @@ export const ALLOWED_LICENSE_IDS = new Set([
   // places no condition on the larger work that includes them.
   "MPL-2.0",
   "Unlicense",
+  // Approved by PwrDrvr LLC on 2026-09-29, matching PwrGit and PwrSnap.
+  //
+  // SIL Open Font License, covering the @fontsource/geist-* webfont assets the
+  // renderer build emits. Copyleft only in the narrow sense that a derived FONT
+  // must stay OFL; it places no condition on software that merely embeds it.
+  "OFL-1.1",
 ]);
 
 /**
