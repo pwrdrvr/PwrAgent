@@ -71,6 +71,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 export type SettingsSection =
   | "general"
@@ -597,9 +598,7 @@ export function SettingsScreen(props: {
           Settings, GENERAL group label, section list. */}
       <nav className="settings-nav" aria-label="Settings sections">
         <header className="settings-nav__masthead">
-          <p className="settings-nav__brand">
-            Pwr<span className="settings-nav__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="settings-nav" />
         </header>
 
         {/* Exit Settings — first interactive row of the nav. Plain

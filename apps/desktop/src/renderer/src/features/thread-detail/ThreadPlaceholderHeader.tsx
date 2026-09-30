@@ -11,6 +11,7 @@ import {
 } from "../chrome/HistoryNavButtons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type ThreadPlaceholderLayoutControls = {
   sidebarOpen: boolean;
@@ -67,9 +68,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
       <div className="thread-header__top">
         {showMasthead && props.masthead ? (
           <div className="thread-header__masthead">
-            <p className="sidebar__brand">
-              Pwr<span className="sidebar__brand-accent">Agent</span>
-            </p>
+            <BrandLockup variant="sidebar" />
             <FederationRemoteBadge />
             <MastheadActions {...props.masthead} />
           </div>

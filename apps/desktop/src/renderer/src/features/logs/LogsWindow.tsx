@@ -11,6 +11,7 @@ import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadat
 import { CheckIcon, CopyIcon, FolderIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 const BOTTOM_THRESHOLD_PX = 32;
 export const MAX_RENDERED_LOG_ENTRIES = 5000;
@@ -380,9 +381,7 @@ export function LogsWindow() {
     <div className="document-window document-window--logs">
       <section aria-label="PwrAgent logs" className="activity-screen">
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div className="activity-titlebar__breadcrumb">
             <span className="activity-titlebar__eyebrow">Help</span>
             <span aria-hidden="true" className="activity-titlebar__separator">

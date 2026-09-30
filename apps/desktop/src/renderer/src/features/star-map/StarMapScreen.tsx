@@ -206,6 +206,7 @@ import { useStarMapInstanceLoad } from "./useStarMapInstanceLoad";
 import { useStarMapThreads } from "./useStarMapThreads";
 import { useLocalStarMapThreads } from "./useLocalStarMapThreads";
 import { useThreadDraftIndicators } from "../../lib/useThreadDraftIndicators";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 /**
  * DOM-size backstop for a lane column, not a design limit: lanes pan and
@@ -6611,9 +6612,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <div className="star-map__chrome">
           {/* Same wordmark primitive as the sidebar/Settings nav so the brand
               reads identically across every window (theme-contract test). */}
-          <p className="sidebar__brand">
-            Pwr<span className="sidebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="sidebar" />
           {/* ⌘K is the map's only way to reach a card it is not drawing, and
               a keyboard-only door on a surface driven by the pointer is a
               door nobody finds. The chord rides the label so learning it

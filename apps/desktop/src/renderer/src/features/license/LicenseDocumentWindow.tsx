@@ -4,6 +4,7 @@ import type {
   AppLicenseDocumentKind,
 } from "../../../../shared/app-metadata";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 function currentDocumentKind(): AppLicenseDocumentKind {
   return window.location.hash.replace(/^#/, "") === "license"
@@ -57,9 +58,7 @@ export function LicenseDocumentWindow() {
     <div className="document-window">
       <section aria-label={`PwrAgent ${title}`} className="activity-screen">
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div className="activity-titlebar__breadcrumb">
             <span className="activity-titlebar__eyebrow">Help</span>
             <span aria-hidden="true" className="activity-titlebar__separator">

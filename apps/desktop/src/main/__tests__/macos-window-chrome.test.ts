@@ -175,6 +175,27 @@ describe("macOS window chrome", () => {
     }
   });
 
+  it("keeps a bordered bar's divider below the band, not inside it", () => {
+    // The band is the FILL the content centres in. Under the app-wide
+    // `box-sizing: border-box`, a 1px border-bottom inside a 40px min-height
+    // leaves a 39px fill centred on 19.5 — a centre no whole-point
+    // `trafficLightPosition` can reach. `.activity-titlebar` and
+    // `.settings-titlebar` sat there, their crumbs half a point to 1.25pt
+    // off the stoplights. A bar with a divider sizes by its content box, so
+    // the divider hangs below the fill (41px border-box).
+    const bordered = CHROME_BARS.filter((bar) => {
+      const width = lastValueOf(ruleFor(bar), "border-bottom");
+      return width !== undefined && width !== "none" && !width.startsWith("0");
+    });
+    expect(bordered).toEqual([".activity-titlebar", ".settings-titlebar"]);
+    for (const bar of bordered) {
+      expect(
+        lastValueOf(ruleFor(bar), "box-sizing"),
+        `${bar} should keep its divider outside the band`,
+      ).toBe("content-box");
+    }
+  });
+
   it("centres every chrome bar's content in the band", () => {
     // The band alone does not put anything on the centreline; the centring
     // does. `.sidebar__masthead, .thread-header` is declared `flex-start`

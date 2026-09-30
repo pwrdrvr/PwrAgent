@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { BrandLockup } from "../chrome/BrandLockup";
 import { UsageActivity } from "./UsageActivity";
 
 export function UsageActivityWindow() {
@@ -7,7 +8,7 @@ export function UsageActivityWindow() {
   useEffect(() => { document.title = "Usage Activity"; }, []);
   return <div className="messaging-activity-window"><section aria-label="Usage activity" className="activity-screen">
     <header className="activity-titlebar">
-      <p className="activity-titlebar__brand">Pwr<span className="activity-titlebar__brand-accent">Agent</span></p>
+      <BrandLockup variant="activity-titlebar" />
       <div className="activity-titlebar__breadcrumb"><span className="activity-titlebar__eyebrow">Usage</span>
         <span aria-hidden="true" className="activity-titlebar__separator">›</span>
         <span className="activity-titlebar__current">Limits and spend</span></div>

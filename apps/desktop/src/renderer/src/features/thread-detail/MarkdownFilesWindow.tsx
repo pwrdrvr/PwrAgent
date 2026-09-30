@@ -10,6 +10,7 @@ import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type LoadState =
   | { status: "idle" | "loading" }
@@ -148,9 +149,7 @@ export function MarkdownFilesWindow() {
     <div className="document-window markdown-files-window">
       <section aria-label="Files" className="activity-screen">
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div
             className="activity-titlebar__breadcrumb"
             aria-label={breadcrumbParts.join(" > ")}

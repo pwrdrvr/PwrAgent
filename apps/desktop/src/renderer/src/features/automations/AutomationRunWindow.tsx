@@ -9,6 +9,7 @@ import {
   formatAutomationTimestamp,
   formatRunStatus,
 } from "./automation-format";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type AutomationRunTarget = {
   automationId: string;
@@ -80,9 +81,7 @@ export function AutomationRunWindow() {
     <div className="automation-run-window">
       <section aria-label="Automation run" className="activity-screen">
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           {/* No aria-label: the Messaging Activity, License, and Changelog
               windows all let this breadcrumb read its own content, and a
               label here only overrode "Automations Run" with an ASCII ">"

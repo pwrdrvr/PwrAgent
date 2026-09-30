@@ -21,6 +21,7 @@ import {
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
@@ -155,9 +156,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       <div className="thread-header__top">
         {showMasthead && props.masthead ? (
           <div className="thread-header__masthead">
-            <p className="sidebar__brand">
-              Pwr<span className="sidebar__brand-accent">Agent</span>
-            </p>
+            <BrandLockup variant="sidebar" />
             {/* With the sidebar hidden its remote-instance pill is gone,
                 so the title bar becomes the window's only remote marker. */}
             <FederationRemoteBadge />

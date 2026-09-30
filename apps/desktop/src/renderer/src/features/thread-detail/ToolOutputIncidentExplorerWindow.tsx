@@ -81,6 +81,7 @@ import {
   sortIncidentCases,
   summarizeIncidents,
 } from "./tool-output-incident-insights";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 const HISTORY_PAGE_LIMIT = 100;
 const DEFAULT_MODEL_VISIBLE_TOOL_OUTPUT_CAP_CHARACTERS = 40_000;
@@ -530,9 +531,7 @@ export function ToolOutputIncidentExplorerWindow() {
   return (
     <div className="incident-explorer">
       <header className="activity-titlebar">
-        <p className="activity-titlebar__brand">
-          Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-        </p>
+        <BrandLockup variant="activity-titlebar" />
         <div
           aria-label={[
             route.projectLabel,

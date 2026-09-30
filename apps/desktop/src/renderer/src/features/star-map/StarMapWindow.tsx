@@ -6,6 +6,7 @@ import { useComposerDraftStore } from "../composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "../composer/useDurableComposerDraftStore";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { StarMapScreen } from "./StarMapScreen";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 /**
  * Root component for the dedicated Federation Star Map BrowserWindow.
@@ -77,9 +78,7 @@ export function StarMapWindow() {
       ) : null}
       {isWindows ? (
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div className="activity-titlebar__breadcrumb">
             <span className="activity-titlebar__eyebrow">Federation</span>
             <span aria-hidden="true" className="activity-titlebar__separator">

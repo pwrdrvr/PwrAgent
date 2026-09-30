@@ -12,6 +12,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { THREAD_HISTORY_PAGE_LIMIT } from "../../lib/thread-history-limits";
 import { TranscriptList } from "./TranscriptList";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 const LIVE_TRANSCRIPT_REFRESH_MS = 2_000;
 
@@ -174,9 +175,7 @@ export function SubAgentTranscriptWindow() {
     <div className="subagent-transcript-window">
       <section aria-label="Sub-agent transcript" className="activity-screen">
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div className="activity-titlebar__breadcrumb" aria-label="Sub-agents > Transcript">
             <span className="activity-titlebar__eyebrow">Sub-agents</span>
             <span aria-hidden="true" className="activity-titlebar__separator">›</span>

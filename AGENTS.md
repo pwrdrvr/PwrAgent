@@ -531,16 +531,25 @@ This rule applies to these elements:
 
 Canonical primitives and the tokens they read:
 
-| Primitive | Brand | Brand accent | Eyebrow | Breadcrumb separator | Breadcrumb current |
-|---|---|---|---|---|---|
-| `.sidebar__brand` (main sidebar) | `--text-primary` | `--accent` | n/a | n/a | n/a |
-| `.settings-nav__brand` (Settings nav) | `--text-primary` | `--accent` | n/a | n/a | n/a |
-| `.settings-titlebar__*` (Settings right-pane) | n/a | n/a | `--accent` | `--text-muted` | `--text-primary` |
-| `.activity-titlebar__*` (Activity window) | `--text-primary` | `--accent` | `--accent` | `--text-muted` | `--text-primary` |
+| Primitive | Mark | Brand | Brand accent | Eyebrow | Breadcrumb separator | Breadcrumb current |
+|---|---|---|---|---|---|---|
+| `.sidebar__brand` (main sidebar) | `--accent` | `--text-primary` | `--accent` | n/a | n/a | n/a |
+| `.settings-nav__brand` (Settings nav) | `--accent` | `--text-primary` | `--accent` | n/a | n/a | n/a |
+| `.settings-titlebar__*` (Settings right-pane) | n/a | n/a | n/a | `--accent` | `--text-muted` | `--text-primary` |
+| `.activity-titlebar__*` (Activity window) | `--accent` | `--text-primary` | `--accent` | `--accent` | `--text-muted` | `--text-primary` |
+
+Render a brand through `BrandLockup`
+(`apps/desktop/src/renderer/src/features/chrome/BrandLockup.tsx`).
+
+- It draws the app-icon mark and the wordmark together.
+- Do not hand-write a `__brand` paragraph. The lockup's test fails when one appears.
+- The macOS title-strip geometry is the Pwr-family spec in
+  [features/chrome/AGENTS.md](apps/desktop/src/renderer/src/features/chrome/AGENTS.md).
 
 `apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx` enforces this token contract.
 
 - The test compares brand accent tokens across the listed primitives.
+- The test holds the lockup's mark color, gap, and wordmark type to the family spec.
 - The test also compares Activity and Settings breadcrumb tokens.
 - If you intentionally change a chrome token, change the test in the same commit.
 - This paired change makes the design decision visible during review.
