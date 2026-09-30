@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronLeftIcon,
@@ -18,6 +18,8 @@ import {
   type ViewportTooltip,
 } from "../../lib/useViewportTooltip";
 import { TranscriptImage } from "./TranscriptImage";
+import { interactiveSvgDocument } from "./interactive-svg-document";
+import { loadImageBlob } from "../../lib/load-image-blob";
 
 type ImageLightboxProps = {
   /** Image source — a data URL or any resolvable URL. */
@@ -34,6 +36,8 @@ type ImageLightboxProps = {
   position?: number;
   /** Total number of images in an optional gallery. */
   total?: number;
+  /** Enables an isolated document view for transcript SVG links. */
+  interactiveSvg?: boolean;
   onClose: () => void;
   onNext?: () => void;
   onPrevious?: () => void;
@@ -65,6 +69,7 @@ export function ImageLightbox({
   dialogLabel = "Expanded image",
   position,
   total,
+  interactiveSvg = false,
   onClose,
   onNext,
   onPrevious,
@@ -186,6 +191,7 @@ export function ImageLightbox({
         </span>
       ) : null}
       <LightboxImage key={src} src={src} alt={alt} actions={actions} tooltip={tooltip}
+        interactiveSvg={interactiveSvg} onClose={onClose}
         meta={gallery || caption ? (
           <p className="image-lightbox__meta">
             {gallery ? (
@@ -237,29 +243,128 @@ export function ImageLightbox({
   );
 }
 
-function LightboxImage({ src, alt, meta, actions, tooltip }: {
+function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClose }: {
   src: string;
   alt: string;
   meta: ReactNode;
   actions: ReactNode;
+  interactiveSvg: boolean;
+  onClose: () => void;
   /** The dialog's one tooltip. Per-control instances do not know about each
    *  other, so a control left showing one on focus would still be showing it
    *  while a hover raised a second. */
   tooltip: ViewportTooltip;
 }) {
   const gestures = useLightboxGestures();
+  const [svgDocument, setSvgDocument] = useState<string>();
+  const [svgActive, setSvgActive] = useState(false);
+  const [svgLoading, setSvgLoading] = useState(false);
+  const [svgError, setSvgError] = useState(false);
+  const [svgSearchOpen, setSvgSearchOpen] = useState(false);
+  const [svgSearchTerm, setSvgSearchTerm] = useState("");
+  const [svgSearchError, setSvgSearchError] = useState(false);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const loadController = useRef<AbortController>(null);
+
+  useEffect(() => () => loadController.current?.abort(), []);
+  useEffect(() => {
+    if (!svgActive) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow) return;
+      if (event.data === "pwragent-interactive-svg-escape") {
+        if (svgSearchOpen) setSvgSearchOpen(false);
+        else onClose();
+      } else if (event.data === "pwragent-interactive-svg-search") {
+        setSvgSearchError(false);
+        setSvgSearchOpen(true);
+      } else if (event.data === "pwragent-interactive-svg-search-error") {
+        setSvgSearchError(true);
+        setSvgSearchOpen(true);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [onClose, svgActive, svgSearchOpen]);
+
+  const toggleInteractiveSvg = async (): Promise<void> => {
+    if (svgActive) {
+      setSvgActive(false);
+      setSvgSearchOpen(false);
+      return;
+    }
+    if (svgDocument) {
+      setSvgActive(true);
+      return;
+    }
+
+    const controller = new AbortController();
+    loadController.current = controller;
+    setSvgLoading(true);
+    setSvgError(false);
+    try {
+      const blob = await loadImageBlob(src, controller.signal);
+      if (blob.type !== "image/svg+xml" || blob.size > 16 * 1024 * 1024) {
+        throw new Error("SVG format or size is not supported");
+      }
+      const document = interactiveSvgDocument(await blob.text());
+      if (controller.signal.aborted) return;
+      setSvgDocument(document);
+      setSvgActive(true);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error("Failed to open interactive SVG", error);
+        setSvgError(true);
+      }
+    } finally {
+      if (!controller.signal.aborted) setSvgLoading(false);
+    }
+  };
+
   return <>
     {/* Focus, not hover: this box is the scrim, so a hover tooltip would pop
         every time the pointer crossed the letterbox. On focus it is the only
         thing that names the arrow-key pan the `onKeyDown` below implements. */}
-    <div ref={gestures.viewport} className="image-lightbox__viewport"
-      tabIndex={0} aria-label="Image pan and zoom" onKeyDown={gestures.onKeyDown}
-      onFocus={(event) => tooltip.show(event.currentTarget, "Use arrow keys to pan")}
-      onBlur={tooltip.hide}>
-      <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
-        data-panning={gestures.panning} draggable={false} onDragStart={(event) => event.preventDefault()}
-        onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle}
-        {...gestures.imageHandlers} />
+    <div ref={svgActive ? undefined : gestures.viewport}
+      className={svgActive
+        ? "image-lightbox__viewport image-lightbox__viewport--interactive"
+        : "image-lightbox__viewport"}
+      tabIndex={svgActive ? undefined : 0}
+      aria-label={svgActive ? undefined : "Image pan and zoom"}
+      onKeyDown={svgActive ? undefined : gestures.onKeyDown}
+      onFocus={svgActive ? undefined : (event) => tooltip.show(event.currentTarget, "Use arrow keys to pan")}
+      onBlur={svgActive ? undefined : tooltip.hide}>
+      {svgActive && svgDocument ? (
+        <iframe ref={frame} className="image-lightbox__interactive-svg"
+          title={`Interactive SVG: ${alt}`}
+          sandbox="allow-scripts" referrerPolicy="no-referrer"
+          srcDoc={svgDocument} />
+      ) : (
+        <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
+          data-panning={gestures.panning} draggable={false} onDragStart={(event) => event.preventDefault()}
+          onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle}
+          {...gestures.imageHandlers} />
+      )}
+      {svgActive && svgSearchOpen ? (
+        <form className="image-lightbox__svg-search" onSubmit={(event) => {
+          event.preventDefault();
+          frame.current?.contentWindow?.postMessage({
+            type: "pwragent-interactive-svg-search-term",
+            term: svgSearchTerm,
+          }, "*");
+          setSvgSearchOpen(false);
+        }} onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            setSvgSearchOpen(false);
+          }
+        }}>
+          <input aria-label="Search SVG frames" autoFocus value={svgSearchTerm}
+            onChange={(event) => setSvgSearchTerm(event.target.value)} />
+          <button type="submit">Find</button>
+          <button type="button" onClick={() => setSvgSearchOpen(false)}>Cancel</button>
+          {svgSearchError ? <span role="alert">Invalid search expression</span> : null}
+        </form>
+      ) : null}
     </div>
     {/* The bottom cluster. Nothing rides the top corners: macOS draws its
         stoplights in the top-left of the renderer and win32/linux draw caption
@@ -267,6 +372,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip }: {
     <div className="image-lightbox__chrome">
       {meta}
       <div className="image-lightbox__toolbar">
+        {svgActive ? <span className="image-lightbox__interactive-label">Interactive SVG</span> : <>
         <button type="button" className="image-lightbox__tool" aria-label="Zoom out"
           aria-disabled={gestures.view.scale <= 0.1}
           onClick={() => { if (gestures.view.scale > 0.1) gestures.zoom(1 / 1.5); }}
@@ -288,10 +394,21 @@ function LightboxImage({ src, alt, meta, actions, tooltip }: {
           {...tooltipHandlers(tooltip, "Fit the whole image in the window")}>
           <FitToWindowIcon size={16} aria-hidden="true" />
         </button>
+        </>}
         <span className="image-lightbox__tool-divider" aria-hidden="true" />
+        {interactiveSvg ? (
+          <button type="button" className="image-lightbox__tool image-lightbox__tool--labelled"
+            aria-label={svgActive ? "Show image preview" : "Interact with SVG"}
+            disabled={svgLoading}
+            onClick={() => { void toggleInteractiveSvg(); }}
+            {...tooltipHandlers(tooltip, svgActive ? "Show image preview" : "Use SVG hover, zoom, and search controls in an isolated view")}>
+            {svgActive ? "Preview" : svgLoading ? "Loading" : "Interact"}
+          </button>
+        ) : null}
         <ImageCopyButton src={src} appearance="pill" />
         {actions}
       </div>
+      {svgError ? <span className="image-lightbox__interactive-error" role="alert">Interactive SVG could not be opened.</span> : null}
     </div>
   </>;
 }

@@ -10,7 +10,8 @@ import type {
   FederationInstanceId,
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1257,6 +1258,63 @@ export async function readTranscriptImageProtocolRequest(
     dataBase64: bytes.toString("base64"),
     mimeType: resolution.mimeType,
   };
+}
+
+/** Renderer reads are limited to PwrAgent-owned transcript and input images. */
+export async function readPwragentTranscriptImageForRenderer(
+  requestUrl: string,
+  options?: TranscriptImageProtocolOptions,
+): Promise<FederatedTranscriptImageResponse> {
+  if (!requestUrl.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`)) {
+    throw new Error("Only local transcript images can be read");
+  }
+  const resolution = await resolveTranscriptImageProtocolRequest(requestUrl, options);
+  if (!resolution.ok) throw new Error(resolution.message);
+
+  const env = options?.env ?? process.env;
+  const homeDir = options?.homeDir ?? os.homedir();
+  const roots = [
+    resolvePwragentRoot({ env, homeDir }),
+    resolvePwragentRoot({ env: {}, homeDir }),
+  ];
+  let ownedImage = false;
+  for (const root of roots) {
+    let profilesRoot: string;
+    try {
+      profilesRoot = await realpath(path.join(root, "profiles"));
+    } catch {
+      continue;
+    }
+    if (!isPathInsideRoot(resolution.path, profilesRoot)) continue;
+    const segments = path.relative(profilesRoot, resolution.path).split(path.sep);
+    if (
+      segments.length >= 4
+      && segments[1] === "state"
+      && (segments[2] === "thread-images" || segments[2] === "image-inputs")
+    ) {
+      ownedImage = true;
+      break;
+    }
+  }
+  if (!ownedImage) throw new Error("Transcript image path is not owned by PwrAgent");
+
+  const file = await open(resolution.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const fileStat = await file.stat();
+    if (
+      !fileStat.isFile()
+      || fileStat.size === 0
+      || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    ) {
+      throw new Error("Transcript image size is not supported");
+    }
+    return {
+      dataBase64: (await file.readFile()).toString("base64"),
+      mimeType: resolution.mimeType,
+    };
+  } finally {
+    await file.close();
+  }
 }
 
 function decodeTranscriptImageProtocolRequest(requestUrl: string): string | undefined {

@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "../ImageLightbox";
 import { addTabSentinels, pressTab, walkTab } from "../../../test/tab-walk";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("ImageLightbox", () => {
@@ -26,6 +27,27 @@ describe("ImageLightbox", () => {
 
     const image = screen.getByRole("img", { name: "A cat" });
     expect(image).toHaveAttribute("src", "https://example.test/cat.png");
+  });
+
+  it("opens SVG interaction in a sandboxed frame while keeping the image preview", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"/>';
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([svg], { type: "image/svg+xml" }),
+    }));
+    render(<ImageLightbox src="pwragent-image://file/graph.svg"
+      alt="Flamegraph" interactiveSvg onClose={() => {}} />);
+
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    const frame = await screen.findByTitle("Interactive SVG: Flamegraph");
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(frame).toHaveAttribute("srcdoc", expect.stringContaining("default-src 'none'"));
+    expect(screen.queryByRole("img", { name: "Flamegraph" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show image preview" }));
+    await waitFor(() => expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument());
   });
 
   it("closes via the accent cookie button", () => {

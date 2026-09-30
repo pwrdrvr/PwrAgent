@@ -188,6 +188,9 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
  * - `will-navigate` prevents the existing window from being navigated
  *   away — only file:// and the dev server origin are allowed (the
  *   bundle's own assets / hot-reload), everything else is blocked.
+ * - Subframes cannot navigate away from their initial document. Interactive
+ *   SVGs run in an opaque-origin iframe and must not use navigation to send
+ *   local data to an external site.
  */
 export function applyWindowSecurityHardening(window: BrowserWindow): void {
   const log = getMainLogger("pwragent:window-guards");
@@ -207,6 +210,14 @@ export function applyWindowSecurityHardening(window: BrowserWindow): void {
     }
     event.preventDefault();
     log.warn("blocked renderer navigation", { targetUrl });
+  });
+
+  window.webContents.on("will-frame-navigate", (event) => {
+    if (event.isMainFrame || event.url === "about:srcdoc") {
+      return;
+    }
+    event.preventDefault();
+    log.warn("blocked renderer subframe navigation");
   });
 
   window.webContents.on("context-menu", (_event, params) => {

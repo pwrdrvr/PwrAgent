@@ -2,7 +2,9 @@ import { clipboard, ipcMain } from "electron";
 import {
   CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
   CLIPBOARD_WRITE_TEXT_CHANNEL,
+  TRANSCRIPT_IMAGE_READ_CHANNEL,
 } from "../../shared/ipc";
+import { readPwragentTranscriptImageForRenderer } from "../transcript-image-protocol";
 
 export type E2eClipboardSnapshot = {
   html?: string;
@@ -43,6 +45,7 @@ function writeRichText(payload: E2eClipboardSnapshot & { html: string }): void {
 export function registerClipboardIpcHandlers(): void {
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);
+  ipcMain.removeHandler(TRANSCRIPT_IMAGE_READ_CHANNEL);
   ipcMain.handle(
     CLIPBOARD_WRITE_TEXT_CHANNEL,
     async (_event, text: unknown): Promise<void> => {
@@ -67,9 +70,14 @@ export function registerClipboardIpcHandlers(): void {
       writeRichText({ text: richText.text, html: richText.html });
     },
   );
+  ipcMain.handle(TRANSCRIPT_IMAGE_READ_CHANNEL, async (_event, url: unknown) => {
+    if (typeof url !== "string") throw new Error("Transcript image URL is required");
+    return await readPwragentTranscriptImageForRenderer(url);
+  });
 }
 
 export function disposeClipboardIpcHandlers(): void {
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);
+  ipcMain.removeHandler(TRANSCRIPT_IMAGE_READ_CHANNEL);
 }

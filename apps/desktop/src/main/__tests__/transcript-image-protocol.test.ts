@@ -84,6 +84,30 @@ describe("transcript image protocol", () => {
     });
   });
 
+  it("reads PwrAgent-owned cached SVG bytes for the renderer", async () => {
+    const { readPwragentTranscriptImageForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const pwragentHome = path.join(tempDir, "pwragent-home");
+    const imagePath = path.join(
+      pwragentHome, "profiles", "dev", "state", "thread-images", "codex", "thread", "graph.svg",
+    );
+    const unrelatedPath = path.join(pwragentHome, "profiles", "dev", "other.svg");
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    await mkdir(path.dirname(imagePath), { recursive: true });
+    await writeFile(imagePath, svg);
+    await writeFile(unrelatedPath, svg);
+    const options = {
+      env: { PWRAGENT_HOME: pwragentHome } as NodeJS.ProcessEnv,
+      homeDir: path.join(tempDir, "home"),
+    };
+
+    await expect(readPwragentTranscriptImageForRenderer(toProtocolUrl(imagePath), options))
+      .resolves.toEqual({ dataBase64: svg.toString("base64"), mimeType: "image/svg+xml" });
+    await expect(readPwragentTranscriptImageForRenderer(toProtocolUrl(unrelatedPath), options))
+      .rejects.toThrow("not owned by PwrAgent");
+  });
+
   it("rewrites file image URLs in thread/read responses before they reach the renderer", async () => {
     const { rewriteTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

@@ -445,6 +445,27 @@ describe("createMainWindow", () => {
     expect(shellOpenExternalMock).not.toHaveBeenCalled();
   });
 
+  it("blocks navigation from an interactive SVG subframe", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    const preventDefault = vi.fn();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "https://example.com/collect?data=private",
+      preventDefault,
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    preventDefault.mockClear();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "about:srcdoc",
+      preventDefault,
+    });
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
   it("shows a native copy action when a renderer link is right-clicked", async () => {
     const { createMainWindow } = await import("../window");
     createMainWindow();

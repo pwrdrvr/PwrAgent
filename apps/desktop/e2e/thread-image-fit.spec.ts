@@ -339,6 +339,68 @@ test("copies a transcript SVG as PNG for the composer", async () => {
   }
 });
 
+test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
+  const fixture = await createThreadImageFitFixture();
+  const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
+  const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160" onload="init(evt)">
+    <script><![CDATA[
+      function init() { document.getElementById("state").textContent = "Ready"; }
+      window.addEventListener("mouseover", function(event) {
+        if (event.target.id === "frame") document.getElementById("details").textContent = "Function: frame";
+      });
+      window.addEventListener("click", function(event) {
+        if (event.target.id === "frame") {
+          document.getElementById("state").textContent = "Zoomed";
+          history.replaceState(null, null, "?x=1");
+        }
+        if (event.target.id === "search") search_prompt();
+      });
+      function search_prompt() { prompt("Search", ""); }
+      function search(term) {
+        history.replaceState(null, null, "?s=" + term);
+        document.getElementById("matched").textContent = term;
+      }
+    ]]></script>
+    <rect id="frame" x="20" y="30" width="180" height="60" fill="orange"/>
+    <text id="state" x="20" y="115">Loading</text>
+    <text id="details" x="20" y="135"> </text>
+    <text id="search" x="230" y="35">Search</text>
+    <text id="matched" x="230" y="55"> </text>
+  </svg>`;
+  const image = {
+    type: "image",
+    url: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    alt: "Interactive flamegraph",
+  };
+  for (const message of [...read.result.entries, ...read.result.messages]) {
+    if (message.id === "message-image-fit-2") message.parts[2] = image;
+  }
+  await writeFile(fixture.fixturePath, JSON.stringify(replay));
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+    await app.window.getByAltText("Interactive flamegraph").click();
+    await app.window.getByRole("button", { name: "Interact with SVG" }).click();
+    const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
+    await expect(frame.locator("#state")).toHaveText("Ready");
+    await frame.locator("#frame").hover();
+    await expect(frame.locator("#details")).toHaveText("Function: frame");
+    await frame.locator("#frame").click();
+    await expect(frame.locator("#state")).toHaveText("Zoomed");
+
+    await frame.locator("#search").click();
+    await app.window.getByRole("textbox", { name: "Search SVG frames" }).fill("frame");
+    await app.window.getByRole("button", { name: "Find" }).click();
+    await expect(frame.locator("#matched")).toHaveText("frame");
+    expect(await frame.locator("html").evaluate(() => location.origin)).toBe("null");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("loads an offscreen transcript image only after scrolling it into view", async () => {
   const fixture = await createThreadImageFitFixture(true);
   const app = await launchElectronApp({

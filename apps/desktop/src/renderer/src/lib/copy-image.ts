@@ -1,12 +1,12 @@
+import { loadImageBlob } from "./load-image-blob";
+
 /** Copy original PNG bytes, never the fitted preview. Other images are
  * rasterized to PNG because the clipboard requires PNG. */
 export async function copyImage(src: string): Promise<void> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
     throw new Error("Image clipboard is unavailable");
   }
-  const response = await fetch(src);
-  if (!response.ok) throw new Error("Image could not be loaded");
-  let blob = await response.blob();
+  let blob = await loadImageBlob(src);
   if (blob.type !== "image/png") {
     blob = blob.type === "image/svg+xml"
       ? await rasterizeSvg(blob)

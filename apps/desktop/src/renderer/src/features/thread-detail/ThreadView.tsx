@@ -3444,6 +3444,9 @@ export function ThreadView(props: ThreadViewProps) {
     <ImageLightbox
       src={expandedImage.url}
       alt={expandedImage.alt ?? "Expanded image"}
+      interactiveSvg={!expandedImage.url.startsWith("pwragent-image://federation/")
+        && (/\.svg(?:$|[?#])/i.test(expandedImage.sourceUrl ?? expandedImage.url)
+          || expandedImage.url.startsWith("data:image/svg+xml"))}
       position={expandedGallery.index + 1}
       total={expandedGallery.images.length}
       onClose={() => {
