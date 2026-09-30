@@ -12,7 +12,7 @@ type PendingRequest = {
   cleanupAbort: () => void;
   reject: (error: Error) => void;
   resolve: (value: unknown) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 export type FederationRpcRequestOptions = {
@@ -60,18 +60,20 @@ export class FederationRpcEndpoint {
   request<Result = unknown>(params: {
     method: string;
     params: unknown;
-    timeoutMs?: number;
+    /** null keeps the request open until a response, abort, or peer disconnect. */
+    timeoutMs?: number | null;
     deadlineAt?: number;
     signal?: AbortSignal;
   }): Promise<Result> {
     if (params.signal?.aborted) return Promise.reject(params.signal.reason);
     const id = `federation-request:${randomUUID()}`;
     const now = this.now();
-    const deadlineAt =
-      params.deadlineAt
-      ?? now + (params.timeoutMs ?? this.options.defaultTimeoutMs ?? 30_000);
-    const timeoutMs = deadlineAt - now;
-    if (timeoutMs <= 0) {
+    const deadlineAt = params.timeoutMs === null
+      ? undefined
+      : params.deadlineAt
+        ?? now + (params.timeoutMs ?? this.options.defaultTimeoutMs ?? 30_000);
+    const timeoutMs = deadlineAt === undefined ? undefined : deadlineAt - now;
+    if (timeoutMs !== undefined && timeoutMs <= 0) {
       return Promise.reject(
         new Error(`Federation request timed out: ${params.method}`),
       );
@@ -85,7 +87,7 @@ export class FederationRpcEndpoint {
       sourceInstanceId: this.options.localInstanceId,
       targetInstanceId: this.options.remoteInstanceId,
       createdAt: now,
-      deadlineAt,
+      ...(deadlineAt === undefined ? {} : { deadlineAt }),
     };
 
     const promise = new Promise<Result>((resolve, reject) => {
@@ -98,12 +100,12 @@ export class FederationRpcEndpoint {
         reject(params.signal?.reason ?? new Error("Federation request cancelled."));
       };
       const cleanupAbort = (): void => params.signal?.removeEventListener("abort", abort);
-      const timer = setTimeout(() => {
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
         cleanupAbort();
         this.pending.delete(id);
         reject(new Error(`Federation request timed out: ${params.method}`));
       }, timeoutMs);
-      if (timer.unref) timer.unref();
+      if (timer?.unref) timer.unref();
       this.pending.set(id, {
         cleanupAbort,
         resolve: resolve as (value: unknown) => void,

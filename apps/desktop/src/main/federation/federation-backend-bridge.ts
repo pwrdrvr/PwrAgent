@@ -851,6 +851,7 @@ export type FederationBackendOperations = {
   ): Promise<StopCodexEnvironmentActionResponse>;
   setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
+    onSetupProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
   ): Promise<SetCodexThreadEnvironmentResponse>;
   refreshThreadPullRequests(
     request: FederationRefreshThreadPullRequestsRequest,
@@ -920,6 +921,17 @@ export function registerFederationBackendHandlers(params: {
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
 }): void {
+  const forwardEnvironmentSetupProgress = (
+    event: CodexEnvironmentSetupProgressEvent,
+    targetInstanceId: FederationInstanceId,
+  ): void => {
+    try {
+      params.onEnvironmentSetupProgress?.(event, targetInstanceId);
+    } catch {
+      // A disconnected viewer must not interrupt the owner-side setup command.
+    }
+  };
+
   if (params.backend.getNavigationQueryPage) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
@@ -1289,10 +1301,7 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as ForkThreadRequest,
         {
           onCodexEnvironmentSetupProgress: (event) => {
-            params.onEnvironmentSetupProgress?.(
-              event,
-              envelope.sourceInstanceId,
-            );
+            forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
           },
         },
       ),
@@ -1623,6 +1632,9 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setCodexThreadEnvironment(
         envelope.params as SetCodexThreadEnvironmentRequest,
+        (event) => {
+          forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
+        },
       ),
   );
   params.router.registerHandler(
@@ -1723,10 +1735,7 @@ export function registerFederationBackendHandlers(params: {
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
           onCodexEnvironmentSetupProgress: (event) => {
-            params.onEnvironmentSetupProgress?.(
-              event,
-              envelope.sourceInstanceId,
-            );
+            forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
           },
         },
       );
@@ -2201,6 +2210,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<ForkThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.forkThread,
       params: request,
+      timeoutMs: null,
     });
   }
 
@@ -2557,6 +2567,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<SetCodexThreadEnvironmentResponse>({
       method: FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
       params: request,
+      timeoutMs: null,
     });
   }
 
@@ -2657,6 +2668,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       : request.input;
     return await this.rpc.request<MaterializeDirectoryLaunchpadResponse>({
       method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
+      timeoutMs: null,
       params: {
         ...request,
         ...(input ? { input } : {}),

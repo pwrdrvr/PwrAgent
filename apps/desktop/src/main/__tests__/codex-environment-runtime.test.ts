@@ -1251,6 +1251,29 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("does not impose a default timeout on setup commands", async () => {
+    const commandRunner = vi.fn(async () => ({ output: "ok", exitCode: 0, durationMs: 1 }));
+    await applyLocalCodexEnvironmentSelection({
+      commandRunner,
+      env: {},
+      selection: {
+        environment: {
+          id: "env",
+          name: "Env",
+          sourcePath: "environment.toml",
+          setupScript: "install dependencies",
+          actions: [],
+        },
+        executionTarget: "local",
+        runSetup: true,
+      },
+    });
+    expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "wait",
+      timeoutMs: undefined,
+    }));
+  });
+
   it("times out setup commands that do not finish", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-timeout-"));
 

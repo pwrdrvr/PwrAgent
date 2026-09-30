@@ -6457,8 +6457,9 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async setCodexThreadEnvironment(
       request: SetCodexThreadEnvironmentRequest,
+      onSetupProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
     ): Promise<SetCodexThreadEnvironmentResponse> {
-      return await getDesktopBackendRegistry().setCodexThreadEnvironment(request);
+      return await getDesktopBackendRegistry().setCodexThreadEnvironment(request, onSetupProgress);
     },
     async refreshDirectoryGitStatuses(
       request: RefreshDirectoryGitStatusesRequest,

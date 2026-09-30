@@ -27,6 +27,122 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("keeps remote environment selection unbounded and forwards setup progress", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const onEnvironmentSetupProgress = vi.fn();
+    const setCodexThreadEnvironment = vi.fn(async (
+      request: { backend: "codex"; threadId: string },
+      onProgress?: (event: { directoryKey: string; phase: "started"; at: number }) => void,
+    ) => {
+      onProgress?.({ directoryKey: "thread:codex:thread-1", phase: "started", at: 1 });
+      return { backend: request.backend, threadId: request.threadId };
+    });
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: { setCodexThreadEnvironment } as unknown as FederationBackendOperations,
+      onEnvironmentSetupProgress,
+    });
+    rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => {
+        sent.push(envelope);
+        void router.routeEnvelope({ envelope, sourcePeerId: "viewer_one" });
+      },
+    });
+
+    await new FederationRemoteBackendClient(rpc).setCodexThreadEnvironment({
+      backend: "codex",
+      threadId: "thread-1",
+      environmentId: "node",
+    });
+
+    expect(sent[0]).not.toHaveProperty("deadlineAt");
+    expect(onEnvironmentSetupProgress).toHaveBeenCalledWith(
+      { directoryKey: "thread:codex:thread-1", phase: "started", at: 1 },
+      "viewer_one",
+    );
+  });
+
+  it("completes environment selection when progress delivery loses its viewer", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const backend = {
+      setCodexThreadEnvironment: vi.fn(async (
+        request: { backend: "codex"; threadId: string },
+        onProgress?: (event: { directoryKey: string; phase: "started" | "stdout"; at: number }) => void,
+      ) => {
+        onProgress?.({ directoryKey: "thread:codex:thread-1", phase: "started", at: 1 });
+        onProgress?.({ directoryKey: "thread:codex:thread-1", phase: "stdout", at: 2 });
+        return { backend: request.backend, threadId: request.threadId };
+      }),
+    } as unknown as FederationBackendOperations;
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    const onEnvironmentSetupProgress = vi.fn(() => {
+      throw new Error("Viewer disconnected");
+    });
+    registerFederationBackendHandlers({ router, backend, onEnvironmentSetupProgress });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "select-environment",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
+        params: { backend: "codex", threadId: "thread-1", environmentId: "node" },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1,
+      },
+    });
+
+    expect(onEnvironmentSetupProgress).toHaveBeenCalledTimes(2);
+    expect(replies.at(-1)).toMatchObject({
+      kind: "response",
+      requestId: "select-environment",
+      result: { backend: "codex", threadId: "thread-1" },
+    });
+  });
+
+  it("keeps remote fork and launchpad setup requests unbounded", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = new FederationRemoteBackendClient(
+      { request } as unknown as FederationRpcEndpoint,
+    );
+
+    await client.forkThread({} as Parameters<typeof client.forkThread>[0]);
+    await client.materializeDirectoryLaunchpad(
+      {} as Parameters<typeof client.materializeDirectoryLaunchpad>[0],
+    );
+
+    expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      method: FEDERATION_BACKEND_METHODS.forkThread,
+      timeoutMs: null,
+    }));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
+      timeoutMs: null,
+    }));
+  });
+
   it.each([true, false])("requires turn control for paid usage analysis while allowing ledger reads (%s)", async (allowed) => {
     const readUsageActivity = vi.fn(async () => ({ rows: [], truncated: false, readAt: 1, rateLimits: [] }));
     const analyzeUsageActivity = vi.fn(async () => ({ analysis: "Result" }));
