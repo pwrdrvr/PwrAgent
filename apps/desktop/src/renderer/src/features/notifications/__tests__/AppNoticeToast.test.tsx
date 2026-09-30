@@ -71,6 +71,73 @@ describe("AppNoticeToast", () => {
     );
   });
 
+  it("renders machine-state facts as label/value rows and copies them", () => {
+    const copyText = vi.fn(async () => undefined);
+    const factsNotice = {
+      id: "heap-snapshot:1",
+      title: "Heap snapshot captured",
+      message: "Captured the renderer heap.",
+      facts: [
+        { label: "Session", value: "heap-2026-09-29-1904-5f9159" },
+        { label: "Source", value: "Local app on fixture-m5.local" },
+      ],
+    };
+
+    render(
+      <AppNoticeToast
+        desktopApi={{ copyText }}
+        notice={factsNotice}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const terms = screen.getAllByRole("term").map((term) => term.textContent);
+    const values = screen.getAllByRole("definition").map((value) => value.textContent);
+    expect(terms).toEqual(["Session", "Source"]);
+    expect(values).toEqual([
+      "heap-2026-09-29-1904-5f9159",
+      "Local app on fixture-m5.local",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
+    expect(copyText).toHaveBeenCalledWith(
+      [
+        factsNotice.title,
+        factsNotice.message,
+        "Session: heap-2026-09-29-1904-5f9159",
+        "Source: Local app on fixture-m5.local",
+      ].join("\n"),
+    );
+  });
+
+  it("shows the notice's state on one title-row dot", () => {
+    const { container, rerender } = render(
+      <AppNoticeToast notice={notice} onDismiss={vi.fn()} />,
+    );
+    const dot = () => container.querySelector(".app-notice-toast__dot");
+    expect(dot()).toHaveClass("status-dot--neutral");
+
+    rerender(
+      <AppNoticeToast notice={{ ...notice, tone: "error" }} onDismiss={vi.fn()} />,
+    );
+    expect(dot()).toHaveClass("status-dot--error");
+
+    // A reported status outranks the tone, and the status line draws no
+    // second dot of its own.
+    rerender(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          tone: "error",
+          status: { label: "Repairing saved thread history.", state: "progress" },
+        }}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(dot()).toHaveClass("status-dot--warning", "status-dot--blink");
+    expect(container.querySelectorAll(".status-dot")).toHaveLength(1);
+  });
+
   it("renders an originating thread as an actionable thread chip", () => {
     const onOpenThread = vi.fn();
     const threadLink = {

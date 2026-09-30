@@ -15,7 +15,7 @@ export function buildBundledGitLfsNotice(params: {
       },
     ],
     autoDismiss: false,
-    detail: params.event.repositoryPath,
+    facts: [{ label: "Repository", value: params.event.repositoryPath }],
     id: "bundled-git-lfs-advisory",
     message:
       "PwrAgent's bundled Git LFS set this repository up. Git outside PwrAgent has no git-lfs, so `git push` from your own terminal will fail there until you install Git LFS.",
