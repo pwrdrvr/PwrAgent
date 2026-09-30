@@ -26245,6 +26245,7 @@ command = "pnpm dev"
             injectDefaultTools: false,
             mcpInheritance: "none",
             tools: ["read_file"],
+            disallowedTools: ["read_file", "search_tool", "use_tool"],
           }),
           systemPromptOverride: expect.stringContaining(
             "do not use tools",

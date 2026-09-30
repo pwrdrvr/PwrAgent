@@ -40,6 +40,23 @@ const PROMPT = flag("prompt", "tell me your favorite breakfast cereal");
 const QUIET_MS = Number(flag("quiet-ms", "6000"));
 const HARD_TIMEOUT_MS = Number(flag("timeout-ms", "180000"));
 const ALLOW_TOOLS = process.argv.includes("--allow-tools");
+// `_meta` for `session/new`, as JSON — how PwrAgent passes an agent profile
+// (Grok's `agentProfile`, `systemPromptOverride`) to a helper session.
+const SESSION_META = flag("session-meta");
+// `session/set_config_option` writes before the prompt, as `id=value` pairs
+// (for example `model=grok-4.7,reasoning_effort=low`), in order.
+const CONFIG = (flag("config") ?? "").split(",").filter(Boolean).map((pair) => {
+  const index = pair.indexOf("=");
+  return { configId: pair.slice(0, index), value: pair.slice(index + 1) };
+});
+// After the prompt, call each of these methods with `{ sessionId }` (for
+// example `session/close,_x.ai/session/delete`), then `session/list` for the
+// capture cwd, to see what a helper session leaves behind.
+const AFTER_METHODS = (flag("after") ?? "").split(",").filter(Boolean);
+const LIST_SESSIONS = process.argv.includes("--list-sessions");
+// Deny the way PwrAgent's `deny-all` helper sessions do — a `cancelled`
+// outcome — instead of selecting a `reject` option the agent may not offer.
+const DENY_CANCELLED = process.argv.includes("--deny-cancelled");
 
 const child = spawn(COMMAND, ARGS, {
   stdio: ["pipe", "pipe", "pipe"],
@@ -107,7 +124,9 @@ function respondToAgentRequest(frame) {
     const response = {
       jsonrpc: "2.0",
       id: frame.id,
-      result: { outcome: { outcome: "selected", optionId: "reject" } },
+      result: DENY_CANCELLED
+        ? { outcome: { outcome: "cancelled" } }
+        : { outcome: { outcome: "selected", optionId: "reject" } },
     };
     log.push({ dir: "out", frame: response, note: "denied (no --allow-tools)" });
     child.stdin.write(`${JSON.stringify(response)}\n`);
@@ -204,13 +223,27 @@ try {
     },
     clientInfo: { name: "pwragent", title: "PwrAgent", version: "0.0.0" },
   });
-  const session = await send("session/new", { cwd: CWD, mcpServers: [] });
+  const session = await send("session/new", {
+    cwd: CWD,
+    mcpServers: [],
+    ...(SESSION_META ? { _meta: JSON.parse(SESSION_META) } : {}),
+  });
   const sessionId = session?.sessionId ?? session?.session_id;
+  for (const option of CONFIG) {
+    await send("session/set_config_option", { sessionId, ...option });
+  }
   await send("session/prompt", {
     sessionId,
     prompt: [{ type: "text", text: PROMPT }],
   });
   promptCompleted = true;
+  // A refusal is part of the capture, not a failed one.
+  for (const method of AFTER_METHODS) {
+    await send(method, { sessionId }).catch(() => undefined);
+  }
+  if (LIST_SESSIONS) {
+    await send("session/list", { cwd: CWD }).catch(() => undefined);
+  }
   // Drain trailing notifications until the stream goes quiet.
   await new Promise((resolve) => {
     const timer = setInterval(() => {
