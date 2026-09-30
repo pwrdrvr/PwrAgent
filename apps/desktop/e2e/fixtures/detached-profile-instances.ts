@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { DESKTOP_MAIN_ENTRY } from "./electron-app";
+import { ELECTRON_E2E_ENTRY } from "./electron-app";
 
 /**
  * Terminate PwrAgent instances the wizard's profile graduation spawned.
@@ -17,7 +17,7 @@ import { DESKTOP_MAIN_ENTRY } from "./electron-app";
  * `EBUSY: resource busy or locked, unlink '...\state\state.db'` after every
  * assertion has already passed — a cleanup failure reported as a test failure.
  *
- * Matching is on the command line, which carries both this checkout's main
+ * Matching is on the command line, which carries both this checkout's E2E bootstrap
  * entry and the `--profile <name>` pair the relaunch appends, so it cannot
  * reach another checkout's instance or the operator's own app. It cannot reach
  * the Playwright-owned window either: that one is launched without `--profile`
@@ -87,13 +87,13 @@ async function listGraduatedProfilePids(profile: string): Promise<number[]> {
   return selectGraduatedProfilePids(await readProcessTable() ?? [], profile);
 }
 
-function selectGraduatedProfilePids(
+export function selectGraduatedProfilePids(
   rows: ReadonlyArray<{ pid: number; commandLine: string }>,
   profile: string,
 ): number[] {
   const pids: number[] = [];
   for (const { pid, commandLine } of rows) {
-    if (pid === process.pid || !commandLine.includes(DESKTOP_MAIN_ENTRY)) {
+    if (pid === process.pid || !commandLine.includes(ELECTRON_E2E_ENTRY)) {
       continue;
     }
     // `replaceProfileLaunchArgs` always appends the flag and its value as two

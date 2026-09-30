@@ -27,9 +27,14 @@ import {
 import { subscribeManagedRuntimeProgress } from "../managed-runtime-progress";
 import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 
+import { fetchGitHubReleaseMetadata } from "../github-release-cache";
+
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
   await Promise.all(
     cleanupPaths.splice(0).map((entry) =>
       rm(entry, { force: true, recursive: true }),
@@ -337,7 +342,19 @@ describe("ensureManagedGrokRuntime", () => {
     );
   });
 
-  it("uses the public release feed on Prerelease when the API is limited", async () => {
+  it("does not fall back to the feed during a fresh-root startup delay", async () => {
+    const rootDir = await temporaryRoot();
+    vi.stubEnv("PWRAGENT_HOME", rootDir);
+    const network = vi.fn<typeof fetch>(async () => { throw new Error("Unexpected network request"); });
+    vi.stubGlobal("fetch", network);
+    const request = ensureManagedGrokRuntime({
+      rootDir, platform: "linux", arch: "x64", checkMode: "ttl",
+    });
+    await expect(request).resolves.toBeUndefined();
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it.each(["live 403", "cached 403", "cached 429"])("installs from the release feed after %s", async (scenario) => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v2.1.0-pwragent.1";
     const archiveName = "pwragent-grok-2.1.0-pwragent.1-linux-x86_64.tar.gz";
@@ -362,6 +379,24 @@ describe("ensureManagedGrokRuntime", () => {
       return new Response("missing", { status: 404 });
     });
 
+    const cachedLimit = scenario.startsWith("cached");
+    if (cachedLimit) {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+      vi.stubEnv("PWRAGENT_HOME", rootDir);
+      vi.stubGlobal("fetch", fetchMock);
+      // Another consumer persists the root-wide limit before this first install.
+      fetchMock.mockResolvedValueOnce(new Response("limited", {
+        status: scenario === "cached 403" ? 403 : 429,
+        headers: { "retry-after": "3600" },
+      }));
+      await fetchGitHubReleaseMetadata(
+        "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30",
+        {}, { manual: true },
+      );
+      fetchMock.mockClear();
+    }
+
     const runtime = await ensureManagedGrokRuntime({
       arch: "x64",
       channel: "prerelease",
@@ -369,7 +404,7 @@ describe("ensureManagedGrokRuntime", () => {
       extractArchive: async (_archivePath, targetDir) => {
         await writeFakeBundle(targetDir);
       },
-      fetch: fetchMock as typeof globalThis.fetch,
+      fetch: cachedLimit ? undefined : fetchMock as typeof globalThis.fetch,
       platform: "linux",
       probeVersion: async () => "grok 2.1.0-test",
       rootDir,
@@ -377,6 +412,10 @@ describe("ensureManagedGrokRuntime", () => {
 
     expect(runtime?.metadata.tag).toBe(tag);
     expect(runtime?.metadata.channel).toBe("prerelease");
+    if (cachedLimit) {
+      expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).hostname === "api.github.com"))
+        .toHaveLength(0);
+    }
     expect(fetchMock).toHaveBeenCalledWith(
       MANAGED_GROK_RELEASES_FEED_URL,
       expect.any(Object),

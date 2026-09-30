@@ -29,6 +29,7 @@ import {
   readManagedRuntimeProgress,
   subscribeManagedRuntimeProgress,
 } from "../managed-runtime-progress";
+import { fetchGitHubReleaseMetadata } from "../github-release-cache";
 import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 
 const verifySigstoreMock = vi.hoisted(() => vi.fn(async () => ({})));
@@ -37,6 +38,9 @@ vi.mock("sigstore", () => ({ verify: verifySigstoreMock }));
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
   verifySigstoreMock.mockClear();
   await Promise.all(
     cleanupPaths.splice(0).map(async (entry) =>
@@ -578,7 +582,19 @@ describe("ensureManagedCodexRuntime", () => {
     expect(verifySigstoreMock).not.toHaveBeenCalled();
   });
 
-  it("uses the release feed when the unauthenticated API is limited", async () => {
+  it("does not fall back to the feed during a fresh-root startup delay", async () => {
+    const rootDir = await temporaryRoot();
+    vi.stubEnv("PWRAGENT_HOME", rootDir);
+    const network = vi.fn<typeof fetch>(async () => { throw new Error("Unexpected network request"); });
+    vi.stubGlobal("fetch", network);
+    const request = ensureManagedCodexRuntime({
+      rootDir, platform: "linux", arch: "x64", checkMode: "ttl",
+    });
+    await expect(request).rejects.toMatchObject({ name: "ReleaseCheckDeferredError", reason: "cooldown" });
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it.each(["live 403", "cached 403", "cached 429"])("installs from the release feed after %s", async (scenario) => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v0.201.0-pwragent.1";
     const version = "0.201.0-pwragent.1";
@@ -619,19 +635,41 @@ describe("ensureManagedCodexRuntime", () => {
       return new Response("missing", { status: 404 });
     });
 
+    const cachedLimit = scenario.startsWith("cached");
+    if (cachedLimit) {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+      vi.stubEnv("PWRAGENT_HOME", rootDir);
+      vi.stubGlobal("fetch", fetchMock);
+      // Another consumer persists the root-wide limit before this first install.
+      fetchMock.mockResolvedValueOnce(new Response("limited", {
+        status: scenario === "cached 403" ? 403 : 429,
+        headers: { "retry-after": "3600" },
+      }));
+      await fetchGitHubReleaseMetadata(
+        "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30",
+        {}, { manual: true },
+      );
+      fetchMock.mockClear();
+    }
+
     const runtime = await ensureManagedCodexRuntime({
       arch: "x64",
       checkMode: "force",
       extractArchive: async (_archivePath, targetDir) => {
         await writeFakeBundle(targetDir, "linux");
       },
-      fetch: fetchMock as typeof globalThis.fetch,
+      fetch: cachedLimit ? undefined : fetchMock as typeof globalThis.fetch,
       platform: "linux",
       probeVersion: versionProbe(version),
       rootDir,
     });
 
     expect(runtime.metadata.tag).toBe(tag);
+    if (cachedLimit) {
+      expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).hostname === "api.github.com"))
+        .toHaveLength(0);
+    }
     expect(fetchMock).toHaveBeenCalledWith(
       MANAGED_CODEX_RELEASES_FEED_URL,
       expect.any(Object),

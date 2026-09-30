@@ -13,6 +13,7 @@ import type {
   PwrSuiteInstallerPlatform,
   PwrSuiteInstallerState,
 } from "../../shared/pwrsuite-installer";
+import { fetchGitHubReleaseMetadata } from "../github-release-cache";
 import { getMainLogger } from "../log";
 
 const installerLog = getMainLogger("pwragent:pwrsuite-installer");
@@ -380,7 +381,9 @@ export class PwrSuiteInstallerService {
       this.options.arch ?? process.arch,
     );
     if (!target) return undefined;
-    const response = await (this.options.fetchFn ?? globalThis.fetch)(
+    const response = await (this.options.fetchFn ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
+      manual: options.fresh, ttlMs: OFFER_TTL_MS,
+    })))(
       `https://api.github.com/repos/pwrdrvr/${REPOSITORIES[app]}/releases/latest`,
       {
         headers: {

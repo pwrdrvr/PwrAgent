@@ -57,8 +57,19 @@ import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
+/** The launch entry also identifies detached profile instances during cleanup. */
+export const ELECTRON_E2E_ENTRY = path.join(fixtureDir, "electron-bootstrap.mjs");
+
+/** Apply after spec overrides; profile helper processes inherit both values. */
+export function configureElectronE2eReleaseEnv(env: Record<string, string>): void {
+  env.PWRAGENT_E2E = "1";
+  const preload = path.join(fixtureDir, "github-release-stubs.cjs");
+  env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require ${JSON.stringify(preload)}`]
+    .filter(Boolean).join(" ");
+}
+
 /**
- * The built main-process entry every E2E launch runs. Exported so callers
+ * The built main-process entry imported by the E2E bootstrap. Exported so callers
  * that need to check for a build (the pre-flight canary) cannot drift from
  * the path the harness actually launches — a stale copy would silently turn
  * such a check into a no-op that reports success.
@@ -344,6 +355,7 @@ export async function launchElectronApp(
       env[key] = value;
     }
   }
+  configureElectronE2eReleaseEnv(env);
   anchorWindowsPwragentRoot(env);
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {
@@ -396,7 +408,7 @@ export async function launchElectronApp(
 
   const electronApp = await electron.launch({
     args: [
-      DESKTOP_MAIN_ENTRY,
+      ELECTRON_E2E_ENTRY,
       // Hardware video codecs leak kernel objects inside a
       // Virtualization.framework guest (the Tart macOS VMs): every
       // VideoToolbox init creates an

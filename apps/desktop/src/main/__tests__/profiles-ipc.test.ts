@@ -293,7 +293,7 @@ describe("profile IPC helpers", () => {
     expect(fs.existsSync(response.profileDir)).toBe(true);
   });
 
-  it("openDesktopPwrAgentProfile normalizes and preserves the E2E secret-storage opt-out", async () => {
+  it("openDesktopPwrAgentProfile normalizes and preserves E2E network and secret-storage isolation", async () => {
     const root = createRoot();
     const env = {
       [PWRAGENT_HOME_ENV]: root,
@@ -304,18 +304,36 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
     vi.stubEnv(SECRET_STORAGE_DISABLED_ENV, "1");
+    vi.stubEnv("PWRAGENT_E2E", "1");
+    vi.stubEnv("NODE_OPTIONS", '--require "/fixture/github-release-stubs.cjs"');
     const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
 
-    const response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
+    const previousArgv = process.argv;
+    const previousDefaultApp = Object.getOwnPropertyDescriptor(process, "defaultApp");
+    process.argv = [process.execPath, "/fixture/electron-bootstrap.mjs"];
+    Object.defineProperty(process, "defaultApp", { configurable: true, value: true });
+    let response;
+    try {
+      response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
+    } finally {
+      process.argv = previousArgv;
+      if (previousDefaultApp) {
+        Object.defineProperty(process, "defaultApp", previousDefaultApp);
+      } else {
+        Reflect.deleteProperty(process, "defaultApp");
+      }
+    }
 
     expect(response).toEqual({ opened: true, profile: "my-work-profile" });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
-      expect.arrayContaining(["--profile", "my-work-profile"]),
+      expect.arrayContaining(["/fixture/electron-bootstrap.mjs", "--profile", "my-work-profile"]),
       expect.objectContaining({
         env: expect.objectContaining({
           [PWRAGENT_PROFILE_ENV]: "my-work-profile",
           [SECRET_STORAGE_DISABLED_ENV]: "1",
+          PWRAGENT_E2E: "1",
+          NODE_OPTIONS: '--require "/fixture/github-release-stubs.cjs"',
         }),
       }),
     );

@@ -35,6 +35,8 @@ import {
   prepareForUpdateInstall,
 } from "./update-install-state";
 
+import { fetchGitHubReleaseMetadata, reserveAppReleaseCheck, ReleaseCheckDeferredError } from "./github-release-cache";
+
 const log = getMainLogger("pwragent:updater");
 const GITHUB_RELEASES_URL =
   "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30";
@@ -49,6 +51,7 @@ const RATE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1_000;
 
 let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
+let deferredUpdateCheckTimer: ReturnType<typeof setTimeout> | undefined;
 let periodicUpdateCheckTimer: ReturnType<typeof setInterval> | undefined;
 let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
 type UpdateSelectionKey = `${DesktopUpdateTrain}:${DesktopUpdateChannel}`;
@@ -732,6 +735,7 @@ async function runAppUpdateCheck(
 
   updateCheckInFlight = (async (): Promise<AppUpdateCheckResult> => {
     try {
+      reserveAppReleaseCheck(trigger === "manual" || trigger === "menu" || trigger === "selection");
       const {
         channel: updateChannel,
         train: updateTrain,
@@ -861,6 +865,18 @@ async function runAppUpdateCheck(
         version: result.updateInfo.version,
       });
     } catch (err) {
+      if (err instanceof ReleaseCheckDeferredError) {
+        if (trigger === "startup" || trigger === "periodic" || trigger === "discovery") {
+          if (!deferredUpdateCheckTimer) {
+            deferredUpdateCheckTimer = setTimeout(() => {
+              deferredUpdateCheckTimer = undefined;
+              void checkForAppUpdatesNow("periodic");
+            }, Math.max(1_000, err.retryAt - Date.now()));
+            deferredUpdateCheckTimer.unref?.();
+          }
+        }
+        return { status: "skipped", reason: err.message };
+      }
       const result = {
         status: "error",
         message:
@@ -1266,8 +1282,8 @@ function githubReleaseHeaders(etag?: string): HeadersInit {
     Accept: "application/vnd.github+json",
     "User-Agent": "PwrAgent",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    // A conditional request that answers 304 is not charged against the
-    // GitHub rate limit, so revalidation stays free while nothing ships.
+    // GitHub exempts a 304 from the primary quota only when authenticated.
+    // Anonymous conditional requests still need the persistent request budget.
     ...(etag ? { "If-None-Match": etag } : {}),
   };
 }
@@ -1309,14 +1325,14 @@ function rateLimitResetFromResponse(response: Response): number | undefined {
     : now + RATE_LIMIT_FALLBACK_BACKOFF_MS;
 }
 
-async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
+async function fetchGitHubReleases(manual: boolean): Promise<GitHubRelease[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(GITHUB_RELEASES_URL, {
+    const response = await fetchGitHubReleaseMetadata(GITHUB_RELEASES_URL, {
       headers: githubReleaseHeaders(releaseCache?.etag),
       signal: controller.signal,
-    });
+    }, { manual });
     if (response.status === 304 && releaseCache) {
       releaseCache = { ...releaseCache, fetchedAt: Date.now() };
       rateLimitResetAt = undefined;
@@ -1383,7 +1399,7 @@ async function readGitHubReleases(
     throw rateLimitedError(rateLimitResetAt);
   }
   if (!releaseFetchInFlight) {
-    releaseFetchInFlight = fetchGitHubReleases().finally(() => {
+    releaseFetchInFlight = fetchGitHubReleases(maxAgeMs === 0).finally(() => {
       releaseFetchInFlight = undefined;
     });
   }

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type UpdateEventHandler = (info?: {
@@ -27,6 +30,18 @@ const subscribeConfigStoreMock = vi.fn(
 const logInfoMock = vi.fn();
 const logWarnMock = vi.fn();
 const fetchMock = vi.fn();
+let durableCacheEnabled = false;
+vi.mock("../github-release-cache", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github-release-cache")>();
+  return {
+    ...actual,
+    reserveAppReleaseCheck: (...args: Parameters<typeof actual.reserveAppReleaseCheck>) => {
+      if (durableCacheEnabled) actual.reserveAppReleaseCheck(...args);
+    },
+    fetchGitHubReleaseMetadata: (...args: Parameters<typeof actual.fetchGitHubReleaseMetadata>) =>
+      durableCacheEnabled ? actual.fetchGitHubReleaseMetadata(...args) : globalThis.fetch(args[0], args[1]),
+  };
+});
 
 const autoUpdaterMock = {
   allowDowngrade: false,
@@ -224,6 +239,7 @@ describe("auto updater", () => {
   }
 
   beforeEach(() => {
+    durableCacheEnabled = false;
     vi.resetModules();
     vi.useFakeTimers();
     setPlatform("darwin");
@@ -1202,7 +1218,9 @@ describe("auto updater", () => {
       });
     });
 
-    it("walks the whole machine without reaching GitHub", async () => {
+    it.each(["development", "production"])("walks the fake without GitHub under NODE_ENV=%s", async (nodeEnv) => {
+      process.env.NODE_ENV = nodeEnv;
+      process.env.PWRAGENT_E2E = "1";
       const updater = await importAutoUpdater();
 
       await expect(runFakeCheck(updater, "menu")).resolves.toEqual({
@@ -1681,13 +1699,67 @@ describe("auto updater", () => {
     expect(stale.stable.latest.unavailableReason).toBeUndefined();
   });
 
+  it("bounds production launches across restarts and a new profile, without delaying manual checks", async () => {
+    durableCacheEnabled = true;
+    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+    const root = mkdtempSync(path.join(tmpdir(), "updater-restarts-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    const previousProfile = process.env.PWRAGENT_PROFILE;
+    process.env.PWRAGENT_HOME = root;
+    try {
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify([githubRelease("v1.0.0-beta.8")])));
+      for (let launch = 0; launch < 20; launch++) {
+        const now = Date.now();
+        vi.clearAllTimers(); // Exit the old process without rewinding fake time.
+        vi.setSystemTime(now);
+        vi.resetModules();
+        process.env.PWRAGENT_PROFILE = `screenshot-${launch}`;
+        const updater = await importAutoUpdater();
+        expect((await updater.checkForAppUpdatesNow("startup")).status).toBe("skipped");
+        await updater.readAppUpdateReleaseVersions();
+        vi.setSystemTime(Date.now() + 3_000);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(checkForUpdatesMock).not.toHaveBeenCalled();
+      const now = Date.now();
+      vi.clearAllTimers();
+      vi.setSystemTime(now);
+      vi.resetModules();
+      (await importAutoUpdater()).initAutoUpdater();
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+      vi.resetModules();
+      const eligible = await importAutoUpdater();
+      expect((await eligible.checkForAppUpdatesNow("startup")).status).toBe("skipped");
+      vi.resetModules();
+      process.env.PWRAGENT_PROFILE = "brand-new-profile";
+      const newProfile = await importAutoUpdater();
+      await newProfile.checkForAppUpdatesNow("startup");
+      await newProfile.readAppUpdateReleaseVersions();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+      await newProfile.checkForAppUpdatesNow("manual");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(checkForUpdatesMock).toHaveBeenCalledTimes(2);
+    } finally {
+      if (previousHome === undefined) delete process.env.PWRAGENT_HOME;
+      else process.env.PWRAGENT_HOME = previousHome;
+      if (previousProfile === undefined) delete process.env.PWRAGENT_PROFILE;
+      else process.env.PWRAGENT_PROFILE = previousProfile;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("makes no update requests during an E2E run", async () => {
     process.env.PWRAGENT_E2E = "1";
     const updater = await importAutoUpdater();
 
     updater.initAutoUpdater();
     const result = await updater.checkForAppUpdatesNow("startup");
-    await vi.advanceTimersByTimeAsync(updater.APP_UPDATE_CHECK_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(2 * updater.APP_UPDATE_CHECK_INTERVAL_MS);
+    await updater.checkForAppUpdatesNow("manual");
+    await updater.readAppUpdateReleaseVersions();
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
