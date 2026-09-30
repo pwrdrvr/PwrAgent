@@ -80,7 +80,6 @@ export function buildExitErrorSuffix(output: string): string {
   return `: ${tail}`;
 }
 
-export const DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS = 10 * 60 * 1_000;
 export const CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV =
   "PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS";
 
@@ -1623,10 +1622,10 @@ function describeSpawnError(
   return error.message;
 }
 
-function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
+function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number | undefined {
   const rawValue = env[CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]?.trim();
   if (!rawValue) {
-    return DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS;
+    return undefined;
   }
 
   const parsed = Number(rawValue);
@@ -1635,7 +1634,7 @@ function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
       env: CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
       value: rawValue,
     });
-    return DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS;
+    return undefined;
   }
 
   return Math.round(parsed);

@@ -19,11 +19,13 @@ describe("FederationRpcEndpoint", () => {
       method: "backend.getNavigationQueryPage",
       params: {},
       signal: controller.signal,
+      timeoutMs: null,
     });
     controller.abort(new Error("Last window closed"));
     await expect(pending).rejects.toThrow("Last window closed");
     expect((endpoint as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
     expect(sent[0]).not.toHaveProperty("signal");
+    expect(sent[0]).not.toHaveProperty("deadlineAt");
     expect(endpoint.receiveEnvelope({
       id: "late",
       protocolVersion: 1,
@@ -82,6 +84,37 @@ describe("FederationRpcEndpoint", () => {
     expect(
       (endpoint as unknown as { pending: Map<string, unknown> }).pending.size,
     ).toBe(0);
+  });
+
+  it("keeps an explicitly unbounded request pending until its response arrives", async () => {
+    vi.useFakeTimers();
+    const sent: FederationProtocolEnvelope[] = [];
+    const endpoint = new FederationRpcEndpoint({
+      localInstanceId: "client_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+
+    const request = endpoint.request({
+      method: "backend.setCodexThreadEnvironment",
+      params: {},
+      timeoutMs: null,
+    });
+    expect(sent[0]).not.toHaveProperty("deadlineAt");
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect((endpoint as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+    endpoint.receiveEnvelope({
+      id: "response",
+      protocolVersion: 1,
+      kind: "response",
+      requestId: sent[0]!.id,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "client_one",
+      createdAt: Date.now(),
+      result: { threadId: "thread-1" },
+    });
+    await expect(request).resolves.toEqual({ threadId: "thread-1" });
   });
 
   it("does not send a request after its shared deadline has expired", async () => {
