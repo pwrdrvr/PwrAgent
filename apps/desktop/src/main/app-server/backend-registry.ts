@@ -41090,14 +41090,17 @@ export class DesktopBackendRegistry {
   private async handleCodexAppServerUnexpectedExit(): Promise<void> {
     const threadIds = [...this.liveCodexToolItemsByThread.keys()];
     this.liveCodexToolItemsByThread.clear();
-    await Promise.all(threadIds.map((threadId) => this.emit({
-      backend: "codex",
-      notification: {
-        method: "thread/status/changed",
-        params: { threadId, status: { type: "notLoaded" } },
-      },
-    })));
-    await this.maybeRestartCodexForManagedRuntimeChange();
+    try {
+      await Promise.all(threadIds.map((threadId) => this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId, status: { type: "notLoaded" } },
+        },
+      })));
+    } finally {
+      await this.maybeRestartCodexForManagedRuntimeChange();
+    }
   }
 
   private emitEvent(event: AgentEvent): Promise<void> {
