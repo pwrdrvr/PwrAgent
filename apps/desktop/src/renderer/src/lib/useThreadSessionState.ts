@@ -3006,12 +3006,15 @@ function withCompletedAssistantTimestamp(
 function settleTurnActivity(
   entry: AppServerThreadEntry,
   turn: AppServerThreadTurnMetadata,
+  liveToolItemIds?: ReadonlySet<string>,
 ): AppServerThreadEntry {
   if (entry.type !== "activity") return { ...entry, turn };
-  // A terminal turn cannot still own running tools. Without an item result,
-  // mark them cancelled rather than inventing a successful tool response.
+  // A completed Codex turn can leave a yielded Code Mode tool running. Keep
+  // only items with a live start notification pending their completion; other
+  // unfinished items have no evidence of work after the turn boundary.
   const details = entry.details.map((detail) =>
     detail.status === "in_progress"
+      && !(turn.status === "completed" && liveToolItemIds?.has(detail.id))
       ? { ...detail, status: "cancelled" as const }
       : detail,
   );
@@ -3028,7 +3031,8 @@ function settleTurnActivity(
 function withCompletedResponseTurnMetadata(
   response: AppServerReadThreadResponse | undefined,
   turn: AppServerThreadTurnMetadata | undefined,
-  unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"]
+  unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"],
+  liveToolItemIds?: ReadonlySet<string>,
 ): AppServerReadThreadResponse | undefined {
   if (!response || !turn) {
     return response;
@@ -3042,7 +3046,7 @@ function withCompletedResponseTurnMetadata(
         entry.turn?.id === turn.id
           ? entry.type === "message"
             ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
-            : settleTurnActivity(entry, turn)
+            : settleTurnActivity(entry, turn, liveToolItemIds)
           : entry
       ),
     },
@@ -4763,6 +4767,13 @@ export function useThreadSessionState(params: {
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
+  // Tool item notifications can outlive turn/completed when Code Mode yields
+  // a running cell. This stays separate from transcript retention so an
+  // observed thread can still show its live work in navigation.
+  const liveToolItemsRef = useRef<Record<string, Record<string, string>>>({});
+  const [liveToolItemsByThread, setLiveToolItemsByThread] = useState<
+    Record<string, Record<string, string>>
+  >({});
   // Keep owner baselines separate from optimistic/live state so an unchanged
   // recovery read cannot reuse a locally cleared approval. Share entry objects.
   const conditionalReadsRef = useRef(new Map<string, AppServerReadThreadResponse>());
@@ -5748,6 +5759,61 @@ export function useThreadSessionState(params: {
 
       const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
+      if (event.backend === "codex" && (
+        !liveTranscriptEventFiltering || !isUnfocusedThread || isRetainedRemoteThread
+      )) {
+        const method = event.notification.method;
+        if (method === "item/started" || method === "item/completed") {
+          const item = getNotificationItem(event.notification.params);
+          const detail = item ? buildLiveToolDetails(item)[0] : undefined;
+          if (detail) {
+            const currentItems = liveToolItemsRef.current[targetThreadKey] ?? {};
+            if (method === "item/started" && (
+              item?.status === "inProgress" || item?.status === "in_progress"
+            )) {
+              const turnId = readNotificationTurnId(event.notification);
+              if (turnId && currentItems[detail.id] !== turnId) {
+                const next = {
+                  ...liveToolItemsRef.current,
+                  [targetThreadKey]: { ...currentItems, [detail.id]: turnId },
+                };
+                liveToolItemsRef.current = next;
+                setLiveToolItemsByThread(next);
+              }
+            } else if (currentItems[detail.id]) {
+              const nextItems = { ...currentItems };
+              delete nextItems[detail.id];
+              const next = { ...liveToolItemsRef.current };
+              if (Object.keys(nextItems).length > 0) {
+                next[targetThreadKey] = nextItems;
+              } else {
+                delete next[targetThreadKey];
+              }
+              liveToolItemsRef.current = next;
+              setLiveToolItemsByThread(next);
+            }
+          }
+        } else if (method === "turn/failed" || method === "turn/cancelled") {
+          const turnId = readNotificationTurnId(event.notification);
+          const currentItems = liveToolItemsRef.current[targetThreadKey];
+          if (turnId && currentItems) {
+            const nextItems = Object.fromEntries(
+              Object.entries(currentItems).filter(([, itemTurnId]) => itemTurnId !== turnId),
+            );
+            if (Object.keys(nextItems).length !== Object.keys(currentItems).length) {
+              const next = { ...liveToolItemsRef.current };
+              if (Object.keys(nextItems).length > 0) {
+                next[targetThreadKey] = nextItems;
+              } else {
+                delete next[targetThreadKey];
+              }
+              liveToolItemsRef.current = next;
+              setLiveToolItemsByThread(next);
+            }
+          }
+        }
+      }
       if (
         event.notification.method === "turn/completed"
         || event.notification.method === "turn/failed"
@@ -5764,7 +5830,6 @@ export function useThreadSessionState(params: {
           },
         }).catch(() => undefined);
       }
-      const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
       // Another window can still subscribe to an evicted thread. Its events
       // must not recreate this window's discarded transcript cache.
       if (managesRemoteRetentionRef.current && event.federationTarget?.scope === "remote"
@@ -6420,6 +6485,9 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          const liveToolItemIds = new Set(
+            Object.keys(liveToolItemsRef.current[targetThreadKey] ?? {}),
+          );
           const completedTurnMatchesActive = terminalTurnMatchesActiveTurn(
             current,
             completedTurn?.id,
@@ -6572,7 +6640,8 @@ export function useThreadSessionState(params: {
           const responseWithCompletedTurn = withCompletedResponseTurnMetadata(
             current.response,
             completedTurn,
-            unphasedAssistantCompletionPhase
+            unphasedAssistantCompletionPhase,
+            liveToolItemIds,
           );
           const nextResponse =
             nextEntries.length > 0
@@ -6600,7 +6669,11 @@ export function useThreadSessionState(params: {
             .filter((entry) => entry.type !== "message")
             .map((entry) =>
               entry.turn?.id === completedTurn?.id && completedTurn
-                ? settleTurnActivity(entry, completedTurn)
+                ? settleTurnActivity(
+                    entry,
+                    completedTurn,
+                    liveToolItemIds,
+                  )
                 : entry
             );
           const retainedLiveEntryStore =
@@ -6625,7 +6698,11 @@ export function useThreadSessionState(params: {
                         unphasedAssistantCompletionPhase ?? entry.phase,
                     },
                   )
-                : settleTurnActivity(entry, completedTurn);
+                : settleTurnActivity(
+                    entry,
+                    completedTurn,
+                    liveToolItemIds,
+                  );
               retainedLiveEntryStore.set(entryId, completedEntry);
               didCompleteRetainedLiveEntry = true;
             }
@@ -7756,11 +7833,15 @@ export function useThreadSessionState(params: {
   const thinkingThreadKeys = useMemo(
     () =>
       Object.fromEntries(
-        Object.entries(sessions)
-          .filter(([, session]) => hasThinkingState(session))
-          .map(([sessionThreadKey]) => [sessionThreadKey, true])
+        [
+          ...Object.entries(sessions)
+            .filter(([, session]) => hasThinkingState(session))
+            .map(([sessionThreadKey]) => [sessionThreadKey, true] as const),
+          ...Object.keys(liveToolItemsByThread)
+            .map((sessionThreadKey) => [sessionThreadKey, true] as const),
+        ],
       ),
-    [sessions]
+    [sessions, liveToolItemsByThread]
   );
   const approvalRequestThreadKeys = useMemo(
     () =>
@@ -7788,9 +7869,13 @@ export function useThreadSessionState(params: {
         ? undefined
         : selectedSession?.pendingStatusText ??
           (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
+            || (threadKey && liveToolItemsByThread[threadKey])
             ? "Thinking"
             : undefined);
-  const threadBusy = selectedSession ? hasThinkingState(selectedSession) : false;
+  const threadBusy = Boolean(
+    (selectedSession && hasThinkingState(selectedSession))
+    || (threadKey && liveToolItemsByThread[threadKey]),
+  );
   const transientMessages = useMemo(
     () => [
       ...(selectedSession?.settledTransientMessages ?? []),

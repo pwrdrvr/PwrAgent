@@ -23523,6 +23523,62 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("keeps a yielded Codex tool in the quit snapshot after its turn ends", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      threads: [{
+        id: "thread-1",
+        title: "Long command",
+        titleSource: "explicit",
+        threadStatus: "idle",
+        linkedDirectories: [],
+        source: "codex",
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.listThreads({ backend: "codex" });
+
+    await codexClient.emit({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "inProgress", command: "pnpm test" },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-1"],
+      threadTitles: { "codex:thread-1": "Long command" },
+    });
+
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "completed", command: "pnpm test" },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+    await registry.close();
+  });
+
   it("preserves a newer idle observation over a stale active Codex thread list", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/read"] },
