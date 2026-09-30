@@ -1260,8 +1260,8 @@ export async function readTranscriptImageProtocolRequest(
   };
 }
 
-/** Renderer reads are limited to PwrAgent-owned transcript and input images. */
-export async function readPwragentTranscriptImageForRenderer(
+/** Match the image protocol's approved local roots before exposing bytes. */
+export async function readTranscriptImageForRenderer(
   requestUrl: string,
   options?: TranscriptImageProtocolOptions,
 ): Promise<FederatedTranscriptImageResponse> {
@@ -1270,33 +1270,6 @@ export async function readPwragentTranscriptImageForRenderer(
   }
   const resolution = await resolveTranscriptImageProtocolRequest(requestUrl, options);
   if (!resolution.ok) throw new Error(resolution.message);
-
-  const env = options?.env ?? process.env;
-  const homeDir = options?.homeDir ?? os.homedir();
-  const roots = [
-    resolvePwragentRoot({ env, homeDir }),
-    resolvePwragentRoot({ env: {}, homeDir }),
-  ];
-  let ownedImage = false;
-  for (const root of roots) {
-    let profilesRoot: string;
-    try {
-      profilesRoot = await realpath(path.join(root, "profiles"));
-    } catch {
-      continue;
-    }
-    if (!isPathInsideRoot(resolution.path, profilesRoot)) continue;
-    const segments = path.relative(profilesRoot, resolution.path).split(path.sep);
-    if (
-      segments.length >= 4
-      && segments[1] === "state"
-      && (segments[2] === "thread-images" || segments[2] === "image-inputs")
-    ) {
-      ownedImage = true;
-      break;
-    }
-  }
-  if (!ownedImage) throw new Error("Transcript image path is not owned by PwrAgent");
 
   const file = await open(resolution.path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -342,6 +342,8 @@ test("copies a transcript SVG as PNG for the composer", async () => {
 
 test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
   const fixture = await createThreadImageFitFixture();
+  const homeRoot = path.join(path.dirname(fixture.fixturePath), "home");
+  const svgPath = path.join(homeRoot, ".codex", "worktrees", "flamegraph.svg");
   const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
   const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160" onload="init(evt)">
@@ -369,16 +371,18 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     <text id="search" x="230" y="35">Search</text>
     <text id="matched" x="230" y="55"> </text>
   </svg>`;
+  await mkdir(path.dirname(svgPath), { recursive: true });
+  await writeFile(svgPath, svg);
   const image = {
     type: "image",
-    url: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    url: pathToFileURL(svgPath).toString(),
     alt: "Interactive flamegraph",
   };
   for (const message of [...read.result.entries, ...read.result.messages]) {
     if (message.id === "message-image-fit-2") message.parts[2] = image;
   }
   await writeFile(fixture.fixturePath, JSON.stringify(replay));
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath, homeRoot });
 
   try {
     await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
@@ -391,6 +395,10 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     await frame.locator("#frame").click();
     await expect(frame.locator("#state")).toHaveText("Zoomed");
 
+    await frame.locator("#search").click();
+    await app.window.getByRole("textbox", { name: "Search SVG frames" }).press("Escape");
+    await expect(app.window.getByRole("dialog", { name: "Expanded image" })).toBeVisible();
+    await expect(app.window.getByRole("textbox", { name: "Search SVG frames" })).toBeHidden();
     await frame.locator("#search").click();
     await app.window.getByRole("textbox", { name: "Search SVG frames" }).fill("frame");
     await app.window.getByRole("button", { name: "Find" }).click();

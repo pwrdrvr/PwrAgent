@@ -11,6 +11,7 @@ import {
 import { ImageCopyButton } from "./ImageCopyButton";
 import { useLightboxGestures } from "./useLightboxGestures";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import {
   tooltipHandlers,
   useViewportTooltip,
@@ -264,7 +265,13 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   const [svgSearchTerm, setSvgSearchTerm] = useState("");
   const [svgSearchError, setSvgSearchError] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
+  const search = useRef<HTMLFormElement>(null);
   const loadController = useRef<AbortController>(null);
+  useDismissableLayer({
+    open: svgActive && svgSearchOpen,
+    onDismiss: () => setSvgSearchOpen(false),
+    surfaceRef: search,
+  });
 
   useEffect(() => () => loadController.current?.abort(), []);
   useEffect(() => {
@@ -345,18 +352,13 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
           {...gestures.imageHandlers} />
       )}
       {svgActive && svgSearchOpen ? (
-        <form className="image-lightbox__svg-search" onSubmit={(event) => {
+        <form ref={search} className="image-lightbox__svg-search" onSubmit={(event) => {
           event.preventDefault();
           frame.current?.contentWindow?.postMessage({
             type: "pwragent-interactive-svg-search-term",
             term: svgSearchTerm,
           }, "*");
           setSvgSearchOpen(false);
-        }} onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.stopPropagation();
-            setSvgSearchOpen(false);
-          }
         }}>
           <input aria-label="Search SVG frames" autoFocus value={svgSearchTerm}
             onChange={(event) => setSvgSearchTerm(event.target.value)} />
