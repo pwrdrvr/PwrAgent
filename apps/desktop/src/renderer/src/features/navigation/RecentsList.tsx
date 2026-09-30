@@ -31,6 +31,13 @@ import {
 } from "./NativeSubAgentsDisclosure";
 import { SubthreadPagination } from "./SubthreadPagination";
 import { ThreadRow } from "./ThreadRow";
+import {
+  interleaveStartingSubthreads,
+  selectUnlandedStartingThreads,
+  StartingThreadRow,
+  traysStartingSubthreads,
+} from "./StartingThreadRow";
+import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 
 type RecentsListProps = {
   presentationOrder?: NavigationPresentationOrder;
@@ -51,6 +58,13 @@ type RecentsListProps = {
   selectedThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
+  /**
+   * Threads still starting. Each renders where its thread will land: under
+   * its parent when that row is here, otherwise at the top, where a new
+   * thread sorts in every lens that renders this list.
+   */
+  startingThreads?: PendingLaunchpadCreation[];
+  onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
@@ -146,6 +160,14 @@ export function RecentsList(props: RecentsListProps) {
   // only direct children would silently drop it from this lens.
   const trays = createSubthreadTrays(childrenByParentKey);
   for (const thread of topLevelThreads) trays.addTrayOwner(thread);
+  const renderedThreadKeys = new Set(topLevelKeys);
+  for (const key of topLevelKeys) {
+    for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
+  }
+  const startingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
+  const startingSubthreads = startingThreads.filter((creation) =>
+    creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
+  const startingRootThreads = startingThreads.filter((creation) => !startingSubthreads.includes(creation));
   const renderSubthreads = (parent: NavigationPresentedThread) => {
     const parentKey = threadSummaryIdentityKey(parent);
     // Already depth-first ordered by the tray. Re-sorting here by this
@@ -167,9 +189,13 @@ export function RecentsList(props: RecentsListProps) {
       parent,
       "thread_grouping",
     );
+    // A starting child opens its tray: the created thread does the same when
+    // it lands, so the row is already where it will be.
+    const startsSubthread = traysStartingSubthreads(parentKey, children, startingSubthreads);
     if (
-      ((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
-      || subthreadsCollapsed
+      (((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
+        || subthreadsCollapsed)
+      && !startsSubthread
     ) {
       return null;
     }
@@ -182,7 +208,25 @@ export function RecentsList(props: RecentsListProps) {
         {nativeSubAgentCount > 0 ? (
           <NativeSubAgentsDisclosure thread={parent} />
         ) : null}
-        {children.flatMap((child) => {
+        {interleaveStartingSubthreads({
+          trayKey: parentKey,
+          subtree: children,
+          depthOf: trays.depth,
+          creations: startsSubthread ? startingSubthreads : [],
+        }).flatMap((entry) => {
+          if (entry.kind === "starting") {
+            return [
+              <StartingThreadRow
+                key={entry.creation.selectionKey}
+                creation={entry.creation}
+                locationMode="label"
+                nestedDepth={entry.depth}
+                selected={props.selectedThreadKey === entry.creation.selectionKey}
+                onSelect={props.onSelectStartingThread}
+              />,
+            ];
+          }
+          const child = entry.thread;
           const childKey = threadSummaryIdentityKey(child);
           const rowDropKey = `${parentKey}:${childKey}`;
           // A row plus its own worker group, as siblings of this list. A
@@ -386,6 +430,16 @@ export function RecentsList(props: RecentsListProps) {
 
   return (
     <div className="sidebar-list sidebar-list--dense" role="list">
+      {startingRootThreads.map((creation) => (
+        <div key={creation.selectionKey} className="thread-group">
+          <StartingThreadRow
+            creation={creation}
+            locationMode="label"
+            selected={props.selectedThreadKey === creation.selectionKey}
+            onSelect={props.onSelectStartingThread}
+          />
+        </div>
+      ))}
       {topLevelThreads.map((thread) => renderThreadGroup(thread))}
     </div>
   );

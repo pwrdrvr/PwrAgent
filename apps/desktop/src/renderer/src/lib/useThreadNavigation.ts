@@ -21,6 +21,7 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
+  FederationInstanceId,
   FederationRemoteTarget,
   FederationTarget,
   HandoffThreadWorkspaceRequest,
@@ -2691,9 +2692,31 @@ export type PendingLaunchpadCreation = {
   composerScopeKey?: string;
   /** Matches this creation's setup progress events. */
   setupProgressKey: string;
+  /**
+   * The row a sub-thread launchpad's thread nests under, and the card it lands
+   * directly below. Keys as `threadSummaryIdentityKey` spells them.
+   */
+  parentThreadKey?: string;
+  sourceThreadKey?: string;
+  /**
+   * The created thread, once the owner answers. Its row takes over this
+   * creation's slot as soon as it renders there.
+   */
+  threadKey?: string;
   title: string;
   input: AppServerTurnInputItem[];
 };
+
+function buildLaunchpadRelativeThreadKey(
+  backend: AppServerBackendKind,
+  threadId: string | undefined,
+  instanceId: FederationInstanceId | undefined,
+): string | undefined {
+  if (!threadId) return undefined;
+  return instanceId
+    ? federatedThreadIdentityKey({ backend, target: { scope: "remote", instanceId }, threadId })
+    : buildThreadIdentityKey(backend, threadId);
+}
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
@@ -6699,6 +6722,14 @@ export function useThreadNavigation(
       const setupProgressKey = releasesLaunchpad
         ? `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${creationId}`
         : directoryKey;
+      const materializeParentThreadId =
+        parentThreadId ??
+        launchpad.parentThreadId ??
+        getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+      const materializeParentThreadBackend =
+        launchpad.parentThreadBackend ?? launchpad.backend;
+      const materializeParentThreadInstanceId =
+        launchpad.parentThreadInstanceId;
       const pendingCreation: PendingLaunchpadCreation = {
         federatedSession: federatedSelection,
         selectionKey: launchpadSelectionKey,
@@ -6707,6 +6738,16 @@ export function useThreadNavigation(
         launchpad,
         composerScopeKey,
         setupProgressKey,
+        parentThreadKey: buildLaunchpadRelativeThreadKey(
+          materializeParentThreadBackend,
+          materializeParentThreadId,
+          materializeParentThreadInstanceId,
+        ),
+        sourceThreadKey: buildLaunchpadRelativeThreadKey(
+          materializeParentThreadBackend,
+          materializeParentThreadId && (launchpad.sourceThreadId ?? materializeParentThreadId),
+          materializeParentThreadInstanceId,
+        ),
         title: input?.find((item) => item.type === "text")?.text
           ?? launchpad.prompt ?? "New thread",
         input: input ?? [],
@@ -6746,14 +6787,6 @@ export function useThreadNavigation(
       }
       let materialized = false;
       try {
-        const materializeParentThreadId =
-          parentThreadId ??
-          launchpad.parentThreadId ??
-          getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
-        const materializeParentThreadBackend =
-          launchpad.parentThreadBackend ?? launchpad.backend;
-        const materializeParentThreadInstanceId =
-          launchpad.parentThreadInstanceId;
         const federationTarget = submittedFederationTarget;
         if (!desktopApi.getNavigationLaunchpadConfig) throw new Error("Upgrade this instance to load launchpad configuration before sending.");
         const configuration = initialConfiguration ?? await desktopApi.getNavigationLaunchpadConfig({ protocol: 2, directoryKey, federationTarget });
@@ -6943,6 +6976,14 @@ export function useThreadNavigation(
           }));
         }
         materialized = true;
+        const landing = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+        if (landing) {
+          pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {
+            ...landing,
+            threadKey: nextThreadKey,
+          });
+          setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+        }
         onMaterialized?.(
           namedOptimisticMaterializedThread,
           composerScopeKey ?? `launchpad:${directoryKey}`,

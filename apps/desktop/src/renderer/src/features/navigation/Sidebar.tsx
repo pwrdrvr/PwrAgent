@@ -595,6 +595,10 @@ export function Sidebar(props: SidebarProps) {
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
+  // A starting thread renders where its thread will land. Drafts holds only
+  // threads with unsent replies, which a new thread never is, so it lands
+  // nowhere there.
+  const startingThreads = props.browseMode === "drafts" ? [] : props.pendingLaunchpadCreations ?? [];
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
     !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
@@ -2126,30 +2130,6 @@ export function Sidebar(props: SidebarProps) {
           onPointerOut={hoverStableSnapshot.onPointerOut}
           onPointerOver={hoverStableSnapshot.onPointerOver}
         >
-          {props.pendingLaunchpadCreations?.map((creation) => (
-            <button
-              key={creation.selectionKey}
-              className="sidebar-pending-thread"
-              aria-current={props.selectedItemKey === creation.selectionKey ? "true" : undefined}
-              aria-label={`${creation.title || "New thread"}, starting in ${creation.directoryLabel}`}
-              onClick={() => props.onSelectPendingLaunchpad?.(creation)}
-              type="button"
-            >
-              <span className="sidebar-pending-thread__heading">
-                <span className="pending-spinner" aria-hidden="true" />
-                <span className="sidebar-pending-thread__title">{creation.title || "New thread"}</span>
-                <span className="sidebar-pending-thread__status">Starting</span>
-              </span>
-              <span className="sidebar-pending-thread__chips" aria-hidden="true">
-                <span className="thread-row__chip">
-                  <span className="thread-row__chip-icon">
-                    <FolderIcon size={12} />
-                  </span>
-                  <span className="thread-row__chip-label">{creation.directoryLabel}</span>
-                </span>
-              </span>
-            </button>
-          ))}
           {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
             <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
           ) : null}
@@ -2162,6 +2142,8 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
+              startingThreads={startingThreads}
+              onSelectStartingThread={props.onSelectPendingLaunchpad}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
               pagedNavigation={props.pagedNavigation}
@@ -2227,7 +2209,7 @@ export function Sidebar(props: SidebarProps) {
               onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
             />
           ) : (
-            renderedThreads.length === 0 ? (
+            renderedThreads.length === 0 && startingThreads.length === 0 ? (
               <p className="sidebar-empty">
                 {props.browseMode === "attention"
                   ? "Nothing running, nothing to review."
@@ -2243,6 +2225,8 @@ export function Sidebar(props: SidebarProps) {
               </p>
             ) : (
               <RecentsList
+                startingThreads={startingThreads}
+                onSelectStartingThread={props.onSelectPendingLaunchpad}
                 pagedNavigation={props.pagedNavigation}
                 resourceIds={lensResources.map((resource) => resource.id)}
                 presentationOrder={hoverStableSnapshot.value.order}

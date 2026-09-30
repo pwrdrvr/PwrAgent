@@ -407,56 +407,6 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("names the project a starting thread belongs to", () => {
-    const onSelectPendingLaunchpad = vi.fn();
-    const creation = {
-      selectionKey: "starting-launchpad:1",
-      directoryKey: "directory:/repo/snap",
-      directoryLabel: "PwrSnap",
-      launchpad: {
-        backend: "codex" as const,
-        directoryKey: "directory:/repo/snap",
-        directoryKind: "directory" as const,
-        directoryLabel: "PwrSnap",
-        directoryPath: "/repo/snap",
-        executionMode: "default" as const,
-        prompt: "test",
-        workMode: "worktree" as const,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      composerScopeKey: "launchpad:starting:1:directory:/repo/snap",
-      setupProgressKey: "starting-launchpad:1",
-      title: "test",
-      input: [],
-    };
-
-    render(
-      <Sidebar
-        backends={backends}
-        browseMode="directories"
-        directories={directories}
-        inboxThreads={[]}
-        loaded
-        loading={false}
-        pendingLaunchpadCreations={[creation]}
-        selectedItemKey="starting-launchpad:1"
-        threads={[]}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onOpenLaunchpad={async () => undefined}
-        onSelectPendingLaunchpad={onSelectPendingLaunchpad}
-        onSelectThread={() => undefined}
-      />,
-    );
-
-    const row = screen.getByRole("button", { name: "test, starting in PwrSnap" });
-    expect(row).toHaveAttribute("aria-current", "true");
-    expect(within(row).getByText("PwrSnap")).toHaveClass("thread-row__chip-label");
-    fireEvent.click(row);
-    expect(onSelectPendingLaunchpad).toHaveBeenCalledWith(creation);
-  });
-
   it("labels a remote window without showing the controller's runtime identity", () => {
     (window as unknown as {
       __pwragentFederationLabel?: unknown;
