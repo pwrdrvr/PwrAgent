@@ -74,6 +74,54 @@ describe("federation backend bridge", () => {
     );
   });
 
+  it("completes environment selection when progress delivery loses its viewer", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const backend = {
+      setCodexThreadEnvironment: vi.fn(async (
+        request: { backend: "codex"; threadId: string },
+        onProgress?: (event: { directoryKey: string; phase: "started" | "stdout"; at: number }) => void,
+      ) => {
+        onProgress?.({ directoryKey: "thread:codex:thread-1", phase: "started", at: 1 });
+        onProgress?.({ directoryKey: "thread:codex:thread-1", phase: "stdout", at: 2 });
+        return { backend: request.backend, threadId: request.threadId };
+      }),
+    } as unknown as FederationBackendOperations;
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    const onEnvironmentSetupProgress = vi.fn(() => {
+      throw new Error("Viewer disconnected");
+    });
+    registerFederationBackendHandlers({ router, backend, onEnvironmentSetupProgress });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "select-environment",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
+        params: { backend: "codex", threadId: "thread-1", environmentId: "node" },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1,
+      },
+    });
+
+    expect(onEnvironmentSetupProgress).toHaveBeenCalledTimes(2);
+    expect(replies.at(-1)).toMatchObject({
+      kind: "response",
+      requestId: "select-environment",
+      result: { backend: "codex", threadId: "thread-1" },
+    });
+  });
+
   it("keeps remote fork and launchpad setup requests unbounded", async () => {
     const request = vi.fn(async () => ({}));
     const client = new FederationRemoteBackendClient(

@@ -921,6 +921,17 @@ export function registerFederationBackendHandlers(params: {
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
 }): void {
+  const forwardEnvironmentSetupProgress = (
+    event: CodexEnvironmentSetupProgressEvent,
+    targetInstanceId: FederationInstanceId,
+  ): void => {
+    try {
+      params.onEnvironmentSetupProgress?.(event, targetInstanceId);
+    } catch {
+      // A disconnected viewer must not interrupt the owner-side setup command.
+    }
+  };
+
   if (params.backend.getNavigationQueryPage) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
@@ -1290,10 +1301,7 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as ForkThreadRequest,
         {
           onCodexEnvironmentSetupProgress: (event) => {
-            params.onEnvironmentSetupProgress?.(
-              event,
-              envelope.sourceInstanceId,
-            );
+            forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
           },
         },
       ),
@@ -1625,10 +1633,7 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.setCodexThreadEnvironment(
         envelope.params as SetCodexThreadEnvironmentRequest,
         (event) => {
-          params.onEnvironmentSetupProgress?.(
-            event,
-            envelope.sourceInstanceId,
-          );
+          forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
         },
       ),
   );
@@ -1730,10 +1735,7 @@ export function registerFederationBackendHandlers(params: {
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
           onCodexEnvironmentSetupProgress: (event) => {
-            params.onEnvironmentSetupProgress?.(
-              event,
-              envelope.sourceInstanceId,
-            );
+            forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
           },
         },
       );
