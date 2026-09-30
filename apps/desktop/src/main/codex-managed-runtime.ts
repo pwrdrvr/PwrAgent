@@ -1,4 +1,4 @@
-import { fetchGitHubReleaseMetadata } from "./github-release-cache.js";
+import { fetchGitHubReleaseMetadata, ReleaseCheckDeferredError } from "./github-release-cache.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import {
@@ -387,6 +387,12 @@ async function fetchLatestCompatibleRelease(
       "X-GitHub-Api-Version": "2022-11-28",
     },
     signal: managedCodexFetchSignal(options.signal),
+  }).catch((error: unknown) => {
+    if (error instanceof ReleaseCheckDeferredError && error.reason === "rate-limit") {
+      // A persisted limit has the same feed fallback as a live 429, without REST.
+      return new Response(null, { status: 429 });
+    }
+    throw error;
   });
   if (response.ok) {
     const releases = await response.json();

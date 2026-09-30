@@ -36,7 +36,7 @@ type Options = {
 };
 
 export class ReleaseCheckDeferredError extends Error {
-  constructor(readonly retryAt: number) {
+  constructor(readonly retryAt: number, readonly reason: "cooldown" | "rate-limit" = "cooldown") {
     super(`Release checks resume at ${new Date(retryAt).toISOString()}.`);
     this.name = "ReleaseCheckDeferredError";
   }
@@ -125,16 +125,16 @@ export async function fetchGitHubReleaseMetadata(
     const blockedUntil = Math.max(state.rateLimitUntil ?? 0, entry.pendingUntil ?? 0,
       options.manual ? 0 : Math.max(freshRootDelay(state, now), entry.nextAttempt ?? 0, budgetUntil));
     if (now < blockedUntil) {
-      return { value: { entry, blockedUntil } };
+      return { value: { entry, blockedUntil, rateLimited: now < (state.rateLimitUntil ?? 0) } };
     }
     state.entries[key] = { ...entry, lastAttempt: now, pendingUntil: now + REQUEST_LEASE_MS,
       nextAttempt: now + ttl };
     state.automaticAttempts = options.manual ? attempts : [...attempts, now];
-    return { value: { entry, blockedUntil: 0 }, changed: true };
+    return { value: { entry, blockedUntil: 0, rateLimited: false }, changed: true };
   });
   if (reservation.blockedUntil) {
     if (reservation.entry.body !== undefined && !options.manual) return cachedResponse(reservation.entry);
-    throw new ReleaseCheckDeferredError(reservation.blockedUntil);
+    throw new ReleaseCheckDeferredError(reservation.blockedUntil, reservation.rateLimited ? "rate-limit" : "cooldown");
   }
   const headers = new Headers(init.headers);
   if (reservation.entry.etag) headers.set("If-None-Match", reservation.entry.etag);

@@ -103,8 +103,8 @@ describe("persistent GitHub release budget", () => {
       "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetAt / 1_000),
     } }));
     expect((await read(APP, { manual: true })).status).toBe(403);
-    await defer(read(GIT, { manual: true }));
-    await defer(read(SNAP));
+    await expect(read(GIT, { manual: true })).rejects.toMatchObject({ reason: "rate-limit", retryAt: resetAt });
+    await expect(read(SNAP)).rejects.toMatchObject({ reason: "rate-limit", retryAt: resetAt });
     expect(() => reserveAppReleaseCheck(true, options())).toThrow(ReleaseCheckDeferredError);
     expect(network).toHaveBeenCalledTimes(1);
     vi.setSystemTime(resetAt);
