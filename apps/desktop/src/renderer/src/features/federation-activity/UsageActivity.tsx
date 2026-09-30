@@ -209,8 +209,10 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const resolved = limitStart(preset, focusAccount(accounts, focusKey, localLabel));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
-      if (bounded < start - 60_000) {
-        // The window began before what was read: read once more from its start.
+      if (Math.abs(bounded - start) > 60_000) {
+        // Read once more over the window itself: from its start when it began
+        // earlier than what was read, and when it began later, so the owners'
+        // helper rollups and bars fit the window instead of straddling its start.
         results = await readAll(enabledSources, bounded, end);
         if (!mounted.current || seq !== readSeq.current) return;
         accounts = accountsOf(results);
@@ -353,14 +355,15 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const grip = event.currentTarget;
     const startY = event.clientY;
     const startHeight = resultsRef.current?.getBoundingClientRect().height ?? USAGE_RESULTS_MIN_HEIGHT;
-    let latest = startHeight;
+    let latest: number | undefined;
     grip.setPointerCapture?.(event.pointerId);
     const move = (next: PointerEvent) => { latest = clampUsageResultsHeight(startHeight + next.clientY - startY); setResultsHeight(latest); };
     const end = () => {
       grip.removeEventListener("pointermove", move);
       grip.removeEventListener("pointerup", end);
       grip.removeEventListener("pointercancel", end);
-      writeStoredUsageResultsHeight(latest);
+      // A click without a drag leaves a list that fills the window as it was.
+      if (latest !== undefined) writeStoredUsageResultsHeight(latest);
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", end);

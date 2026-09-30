@@ -19,7 +19,9 @@ export function usageNotCountedReason(row: OwnedUsageRow, from: number, to: numb
   return "Finished after this period";
 }
 
-const ROLLUP_LABELS: Record<string, string> = { "token-miser": "Token Miser", "title-helper": "Title helper" };
+const ROLLUP_LABELS: Record<string, string> = {
+  "token-miser": "Token Miser", "token-miser-focused": "Token Miser, focused", "title-helper": "Title helper",
+};
 /** "Token Miser · 42 runs" for a summed background-helper line. */
 export function usageRollupLabel(rollup: UsageActivityRollup): string {
   return `${ROLLUP_LABELS[rollup.kind] ?? rollup.kind} · ${rollup.count} ${rollup.count === 1 ? "run" : "runs"}`;

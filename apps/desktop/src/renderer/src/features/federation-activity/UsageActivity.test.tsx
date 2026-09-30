@@ -159,6 +159,10 @@ it("keeps the thread list at the height its grip was set to", async () => {
   const first = render(<UsageActivity desktopApi={{ readUsageActivity }} />);
   const grip = await screen.findByRole("separator", { name: "Resize thread list" });
   expect(document.querySelector(".usage-results")).not.toHaveAttribute("style");
+  // A click without a drag keeps the list filling the window, now and next time.
+  fireEvent.pointerDown(grip, { clientY: 400, pointerId: 1 });
+  fireEvent.pointerUp(grip, { clientY: 400, pointerId: 1 });
+  expect(window.localStorage.getItem("pwragent.usageActivity.layout")).toBeNull();
   // jsdom measures nothing, so the first step lands on the floor and the next adds to it.
   fireEvent.keyDown(grip, { key: "ArrowDown" });
   expect(document.querySelector(".usage-results")).toHaveStyle({ height: "220px" });
@@ -275,9 +279,11 @@ it("starts Since reset at an unexpected reset and says so", async () => {
   render(<UsageActivity desktopApi={{ readUsageActivity }} />);
   expect(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "Since reset" })).toHaveAttribute("aria-pressed", "true");
   expect(await screen.findByText(/Unexpected reset seen/)).toBeInTheDocument();
-  // The window was known to be shorter than the provisional read, so nothing is read twice.
-  expect(readUsageActivity).toHaveBeenCalledTimes(1);
-  expect(readUsageActivity).toHaveBeenCalledWith(expect.objectContaining({ from: now - 8 * 24 * HOUR, to: now }));
+  // The window turned out shorter than the provisional read, so it is read
+  // once more over itself: owners bucket helper rollups by the window read.
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
+  expect(readUsageActivity).toHaveBeenNthCalledWith(1, expect.objectContaining({ from: now - 8 * 24 * HOUR, to: now }));
+  expect(readUsageActivity).toHaveBeenNthCalledWith(2, expect.objectContaining({ from: now - 2.5 * HOUR, to: now }));
   expect(screen.getByRole("img", { name: "Weekly limit 7% used" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect After the reset" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Before the reset" })).not.toBeInTheDocument();

@@ -24,9 +24,10 @@ them.
   limit states no window length; its window is taken as the calendar month
   before its reset.
 - Before limits are known, the limit presets read a provisional window (8
-  days, or 5 hours) and narrow it on the client. When the start lies earlier
-  than what was read, the view reads once more from the start. Every read is
-  bounded to 31 days. Turns that finished before a narrowed start are outside
+  days, or 5 hours). When the limit's start differs from what was read, the
+  view reads once more over the limit's window, so helper rollups and bars
+  fit it rather than straddling its start. Every read is
+  bounded to 31 days. Turns that finished before the start are outside
   the window and are dropped, not listed as not counted.
 
 ## Totals
