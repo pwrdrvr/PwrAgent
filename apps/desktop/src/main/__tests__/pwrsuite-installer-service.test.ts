@@ -216,7 +216,11 @@ describe("PwrSuiteInstallerService", () => {
       fileName: "PwrGit-0.25.0-arm64.dmg",
     });
 
-    expect(phases).toEqual(["downloading", "verifying", "ready"]);
+    expect(phases.filter((phase, index) => phase !== phases[index - 1])).toEqual([
+      "downloading",
+      "verifying",
+      "ready",
+    ]);
     expect(await readdir(downloads)).toEqual(["PwrGit-0.25.0-arm64.dmg"]);
     expect(await readFile(join(downloads, "PwrGit-0.25.0-arm64.dmg"))).toEqual(
       INSTALLER_BYTES,
@@ -282,6 +286,86 @@ describe("PwrSuiteInstallerService", () => {
       offer: expect.objectContaining({ assetName: "PwrGit-0.25.0-arm64.dmg" }),
     });
     expect(await readdir(downloads)).toEqual([]);
+  });
+
+  it("runs one download when Start arrives twice while GitHub answers", async () => {
+    const fetchFn = releaseFetch();
+    const service = createService(fetchFn);
+    const ready = waitForPhase(service, "ready");
+
+    const [first, second] = await Promise.all([
+      service.start("pwrgit"),
+      service.start("pwrgit"),
+    ]);
+    await ready;
+
+    expect(first.phase).toBe("downloading");
+    expect(second.phase).toBe("downloading");
+    const installerFetches = fetchFn.mock.calls.filter(
+      ([input]) => !String(input).startsWith("https://api.github.com/"),
+    );
+    expect(installerFetches).toHaveLength(1);
+    expect(await readdir(downloads)).toEqual(["PwrGit-0.25.0-arm64.dmg"]);
+  });
+
+  it("stops a download canceled while the release is still being read", async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).startsWith("https://api.github.com/")) {
+        await answered;
+        return new Response(JSON.stringify(release), { status: 200 });
+      }
+      return new Response(new Uint8Array(INSTALLER_BYTES), { status: 200 });
+    });
+    const service = createService(fetchFn as never);
+
+    const started = service.start("pwrgit");
+    service.cancel("pwrgit");
+    answer();
+
+    await expect(started).resolves.toMatchObject({ phase: "idle" });
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("downloads from a recent answer when GitHub stops answering", async () => {
+    let apiUp = true;
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).startsWith("https://api.github.com/")) {
+        if (!apiUp) throw new TypeError("fetch failed");
+        return new Response(JSON.stringify(release), { status: 200 });
+      }
+      return new Response(new Uint8Array(INSTALLER_BYTES), { status: 200 });
+    });
+    const service = createService(fetchFn as never);
+    const offered = new Promise<void>((resolve) => {
+      service.subscribe((state) => {
+        if (state.offer) resolve();
+      });
+    });
+    service.readState("pwrgit");
+    await offered;
+    apiUp = false;
+    const ready = waitForPhase(service, "ready");
+
+    await expect(service.start("pwrgit")).resolves.toMatchObject({
+      phase: "downloading",
+    });
+    await expect(ready).resolves.toMatchObject({ phase: "ready" });
+  });
+
+  it("does not ask GitHub again right after a release with no installer here", async () => {
+    const fetchFn = releaseFetch(undefined, { tag_name: "v0.25.0", assets: [] });
+    const service = createService(fetchFn);
+
+    service.readState("pwrgit");
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    service.readState("pwrgit");
+
+    expect(fetchFn).toHaveBeenCalledOnce();
   });
 
   it("gives a short reason when GitHub cannot be reached", async () => {

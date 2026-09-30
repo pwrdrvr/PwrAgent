@@ -107,6 +107,15 @@ describe("PwrGitConnectionPrompt", () => {
     const download = await screen.findByRole("button", {
       name: "Download for Mac 138 MB",
     });
+    // The size is hidden while the tiles sit side by side, so the version
+    // and size have to reach assistive tech through the tooltip.
+    fireEvent.mouseEnter(download);
+    const describedBy = download.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toBe(
+      "PwrGit 0.25.0 · 138 MB",
+    );
+    fireEvent.mouseLeave(download);
     await act(async () => {
       fireEvent.click(download);
     });
@@ -226,7 +235,7 @@ describe("PwrGitConnectionPrompt", () => {
       fireEvent.keyDown(about, { key: "Escape" });
       expect(screen.queryByRole("dialog")).toBeNull();
 
-      fireEvent.click(screen.getByRole("button", { name: "Open pwrgit.com" }));
+      fireEvent.click(screen.getByRole("button", { name: "Visit pwrgit.com" }));
       expect(open).toHaveBeenCalledWith(
         "https://pwrgit.com",
         "_blank",
@@ -369,6 +378,46 @@ describe("PwrGitConnectionPrompt", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not let a read that started before Connect undo its answer", async () => {
+    let answerStaleRead!: (value: PwrGitConnectionStatus) => void;
+    const readPwrGitConnectionStatus = vi.fn<() => Promise<PwrGitConnectionStatus>>()
+      .mockResolvedValueOnce(status())
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          answerStaleRead = resolve;
+        }),
+      );
+    render(
+      <PwrGitConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrGitConnectionStatus,
+          connectPwrGit: async () => ({
+            status: status({ configured: true }),
+            outcome: "connected" as const,
+          }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    const connect = await screen.findByRole("button", { name: "Connect to PwrGit" });
+    // The operator switches to PwrGit to approve and back: a focus re-read
+    // starts while the pairing is still waiting.
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      fireEvent.click(connect);
+    });
+    await screen.findByRole("switch", { name: /Use PwrGit in this thread/i });
+
+    await act(async () => answerStaleRead(status()));
+    expect(screen.getByRole("switch", { name: /Use PwrGit in this thread/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect to PwrGit" })).toBeNull();
   });
 
   it("keeps the last status it read when a later read fails", async () => {

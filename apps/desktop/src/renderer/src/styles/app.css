@@ -18466,13 +18466,15 @@ a.button {
   white-space: nowrap;
 }
 
+/* 24px: the WCAG 2.2 target size the a11y gate holds. Info and Website sit
+   side by side, so neither may rely on spacing to pass. */
 .pwrsuite-tile__icon-button {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -18603,8 +18605,6 @@ a.button {
 .pwrsuite-meter__cancel {
   grid-row: 1;
   grid-column: 2;
-  width: 20px;
-  height: 20px;
 }
 
 .pwrsuite-meter__line {

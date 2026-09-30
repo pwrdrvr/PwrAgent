@@ -31,16 +31,29 @@ export function usePwrSuiteConnectionStatus<T>(
 ) {
   const onReadRef = useRef(onRead);
   onReadRef.current = onRead;
-  const [status, setStatus] = useState<T>();
+  const [status, setStatusState] = useState<T>();
   const [failures, setFailures] = useState(0);
+  // Bumped by every read and every status set from elsewhere (a Connect
+  // response). A read that resolves after a newer one started, or after
+  // Connect answered, is older than what the card shows and is dropped.
+  const generation = useRef(0);
+
+  const setStatus = useCallback((next: T) => {
+    generation.current += 1;
+    setStatusState(next);
+  }, []);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!read) return;
+    const started = ++generation.current;
     try {
-      setStatus(await read());
+      const next = await read();
+      if (started !== generation.current) return;
+      setStatusState(next);
       setFailures(0);
       onReadRef.current?.();
     } catch {
+      if (started !== generation.current) return;
       setFailures((count) => count + 1);
     }
   }, [read]);

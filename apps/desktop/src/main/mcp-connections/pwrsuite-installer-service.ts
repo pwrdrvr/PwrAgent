@@ -156,6 +156,13 @@ function publicOffer(offer: ResolvedOffer): PwrSuiteInstallerOffer {
 /** Five words for the tile; the full error goes to the log. */
 function describeDownloadFailure(error: unknown): string {
   if (error instanceof InstallerError) return error.message;
+  // A local file error is not the network's fault, and Try again will not
+  // fix it until the operator does something about Downloads.
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOSPC") return "Not enough space in Downloads";
+  if (code === "EACCES" || code === "EPERM" || code === "EBUSY" || code === "EROFS") {
+    return "Couldn't save to Downloads";
+  }
   return "Download failed: connection lost";
 }
 
@@ -211,8 +218,14 @@ export class PwrSuiteInstallerService {
     const read = (async () => {
       try {
         const offer = await this.resolveOffer(app);
-        this.offerFailures.delete(app);
-        if (offer) this.update(app, { offer: publicOffer(offer) });
+        if (offer) {
+          this.offerFailures.delete(app);
+          this.update(app, { offer: publicOffer(offer) });
+        } else {
+          // A release with no installer for this machine is an answer, not
+          // an outage; ask again no sooner than after a failure.
+          this.offerFailures.set(app, now);
+        }
       } catch (error) {
         this.offerFailures.set(app, now);
         installerLog.warn("could not read the latest release", {
@@ -233,6 +246,20 @@ export class PwrSuiteInstallerService {
     if (!state.platform) {
       return this.update(app, { phase: "failed", error: "No installer for this system" });
     }
+    // Claim the download before the release read: a second Start (a double
+    // click, or another window) must find it running, and Cancel must be
+    // able to stop it while GitHub is still answering.
+    const job: Job = { controller: new AbortController(), canceled: false };
+    this.jobs.set(app, job);
+    this.readyPaths.delete(app);
+    this.update(app, {
+      phase: "downloading",
+      receivedBytes: undefined,
+      totalBytes: undefined,
+      bytesPerSecond: undefined,
+      fileName: undefined,
+      error: undefined,
+    });
     let offer: ResolvedOffer | undefined;
     try {
       offer = await this.resolveOffer(app, { fresh: true });
@@ -241,25 +268,34 @@ export class PwrSuiteInstallerService {
         app,
         error: error instanceof Error ? error.message : String(error),
       });
-      return this.update(app, { phase: "failed", error: "Couldn't reach GitHub" });
+      // A recent answer still names a verifiable asset.
+      offer = this.cachedOffer(app);
+      if (!offer && !job.canceled) {
+        this.jobs.delete(app);
+        return this.update(app, { phase: "failed", error: "Couldn't reach GitHub" });
+      }
+    }
+    if (job.canceled) {
+      this.jobs.delete(app);
+      return this.update(app, { phase: "idle", receivedBytes: undefined });
     }
     if (!offer) {
+      this.jobs.delete(app);
       return this.update(app, { phase: "failed", error: "No installer in the latest release" });
     }
-    const job: Job = { controller: new AbortController(), canceled: false };
-    this.jobs.set(app, job);
-    this.readyPaths.delete(app);
     const next = this.update(app, {
-      phase: "downloading",
       offer: publicOffer(offer),
       receivedBytes: 0,
       totalBytes: offer.sizeBytes,
-      bytesPerSecond: undefined,
-      fileName: undefined,
-      error: undefined,
     });
     void this.download(app, offer, job);
     return next;
+  }
+
+  private cachedOffer(app: PwrSuiteAppId): ResolvedOffer | undefined {
+    const cached = this.offers.get(app);
+    const now = (this.options.now ?? Date.now)();
+    return cached && now - cached.readAt < OFFER_TTL_MS ? cached.offer : undefined;
   }
 
   cancel(app: PwrSuiteAppId): PwrSuiteInstallerState {
@@ -336,10 +372,8 @@ export class PwrSuiteInstallerService {
     options: { fresh?: boolean } = {},
   ): Promise<ResolvedOffer | undefined> {
     const now = (this.options.now ?? Date.now)();
-    const cached = this.offers.get(app);
-    if (cached && !options.fresh && now - cached.readAt < OFFER_TTL_MS) {
-      return cached.offer;
-    }
+    const cached = options.fresh ? undefined : this.cachedOffer(app);
+    if (cached) return cached;
     const target = installerAssetPatterns(
       REPOSITORIES[app],
       this.options.platform ?? process.platform,

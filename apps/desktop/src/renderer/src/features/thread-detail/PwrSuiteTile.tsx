@@ -48,7 +48,9 @@ export function PwrSuiteTile(props: {
   const tone = props.lineTone ?? "pitch";
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const siteUrl = PWRSUITE_PRODUCT_URLS[props.app];
-  const siteLabel = `Open ${new URL(siteUrl).host}`;
+  // "Visit", not "Open": Playwright matches names by substring, and
+  // "Open pwrgit.com" would also answer to the tile's "Open PwrGit".
+  const siteLabel = `Visit ${new URL(siteUrl).host}`;
   const lineRef = useRef<HTMLParagraphElement>(null);
 
   const showLineIfClipped = (): void => {
@@ -380,6 +382,7 @@ export function PwrSuiteInstallAction(props: {
   return (
     <>
       <button
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         className="button button--primary"
         type="button"
         onBlur={tooltip.hide}
