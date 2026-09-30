@@ -167,6 +167,8 @@ import {
   type BackendRateLimitSummary,
   type BackendRuntimeBuild,
   type BackendSummary,
+  type CodexAppServerRestartResult,
+  type CodexAppServerRestartStatus,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
   type DesktopSpendAlertPolicy,
@@ -988,6 +990,12 @@ type BackendClient = {
     ownerId?: string;
   }): Promise<BackendModelOption[]>;
   isAuthenticationRequired?(): boolean;
+  getAppServerRestartStatus?(): CodexAppServerRestartStatus;
+  onAppServerRestartStatusChanged?(
+    listener: (status: CodexAppServerRestartStatus) => void,
+  ): () => void;
+  restartAppServer?(): Promise<void>;
+  resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -10977,6 +10985,31 @@ export class DesktopBackendRegistry {
       ...(result.configPath ? { configPath: result.configPath } : {}),
       trusted: true,
     };
+  }
+
+  getCodexAppServerRestartStatus(): CodexAppServerRestartStatus {
+    return this.codexClient.getAppServerRestartStatus?.() ?? { stopped: false };
+  }
+
+  onCodexAppServerRestartStatusChanged(
+    listener: (status: CodexAppServerRestartStatus) => void,
+  ): () => void {
+    return this.codexClient.onAppServerRestartStatusChanged?.(listener) ?? (() => undefined);
+  }
+
+  /**
+   * Start Codex again after the client stopped restarting it. A failed start
+   * is returned with the status it leaves, so the notice can say what happened.
+   */
+  async restartCodexAppServer(): Promise<CodexAppServerRestartResult> {
+    try {
+      await this.codexClient.restartAppServer?.();
+      return { status: this.getCodexAppServerRestartStatus() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("Codex app server restart failed", { error: message });
+      return { status: this.getCodexAppServerRestartStatus(), error: message };
+    }
   }
 
   async listBackends(
@@ -30382,6 +30415,9 @@ export class DesktopBackendRegistry {
       this.codexRuntimeRestartPending = false;
       this.managedCodexRuntimeSwitchPending = false;
       await this.codexClient.close();
+      // Exits counted against the old binary say nothing about the new one.
+      // Clear the breaker; the next request starts the selected Codex.
+      this.codexClient.resetAppServerRestarts?.("Codex runtime changed");
       this.tokenMiserServerCapabilities.delete(this.codexClient);
       this.tokenMiserReducerCapabilityState = undefined;
       this.tokenMiserCodeModeGroupingVersion = undefined;

@@ -95,6 +95,11 @@ export const APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL =
   "app-server:resume-pr-auto-dispatch-budget";
 export const PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL =
   "app-server:pr-auto-dispatch-budget-changed";
+export const APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL =
+  "app-server:get-codex-restart-status";
+export const APP_SERVER_RESTART_CODEX_CHANNEL = "app-server:restart-codex";
+export const CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL =
+  "app-server:codex-restart-status-changed";
 export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
 export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =

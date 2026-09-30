@@ -24,6 +24,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerAvailableCommandSummary,
+  CodexAppServerRestartStatus,
   AppServerFileInputItem,
   AppServerLocalFileInputItem,
   AppServerNotification,
@@ -135,8 +136,13 @@ import {
 } from "../../shared/tool-activity";
 import {
   StdioJsonRpcTransport,
+  type CodexAppServerExit,
   type StdioJsonRpcTransportOptions,
 } from "./stdio-transport";
+import {
+  CodexAppServerRestartPolicy,
+  type CodexAppServerRestartPolicyOptions,
+} from "./app-server-restart-policy";
 import {
   isCodexInvalidResponseMessageIdError,
   repairCodexInvalidResponseMessageIds,
@@ -335,7 +341,23 @@ type CodexClientOptions = {
    * the operator wants" and "fire it up."
    */
   isCodexBootstrapDeferred?: () => boolean;
+  /** Test seam for the backoff and circuit breaker after unexpected exits. */
+  appServerRestartPolicy?: CodexAppServerRestartPolicyOptions;
 };
+
+/**
+ * Thrown instead of starting Codex after it exited on its own too many times
+ * in a row. Only an operator restart (`restartAppServer`) clears it.
+ */
+export class CodexAppServerStoppedError extends Error {
+  constructor(exits: number, windowMs: number) {
+    super(
+      `Codex stopped unexpectedly ${exits} times in ${Math.round(windowMs / 60_000)} minutes,`
+      + " so PwrAgent stopped restarting it. Restart Codex to try again.",
+    );
+    this.name = "CodexAppServerStoppedError";
+  }
+}
 
 /**
  * Thrown by `ensureInitialized` when `isCodexBootstrapDeferred` returns
@@ -7505,6 +7527,12 @@ export class CodexAppServerClient {
   private readonly liveTurnActivityWaiters = new Set<() => void>();
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
+  private readonly restartPolicy: CodexAppServerRestartPolicy;
+  private restartStatus: CodexAppServerRestartStatus = { stopped: false };
+  private readonly restartStatusListeners = new Set<
+    (status: CodexAppServerRestartStatus) => void
+  >();
+  private cancelRestartBackoff?: () => void;
   private readonly lastDirectoryEnrichment = new Map<string, ThreadDirectoryEnrichment>();
   private readonly threadDirectoryEnricher: (
     projectKey?: string,
@@ -7593,6 +7621,7 @@ export class CodexAppServerClient {
   private readonly reportedUnknownNotificationMethods = new Set<string>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
+    this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
     this.rawConnection = new JsonRpcConnection(
       new StdioJsonRpcTransport({
         command: options.command?.trim() || "codex",
@@ -7606,18 +7635,7 @@ export class CodexAppServerClient {
             await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
           })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
         },
-        onUnexpectedExit: () => {
-          // No terminal notification can follow for a turn whose app-server
-          // exited, so this is the moment its end is observed.
-          const runningTurns = [...this.runningTurnIdsByThread];
-          this.runningTurnIdsByThread.clear();
-          this.noteLiveTurnActivity();
-          codexClientLog.warn("Codex app server exited unexpectedly", {
-            runningTurns: runningTurns.length,
-          });
-          void this.failRunningTurns(runningTurns, CODEX_APP_SERVER_EXITED_MID_TURN)
-            .catch((error) => codexClientLog.warn("Codex exit turn failure delivery failed", { error: String(error) }));
-        },
+        onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
         args: options.args ?? [],
         env: options.env,
         resolveArgs: options.resolveArgs,
@@ -7774,6 +7792,9 @@ export class CodexAppServerClient {
     this.pendingCloses += 1;
     // A recovery waiting for other turns re-checks the generation and stops.
     this.noteLiveTurnActivity();
+    // A restart waiting out its backoff must not hold close open. Its
+    // initialization sees the new close generation and gives up.
+    this.cancelRestartBackoff?.();
     // Stop the transport now: pending RPC responses must not hold shutdown
     // (or a recovery waiting to drain those RPCs) until their timeouts expire.
     const stopped = this.stopTransport();
@@ -7810,14 +7831,120 @@ export class CodexAppServerClient {
     }
   }
 
+  /**
+   * The app server ended without `close()` asking it to. Everything the
+   * process held is gone, so reset what `closeConnection` resets. The next
+   * request starts a new server through `initializeConnection`, once the
+   * restart policy's backoff has passed; thread operations replay their
+   * resume and settings on the new `serverGeneration`.
+   *
+   * Restarting lazily rather than on a timer keeps one start path: a caller
+   * that arrives during the backoff waits for it instead of racing a timer to
+   * spawn, and nothing is left to cancel when the app shuts down.
+   */
+  private handleUnexpectedExit(exit: CodexAppServerExit): void {
+    // No terminal notification can follow for a turn whose app-server
+    // exited, so this is the moment its end is observed.
+    const runningTurns = [...this.runningTurnIdsByThread];
+    this.resetConnectionState(new Error("codex app server exited"));
+    const decision = this.restartPolicy.recordExit();
+    codexClientLog.warn("Codex app server exited unexpectedly", {
+      runningTurns: runningTurns.length,
+      code: exit.code,
+      signal: exit.signal,
+      ...(decision.kind === "restart"
+        ? { restartAttempt: decision.attempt, restartDelayMs: decision.delayMs }
+        : { restartsStopped: true, exits: decision.exits, windowMs: decision.windowMs }),
+    });
+    if (decision.kind === "stopped") {
+      this.setRestartStatus({
+        stopped: true,
+        stoppedAt: Date.now(),
+        exits: decision.exits,
+        windowMs: decision.windowMs,
+        lastExit: { code: exit.code, signal: exit.signal },
+      });
+    }
+    void this.failRunningTurns(runningTurns, CODEX_APP_SERVER_EXITED_MID_TURN)
+      .catch((error) => codexClientLog.warn("Codex exit turn failure delivery failed", { error: String(error) }));
+  }
+
+  getAppServerRestartStatus(): CodexAppServerRestartStatus {
+    return this.restartStatus;
+  }
+
+  onAppServerRestartStatusChanged(
+    listener: (status: CodexAppServerRestartStatus) => void,
+  ): () => void {
+    this.restartStatusListeners.add(listener);
+    return () => {
+      this.restartStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * The operator's "Restart Codex": forget the exit history, including an
+   * open breaker, and start the server now.
+   */
+  async restartAppServer(): Promise<void> {
+    this.resetAppServerRestarts("operator restart");
+    await this.ensureInitialized();
+  }
+
+  /**
+   * Forget the exit history, including an open breaker, without starting the
+   * server. The exits it counted belong to a binary that is no longer
+   * selected, so a new Codex version starts with a clean slate.
+   */
+  resetAppServerRestarts(reason: string): void {
+    const wasStopped = this.restartStatus.stopped;
+    this.restartPolicy.reset();
+    // A start already waiting out the old delay proceeds now.
+    this.cancelRestartBackoff?.();
+    this.setRestartStatus({ stopped: false });
+    codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
+  }
+
+  private setRestartStatus(status: CodexAppServerRestartStatus): void {
+    if (!status.stopped && !this.restartStatus.stopped) return;
+    this.restartStatus = status;
+    for (const listener of this.restartStatusListeners) {
+      try {
+        listener(status);
+      } catch (error) {
+        codexClientLog.warn("Codex restart status listener failed", { error: String(error) });
+      }
+    }
+  }
+
+  private async waitForRestartBackoff(): Promise<void> {
+    const delayMs = this.restartPolicy.remainingDelayMs();
+    if (delayMs <= 0) return;
+    codexClientLog.info("waiting to restart Codex app server", { delayMs });
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        if (this.cancelRestartBackoff === finish) this.cancelRestartBackoff = undefined;
+        resolve();
+      };
+      const timer = setTimeout(finish, delayMs);
+      this.cancelRestartBackoff = finish;
+    });
+  }
+
   private async closeConnection(): Promise<void> {
+    this.resetConnectionState(new Error("codex app server client closed"));
+    await this.stopTransport();
+  }
+
+  private resetConnectionState(helperTurnError: Error): void {
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
     this.availableHelperModels = [];
-    this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
+    this.rejectHelperTurnWaiters(helperTurnError);
     this.pendingThreadListings.clear();
     this.threadListTextCache.clear();
     this.pendingFirstTurnThreadResults.clear();
@@ -7831,8 +7958,9 @@ export class CodexAppServerClient {
     this.helperTurnTitleObjects.clear();
     this.helperTurnTokenUsage.clear();
     this.helperThreadPredicates.clear();
+    // Whether closed or exited, the process's turns are over; a recovery
+    // waiting on them re-checks.
     this.noteLiveTurnActivity();
-    await this.stopTransport();
   }
 
   private noteLiveTurnActivity(): void {
@@ -10443,14 +10571,25 @@ export class CodexAppServerClient {
       return;
     }
 
+    const restartStatus = this.restartStatus;
+    if (restartStatus.stopped) {
+      throw new CodexAppServerStoppedError(restartStatus.exits, restartStatus.windowMs);
+    }
+
     const closeGeneration = this.closeGeneration;
+    const serverGeneration = ++this.serverGeneration;
     const assertNotClosed = () => {
       if (closeGeneration !== this.closeGeneration || this.pendingCloses > 0) {
         throw new Error("codex app server client closed");
       }
+      // An exit reset this attempt and a newer one owns the next server.
+      if (serverGeneration !== this.serverGeneration) {
+        throw new Error("codex app server exited during initialization");
+      }
     };
-    this.serverGeneration += 1;
-    this.initializationPromise = (async () => {
+    const initialization = (async () => {
+      await this.waitForRestartBackoff();
+      assertNotClosed();
       const startedAt = performance.now();
       await this.rawConnection.connect();
       assertNotClosed();
@@ -10501,16 +10640,18 @@ export class CodexAppServerClient {
       await this.rawConnection.notify("initialized", {});
       assertNotClosed();
       this.initialized = true;
+      this.restartPolicy.recordStarted();
       codexClientLog.info("app-server initialized", {
         handshakeDurationMs: Math.round(performance.now() - handshakeStartedAt),
         durationMs: Math.round(performance.now() - startedAt),
       });
     })();
 
+    this.initializationPromise = initialization;
     try {
-      await this.initializationPromise;
+      await initialization;
     } finally {
-      if (!this.initialized) {
+      if (!this.initialized && this.initializationPromise === initialization) {
         this.initializationPromise = null;
       }
     }

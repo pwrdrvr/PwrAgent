@@ -320,6 +320,26 @@ export type ListBackendsResponse = {
   backends: BackendSummary[];
 };
 
+/**
+ * Whether PwrAgent stopped restarting a Codex app server that kept exiting on
+ * its own. Restarts resume only when the operator asks for one.
+ */
+export type CodexAppServerRestartStatus =
+  | { stopped: false }
+  | {
+      stopped: true;
+      stoppedAt: number;
+      exits: number;
+      windowMs: number;
+      lastExit: { code: number | null; signal: string | null };
+    };
+
+export type CodexAppServerRestartResult = {
+  status: CodexAppServerRestartStatus;
+  /** Why the requested restart did not start Codex. */
+  error?: string;
+};
+
 export type AcpAgentSettingsEntry = {
   backendId: AppServerBackendKind;
   registryId: string;

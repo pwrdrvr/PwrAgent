@@ -3038,6 +3038,11 @@ describe("DesktopBackendRegistry", () => {
 
   it("reconnects idle Codex when managed runtime selection changes", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
+    const resetAppServerRestarts = vi.fn(() => {
+      // The breaker clears only once the old binary's process is gone.
+      expect(codexClient.closeCallCount).toBe(1);
+    });
+    Object.assign(codexClient, { resetAppServerRestarts });
     let selectionListener:
       | ((change: ManagedCodexSelectionChange) => void)
       | undefined;
@@ -3056,6 +3061,7 @@ describe("DesktopBackendRegistry", () => {
     selectionListener?.({ enabled: true, reason: "availability" });
     await vi.waitFor(() => expect(codexClient.closeCallCount).toBe(1));
     expect(markSwitchComplete).toHaveBeenCalledOnce();
+    expect(resetAppServerRestarts).toHaveBeenCalledExactlyOnceWith("Codex runtime changed");
 
     await registry.close();
     expect(stopWatching).toHaveBeenCalledOnce();
@@ -3063,6 +3069,8 @@ describe("DesktopBackendRegistry", () => {
 
   it("disconnects idle Codex after its configured path changes", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
+    const resetAppServerRestarts = vi.fn();
+    Object.assign(codexClient, { resetAppServerRestarts });
     const markSwitchComplete = vi.fn();
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -3076,6 +3084,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.closeCallCount).toBe(1);
+    expect(resetAppServerRestarts).toHaveBeenCalledOnce();
     expect(markSwitchComplete).not.toHaveBeenCalled();
     await registry.close();
   });
