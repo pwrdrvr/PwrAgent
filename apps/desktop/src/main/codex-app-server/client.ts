@@ -158,6 +158,8 @@ import {
 import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_APP_SERVER_EXITED_MID_TURN =
+  "The Codex app server stopped before this turn finished.";
 // Codex gives client creation, initialization, and tool discovery separate
 // 30-second startup budgets. Full inventory also lists resources with a
 // 300-second request budget. Leave headroom for auth discovery and processing.
@@ -7480,7 +7482,7 @@ export class CodexAppServerClient {
   private closeGeneration = 0;
   private pendingCloses = 0;
   private serverGeneration = 0;
-  private readonly authActiveTurns = new Map<string, string>();
+  private readonly runningTurnIdsByThread = new Map<string, string>();
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly lastDirectoryEnrichment = new Map<string, ThreadDirectoryEnrichment>();
@@ -7577,23 +7579,23 @@ export class CodexAppServerClient {
         authenticationRecovery: options.authenticationRecovery,
         onAuthenticationRejected: (home) => {
           this.rejectedCodexHome = home;
-          const activeTurns = [...this.authActiveTurns];
-          this.authActiveTurns.clear();
+          const runningTurns = [...this.runningTurnIdsByThread];
+          this.runningTurnIdsByThread.clear();
           void (async () => {
             await this.close();
-            for (const [threadId, turnId] of activeTurns) {
-              for (const listener of this.notificationListeners) {
-                await listener({
-                  method: "turn/failed",
-                  params: {
-                    threadId,
-                    turnId,
-                    turn: { id: turnId, status: "failed", error: { message: CODEX_SIGN_IN_REQUIRED } },
-                  },
-                });
-              }
-            }
+            await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
           })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
+        },
+        onUnexpectedExit: () => {
+          // No terminal notification can follow for a turn whose app-server
+          // exited, so this is the moment its end is observed.
+          const runningTurns = [...this.runningTurnIdsByThread];
+          this.runningTurnIdsByThread.clear();
+          codexClientLog.warn("Codex app server exited unexpectedly", {
+            runningTurns: runningTurns.length,
+          });
+          void this.failRunningTurns(runningTurns, CODEX_APP_SERVER_EXITED_MID_TURN)
+            .catch((error) => codexClientLog.warn("Codex exit turn failure delivery failed", { error: String(error) }));
         },
         args: options.args ?? [],
         env: options.env,
@@ -7675,9 +7677,9 @@ export class CodexAppServerClient {
         ?? pickString(asRecord(asRecord(normalized.params)?.turn) ?? {}, ["id"]);
       if (turnMetadata.threadId && observedTurnId) {
         if (normalized.method === "turn/started") {
-          this.authActiveTurns.set(turnMetadata.threadId, observedTurnId);
+          this.runningTurnIdsByThread.set(turnMetadata.threadId, observedTurnId);
         } else if (normalized.method === "turn/completed" || normalized.method === "turn/failed") {
-          this.authActiveTurns.delete(turnMetadata.threadId);
+          this.runningTurnIdsByThread.delete(turnMetadata.threadId);
         }
       }
 
@@ -7760,10 +7762,29 @@ export class CodexAppServerClient {
     }
   }
 
+  private async failRunningTurns(
+    runningTurns: Array<[threadId: string, turnId: string]>,
+    message: string,
+  ): Promise<void> {
+    const completedAt = Date.now();
+    for (const [threadId, turnId] of runningTurns) {
+      for (const listener of this.notificationListeners) {
+        await listener({
+          method: "turn/failed",
+          params: {
+            threadId,
+            turnId,
+            turn: { id: turnId, status: "failed", completedAt, error: { message } },
+          },
+        });
+      }
+    }
+  }
+
   private async closeConnection(): Promise<void> {
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
-    this.authActiveTurns.clear();
+    this.runningTurnIdsByThread.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
     this.availableHelperModels = [];

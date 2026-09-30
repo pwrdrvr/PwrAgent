@@ -1400,6 +1400,47 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("fails the turns an app server was running when it exits on its own", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    transport.emitInbound({ method: "turn/started", params: {
+      threadId: "running-thread", turn: { id: "running-turn", status: "inProgress" },
+    } });
+    transport.emitInbound({ method: "turn/started", params: {
+      threadId: "finished-thread", turn: { id: "finished-turn", status: "inProgress" },
+    } });
+    transport.emitInbound({ method: "turn/completed", params: {
+      threadId: "finished-thread", turn: { id: "finished-turn", status: "completed" },
+    } });
+    await vi.waitFor(() => expect(notifications.some((n) => n.method === "turn/completed")).toBe(true));
+    const exitedAt = Date.now();
+
+    (transport.options as { onUnexpectedExit: () => void }).onUnexpectedExit();
+
+    await vi.waitFor(() => expect(notifications.some((n) => n.method === "turn/failed")).toBe(true));
+    const failures = notifications.filter((n) => n.method === "turn/failed");
+    expect(failures).toEqual([{
+      method: "turn/failed",
+      params: {
+        threadId: "running-thread",
+        turnId: "running-turn",
+        turn: {
+          id: "running-turn",
+          status: "failed",
+          completedAt: expect.any(Number),
+          error: { message: "The Codex app server stopped before this turn finished." },
+        },
+      },
+    }]);
+    expect((failures[0]!.params as { turn: { completedAt: number } }).turn.completedAt)
+      .toBeGreaterThanOrEqual(exitedAt);
+    await client.close();
+  });
+
   it("fails active turns and blocks probes until the rejected profile is verified", async () => {
     const { codexAuthState } = await import("../codex-auth-state");
     const { CodexAppServerClient } = await import("../codex-app-server/client");

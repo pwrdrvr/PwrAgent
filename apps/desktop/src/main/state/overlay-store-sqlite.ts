@@ -104,6 +104,10 @@ import type {
 } from "./remote-thread-target-store.js";
 
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
+// A live usage flush stamps one `updated_at` per batch, one line per turn
+// running at that moment. On a real 22,000-line profile no flush stamp was
+// shared by more than 2 lines; one migration stamp was shared by 7,251.
+const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
 class UnsupportedStarMapWorkspaceVersionError extends Error {}
 
@@ -1891,6 +1895,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
               ELSE MIN(thread_usage_turns.started_at, excluded.started_at)
             END,
             completed_at = COALESCE(excluded.completed_at, thread_usage_turns.completed_at),
+            completed_at_inferred = CASE
+              WHEN excluded.completed_at IS NULL THEN thread_usage_turns.completed_at_inferred
+            END,
             observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
             -- Observation-derived tallies are absent on transcript-hydration
             -- lines (the Codex transcript can't reproduce them). COALESCE keeps a
@@ -2177,6 +2184,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   // Record timing separately from finalizing accounting: Codex may send a
   // legitimate token update after the terminal turn notification.
+  //
+  // The first observed end wins. An end the startup repair inferred is only a
+  // placeholder, so an observed one replaces it.
   async completeThreadUsageTurn(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -2186,7 +2196,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
     const turn = this.stateDb.raw.prepare(
-      `SELECT turn.completed_at FROM thread_usage_turns AS turn
+      `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
         WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
           AND EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
@@ -2198,16 +2208,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           )`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
+      completed_at_inferred: number | null;
     } | undefined;
-    if (!turn || turn.completed_at !== null) {
+    if (!turn || (turn.completed_at !== null && turn.completed_at_inferred !== 1)) {
       return false;
     }
     const result = this.stateDb.raw.prepare(
       `UPDATE thread_usage_turns
-          SET completed_at = ?, updated_at = ?,
+          SET completed_at = ?, completed_at_inferred = NULL, updated_at = ?,
               rate_limit_snapshot = COALESCE(?, rate_limit_snapshot)
         WHERE backend = ? AND thread_id = ? AND turn_id = ?
-          AND completed_at IS NULL`,
+          AND (completed_at IS NULL OR completed_at_inferred = 1)`,
     ).run(
       params.completedAt,
       Date.now(),
@@ -2217,6 +2228,136 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       params.turnId,
     );
     return result.changes > 0;
+  }
+
+  /**
+   * Record one end time for turns their owner stopped, such as every turn
+   * still running when the app shuts its agent processes down. That stop is
+   * the observed end, so this replaces only a missing or inferred one.
+   *
+   * One transaction however many turns; none when no turn has a ledger row.
+   */
+  async completeThreadUsageTurns(params: {
+    completedAt: number;
+    turns: ReadonlyArray<{
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+      turnId: string;
+    }>;
+  }): Promise<number> {
+    const findOpen = this.stateDb.raw.prepare(
+      `SELECT turn.usage_turn_id FROM thread_usage_turns AS turn
+        WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
+          AND (turn.completed_at IS NULL OR turn.completed_at_inferred = 1)
+          AND EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live'
+               AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL
+               AND line.status != 'superseded'
+          )`,
+    );
+    const usageTurnIds = params.turns.flatMap((turn) =>
+      (findOpen.all(turn.backend, turn.threadId, turn.turnId) as Array<{
+        usage_turn_id: string;
+      }>).map((row) => row.usage_turn_id));
+    if (usageTurnIds.length === 0) {
+      return 0;
+    }
+    const complete = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET completed_at = ?, completed_at_inferred = NULL, updated_at = ?
+        WHERE usage_turn_id = ?
+          AND (completed_at IS NULL OR completed_at_inferred = 1)`,
+    );
+    const now = Date.now();
+    return this.stateDb.raw.transaction(() => usageTurnIds.reduce(
+      (changed, usageTurnId) =>
+        changed + complete.run(params.completedAt, now, usageTurnId).changes,
+      0,
+    ))();
+  }
+
+  /**
+   * Close ledger turns whose end was never observed: the process running them
+   * quit or crashed, or its app-server died, before a terminal event arrived.
+   * The caller picks `lastWriteBefore` so no live turn can qualify.
+   *
+   * The end is the turn's last dated usage write, which is when its spend was
+   * last observed. It is capped at the next turn's start in the same thread,
+   * since one thread runs one turn at a time. A migration or repricing stamps
+   * `updated_at` on thousands of rows at once, so a stamp shared that widely
+   * dates the rewrite, not the usage; those rows fall back to the first write.
+   * Every repaired end is marked inferred, so an observed terminal replaces it.
+   *
+   * Idempotent, bounded to `limit` turns, and one transaction.
+   */
+  async repairUnfinishedThreadUsageTurns(params: {
+    lastWriteBefore: number;
+    limit: number;
+  }): Promise<{ repaired: number; remaining: boolean; datedByFirstWrite: number }> {
+    const candidates = this.stateDb.raw.prepare(
+      `SELECT turn.usage_turn_id,
+              COALESCE(turn.started_at, turn.observed_at) AS started_at,
+              MIN(line.created_at) AS first_write_at,
+              MAX(line.updated_at) AS last_write_at,
+              (SELECT MIN(COALESCE(next.started_at, next.observed_at))
+                 FROM thread_usage_turns AS next
+                WHERE next.provider = turn.provider
+                  AND next.backend = turn.backend
+                  AND next.thread_id = turn.thread_id
+                  AND COALESCE(next.started_at, next.observed_at)
+                    > COALESCE(turn.started_at, turn.observed_at)) AS next_started_at
+         FROM thread_usage_turns AS turn
+         JOIN thread_usage_lines AS line ON line.usage_turn_id = turn.usage_turn_id
+        WHERE turn.completed_at IS NULL
+          AND line.source = 'live'
+          AND line.scope = 'turn'
+          AND line.parent_thread_id IS NULL
+          AND line.status != 'superseded'
+        GROUP BY turn.usage_turn_id
+       HAVING MAX(line.updated_at) < ?
+        ORDER BY turn.observed_at, turn.usage_turn_id
+        LIMIT ?`,
+    ).all(params.lastWriteBefore, params.limit + 1) as Array<{
+      usage_turn_id: string;
+      started_at: number;
+      first_write_at: number;
+      last_write_at: number;
+      next_started_at: number | null;
+    }>;
+    const repairs = candidates.slice(0, params.limit);
+    if (repairs.length === 0) {
+      return { repaired: 0, remaining: false, datedByFirstWrite: 0 };
+    }
+    const bulkRewrites = new Set((this.stateDb.raw.prepare(
+      `SELECT updated_at FROM thread_usage_lines
+        WHERE updated_at IN (SELECT value FROM json_each(?))
+        GROUP BY updated_at
+       HAVING COUNT(*) >= ?`,
+    ).all(
+      JSON.stringify([...new Set(repairs.map((row) => row.last_write_at))]),
+      THREAD_USAGE_BULK_REWRITE_MIN_LINES,
+    ) as Array<{ updated_at: number }>).map((row) => row.updated_at));
+    const complete = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET completed_at = ?, completed_at_inferred = 1, updated_at = ?
+        WHERE usage_turn_id = ? AND completed_at IS NULL`,
+    );
+    const now = Date.now();
+    let datedByFirstWrite = 0;
+    const repaired = this.stateDb.raw.transaction(() => repairs.reduce((changed, row) => {
+      const rewritten = bulkRewrites.has(row.last_write_at);
+      if (rewritten) datedByFirstWrite += 1;
+      const lastUsageAt = rewritten ? row.first_write_at : row.last_write_at;
+      const completedAt = Math.max(
+        row.started_at,
+        Math.min(lastUsageAt, row.next_started_at ?? lastUsageAt),
+      );
+      return changed + complete.run(completedAt, now, row.usage_turn_id).changes;
+    }, 0))();
+    return { repaired, remaining: candidates.length > params.limit, datedByFirstWrite };
   }
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<{

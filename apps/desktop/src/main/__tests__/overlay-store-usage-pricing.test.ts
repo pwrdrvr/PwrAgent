@@ -349,6 +349,158 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(repeated.writes.commits).toBe(0);
   });
 
+  it("repairs unfinished turns in one commit, ending each at its last usage write", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    const seedLiveTurn = (turnId: string, threadId: string, startedAt: number) =>
+      store.upsertThreadUsageLine({ line: buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true,
+        threadId, turnId, startedAt, createdAt: startedAt, usageLineId: `line-${turnId}`,
+      }) });
+    await seedLiveTurn("interrupted", "thread-1", start);
+    await seedLiveTurn("next", "thread-1", start + 30_000);
+    await seedLiveTurn("recent", "thread-2", start);
+    // A row written later for an older turn in the same thread must not cap
+    // `next`, which it did not follow.
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true, threadId: "thread-1",
+      turnId: "backfilled-earlier", startedAt: start - 60_000, createdAt: start + 120_000,
+      usageLineId: "line-backfilled-earlier",
+    }) });
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "backfilled-earlier", completedAt: start - 1_000,
+    });
+    await seedLiveTurn("finished", "thread-3", start);
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-3", turnId: "finished", completedAt: start + 5_000,
+    });
+    // A helper's monitor line never gets a completion; the read side dates it.
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "monitor", scope: "monitor", status: "finalized", parentThreadId: "thread-1",
+      threadId: "helper", turnId: "helper-turn", usageLineId: "line-helper",
+    }) });
+    const setLastWrite = stateDb.raw.prepare(
+      "UPDATE thread_usage_lines SET updated_at = ? WHERE usage_line_id = ?",
+    );
+    // `interrupted` wrote usage after `next` began, so the next start caps it.
+    setLastWrite.run(start + 60_000, "line-interrupted");
+    setLastWrite.run(start + 90_000, "line-next");
+    setLastWrite.run(start + 200_000, "line-recent");
+    const readTurns = () => stateDb.raw.prepare(
+      `SELECT turn_id, completed_at, completed_at_inferred FROM thread_usage_turns
+        ORDER BY turn_id`,
+    ).all();
+
+    const { result, writes } = await measureSqliteWrites(() =>
+      store.repairUnfinishedThreadUsageTurns({ lastWriteBefore: start + 100_000, limit: 10 }));
+
+    expect(result).toEqual({ repaired: 2, remaining: false, datedByFirstWrite: 0 });
+    expectSqliteWriteBudget({
+      scenario: "usage-turn-startup-repair",
+      writes,
+      note: "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",
+    });
+    expect(readTurns()).toEqual([
+      { turn_id: "backfilled-earlier", completed_at: start - 1_000, completed_at_inferred: null },
+      { turn_id: "finished", completed_at: start + 5_000, completed_at_inferred: null },
+      { turn_id: "helper-turn", completed_at: null, completed_at_inferred: null },
+      { turn_id: "interrupted", completed_at: start + 30_000, completed_at_inferred: 1 },
+      { turn_id: "next", completed_at: start + 90_000, completed_at_inferred: 1 },
+      { turn_id: "recent", completed_at: null, completed_at_inferred: null },
+    ]);
+
+    const repeated = await measureSqliteWrites(() =>
+      store.repairUnfinishedThreadUsageTurns({ lastWriteBefore: start + 100_000, limit: 10 }));
+    expect(repeated.result.repaired).toBe(0);
+    expect(repeated.writes.commits).toBe(0);
+
+    // A turn that was still live somewhere replaces the estimate with its
+    // observed end, once.
+    const complete = (completedAt: number) => store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "next", completedAt,
+    });
+    expect(await complete(start + 95_000)).toBe(true);
+    expect(await complete(start + 99_000)).toBe(false);
+    expect(readTurns()).toContainEqual(
+      { turn_id: "next", completed_at: start + 95_000, completed_at_inferred: null },
+    );
+  });
+
+  it("ends a turn at its first usage write when its last write is a bulk rewrite", async () => {
+    const start = PRICING_CATALOG_TIME;
+    const turnIds = Array.from({ length: 64 }, (_, index) => `restamped-${String(index).padStart(2, "0")}`);
+    for (const [index, turnId] of turnIds.entries()) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true,
+        threadId: `thread-${turnId}`, turnId, startedAt: start + index,
+        createdAt: start + index + 1_000, usageLineId: `line-${turnId}`,
+      }) });
+    }
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true,
+      threadId: "thread-own", turnId: "own", startedAt: start + 100, createdAt: start + 100,
+      usageLineId: "line-own",
+    }) });
+    // A repricing migration stamps every row it rewrites with one time.
+    stateDb.raw.prepare(
+      "UPDATE thread_usage_lines SET updated_at = ? WHERE usage_line_id LIKE 'line-restamped-%'",
+    ).run(start + 500_000);
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET updated_at = ? WHERE usage_line_id = 'line-own'")
+      .run(start + 400_000);
+
+    const first = await store.repairUnfinishedThreadUsageTurns({ lastWriteBefore: start + 1_000_000, limit: 40 });
+    const rest = await store.repairUnfinishedThreadUsageTurns({ lastWriteBefore: start + 1_000_000, limit: 40 });
+
+    // Oldest first: `own` began before every restamped turn.
+    expect(first).toEqual({ repaired: 40, remaining: true, datedByFirstWrite: 39 });
+    expect(rest).toEqual({ repaired: 25, remaining: false, datedByFirstWrite: 25 });
+    const completedAt = (turnId: string) => (stateDb.raw.prepare(
+      "SELECT completed_at FROM thread_usage_turns WHERE turn_id = ?",
+    ).get(turnId) as { completed_at: number }).completed_at;
+    expect(turnIds.map(completedAt)).toEqual(turnIds.map((_, index) => start + index + 1_000));
+    expect(completedAt("own")).toBe(start + 400_000);
+  });
+
+  it("records one shutdown end for every running turn in one commit", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const start = PRICING_CATALOG_TIME;
+    for (const turnId of ["running-1", "running-2", "finished"]) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true,
+        turnId, startedAt: start, usageLineId: `line-${turnId}`,
+      }) });
+    }
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "finished", completedAt: start + 1_000,
+    });
+    const turns = ["running-1", "running-2", "finished", "no-usage-yet"].map((turnId) => ({
+      backend: "codex" as const, threadId: "thread-1", turnId,
+    }));
+
+    const { result, writes } = await measureSqliteWrites(() =>
+      store.completeThreadUsageTurns({ completedAt: start + 9_000, turns }));
+
+    expect(result).toBe(2);
+    expectSqliteWriteBudget({
+      scenario: "usage-turn-shutdown-completion",
+      writes,
+      note: "Two turns still running at shutdown: one commit per shutdown, only when a running turn has a ledger row",
+    });
+    expect(stateDb.raw.prepare(
+      "SELECT turn_id, completed_at FROM thread_usage_turns ORDER BY turn_id",
+    ).all()).toEqual([
+      { turn_id: "finished", completed_at: start + 1_000 },
+      { turn_id: "running-1", completed_at: start + 9_000 },
+      { turn_id: "running-2", completed_at: start + 9_000 },
+    ]);
+    const idle = await measureSqliteWrites(() =>
+      store.completeThreadUsageTurns({ completedAt: start + 10_000, turns }));
+    expect(idle.result).toBe(0);
+    expect(idle.writes.commits).toBe(0);
+  });
+
   it("retains a terminal turn time without blocking a later usage update", async () => {
     const startedAt = PRICING_CATALOG_TIME;
     const completedAt = startedAt + 4_000;

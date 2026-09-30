@@ -18,7 +18,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 67;
+export const CURRENT_STATE_DB_USER_VERSION = 68;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -914,6 +914,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
   peak_context_tokens          INTEGER,
   model_context_window         INTEGER,
   rate_limit_snapshot          TEXT,
+  completed_at_inferred        INTEGER,
   updated_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
@@ -1866,6 +1867,12 @@ export class StateDb {
         db.transaction(() => {
           ensureThreadUsageTurnRateLimitColumn(db);
           db.pragma("user_version = 67");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 68) {
+        db.transaction(() => {
+          ensureThreadUsageTurnInferredCompletionColumn(db);
+          db.pragma("user_version = 68");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
@@ -3044,6 +3051,19 @@ function ensureThreadUsageTurnRateLimitColumn(db: BetterSqlite3.Database): void 
   }
   if (!tableColumnExists(db, "thread_usage_turns", "rate_limit_snapshot")) {
     db.exec("ALTER TABLE thread_usage_turns ADD COLUMN rate_limit_snapshot TEXT");
+  }
+}
+
+// Marks a completion time the startup repair estimated from ledger evidence
+// because no terminal event reached any process. An observed end that arrives
+// later replaces it.
+function ensureThreadUsageTurnInferredCompletionColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  if (!tableColumnExists(db, "thread_usage_turns", "completed_at_inferred")) {
+    db.exec("ALTER TABLE thread_usage_turns ADD COLUMN completed_at_inferred INTEGER");
   }
 }
 
