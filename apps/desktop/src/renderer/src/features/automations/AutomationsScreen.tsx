@@ -41,6 +41,7 @@ import {
 import { AutomationRunHistoryItem } from "./ThreadAutomationsPanel";
 import { useAutomationRuns, useAutomations } from "./useAutomations";
 import { useExpandedIds } from "./useExpandedIds";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type AutomationsScreenProps = {
   desktopApi?: DesktopApi;
@@ -110,9 +111,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
     <section className="automations-screen" aria-label="Automations">
       <nav className="settings-nav" aria-label="Automation navigation">
         <header className="settings-nav__masthead">
-          <p className="settings-nav__brand">
-            Pwr<span className="settings-nav__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="settings-nav" />
         </header>
         {/* Same arrow glyph as Settings' Exit row — a bare "<" read as a
             stray character next to the real ← one screen over. */}

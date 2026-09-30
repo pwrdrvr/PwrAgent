@@ -711,7 +711,14 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.thread-header__title,\s*\.thread-empty-state h2\s*\{[\s\S]*?line-height:\s*1\.16;[\s\S]*?\}/
     );
-    expect(compactTitleRule).toContain("padding-bottom: 2px;");
+    // The header title trims to its cap height (it shares the y=20
+    // centreline), so its descender room is symmetric block padding from
+    // the grouped crumb rule. A one-sided `padding-bottom` here would win the
+    // cascade and lift the capitals off centre again, as its old 2px did.
+    expect(compactTitleRule).not.toMatch(/padding(-bottom|-block)?:/);
+    expect(css).toMatch(
+      /\.thread-header__compact-title,[^{}]*\{\s*padding-block:\s*4px;\s*\}/,
+    );
     expect(compactTitleRule).toContain("line-height: 1.25;");
     expect(threadRowTitleRule).toContain("padding-bottom: 2px;");
     expect(threadRowTitleRule).toContain("line-height: 1.25;");
@@ -1371,9 +1378,9 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.star-map__top-band > \*,\s*\.star-map__top-band > \* \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
-    // …except the wordmark, which is brand, not a control: on macOS
-    // pressing it must drag the window like the main window's masthead
-    // brand, never start a text selection. The compound scope
+    // …except the brand lockup (mark + wordmark), which is brand, not a
+    // control: on macOS pressing it must drag the window like the main
+    // window's masthead brand, never start a text selection. The compound scope
     // out-specifies the band rule's universal legs, so source order is
     // free. darwin-only, because the glass strip the rule belongs to only
     // renders there — on Windows the band sits over the sky below the
@@ -1382,8 +1389,8 @@ describe("Tangerine Terminal theme contract", () => {
     // a canvas pan.
     const brandOverride = extractRuleBody(
       css,
-      ':root[data-platform="darwin"] .star-map__chrome .sidebar__brand,\n'
-        + ':root[data-platform="darwin"] .star-map__chrome .sidebar__brand *',
+      ':root[data-platform="darwin"] .star-map__chrome .brand-lockup,\n'
+        + ':root[data-platform="darwin"] .star-map__chrome .brand-lockup *',
     );
     expect(brandOverride).toContain("-webkit-app-region: drag;");
     expect(brandOverride).toContain("pointer-events: none;");
@@ -1696,6 +1703,57 @@ describe("Tangerine Terminal theme contract", () => {
         "color: var(--accent-bright);",
       );
     }
+  });
+
+  it("draws one brand lockup on the Pwr-family title-strip spec", () => {
+    // Family spec (PwrGit/PwrAgent/PwrSnap, features/chrome/AGENTS.md): the
+    // app-icon mark in `--accent`, 8px to the wordmark, `700 17px/1` at
+    // -0.01em. The lockup carries the accent so the mark's `currentColor` is
+    // the UI orange, never the icon's #e8743a.
+    const lockup = extractRuleBody(css, ".brand-lockup");
+    expect(lockup).toContain("color: var(--accent);");
+    expect(lockup).toContain("gap: 8px;");
+    expect(lockup).toContain("align-items: center;");
+
+    const wordmarks = [
+      ".sidebar__brand",
+      ".settings-nav__brand",
+      ".activity-titlebar__brand",
+    ];
+    for (const selector of wordmarks) {
+      const rule = extractRuleBody(css, selector);
+      expect(rule, `${selector} stem`).toContain("color: var(--text-primary);");
+      expect(rule, `${selector} size`).toContain("font-size: 17px;");
+      expect(rule, `${selector} weight`).toContain("font-weight: 700;");
+      expect(rule, `${selector} leading`).toContain("line-height: 1;");
+      expect(rule, `${selector} tracking`).toContain("letter-spacing: -0.01em;");
+    }
+    // The hidden-sidebar masthead once shrank the relocated wordmark to 15px,
+    // so the brand changed size when the sidebar toggled.
+    expect(css).not.toMatch(/\.thread-header__masthead \.sidebar__brand\s*\{/);
+
+    // Text centres by cap height, chevrons by x-height. A flex-centred line
+    // box puts the capitals wherever the font's ascent and descent do.
+    // The selector list of a grouped rule, minus the comment above it.
+    const groupedSelectors = (declaration: string): string[] => {
+      const match = new RegExp(`([^{}]+)\\{\\s*${declaration}\\s*\\}`).exec(css);
+      expect(match, `app.css should group \`${declaration}\``).not.toBeNull();
+      return match![1].split("*/").pop()!.split(",").map((part) => part.trim());
+    };
+    const capSelectors = groupedSelectors("text-box: trim-both cap alphabetic;");
+    for (const selector of [
+      ...wordmarks,
+      ".thread-header__compact-title",
+      ".settings-titlebar__current",
+      ".activity-titlebar__current",
+    ]) {
+      expect(capSelectors, `${selector} should trim to its cap height`).toContain(selector);
+    }
+    expect(groupedSelectors("text-box: trim-both ex alphabetic;")).toEqual([
+      ".thread-header__separator",
+      ".settings-titlebar__separator",
+      ".activity-titlebar__separator",
+    ]);
   });
 
   it("`SettingsSection` and `SettingsPathRow` chips share the same tone CSS modifiers", () => {

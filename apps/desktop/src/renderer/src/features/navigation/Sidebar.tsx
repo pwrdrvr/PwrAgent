@@ -159,6 +159,7 @@ function useReleaseBeforeListChange<Args extends unknown[], Result>(
 }
 
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type SidebarProps = {
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -1891,9 +1892,7 @@ export function Sidebar(props: SidebarProps) {
           the shell as this aside's sibling so it can straddle the border
           that `overflow: hidden` keeps every child from reaching. */}
       <header className="sidebar__masthead">
-        <p className="sidebar__brand">
-          Pwr<span className="sidebar__brand-accent">Agent</span>
-        </p>
+        <BrandLockup variant="sidebar" />
 
         <div className="sidebar__masthead-actions">
           <MastheadActionButton

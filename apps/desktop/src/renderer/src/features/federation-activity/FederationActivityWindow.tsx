@@ -9,6 +9,7 @@ import type { FederationActivitySeries } from "@pwragent/shared";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 type Period = "1m" | "10m" | "1h";
 const PERIODS: Period[] = ["1m", "10m", "1h"];
@@ -286,7 +287,7 @@ export function FederationActivityWindow() {
   useEffect(() => { document.title = view === "usage" ? "Usage Activity" : "Federation Activity"; }, [view]);
   return <div className="messaging-activity-window"><section aria-label="Federation activity" className="activity-screen">
     <header className="activity-titlebar">
-      <p className="activity-titlebar__brand">Pwr<span className="activity-titlebar__brand-accent">Agent</span></p>
+      <BrandLockup variant="activity-titlebar" />
       <div className="activity-titlebar__breadcrumb"><span className="activity-titlebar__eyebrow">Federation</span>
         <span aria-hidden="true" className="activity-titlebar__separator">›</span>
         <span className="activity-titlebar__current">{view === "usage" ? "Usage Activity" : "Activity"}</span></div>

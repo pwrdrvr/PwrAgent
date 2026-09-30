@@ -802,11 +802,6 @@ textarea,
   padding-left: 14px;
 }
 
-.thread-header__masthead .sidebar__brand {
-  font-size: 15px;
-  white-space: nowrap;
-}
-
 .masthead-actions {
   display: flex;
   align-items: center;
@@ -1816,6 +1811,22 @@ textarea,
   }
 }
 
+/* The brand lockup's mark is the first thing the macOS masthead sheds, before
+   any button: it is decorative (the wordmark names the app) and the lockup
+   is 28px wider than the wordmark alone. Measured with the wordmark drawn in
+   `.SF NS` Bold: the lockup ends at x=202.5, and four buttons plus the 8px
+   gap need the rail's content box to be at least 304px (a 337px sidebar).
+   The query leaves ~4px of slack for a system font whose metrics differ.
+   The default 408px rail keeps the mark; the 280px minimum drops it and, at
+   282px, the Settings gear above as well. Only the stoplight gutter costs
+   this room, so every other platform and macOS fullscreen keep the mark. */
+@container sidebar (max-width: 307px) {
+  :root[data-platform="darwin"]:not([data-fullscreen="true"])
+    .sidebar__masthead .brand-lockup__mark {
+    display: none;
+  }
+}
+
 /* macOS reserves 80px for the traffic-light stoplights. Every other
    platform (Linux normal frame; Windows frameless with caption buttons on
    the right, never the left) starts the brand at the left edge. */
@@ -2543,6 +2554,11 @@ textarea,
   align-items: center;
   gap: 16px;
   flex: 0 0 auto;
+  /* The band is the FILL; the divider sits below it (41px border-box).
+     Border-box sizing put the 1px border inside the 40px band, leaving a
+     39px fill centred on 19.5, which the stoplights (whole points only,
+     centred on 20) can never reach. */
+  box-sizing: content-box;
   min-height: var(--chrome-band-h);
   padding: 0 14px 0 96px;
   border-bottom: 1px solid var(--border-subtle);
@@ -3491,6 +3507,68 @@ textarea,
 
 .sidebar__brand-accent {
   color: var(--accent);
+}
+
+/* Brand lockup, the Pwr-family title-strip brand (`BrandLockup.tsx`): the app
+   icon's glyph in the accent, 8px, then the wordmark. The lockup carries the
+   accent so the mark's `currentColor` is `--accent`; the wordmark sets its own
+   `--text-primary` stem. The family spec (PwrGit, PwrAgent, PwrSnap) is in
+   `features/chrome/AGENTS.md`. */
+.brand-lockup {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.brand-lockup__mark {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* Title-strip text centres by its cap height, so the wordmark's capitals, the
+   breadcrumbs, the mark and the stoplights share the y=20 centreline. Without
+   the trim, flex centres each element's line box, and the font's ascent and
+   descent put the capitals wherever that font's metrics happen to put them —
+   1.25px high on the Activity wordmark, 1px high on the thread title.
+   Trimming centres the ink that is actually drawn, at any size and in any
+   font, so nothing here is nudged by a pixel count. */
+.sidebar__brand,
+.settings-nav__brand,
+.activity-titlebar__brand,
+.thread-header__eyebrow,
+.thread-header__compact-title,
+.settings-titlebar__eyebrow,
+.settings-titlebar__crumb,
+.settings-titlebar__current,
+.activity-titlebar__eyebrow,
+.activity-titlebar__crumb,
+.activity-titlebar__current {
+  text-box: trim-both cap alphabetic;
+}
+
+/* The breadcrumb chevron is drawn on the x-height, not up to the cap line, so
+   it centres by that band instead. */
+.thread-header__separator,
+.settings-titlebar__separator,
+.activity-titlebar__separator {
+  text-box: trim-both ex alphabetic;
+}
+
+/* The crumbs that clip their overflow for an ellipsis get their descenders
+   back: the trim shrinks the box to the cap height, and `overflow` would cut
+   everything below the baseline. Symmetric, so the cap band stays centred.
+   None of these crumbs declares its own block padding; keep it that way, or
+   the later rule wins and the band slides off centre (the thread title's old
+   `padding-bottom: 2px` held its capitals 1px high). */
+.thread-header__eyebrow,
+.thread-header__compact-title,
+.settings-titlebar__current,
+.activity-titlebar__crumb,
+.activity-titlebar__current {
+  padding-block: 4px;
 }
 
 /* Stable marker for the remote-instance label text wherever the
@@ -7287,7 +7365,8 @@ a.button {
   /* No padding — the title-bar strip handles its own stoplight
      clearance via padding-left: 80px (mirrors `.sidebar__masthead`).
      The body (.settings-layout) carries its own interior layout via
-     the existing 188px nav + content grid; no outer gutter needed. */
+     the existing nav + content grid (188px nav, 216px on macOS); no
+     outer gutter needed. */
   padding: 0;
   background: var(--bg-app);
 }
@@ -8331,6 +8410,16 @@ a.button {
   overflow: hidden;
 }
 
+/* On macOS the nav's masthead carries the brand lockup at x=96, behind the
+   stoplight gutter, and at 188px the column ended 23.5px short of it (the
+   lockup ends at x=202.5 with the wordmark in `.SF NS` Bold). 216px is that
+   end plus the nav's 8px lane and 1px border, with ~4px of slack for a system
+   font whose metrics differ. The strip platforms hide this masthead, so they
+   keep the 188px column. */
+:root[data-platform="darwin"] :is(.settings-screen, .automations-screen) {
+  grid-template-columns: 216px minmax(0, 1fr);
+}
+
 .automations-main {
   display: flex;
   min-width: 0;
@@ -8845,10 +8934,14 @@ a.button {
   align-items: center;
   gap: 12px;
   /* No 80px stoplight gutter here — the nav masthead on the left
-     handles that. The right pane's title bar starts at x=188 (past
-     the stoplight area) so it doesn't need any clearance. Shares the
+     handles that. The right pane's title bar starts past the nav (x=216
+     on macOS, past the stoplight area) so it doesn't need any clearance. Shares the
      app-wide chrome band so its breadcrumb sits on the same centerline
-     as the nav brand beside it. */
+     as the nav brand beside it. The band is the fill and the divider sits
+     below it, as on `.activity-titlebar`: with the border inside the band
+     the fill was 39px and the breadcrumb centred on 19.5, half a point off
+     the nav brand beside it. */
+  box-sizing: content-box;
   min-height: var(--chrome-band-h);
   padding: 0 14px;
   border-bottom: 1px solid var(--border-subtle);
@@ -8911,7 +9004,10 @@ a.button {
   appearance: none;
   cursor: pointer;
   flex: 0 0 auto;
-  padding: 0;
+  /* The cap-height trim (see `.brand-lockup`) shrinks the button to its
+     capitals; the block padding gives the focus ring and the hover underline
+     their descender room back, evenly, so the capitals stay centred. */
+  padding: 4px 0;
   border: 0;
   background: transparent;
   color: var(--text-muted);
@@ -16569,8 +16665,10 @@ a.button {
    window (whose masthead marks every descendant `drag`). The compound
    scope out-specifies the band rule's universal legs (0,1,0) regardless
    of source order — the `.thread-header .masthead-actions` pattern. The
-   `*` leg covers the accent span for the pointer opt-out; its
-   app-region half is moot on an inline box, which Chromium ignores.
+   `*` leg covers the mark and the wordmark for both opt-outs (the band's
+   universal legs would otherwise punch the mark out as a no-drag hole);
+   on the inline accent span only the pointer half matters, since Chromium
+   ignores app-region on an inline box.
 
    darwin-only, matching the glass strip itself: on Windows the band sits
    below the painted `.activity-titlebar`, over the sky, where a drag rect
@@ -16578,8 +16676,8 @@ a.button {
    Linux the OS frame ignores client-area drag regions entirely, so
    `pointer-events: none` alone would let a wordmark press fall through to
    the viewport and pan the galaxy. */
-:root[data-platform="darwin"] .star-map__chrome .sidebar__brand,
-:root[data-platform="darwin"] .star-map__chrome .sidebar__brand * {
+:root[data-platform="darwin"] .star-map__chrome .brand-lockup,
+:root[data-platform="darwin"] .star-map__chrome .brand-lockup * {
   -webkit-app-region: drag;
   pointer-events: none;
 }
@@ -18682,9 +18780,14 @@ a.button {
   flex: 0 0 auto;
 }
 
+/* Baseline, not centre: the 12px project eyebrow and the 14px title are one
+   line of text and must share a baseline. The title's cap-height trim puts
+   its capitals on the y=20 centreline, and the eyebrow rides its baseline.
+   Centring each by its own cap height instead left the eyebrow's baseline
+   1px above the title's. The chevron still centres, by its x-height. */
 .thread-header__breadcrumb {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
@@ -18706,6 +18809,7 @@ a.button {
 }
 
 .thread-header__separator {
+  align-self: center;
   flex: 0 0 auto;
   color: var(--text-muted);
   font-size: 13px;
@@ -18731,7 +18835,6 @@ a.button {
      ellipsizes its own text, so nothing else paints in the margin. */
   overflow: clip;
   overflow-clip-margin: 4px;
-  padding-bottom: 2px;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 700;

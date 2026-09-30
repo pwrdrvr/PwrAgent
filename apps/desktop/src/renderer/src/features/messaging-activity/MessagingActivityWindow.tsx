@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { MessagingActivityScreen } from "./MessagingActivityScreen";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 /**
  * Root component for the dedicated Messaging Activity BrowserWindow.
@@ -34,9 +35,7 @@ export function MessagingActivityWindow() {
         className="activity-screen"
       >
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div className="activity-titlebar__breadcrumb">
             <span className="activity-titlebar__eyebrow">Messaging</span>
             <span aria-hidden="true" className="activity-titlebar__separator">

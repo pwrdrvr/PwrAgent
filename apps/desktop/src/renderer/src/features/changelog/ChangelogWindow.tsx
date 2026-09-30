@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { AppChangelogDocument } from "../../../../shared/app-metadata";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "../thread-detail/ThreadMarkdown";
+import { BrandLockup } from "../chrome/BrandLockup";
 
 export function ChangelogWindow() {
   const desktopApi = useDesktopApi();
@@ -41,9 +42,7 @@ export function ChangelogWindow() {
     <div className="document-window">
       <section aria-label="PwrAgent changelog" className="activity-screen">
         <header className="activity-titlebar">
-          <p className="activity-titlebar__brand">
-            Pwr<span className="activity-titlebar__brand-accent">Agent</span>
-          </p>
+          <BrandLockup variant="activity-titlebar" />
           <div className="activity-titlebar__breadcrumb">
             <span className="activity-titlebar__eyebrow">Help</span>
             <span aria-hidden="true" className="activity-titlebar__separator">
