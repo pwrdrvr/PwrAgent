@@ -6,6 +6,7 @@ import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
+  useCallback,
   useEffect,
   Fragment,
   useMemo,
@@ -88,7 +89,6 @@ import {
   interleaveStartingSubthreads,
   selectUnlandedStartingThreads,
   StartingThreadRow,
-  traysStartingSubthreads,
 } from "./StartingThreadRow";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 
@@ -862,6 +862,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [props.directories],
   );
+  // The projects a starting thread will render in. A sub-thread launchpad's
+  // own key names no project; its thread lands under the parent's row.
+  const startingThreadDirectoryKeys = useCallback((creation: PendingLaunchpadCreation): string[] => {
+    const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
+    return parent
+      ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
+      : [creation.directoryKey];
+  }, [threadsByKey]);
   const unplacedStartingThreads = selectUnlandedStartingThreads(
     props.startingThreads?.filter((creation) =>
       !visibleDirectories.some((directory) => directory.key === creation.directoryKey)
@@ -1089,13 +1097,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
       previousSelectedItemKeyRef.current = undefined;
       return;
     }
-    const startingDirectoryKey = props.startingThreads?.find(
+    const selectedStartingThread = props.startingThreads?.find(
       (creation) => creation.selectionKey === selectedItemKey,
-    )?.directoryKey;
+    );
+    const startingDirectoryKeys = selectedStartingThread
+      ? startingThreadDirectoryKeys(selectedStartingThread)
+      : [];
     const matchingDirectory = visibleDirectories.find(
       (directory) =>
         selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
-        directory.key === startingDirectoryKey ||
+        startingDirectoryKeys.includes(directory.key) ||
         props.selectedThreadDirectoryKeys?.includes(directory.key),
     );
     if (!matchingDirectory) {
@@ -1140,7 +1151,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     setExpandedByKey((current) => revealsDirectory(current)
       ? { ...current, [matchingDirectory.key]: true }
       : current);
-  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.startingThreads]);
+  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.startingThreads, startingThreadDirectoryKeys]);
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
@@ -1291,7 +1302,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
     const selectedThreadInDirectory = props.selectedThreadDirectoryKeys?.includes(directory.key) ?? false;
     const selectedStartingThread = Boolean(props.startingThreads?.some((creation) =>
-      creation.directoryKey === directory.key && creation.selectionKey === props.selectedItemKey));
+      creation.selectionKey === props.selectedItemKey
+      && startingThreadDirectoryKeys(creation).includes(directory.key)));
     const expanded =
       expandedByKey[directory.key] ??
       (selectedLaunchpad || selectedThreadInDirectory || selectedStartingThread);
@@ -1341,9 +1353,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
           return resource ? [resource] : [];
         });
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
+      const trayEntries = interleaveStartingSubthreads({
+        trayKey: parentKey,
+        subtree: children,
+        depthOf: trays.depth,
+        creations: startingSubthreads,
+      });
       // A starting child opens its tray: the created thread does the same when
       // it lands, so the row is already where it will be.
-      const startsSubthread = traysStartingSubthreads(parentKey, children, startingSubthreads);
+      const startsSubthread = trayEntries.length > children.length;
       if (
         (((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
           || subthreadsCollapsed)
@@ -1375,12 +1393,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {nativeSubAgentCount > 0 ? (
               <NativeSubAgentsDisclosure compact thread={parent} />
             ) : null}
-            {interleaveStartingSubthreads({
-              trayKey: parentKey,
-              subtree: children,
-              depthOf: trays.depth,
-              creations: startsSubthread ? startingSubthreads : [],
-            }).flatMap((entry) => {
+            {trayEntries.flatMap((entry) => {
               if (entry.kind === "starting") {
                 return [
                   <StartingThreadRow

@@ -35,7 +35,6 @@ import {
   interleaveStartingSubthreads,
   selectUnlandedStartingThreads,
   StartingThreadRow,
-  traysStartingSubthreads,
 } from "./StartingThreadRow";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 
@@ -189,9 +188,15 @@ export function RecentsList(props: RecentsListProps) {
       parent,
       "thread_grouping",
     );
+    const trayEntries = interleaveStartingSubthreads({
+      trayKey: parentKey,
+      subtree: children,
+      depthOf: trays.depth,
+      creations: startingSubthreads,
+    });
     // A starting child opens its tray: the created thread does the same when
     // it lands, so the row is already where it will be.
-    const startsSubthread = traysStartingSubthreads(parentKey, children, startingSubthreads);
+    const startsSubthread = trayEntries.length > children.length;
     if (
       (((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
         || subthreadsCollapsed)
@@ -208,12 +213,7 @@ export function RecentsList(props: RecentsListProps) {
         {nativeSubAgentCount > 0 ? (
           <NativeSubAgentsDisclosure thread={parent} />
         ) : null}
-        {interleaveStartingSubthreads({
-          trayKey: parentKey,
-          subtree: children,
-          depthOf: trays.depth,
-          creations: startsSubthread ? startingSubthreads : [],
-        }).flatMap((entry) => {
+        {trayEntries.flatMap((entry) => {
           if (entry.kind === "starting") {
             return [
               <StartingThreadRow

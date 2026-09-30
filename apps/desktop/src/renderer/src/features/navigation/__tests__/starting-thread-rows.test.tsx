@@ -8,6 +8,7 @@ import type {
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import type { PendingLaunchpadCreation } from "../../../lib/useThreadNavigation";
 import { interleaveStartingSubthreads } from "../StartingThreadRow";
+import { buildSubthreadLaunchpadKey } from "../../../lib/subthread-launchpads";
 
 afterEach(cleanup);
 
@@ -133,6 +134,54 @@ describe("a thread that is still starting", () => {
     expect(screen.getByRole("list", { name: "Threads in PwrSnap" }))
       .toContainElement(screen.getByRole("button", { name: "Add a crop tool, starting in PwrSnap" }));
     expect(screen.queryByText("No threads in this directory yet.")).not.toBeInTheDocument();
+  });
+
+  it("lands last among the pins when its project's rows are collapsed under them", () => {
+    const pinnedDirectories = [{ ...directories[0]!, directoryThreadsCollapsed: true }] as NavigationDirectorySummary[];
+    const starting = creation();
+    render(
+      <Sidebar
+        backends={[]}
+        browseMode="directories"
+        directories={pinnedDirectories}
+        inboxThreads={[]}
+        loaded
+        loading={false}
+        pendingLaunchpadCreations={[starting]}
+        selectedItemKey={starting.selectionKey}
+        threads={[thread("Pinned thread", { pinnedRank: "a0" }), thread("Older thread")]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const project = screen.getByRole("list", { name: "Threads in PwrSnap" });
+    // Main pins the new thread there, so it stays out from under the divider.
+    expect(rowNames(project)).toEqual(["Pinned thread, pinned", "Add a crop tool, starting in PwrSnap"]);
+    const divider = screen.getByRole("button", { name: "Show directory threads for PwrSnap" });
+    expect(
+      within(project).getByRole("button", { name: "Add a crop tool, starting in PwrSnap" })
+        .compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("opens the parent's project for a starting sub-thread", () => {
+    const starting = creation({
+      directoryKey: buildSubthreadLaunchpadKey({ id: "Parent", source: "codex" }, "new-worktree"),
+      parentThreadKey: "codex:Parent",
+      sourceThreadKey: "codex:Parent",
+    });
+    renderSidebar({
+      browseMode: "directories",
+      threads: [thread("Parent")],
+      creations: [starting],
+      selectedItemKey: starting.selectionKey,
+    });
+
+    expect(rowNames(screen.getByRole("list", { name: "Sub-threads of Parent" })))
+      .toEqual(["Add a crop tool, starting in PwrSnap"]);
   });
 
   it("lands directly below the card that opened its sub-thread launchpad", () => {

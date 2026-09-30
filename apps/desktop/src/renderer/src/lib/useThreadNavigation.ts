@@ -2707,14 +2707,23 @@ export type PendingLaunchpadCreation = {
   input: AppServerTurnInputItem[];
 };
 
+/**
+ * A thread the launchpad names, keyed as its row is. A row on a peer carries
+ * that peer's ref, including every row of a peer's window, where the launchpad
+ * leaves the instance implicit in the window's own target.
+ */
 function buildLaunchpadRelativeThreadKey(
   backend: AppServerBackendKind,
   threadId: string | undefined,
   instanceId: FederationInstanceId | undefined,
+  launchpadTarget: FederationTarget | undefined,
 ): string | undefined {
   if (!threadId) return undefined;
-  return instanceId
-    ? federatedThreadIdentityKey({ backend, target: { scope: "remote", instanceId }, threadId })
+  const target: FederationTarget | undefined = instanceId
+    ? { scope: "remote", instanceId }
+    : launchpadTarget && isRemoteFederationTarget(launchpadTarget) ? launchpadTarget : undefined;
+  return target
+    ? federatedThreadIdentityKey({ backend, target, threadId })
     : buildThreadIdentityKey(backend, threadId);
 }
 
@@ -3371,7 +3380,7 @@ export function useThreadNavigation(
     } else {
       setState((current) => ({ ...current, loading, refreshing, error }));
     }
-  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore]);
+  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
@@ -6742,11 +6751,13 @@ export function useThreadNavigation(
           materializeParentThreadBackend,
           materializeParentThreadId,
           materializeParentThreadInstanceId,
+          submittedFederationTarget,
         ),
         sourceThreadKey: buildLaunchpadRelativeThreadKey(
           materializeParentThreadBackend,
           materializeParentThreadId && (launchpad.sourceThreadId ?? materializeParentThreadId),
           materializeParentThreadInstanceId,
+          submittedFederationTarget,
         ),
         title: input?.find((item) => item.type === "text")?.text
           ?? launchpad.prompt ?? "New thread",

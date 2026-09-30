@@ -348,6 +348,10 @@ type SidebarProps = {
  * than just ordering threads, so it is the first thing read on the row and
  * the one worth glancing at without opening.
  */
+// One empty list, so a render with nothing starting hands the lists the same
+// array and their effects keyed on it stay put.
+const NO_STARTING_THREADS: PendingLaunchpadCreation[] = [];
+
 const BROWSE_MODES = [
   "attention",
   "drafts",
@@ -598,7 +602,9 @@ export function Sidebar(props: SidebarProps) {
   // A starting thread renders where its thread will land. Drafts holds only
   // threads with unsent replies, which a new thread never is, so it lands
   // nowhere there.
-  const startingThreads = props.browseMode === "drafts" ? [] : props.pendingLaunchpadCreations ?? [];
+  const startingThreads = props.browseMode === "drafts"
+    ? NO_STARTING_THREADS
+    : props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
     !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady

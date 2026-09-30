@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -41,8 +41,15 @@ export function StartingThreadRow(props: {
   const worktree = creation.launchpad.workMode === "worktree";
   const branchName = creation.launchpad.branchName?.trim();
   const nested = props.nestedDepth !== undefined;
+  const shellRef = useRef<HTMLDivElement>(null);
+  // A selected starting row sits wherever its project or parent is, which can
+  // be below the fold. Show it, as selecting a thread row does.
+  useEffect(() => {
+    if (props.selected) shellRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [props.selected]);
   return (
     <div
+      ref={shellRef}
       className={`thread-row-shell thread-row-shell--starting${
         nested ? " thread-row-shell--nested" : ""
       }`}
@@ -175,15 +182,4 @@ export function interleaveStartingSubthreads(params: {
     entries.splice(at, 0, { kind: "starting", creation, depth });
   }
   return entries;
-}
-
-/** Whether a tray keyed by `trayKey` will take any of `creations`. */
-export function traysStartingSubthreads(
-  trayKey: string,
-  subtree: readonly NavigationThreadSummary[],
-  creations: readonly PendingLaunchpadCreation[],
-): boolean {
-  if (creations.length === 0) return false;
-  const keys = new Set([trayKey, ...subtree.map(threadSummaryIdentityKey)]);
-  return creations.some((creation) => creation.parentThreadKey && keys.has(creation.parentThreadKey));
 }
