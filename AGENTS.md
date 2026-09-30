@@ -87,10 +87,11 @@
 - The package command `pnpm --filter @pwragent/desktop test:e2e` is also safe.
 - Both commands build `apps/desktop/out/` before Playwright starts.
 - For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
-  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It discovers an existing
-  PwrSuiteLab checkout and routes all lab access through that checkout's
-  current instructions and controllers. Do not provision a product-local
-  Tart lab or improvise direct Tart or SSH access from this repository.
+  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It uses PwrSuiteLab Control MCP's
+  current schemas and served skills when connected. Use the
+  managed-controller fallback only when MCP is unavailable, preserving existing
+  scoped authorizations. Do not provision a product-local Tart lab or improvise
+  direct Tart or SSH access from this repository.
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.

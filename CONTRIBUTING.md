@@ -109,32 +109,54 @@ repo root. The package-level
 
 ### macOS VM E2E and visual goldens
 
-Do not run a full headed Electron suite on an active desktop. The authoritative
-visual workflow uses a separately managed PwrSuiteLab Tart controller so the
-windows render on the guest display; it is not installed by this repository.
-Use available workspace/directory tools, PwrAgent Federation tools, or MCP
-resources to locate an existing local PwrSuiteLab checkout. If none is
-discoverable, ask the operator for the appropriate lab pointer. Agents
-route that work through
-[`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md),
-which defers to PwrSuiteLab. Do not provision a product-local Tart lab from
-this repository.
+Do not run a full headed Electron suite on an active desktop. Use PwrSuiteLab
+Control MCP and its dedicated E2E target so windows render on the guest display.
+Agents must read
+[`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md)
+and the connected server's current schemas and served E2E skill. An existing
+Operate grant covers matching operations within the requested task without
+per-operation dialogs. Controller scripts and checkout/Federation discovery
+are fallback paths only when MCP is unavailable, under the lab's current
+runbook and existing scoped authorization. Do not provision a product-local lab.
 
 The small macOS/ARM64 visual-regression suite has lossless WebP baselines under
 `apps/desktop/e2e/*.spec.ts-snapshots/`. They are Git LFS objects, not ordinary
-Git blobs. Generate them only inside the Tart VM with:
+Git blobs. Generate them only inside the lab VM. A `lab_e2e_run` request has
+this shape (replace the target, path, and attribution with actual values):
 
-```bash
-suite_lab_root="<PwrSuiteLab checkout discovered with tools/MCP>"
-pwragent_root="$(git rev-parse --show-toplevel)"
-"$suite_lab_root/macos-tart/run-e2e.sh" --confirm-live-run \
-  --workload pwragent --local "$pwragent_root" \
-  e2e/visual-regression.spec.ts
+```json
+{
+  "target": "<exact E2E target from lab_status>",
+  "agent_name": "Codex",
+  "project_name": "PwrAgent",
+  "thread_name": "Verify macOS visual goldens",
+  "job": {
+    "repository": "/absolute/path/to/clean/committed/worktree",
+    "setup": [["pnpm", "install", "--frozen-lockfile"]],
+    "command": ["env", "PWRAGENT_E2E_DISABLE_GPU=1", "pnpm", "test:desktop-e2e", "e2e/visual-regression.spec.ts"],
+    "artifacts": ["apps/desktop/test-results", "apps/desktop/playwright-report"],
+    "timeout_seconds": 3600
+  }
+}
 ```
 
+This assumes the guest has the Node version selected by current CI and the
+pnpm version declared in `package.json`; otherwise include their noninteractive
+installation/version selection in guest `setup` using the served skill.
+`setup` entries and `command` are argv arrays, not shell strings. The product's
+E2E script owns Electron preparation and the build. Add top-level `pr_number`
+as a decimal string when known; omit it when unknown. Both `lab_e2e_run` and
+`lab_e2e_acquire` require `agent_name`, `project_name`, and `thread_name`.
+If a call reports `Invalid tool or arguments`, refresh its schema and correct
+the payload before diagnosing permissions.
+
+Save the request ID and run ID, poll launch completion, then collect with
+`lab_e2e_collect`. A completed launch is not a test result. Inspect the returned
+logs, test exit code, and artifacts before reporting success.
+
 Review the retrieved `*-actual.webp` artifacts, promote the approved files to
-their `*-darwin.webp` baseline names, and check `git lfs status`. The controller
-rejects a dirty worktree and transports only committed `HEAD`, so commit the
+their `*-darwin.webp` baseline names, and check `git lfs status`. The launcher
+requires a clean worktree and transports only committed `HEAD`, so commit the
 promoted references as a disposable checkpoint before rerunning the focused
 spec. Amend or squash that checkpoint only after the VM verifies it. The CI
 lane runs on the selected-repository PwrDrvr organization runner shared with
