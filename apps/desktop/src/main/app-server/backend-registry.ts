@@ -433,6 +433,7 @@ import {
 import {
   isCodexInvalidResponseMessageIdError,
   type CodexInvalidResponseMessageIdRecoveryResult,
+  type CodexRecoveryBlockingTurn,
 } from "../codex-app-server/invalid-response-message-id-recovery";
 import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
@@ -963,6 +964,10 @@ type BackendClient = {
   recoverInvalidPersistedResponseMessageIds?(params: {
     failureMessage: string;
     forkLineageThreadIds?: string[];
+    onWaitingForTurns?: (
+      turns: CodexRecoveryBlockingTurn[],
+    ) => void | Promise<void>;
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult>;
   startReview?(params: {
@@ -8155,6 +8160,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
 type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
   audit: ThreadCodexInvalidIdRecovery;
   failureMessage: string;
+  /** The last status told to the operator was `waiting`. */
+  reportedWaiting: boolean;
   completion: Promise<{
     backend: "codex";
     threadId: string;
@@ -8485,6 +8492,8 @@ export class DesktopBackendRegistry {
     PendingCodexInvalidIdRecovery[] = [];
   private readonly codexInvalidIdRecoveryAttemptedAt = new Map<string, number>();
   private codexInvalidIdRecoveryDrain?: Promise<void>;
+  // Aborted by close(): a drain waiting for other turns must not hold shutdown.
+  private readonly codexInvalidIdRecoveryAbort = new AbortController();
   private codexInvalidIdRecoveryBarrier?: Promise<void>;
   private resolveCodexInvalidIdRecoveryBarrier?: () => void;
   /**
@@ -23749,6 +23758,9 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
+    // A recovery drain waiting for other Codex turns gives up now; the final
+    // Codex close below still waits for that drain before it runs.
+    this.codexInvalidIdRecoveryAbort.abort();
     // `closed` rejects observations that enter from this point forward. The
     // snapshot was registered synchronously at each earlier usage emit's
     // entry, so waiting it cannot miss work still deriving its sqlite row.
@@ -24776,12 +24788,17 @@ export class DesktopBackendRegistry {
       resolve = promiseResolve;
       reject = promiseReject;
     });
+    // Repair stops the Codex app-server, so it waits for every other Codex
+    // turn to finish first. Say so rather than claiming a repair is underway.
+    const waitingForThreadIds = this.listActiveCodexWorkThreadIds()
+      .filter((activeThreadId) => activeThreadId !== threadId);
     const recovery: PendingCodexInvalidIdRecovery = {
       ...candidate,
       audit,
       completion,
       failureMessage,
       reject,
+      reportedWaiting: waitingForThreadIds.length > 0,
       resolve,
     };
     this.codexRetryableTurnStarts.delete(candidate.params.threadId);
@@ -24797,9 +24814,10 @@ export class DesktopBackendRegistry {
     });
     await this.emitCodexInvalidIdRecoveryUpdate({
       failureMessage,
-      status: "repairing",
+      status: recovery.reportedWaiting ? "waiting" : "repairing",
       threadId,
       turnId,
+      ...(recovery.reportedWaiting ? { waitingForThreadIds } : {}),
     });
     return recovery;
   }
@@ -24871,15 +24889,39 @@ export class DesktopBackendRegistry {
       const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
       let retrySubmitted = false;
       try {
+        if (recovery.reportedWaiting) {
+          recovery.reportedWaiting = false;
+          await this.emitCodexInvalidIdRecoveryUpdate({
+            failureMessage: recovery.failureMessage,
+            status: "repairing",
+            threadId: recovery.params.threadId,
+            ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+          });
+        }
         const forkLineageThreadIds =
           await this.resolveCodexInvalidIdRecoveryForkLineage(
             recovery.params.threadId,
           );
+        // The registry's idle check above can miss turns the client alone
+        // owns (helper turns) and turns admitted after it ran (reviews, task
+        // monitors). The client re-checks where the stop actually happens and
+        // waits there; relay that wait to the operator.
         const repaired = await recover({
           ...(forkLineageThreadIds.length > 0
             ? { forkLineageThreadIds }
             : {}),
           failureMessage: recovery.failureMessage,
+          onWaitingForTurns: async (turns) => {
+            recovery.reportedWaiting = true;
+            await this.emitCodexInvalidIdRecoveryUpdate({
+              failureMessage: recovery.failureMessage,
+              status: "waiting",
+              threadId: recovery.params.threadId,
+              ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+              waitingForThreadIds: [...new Set(turns.map((turn) => turn.threadId))],
+            });
+          },
+          signal: this.codexInvalidIdRecoveryAbort.signal,
           threadId: recovery.params.threadId,
         });
         if (this.closed) {
@@ -25069,6 +25111,19 @@ export class DesktopBackendRegistry {
       lineage.push(sourceThreadId);
       currentThreadId = sourceThreadId;
     }
+  }
+
+  private listActiveCodexWorkThreadIds(): string[] {
+    const threadIds = new Set(this.reservedCodexStartThreadIds);
+    for (const key of this.activeCodexTurnModes.keys()) {
+      const parsed = parseThreadTurnKeyBody(key);
+      if (parsed) threadIds.add(parsed.threadId);
+    }
+    for (const key of this.activeTurnKeys) {
+      const parsed = parseActiveTurnKey(key);
+      if (parsed?.backend === "codex") threadIds.add(parsed.threadId);
+    }
+    return [...threadIds];
   }
 
   private hasActiveCodexWork(): boolean {

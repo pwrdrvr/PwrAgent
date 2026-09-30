@@ -23,6 +23,15 @@ export type CodexInvalidResponseMessageIdRecoveryResult = {
   threadId: string;
 };
 
+/**
+ * A turn still running on the app-server process that recovery must stop.
+ * Recovery waits for every one of these to end before it stops the process.
+ */
+export type CodexRecoveryBlockingTurn = {
+  threadId: string;
+  turnId?: string;
+};
+
 export function isCodexInvalidResponseMessageIdError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return INVALID_MESSAGE_ID_ERROR_PATTERN.test(message);

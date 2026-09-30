@@ -92,6 +92,36 @@ describe("resolveBackendErrorNotice", () => {
     + "Invalid 'input[169].id': 'review_rollout_user'. "
     + "Expected an ID that begins with 'msg'.";
 
+  it.each([
+    [1, "another thread finishes its turn"],
+    [3, "3 other threads finish their turns"],
+    [undefined, "other threads finish their turns"],
+  ])("says a repair is waiting for %s other running thread(s)", (count, others) => {
+    const waiting = resolveBackendErrorNotice(
+      {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        status: "waiting",
+        threadId: "thread-1",
+        threadLabel: "Fix the flaky test",
+        turnId: "turn-9",
+        ...(count === undefined ? {} : { waitingForThreadCount: count }),
+      },
+      undefined,
+    );
+    expect(waiting).toMatchObject({
+      autoDismiss: false,
+      id: "codex-invalid-id-recovery:codex:thread-1:turn-9",
+      status: {
+        label:
+          `Repairing the saved thread history restarts Codex, so PwrAgent is waiting until ${others}. Your message will be retried after the repair.`,
+        state: "progress",
+      },
+      title: "Known Codex issue",
+      tone: "warning",
+    });
+  });
+
   it("tracks a known Codex repair from progress through auto-dismissing success", () => {
     const repairing = resolveBackendErrorNotice(
       {

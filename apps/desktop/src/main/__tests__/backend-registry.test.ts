@@ -1885,6 +1885,8 @@ class MockBackendClient {
       };
       invalidIdRecoveryDelay?: Promise<unknown>;
       invalidIdRecoveryError?: Error;
+      invalidIdRecoveryBlockingTurns?: Array<{ threadId: string; turnId?: string }>;
+      invalidIdRecoveryWaitsForAbort?: boolean;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
       setThreadPermissionsDelay?: Promise<unknown>;
@@ -2191,6 +2193,10 @@ class MockBackendClient {
   async recoverInvalidPersistedResponseMessageIds(params: {
     failureMessage: string;
     forkLineageThreadIds?: string[];
+    onWaitingForTurns?: (
+      turns: Array<{ threadId: string; turnId?: string }>,
+    ) => void | Promise<void>;
+    signal?: AbortSignal;
     threadId: string;
   }): Promise<{
     backupPath: string;
@@ -2198,7 +2204,18 @@ class MockBackendClient {
     rolloutPath: string;
     threadId: string;
   }> {
-    this.invalidIdRecoveryCalls.push(params);
+    const { onWaitingForTurns, signal, ...call } = params;
+    this.invalidIdRecoveryCalls.push(call);
+    if (this.options.invalidIdRecoveryBlockingTurns) {
+      await onWaitingForTurns?.(this.options.invalidIdRecoveryBlockingTurns);
+    }
+    if (this.options.invalidIdRecoveryWaitsForAbort) {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw new Error("abandoned while waiting");
+    }
     await this.options.invalidIdRecoveryDelay;
     if (this.options.invalidIdRecoveryError) {
       throw this.options.invalidIdRecoveryError;
@@ -15644,6 +15661,204 @@ script = "echo setup"
     });
 
     await registry.close();
+  });
+
+  describe("invalid message-ID recovery beside live turns on other threads", () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const invalidIdFailure =
+      "[ApiIdParam] [input[3].id] [invalid_id_prefix] "
+      + "Invalid 'input[3].id': 'review_rollout_user'. "
+      + "Expected an ID that begins with 'msg'.";
+
+    async function startFailingThread(
+      options: ConstructorParameters<typeof MockBackendClient>[0] = {},
+    ) {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        startTurnResults: [
+          { threadId, turnId: "turn-failed-invalid-id" },
+          { threadId, turnId: "turn-retried-once" },
+        ],
+        ...options,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            [`codex:${threadId}`]: {
+              backend: "codex",
+              threadId,
+              executionMode: "default",
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+      const fail = async () => {
+        await registry.startTurn({
+          backend: "codex",
+          threadId,
+          input: [{ type: "text", text: "continue after repair" }],
+        });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId,
+            turnId: "turn-failed-invalid-id",
+            turn: {
+              id: "turn-failed-invalid-id",
+              status: "failed",
+              error: { message: invalidIdFailure },
+            },
+          },
+        });
+      };
+      const recoveryUpdates = () => events.flatMap((event) =>
+        event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          ? [event.notification.params]
+          : [],
+      );
+      return { codexClient, events, fail, recoveryUpdates, registry };
+    }
+
+    it("waits for another thread's live turn to end before repairing", async () => {
+      const busyThreadId = "thread-busy-during-repair";
+      const { codexClient, events, fail, recoveryUpdates, registry } =
+        await startFailingThread();
+      await codexClient.emit({
+        method: "turn/started",
+        params: {
+          threadId: busyThreadId,
+          turnId: "turn-busy",
+          turn: { id: "turn-busy", status: "inProgress" },
+        },
+      });
+
+      await fail();
+      await waitForCondition(() => recoveryUpdates().length > 0);
+      await flushAsync();
+      expect(recoveryUpdates()).toEqual([
+        expect.objectContaining({
+          status: "waiting",
+          threadId,
+          turnId: "turn-failed-invalid-id",
+          waitingForThreadIds: [busyThreadId],
+        }),
+      ]);
+      // Nothing stops Codex while the other turn runs.
+      expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: busyThreadId,
+          turnId: "turn-busy",
+          turn: { id: "turn-busy", status: "completed", output: [] },
+        },
+      });
+      await waitForCondition(() =>
+        recoveryUpdates().some((update) => update.status === "succeeded"),
+      );
+      expect(recoveryUpdates().map((update) => update.status)).toEqual([
+        "waiting",
+        "repairing",
+        "succeeded",
+      ]);
+      expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+      expect(codexClient.startTurnCallCount).toBe(2);
+      // The busy turn reached its own terminal before the repair began.
+      const busyTerminalIndex = events.findIndex((event) =>
+        event.notification.method === "turn/completed"
+        && event.notification.params.threadId === busyThreadId
+      );
+      const repairingIndex = events.findIndex((event) =>
+        event.notification.method === "thread/codexInvalidIdRecovery/updated"
+        && event.notification.params.status === "repairing"
+      );
+      expect(busyTerminalIndex).toBeGreaterThanOrEqual(0);
+      expect(busyTerminalIndex).toBeLessThan(repairingIndex);
+      await registry.close();
+    });
+
+    it("tells the operator when the client waits for turns only it can see", async () => {
+      const { codexClient, fail, recoveryUpdates, registry } =
+        await startFailingThread({
+          invalidIdRecoveryBlockingTurns: [
+            { threadId: "helper-thread", turnId: "helper-turn" },
+            { threadId: "review-thread" },
+          ],
+        });
+
+      await fail();
+      await waitForCondition(() =>
+        recoveryUpdates().some((update) => update.status === "succeeded"),
+      );
+      expect(recoveryUpdates()).toEqual([
+        expect.objectContaining({ status: "repairing", threadId }),
+        expect.objectContaining({
+          status: "waiting",
+          threadId,
+          waitingForThreadIds: ["helper-thread", "review-thread"],
+        }),
+        expect.objectContaining({ status: "succeeded", threadId }),
+      ]);
+      expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+      await registry.close();
+    });
+  });
+
+  it("closes promptly while the client waits for another thread's turn", async () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
+      invalidIdRecoveryBlockingTurns: [{ threadId: "thread-busy" }],
+      invalidIdRecoveryWaitsForAbort: true,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`codex:${threadId}`]: {
+            backend: "codex",
+            threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue after repair" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[3].id] [invalid_id_prefix] "
+              + "Invalid 'input[3].id': 'bad'. Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    await waitForCondition(() => codexClient.invalidIdRecoveryCalls.length === 1);
+    await registry.close();
+    expect(codexClient.startTurnCallCount).toBe(1);
   });
 
   it("drains an in-flight repair before the final Codex close", async () => {
