@@ -7818,7 +7818,8 @@ a.button {
   gap: 8px;
 }
 
-.app-notice-toast__dot {
+/* Two classes: `.status-dot` is declared far below and sets 8px. */
+.app-notice-toast .app-notice-toast__dot {
   width: 7px;
   height: 7px;
 }
