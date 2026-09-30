@@ -79,6 +79,12 @@ export async function runAcpEphemeralPrompt(
   let refusedRequests = 0;
   let collecting = false;
   let text = "";
+  // Set once the race is lost, so a late `session/new` goes no further.
+  let abandoned = false;
+  let sessionSettled: () => void = () => undefined;
+  const sessionStarted = new Promise<void>((resolve) => {
+    sessionSettled = resolve;
+  });
   let fail: (error: AcpEphemeralPromptError) => void = () => undefined;
   const failed = new Promise<never>((_resolve, reject) => {
     fail = reject;
@@ -131,16 +137,26 @@ export async function runAcpEphemeralPrompt(
     }));
     closeSupported = asRecord(asRecord(asRecord(initialized?.agentCapabilities)
       ?.sessionCapabilities)?.close) !== undefined;
-    const created = asRecord(await transport.request("session/new", {
-      cwd: request.cwd,
-      mcpServers: [],
-      ...(request.sessionMeta ? { _meta: request.sessionMeta } : {}),
-    }));
-    const createdId = created?.sessionId ?? created?.session_id;
-    if (typeof createdId !== "string" || !createdId) {
+    let created: Record<string, unknown> | undefined;
+    try {
+      created = asRecord(await transport.request("session/new", {
+        cwd: request.cwd,
+        mcpServers: [],
+        ...(request.sessionMeta ? { _meta: request.sessionMeta } : {}),
+      }));
+    } finally {
+      const createdId = created?.sessionId ?? created?.session_id;
+      if (typeof createdId === "string" && createdId) {
+        sessionId = createdId;
+      }
+      sessionSettled();
+    }
+    if (!sessionId) {
       throw new AcpEphemeralPromptError("protocol", "The agent started no session.");
     }
-    sessionId = createdId;
+    if (abandoned) {
+      throw new AcpEphemeralPromptError("protocol", "The run ended before the session started.");
+    }
     let configOptions = readConfigOptions(created);
     let model = readCurrentModel(created, configOptions);
     if (request.model && request.model !== model) {
@@ -173,6 +189,9 @@ export async function runAcpEphemeralPrompt(
         sessionId, configId: effortOption.id, value: request.reasoningEffort,
       }).catch(() => undefined);
     }
+    if (abandoned) {
+      throw new AcpEphemeralPromptError("protocol", "The run ended before the prompt.");
+    }
     collecting = true;
     const prompted = asRecord(await transport.request(
       "session/prompt",
@@ -203,6 +222,12 @@ export async function runAcpEphemeralPrompt(
   try {
     return await Promise.race([running, failed]);
   } catch (error) {
+    abandoned = true;
+    if (!sessionId) {
+      // A deadline can pass while `session/new` is in flight. The agent may
+      // still create that session, so wait for its id to discard it.
+      await bounded(sessionStarted);
+    }
     if (
       sessionId
       && error instanceof AcpEphemeralPromptError

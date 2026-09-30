@@ -155,6 +155,9 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   useEffect(() => {
     let disposed = false;
     setModels([]);
+    // Before the owner's models arrive, and if they never do, a choice on a
+    // backend this owner does not list is not sent to it.
+    setModel((current) => ownerBackends.includes(parseAnalysisModelKey(current).backend) ? current : DEFAULT_ANALYSIS_MODEL);
     if (modelTarget) void desktopApi?.listBackends?.({ federationTarget: modelTarget }).then((value) => {
       if (disposed) return;
       const choices = ownerBackends.flatMap((kind) => {

@@ -163,6 +163,21 @@ describe("ACP ephemeral prompt", () => {
     expect(agent.methods().slice(-2)).toEqual(["session/close", "_x.ai/session/delete"]);
   });
 
+  it("discards a session the agent creates after the budget has passed", async () => {
+    let created: (value: unknown) => void = () => undefined;
+    const agent = new ScriptedAgent({
+      "session/new": () => new Promise((resolve) => { created = resolve; }),
+    });
+
+    const run = runAcpEphemeralPrompt(agent, { ...request, timeoutMs: 30 });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    created({ sessionId: "grok-session", configOptions: configOptions("grok-4.7", "high") });
+
+    await expect(run).rejects.toMatchObject({ failure: "timeout" });
+    expect(agent.methods()).not.toContain("session/prompt");
+    expect(agent.methods().slice(-2)).toEqual(["session/close", "_x.ai/session/delete"]);
+  });
+
   it("cancels an answer that passes the output bound", async () => {
     const agent = new ScriptedAgent({
       "session/prompt": (_params, scripted) => {
