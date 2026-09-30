@@ -31,7 +31,10 @@ export function CodexRestartNotice(props: {
   useEffect(() => {
     let cancelled = false;
     const unsubscribe = desktopApi?.onCodexRestartStatusChanged?.((next) => {
-      if (!cancelled) setStatus(next);
+      if (cancelled) return;
+      setStatus(next);
+      // A breaker that opens again is a new stop, not the old attempt's failure.
+      if (next.stopped) setAttempt({ state: "idle" });
     });
     void desktopApi?.getCodexRestartStatus?.()
       .then((next) => {

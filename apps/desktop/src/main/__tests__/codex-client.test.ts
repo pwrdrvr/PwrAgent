@@ -1623,6 +1623,25 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("starts a waiting restart at once when the operator asks", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    vi.useFakeTimers();
+    try {
+      transport.exitUnexpectedly();
+      const waiting = client.readRateLimits();
+      await vi.advanceTimersByTimeAsync(100);
+      await client.restartAppServer();
+      await expect(waiting).resolves.toBeDefined();
+      expect(transport.connectCount).toBe(2);
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("gives up a pending restart when the client is closed", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ appServerRestartPolicy: { random: () => 0 } });

@@ -101,4 +101,33 @@ describe("CodexRestartNotice", () => {
     expect(desktopApi.restartCodex).toHaveBeenCalledTimes(1);
     expect(notices.at(-1)).toBeUndefined();
   });
+
+  it("drops a failed attempt's error when the breaker opens again", async () => {
+    let push: ((status: CodexAppServerRestartStatus) => void) | undefined;
+    const desktopApi = {
+      getCodexRestartStatus: vi.fn(async () => STOPPED),
+      onCodexRestartStatusChanged: vi.fn((callback: (status: CodexAppServerRestartStatus) => void) => {
+        push = callback;
+        return () => undefined;
+      }),
+      restartCodex: vi.fn(async () => ({
+        status: { stopped: false as const },
+        error: "json-rpc transport closed",
+      })),
+    };
+    const notices: Array<AppNoticeToastNotice | undefined> = [];
+    render(
+      <CodexRestartNotice
+        desktopApi={desktopApi}
+        onNoticeChanged={(notice) => notices.push(notice)}
+      />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { notices.at(-1)?.actions?.[0]?.onClick(); });
+    expect(notices.at(-1)?.status?.label).toBe("json-rpc transport closed");
+
+    act(() => push?.({ ...STOPPED, stoppedAt: 2_000 }));
+    expect(notices.at(-1)?.id).toBe("codex-restart-stopped:2000");
+    expect(notices.at(-1)?.status).toBeUndefined();
+  });
 });

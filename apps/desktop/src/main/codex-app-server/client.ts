@@ -7899,6 +7899,8 @@ export class CodexAppServerClient {
   resetAppServerRestarts(reason: string): void {
     const wasStopped = this.restartStatus.stopped;
     this.restartPolicy.reset();
+    // A start already waiting out the old delay proceeds now.
+    this.cancelRestartBackoff?.();
     this.setRestartStatus({ stopped: false });
     codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
   }
