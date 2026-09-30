@@ -1824,24 +1824,28 @@ textarea,
 /* The brand lockup's mark is the first thing the macOS masthead sheds, before
    any button: it is decorative (the wordmark names the app) and the lockup
    is 28px wider than the wordmark alone. Measured with the wordmark drawn in
-   `.SF NS` Bold: the lockup ends at x=202.5, and four buttons plus the 8px
-   gap need the rail's content box to be at least 304px (a 337px sidebar).
-   The query leaves ~4px of slack for a system font whose metrics differ.
+   the bundled Geist Sans Bold: the lockup ends at x=206.41, and four buttons
+   plus the 8px gap need the rail's content box to be at least 308.41px (a
+   341.41px sidebar). The query leaves ~3.6px of slack. It stood at 307px
+   while the wordmark drew in `.SF NS` Bold, 3.91px narrower, and at a 341px
+   rail that left the buttons 0.41px past their inset.
    The default 408px rail keeps the mark; the 280px minimum drops it and, at
    282px, the Settings gear above as well. Only the stoplight gutter costs
    this room, so every other platform and macOS fullscreen keep the mark. */
-@container sidebar (max-width: 307px) {
+@container sidebar (max-width: 312px) {
   :root[data-platform="darwin"]:not([data-fullscreen="true"])
     .sidebar__masthead .brand-lockup__mark {
     display: none;
   }
 }
 
-/* The wordmark in Geist Sans Bold measures 82.41px, 3.91px wider than it drew
-   in `.SF NS` Bold. With the 8px gap, the three remaining buttons then need a
-   283.41px rail, and at the 280px minimum they sat 3.41px past their inset.
-   Below a 283px rail (251px of content inside the 16px padding) the gap
-   tightens to 4px, which fits them at the minimum with 0.59px to spare. */
+/* At the minimum rail the mark and the gear are both shed (above), leaving
+   the wordmark and three buttons. The wordmark in Geist Sans Bold measures
+   82.41px, 3.91px wider than it drew in `.SF NS` Bold, so with the 8px gap
+   those buttons need a 283.41px rail, and at the 280px minimum they sat
+   3.41px past their inset. At a 284px rail or narrower (251px of content
+   inside the 16px padding and 1px border) the gap tightens to 4px, which fits
+   them at the minimum with 0.59px to spare. */
 @container sidebar (max-width: 251px) {
   .sidebar__masthead {
     gap: 4px;
@@ -8482,11 +8486,14 @@ a.button {
 }
 
 /* On macOS the nav's masthead carries the brand lockup at x=96, behind the
-   stoplight gutter, and at 188px the column ended 23.5px short of it (the
-   lockup ends at x=202.5 with the wordmark in `.SF NS` Bold). 216px is that
-   end plus the nav's 8px lane and 1px border, with ~4px of slack for a system
-   font whose metrics differ. The strip platforms hide this masthead, so they
-   keep the 188px column. */
+   stoplight gutter, and at 188px the column ended 27.41px short of it (the
+   lockup ends at x=206.41 with the wordmark in the bundled Geist Sans Bold).
+   216px is that end plus the nav's 8px lane and 1px border, with 0.59px to
+   spare. The column was sized with ~4px of slack while the wordmark drew in
+   whatever system font the machine had (`.SF NS` Bold ended it at x=202.5);
+   a bundled face draws the same width everywhere, so the slack is no longer
+   covering anything. The strip platforms hide this masthead, so they keep
+   the 188px column. */
 :root[data-platform="darwin"] :is(.settings-screen, .automations-screen) {
   grid-template-columns: 216px minmax(0, 1fr);
 }

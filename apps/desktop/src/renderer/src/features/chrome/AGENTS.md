@@ -38,16 +38,16 @@ Why each one is what it is:
 
 ## Where PwrAgent differs from its siblings
 
-- **The wordmark draws in the system font, not Geist.** `--font-sans` names
-  Geist first, but PwrAgent bundles no `@font-face`. CDP
-  `CSS.getPlatformFontsForNode` reports `.SF NS` (`.SFNS-Bold`,
-  `isCustomFont: false`) for every wordmark. PwrGit and PwrSnap bundle Geist
-  Sans, so the same 17px spec draws a slightly different wordmark there. The
-  widths below are measured in `.SF NS`.
-- **The lockup is 106.5px wide, and two surfaces could not hold it.**
+- **The lockup is 110.41px wide, and two surfaces could not hold it.** The
+  wordmark draws in the bundled Geist Sans Bold (`styles/fonts.css`), as in
+  PwrGit and PwrSnap; CDP `CSS.getPlatformFontsForNode` reports `Geist Bold`,
+  `isCustomFont: true`. Until the bundle landed it drew in `.SF NS` Bold,
+  3.91px narrower, and the thresholds below were first derived from that.
   - The sidebar masthead sheds the mark first, before any button, when the
-    rail's content box is 307px or less. `@container sidebar` sits beside
+    rail's content box is 312px or less. `@container sidebar` sits beside
     `.sidebar__masthead`. The default 408px rail keeps the mark.
+  - At the 280px minimum rail the masthead's brand-to-actions gap tightens
+    from 8px to 4px, so the wordmark and three buttons still fit.
   - On macOS the Settings and Automations nav column is 216px wide, not 188px.
     The strip platforms hide that masthead and keep 188px.
 - **The thread breadcrumb aligns by baseline.** Its 12px project eyebrow and
@@ -83,3 +83,19 @@ These are the measured centres at the adoption, in `.SF NS`, on macOS 26:
 The wordmark's 0.25 is one device pixel. Its source is the SF capital, whose
 ink stands a little above the font's cap-height metric. macOS 15 and earlier
 have not been measured.
+
+Re-measured after the Geist Sans / Geist Mono bundle, in headless Chromium at
+2× with this method, both fonts rendered side by side:
+
+| Element | `.SF NS` | Geist Sans |
+| --- | --- | --- |
+| Mark (sidebar, Settings, Activity) | 20.0 | 20.0 |
+| Wordmark capitals (sidebar, Settings, Activity) | 19.75 | 19.75 |
+| Thread title | 19.75 | 19.75 |
+| Settings eyebrow / current crumb | 20.5 / 19.75 | 20.5 / 19.75 |
+| Activity eyebrow / current crumb | 20.25 / 20.25 | 20.25 / 20.25 |
+| Settings chevron | 19.75 | 19.75 |
+| Activity chevron | 19.5 | 19.25 |
+
+The trim held through the font swap. The Activity chevron moved one device
+pixel.
