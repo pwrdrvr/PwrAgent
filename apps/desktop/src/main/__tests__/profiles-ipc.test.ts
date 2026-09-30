@@ -308,12 +308,22 @@ describe("profile IPC helpers", () => {
     vi.stubEnv("NODE_OPTIONS", '--require "/fixture/github-release-stubs.cjs"');
     const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
 
-    const response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
+    const previousArgv = process.argv;
+    const previousDefaultApp = process.defaultApp;
+    process.argv = [process.execPath, "/fixture/electron-bootstrap.mjs"];
+    process.defaultApp = true;
+    let response;
+    try {
+      response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
+    } finally {
+      process.argv = previousArgv;
+      process.defaultApp = previousDefaultApp;
+    }
 
     expect(response).toEqual({ opened: true, profile: "my-work-profile" });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
-      expect.arrayContaining(["--profile", "my-work-profile"]),
+      expect.arrayContaining(["/fixture/electron-bootstrap.mjs", "--profile", "my-work-profile"]),
       expect.objectContaining({
         env: expect.objectContaining({
           [PWRAGENT_PROFILE_ENV]: "my-work-profile",

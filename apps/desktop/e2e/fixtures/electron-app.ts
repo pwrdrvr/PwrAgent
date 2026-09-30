@@ -405,7 +405,7 @@ export async function launchElectronApp(
 
   const electronApp = await electron.launch({
     args: [
-      DESKTOP_MAIN_ENTRY,
+      path.join(fixtureDir, "electron-bootstrap.mjs"),
       // Hardware video codecs leak kernel objects inside a
       // Virtualization.framework guest (the Tart macOS VMs): every
       // VideoToolbox init creates an

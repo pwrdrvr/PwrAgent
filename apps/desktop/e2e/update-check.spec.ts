@@ -22,6 +22,11 @@ test("main-process release transports are isolated before startup", async () => 
   const app = await launchElectronApp({ requiresReplayDriver: false });
   try {
     const observed = await app.electronApp.evaluate(async ({ net }) => {
+      // Never let this verification itself spend quota if bootstrap loading
+      // regresses. Electron ignores NODE_OPTIONS --require, unlike Node.
+      if (!(globalThis as Record<symbol, unknown>)[Symbol.for("pwragent.e2e.releaseStubs")]) {
+        throw new Error("GitHub release stubs were not installed before startup");
+      }
       const urls = [
         "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30",
         "https://api.github.com/repos/pwrdrvr/PwrGit/releases/latest",

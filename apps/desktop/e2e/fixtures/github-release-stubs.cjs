@@ -1,5 +1,5 @@
-// Loaded by NODE_OPTIONS before the Electron entry point (and inherited by
-// profile helper launches). Keep test release traffic off the runner IP's
+// Imported by the Electron bootstrap, or NODE_OPTIONS in Node helpers.
+// Profile helpers retain the bootstrap entry. Keep traffic off the runner IP's
 // anonymous GitHub quota, including services outside electron-updater.
 if (process.env.PWRAGENT_E2E === "1") {
   const isReleaseUrl = (input) => {
@@ -49,4 +49,5 @@ if (process.env.PWRAGENT_E2E === "1") {
     };
   }
   require("node:module").syncBuiltinESMExports();
+  globalThis[Symbol.for("pwragent.e2e.releaseStubs")] = true;
 }
