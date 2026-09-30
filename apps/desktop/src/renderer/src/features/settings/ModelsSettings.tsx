@@ -215,10 +215,10 @@ export function ModelsSettings(props: {
   // reads the catalog cache, or refreshes Codex alone from its own screen.
   const refreshCatalog = async (
     refreshModels: "codex" | false = false,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!props.desktopApi?.listBackends) {
       setCatalogError("Provider model discovery is unavailable in this build.");
-      return;
+      return false;
     }
     setRefreshingCatalog(true);
     try {
@@ -233,8 +233,10 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      return true;
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setRefreshingCatalog(false);
     }
@@ -250,11 +252,18 @@ export function ModelsSettings(props: {
     setManagedCodexCheckError(undefined);
     setCheckingManagedCodex(true);
     try {
-      await props.desktopApi.refreshCodexDiscovery({
+      const { snapshot } = await props.desktopApi.refreshCodexDiscovery({
         discoveryIntent: "settings-user-action",
       });
       await props.onRefresh();
-      window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      const updatedVersion = snapshot.runtime.tokenMiser?.managedCodex?.version;
+      if (
+        !updatedVersion
+        || updatedVersion === managedCodexRuntime?.version
+        || await refreshCatalog("codex")
+      ) {
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      }
     } catch (error) {
       setManagedCodexCheckError(
         error instanceof Error ? error.message : String(error),

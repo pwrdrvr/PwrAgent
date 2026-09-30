@@ -3705,6 +3705,9 @@ describe("SettingsScreen", () => {
 
     finishCheck();
     await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+      refreshModels: "codex",
+    }));
     view.rerender(
       <SettingsScreen
         desktopApi={desktopApi}
@@ -3730,6 +3733,47 @@ describe("SettingsScreen", () => {
       />,
     );
     expect(screen.getByText(/checked just now/)).toBeInTheDocument();
+  });
+
+  it("rediscovers Codex models after installing a newer managed build", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: { state: "ready", version: "0.155.0-pwragent.1" },
+    };
+    const updatedSnapshot = {
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        tokenMiser: {
+          managedCodex: { state: "ready" as const, version: "0.159.0-pwragent.1" },
+        },
+      },
+    };
+    const refreshCodexDiscovery = vi.fn(async () => ({ snapshot: updatedSnapshot }));
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends, refreshCodexDiscovery } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Check for updates" }),
+    ).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() => expect(listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
+      discoveryIntent: "settings-user-action",
+      refreshModels: "codex",
+    }));
   });
 
   it("shows a managed Codex check error beside the update button", async () => {
