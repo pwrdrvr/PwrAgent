@@ -30,13 +30,22 @@ async function createCodexEnvironmentSetupFixture(params?: {
   includeExistingRunningSteps?: boolean;
   includeExistingThread?: boolean;
   includeCreatedThread?: boolean;
+  holdSetup?: boolean;
 }): Promise<{
   cleanup: () => Promise<void>;
+  finishSetup: () => Promise<void>;
   fixturePath: string;
   repoDir: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-setup-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
+  const setupGatePath = path.join(rootDir, "finish-setup");
+  const posixSetupCommand = params?.holdSetup
+    ? `printf setup-output; while [ ! -f '${setupGatePath.replace(/'/g, "'\\''")}' ]; do sleep 0.05; done`
+    : POSIX_SETUP_COMMAND;
+  const windowsSetupCommand = params?.holdSetup
+    ? `Write-Output setup-output; while (-not (Test-Path -LiteralPath '${setupGatePath.replace(/'/g, "''")}')) { Start-Sleep -Milliseconds 50 }`
+    : WINDOWS_SETUP_COMMAND;
   await mkdir(path.join(repoDir, ".codex", "environments"), { recursive: true });
 
   execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
@@ -63,10 +72,10 @@ version = 1
 name = "Fixture Env"
 
 [setup]
-script = ${JSON.stringify(POSIX_SETUP_COMMAND)}
+script = ${JSON.stringify(posixSetupCommand)}
 
 [setup.win32]
-script = ${JSON.stringify(WINDOWS_SETUP_COMMAND)}
+script = ${JSON.stringify(windowsSetupCommand)}
 
 [[actions]]
 name = "Capture CWD"
@@ -252,6 +261,7 @@ command = ${JSON.stringify(captureCwdCommand)}
   return {
     repoDir,
     fixturePath,
+    finishSetup: () => writeFile(setupGatePath, "ready", "utf8"),
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -459,6 +469,38 @@ test("selected environments run setup and show transcript output", async () => {
         .getByRole("region", { name: "Transcript" })
     ).toContainText("setup-output");
   } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("typing continues in the focused composer after environment setup completes", async () => {
+  const fixture = await createCodexEnvironmentSetupFixture({ holdSetup: true });
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  try {
+    await app.window.getByRole("tab", { name: "directories" }).click();
+    await app.window.getByRole("button", { name: "Open new thread launchpad for FixtureRepo" }).click();
+    await app.window.getByLabel("Composer tools")
+      .getByRole("button", { name: "Environment", exact: true }).click();
+    await app.window.getByRole("option", { name: "Fixture Env" }).click();
+    await app.window.getByRole("textbox", { name: "New thread" }).fill("hello env");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+    await expect(app.window.locator('[aria-label="Setup output"]')).toContainText("setup-output");
+
+    const input = app.window.getByRole("textbox", { name: "New thread" });
+    await input.fill("Still typing");
+    await input.press("End");
+    await expect(input).toBeFocused();
+    await fixture.finishSetup();
+
+    const reply = app.window.getByRole("textbox", { name: "Reply", exact: true });
+    await expect(reply).toBeVisible();
+    await expect(reply).toBeFocused();
+    // Send keys to the current focus, without clicking or targeting the reply.
+    await app.window.keyboard.type(" after setup");
+    await expect(reply).toHaveText("Still typing after setup");
+  } finally {
+    await fixture.finishSetup();
     await app.close();
     await fixture.cleanup();
   }
