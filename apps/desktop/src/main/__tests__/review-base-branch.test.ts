@@ -55,6 +55,40 @@ describe("refreshReviewBaseBranch", () => {
         .toBe(currentBase);
       expect(await git("-C", reviewer, "diff", "--name-only", "origin/main...HEAD"))
         .toBe("feature.txt");
+
+      await git("-C", reviewer, "update-ref", "refs/remotes/origin/main", oldBase);
+      await refreshReviewBaseBranch({
+        cwd: reviewer,
+        target: { type: "baseBranch", branch: "refs/remotes/origin/main" },
+      });
+      expect(await git("-C", reviewer, "merge-base", "refs/remotes/origin/main", "HEAD"))
+        .toBe(currentBase);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fetch a local branch named like a remote-tracking ref", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-review-local-base-"));
+    const git = async (...args: string[]) =>
+      (await execFile("git", args, { cwd: root })).stdout.trim();
+    try {
+      await git("init", "--initial-branch=main");
+      await git("config", "user.name", "Test");
+      await git("config", "user.email", "test@example.com");
+      await writeFile(path.join(root, "base.txt"), "base\n");
+      await git("add", "base.txt");
+      await git("commit", "-m", "base");
+      await git("branch", "origin/topic");
+      await git("remote", "add", "origin", path.join(root, "missing.git"));
+      await git("update-ref", "refs/remotes/origin/topic", "HEAD");
+
+      expect(await git("show-ref", "--verify", "refs/heads/origin/topic"))
+        .toContain("refs/heads/origin/topic");
+      await expect(refreshReviewBaseBranch({
+        cwd: root,
+        target: { type: "baseBranch", branch: "origin/topic" },
+      })).resolves.toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -62,6 +96,7 @@ describe("refreshReviewBaseBranch", () => {
 
   it("stops the review when the remote base cannot be refreshed", async () => {
     const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "rev-parse") return { stdout: "refs/remotes/origin/main\n" };
       if (args[0] === "remote") return { stdout: "origin\n" };
       if (args[0] === "check-ref-format") return { stdout: "" };
       throw new Error("offline");
