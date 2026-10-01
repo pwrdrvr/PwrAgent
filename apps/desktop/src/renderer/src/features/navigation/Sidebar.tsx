@@ -247,6 +247,11 @@ type SidebarProps = {
     instanceId: string,
     directory?: FederationProjectDirectory,
   ) => Promise<void>;
+  /**
+   * Open the Send to Another Machine dialog for a thread this window owns.
+   * Absent when no peer could receive one, which hides the menu item.
+   */
+  onSendThreadToMachine?: (thread: NavigationThreadSummary) => void;
   /** Whether a peer has a directory row's project, for its machine menu. */
   checkFederationTargetProject?: CheckFederationTargetProject;
   newThreadFederationTargets?: readonly FederationThreadTarget[];
@@ -1672,6 +1677,17 @@ export function Sidebar(props: SidebarProps) {
       contextMenu.thread.inbox.inInbox &&
       props.onMarkThreadsSeen,
   );
+  // A transfer needs an idle Codex thread this window owns: a peer's row
+  // belongs to its owner, and a native sub-agent belongs to its parent.
+  const contextMenuCanSendToMachine = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      props.onSendThreadToMachine &&
+      contextMenu.thread.source === "codex" &&
+      !contextMenu.thread.federation &&
+      !contextMenu.thread.codexNativeSubAgent &&
+      !contextMenu.thread.archivedAt,
+  );
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
@@ -1866,6 +1882,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanRename ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
+    contextMenuCanSendToMachine ||
     contextMenuCanArchive;
   const contextMenuHasTopActions =
     contextMenuHasPinAction ||
@@ -2694,6 +2711,19 @@ export function Sidebar(props: SidebarProps) {
                       }
                     >
                       Mark Read
+                    </button>
+                  ) : null}
+                  {contextMenuCanSendToMachine ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        const target = contextMenu.thread;
+                        setContextMenu(undefined);
+                        props.onSendThreadToMachine!(target);
+                      }}
+                    >
+                      Send to Another Machine…
                     </button>
                   ) : null}
                   {contextMenuCanArchive && contextMenuHasChildThreads ? (

@@ -33874,6 +33874,10 @@ button.pricing-token-miser__folded:focus-visible {
   border-radius: 6px;
   color: var(--text-secondary);
   background: var(--bg-input);
+  /* A button inherits the body's 16px, which set each card's description
+     larger than its own 13px title. Match the dialog's 13px prose. */
+  font-size: 13px;
+  line-height: 1.4;
   text-align: left;
   cursor: pointer;
 }
@@ -33895,12 +33899,139 @@ button.pricing-token-miser__folded:focus-visible {
   font-weight: 700;
 }
 
-.workspace-handoff-dialog__note {
+/* Qualified by element, as the rewind dialog's warning is: the bare classes
+   lost to `.workspace-handoff-dialog p`, so every note and error in these
+   dialogs drew in the body's secondary text color. */
+.workspace-handoff-dialog p.workspace-handoff-dialog__note {
   color: var(--text-muted);
 }
 
-.workspace-handoff-dialog__error {
+.workspace-handoff-dialog p.workspace-handoff-dialog__error {
   color: var(--danger-text);
+}
+
+/* Send to Another Machine: the handoff dialog's frame, plus a machine
+   radiogroup and a sent/stays summary. Rows copy the composer dropdown's
+   option geometry so a machine reads the same here as in "New chat on". */
+.thread-handoff-dialog__machines {
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.thread-handoff-dialog__machine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-handoff-dialog__machine:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+}
+
+.thread-handoff-dialog__machine[aria-checked="true"] {
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+}
+
+.thread-handoff-dialog__machine:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.thread-handoff-dialog__machine:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.thread-handoff-dialog__machine-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.thread-handoff-dialog__machine-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-handoff-dialog__machine-state {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.thread-handoff-dialog__machine[aria-checked="true"] .thread-handoff-dialog__machine-state {
+  color: var(--accent-bright);
+}
+
+.thread-handoff-dialog__path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.thread-handoff-dialog__hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.thread-handoff-dialog__operations {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Side by side, the shorter card would spread its two lines over the
+   taller card's height. */
+.thread-handoff-dialog__operations .workspace-handoff-dialog__strategy {
+  align-content: start;
+}
+
+.thread-handoff-dialog__carry {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.thread-handoff-dialog__carry div {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+}
+
+.thread-handoff-dialog__carry dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-handoff-dialog__carry dd {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .workspace-handoff-dialog__actions {

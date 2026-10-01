@@ -10,8 +10,9 @@ source/destination relationship rather than by rewriting a federation mount.
 
 The first implementation exposes `handoff_instance_thread` through PwrAgent's
 agent tools. It handles local-to-remote and remote-to-remote transfers; a local
-viewer can request a transfer from the actual remote owner. It does not move the
-example Windows thread automatically.
+viewer can request a transfer from the actual remote owner. The desktop's
+**Send to Another Machine…** dialog sends threads this window owns through the
+same backend call. Neither moves the example Windows thread automatically.
 
 ## Reuse
 
@@ -163,17 +164,44 @@ receiver and uses that machine's native format. Move requires an idle source wit
 no queued prompts or pending scheduled actions. Return the tool's destination
 thread link and warnings to the operator.
 
-## Desktop interaction to add next
+## Desktop interaction
 
-Add **Send to another machine…** to the thread menu and remote-view header. Show
-connected compatible instances, receiving profiles, and their existing projects.
-The operator selects **Copy** or **Move**, previews branch/dirty-state details and
-the metadata that will stay on the source, then starts the transfer. Progress
-should report capture, upload, workspace preparation, history validation, and
-source archival. Completion opens the destination thread.
+**Send to Another Machine…** in the sidebar thread menu opens one dialog for a
+Codex thread this window owns. The dialog calls the same `handoffInstanceThread`
+path as the agent tool, through the `federation:handoff-thread` IPC channel,
+with a local source only. Remote-owned sources stay with the agent tool, which
+names the owner explicitly.
 
-Before adding automatic repository matching, use normalized remote identities
-and shared commit ancestry. Never match only on basename. Missing repositories
-need an explicit clone destination. Before calling the operation a full ownership
-handoff, add durable provenance, PR references, and explicit policies for
-scheduled work, messaging bindings, child threads, and branch-name conflicts.
+- **Machine.** Every enrolled peer is listed in label order. A peer that cannot
+  receive stays listed, disabled, with its reason: **Offline**, **Update
+  required** (it lacks `thread_handoff`, `turn_control`, `environment_actions`,
+  or `file_push`, the same set `assertTarget` checks), or **Incoming files off**
+  (its **Allow file push** preference).
+- **Repository.** For a Git thread the dialog reads each available peer's
+  directory index and prefills the receiver's path with the counterpart project.
+  The checkout's origin decides first. A name match is used only when one side
+  has no origin, which is the rule new-thread retargeting already uses, and the
+  hint says which rule matched. The path stays editable. The backend still
+  rejects a bundle with unrelated history, so a wrong name match fails before
+  any thread is created. A thread with no Git evidence sends history only and
+  shows no repository field.
+- **Copy or Move.** Copy is the default. The primary button names the
+  operation and the machine. A summary lists what is sent, from the row's last
+  Git probe, and what stays on the source: the pull request link, schedules,
+  messaging bindings, and ignored files.
+- **While sending.** The request has no progress events and cannot be aborted
+  after the push, so the dialog holds one pending state and refuses Escape and
+  Cancel until it returns. A thread with a running turn keeps Send disabled
+  until the turn ends.
+- **Result.** Errors from the backend are shown verbatim in the dialog with the
+  choices kept for a retry. Success closes the dialog, opens the destination
+  thread the way a thread link does, and shows a notice. A Move whose archive
+  was not confirmed reads as a Copy, and every backend warning is listed.
+
+Still to add: phased progress (capture, upload, workspace preparation, history
+validation, source archival) needs events from main. A remote-view header entry
+and remote-to-remote sends from the menu are not offered yet. Missing
+repositories need an explicit clone destination. Before calling the operation a
+full ownership handoff, add durable provenance, PR references, and explicit
+policies for scheduled work, messaging bindings, child threads, and branch-name
+conflicts.
