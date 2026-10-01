@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopCodexVersionAdvisory,
@@ -9,14 +10,18 @@ import {
   CodexVersionNotice,
   buildCodexVersionNotice,
 } from "../CodexVersionNotice";
-import type { AppNoticeToastNotice } from "../AppNoticeToast";
+import { AppNoticeToast, type AppNoticeToastNotice } from "../AppNoticeToast";
+import type { ManagedRuntimeProgress } from "../../../../../shared/managed-runtime-progress";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function advisory(patch: Partial<DesktopCodexVersionAdvisory> = {}): DesktopCodexVersionAdvisory {
   return {
     version: "0.152.0",
-    minimumVersion: "0.155.0",
+    minimumVersion: "0.159.0",
     command: "/opt/homebrew/bin/codex",
     installer: "homebrew",
     upgradeCommand: "brew upgrade codex",
@@ -51,14 +56,14 @@ describe("buildCodexVersionNotice", () => {
       copyText: "brew upgrade codex",
     });
     expect(notice?.message).toBe(
-      "Codex 0.152.0 is older than 0.155.0, so it can't use GPT-6-Sol, GPT-6.1-Sol and newer models.",
+      "Codex 0.152.0 is too old for GPT-6.1-Sol. Update to Codex 0.159.0+ to use it.",
     );
     expect(notice?.detail).toContain("brew upgrade codex");
 
     const copy = notice?.actions?.find((action) => action.label === "Copy command");
     copy?.onClick();
     expect(handlers.onCopyCommand).toHaveBeenCalledWith("brew upgrade codex");
-    notice?.actions?.find((action) => action.label === "Use PwrAgent build")?.onClick();
+    notice?.actions?.find((action) => action.label === "Open Codex settings")?.onClick();
     expect(handlers.onOpenCodexSettings).toHaveBeenCalledOnce();
   });
 
@@ -75,10 +80,11 @@ describe("buildCodexVersionNotice", () => {
     );
   });
 
-  it("sends an app-bundled Codex to the managed build, with no command", () => {
+  it("sends an app-bundled Codex to settings, with app update guidance and no command", () => {
     const { notice } = build({ installer: "application", upgradeCommand: undefined });
-    expect(notice?.actions?.map((action) => action.label)).toEqual(["Use PwrAgent build"]);
+    expect(notice?.actions?.map((action) => action.label)).toEqual(["Open Codex settings"]);
     expect(notice?.copyText).toBeUndefined();
+    expect(notice?.detail).toContain("ChatGPT / Codex app");
   });
 
   it("tells a stale PwrAgent build to check for updates rather than install anything", () => {
@@ -158,5 +164,84 @@ describe("CodexVersionNotice", () => {
     expect(latest).toBeDefined();
     act(() => latest?.onDismiss?.());
     expect(latest).toBeUndefined();
+  });
+
+  function Host(props: Omit<Parameters<typeof CodexVersionNotice>[0], "onNoticeChanged">) {
+    const [notice, setNotice] = useState<AppNoticeToastNotice>();
+    return <>
+      <CodexVersionNotice {...props} onNoticeChanged={setNotice} />
+      <AppNoticeToast notice={notice} onDismiss={() => setNotice(undefined)} />
+    </>;
+  }
+
+  it("enables the custom build from the toast and keeps progress when the advisory clears", async () => {
+    let sendProgress: ((event: ManagedRuntimeProgress) => void) | undefined;
+    let finish: ((saved: boolean) => void) | undefined;
+    const change = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const openSettings = vi.fn();
+    const api = {
+      readManagedRuntimeProgress: vi.fn(async () => []),
+      onManagedRuntimeProgress: vi.fn((handler: (event: ManagedRuntimeProgress) => void) => {
+        sendProgress = handler;
+        return vi.fn();
+      }),
+    };
+    const props = { desktopApi: api, onManagedBuildsChange: change, onOpenCodexSettings: openSettings };
+    const { rerender } = render(<Host {...props} snapshot={snapshot(advisory())} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Open Codex settings" }));
+    expect(openSettings).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(change).toHaveBeenCalledWith(true);
+    expect(screen.getByRole("switch")).toBeDisabled();
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    for (const phase of ["checking", "downloading", "verifying", "unpacking", "activating"] as const) {
+      act(() => sendProgress?.({ runtime: "codex", phase, receivedBytes: 50, totalBytes: 100, updatedAt: Date.now() }));
+      expect(screen.getByTestId("managed-progress-codex")).toBeInTheDocument();
+      if (phase === "downloading") expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
+    }
+    act(() => sendProgress?.({ runtime: "codex", phase: "ready", updatedAt: Date.now() }));
+    rerender(<Host {...props} snapshot={snapshot(undefined)} />);
+    await act(async () => finish?.(true));
+    expect(screen.getByTestId("managed-progress-codex")).toHaveTextContent("Verified and ready");
+    expect(screen.getByText("PwrAgent custom Codex build installed")).toBeInTheDocument();
+    vi.useFakeTimers();
+    // Re-arm the ready strip's expiry under the test clock.
+    act(() => sendProgress?.({ runtime: "codex", phase: "ready", updatedAt: Date.now() }));
+    act(() => vi.advanceTimersByTime(6_100));
+    expect(screen.queryByTestId("managed-progress-codex")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("reports a failed enable and retries without navigating away", async () => {
+    const change = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    render(<Host snapshot={snapshot(advisory())} onManagedBuildsChange={change} onOpenCodexSettings={vi.fn()} />);
+    fireEvent.click(screen.getByRole("switch"));
+    await screen.findByText(/Could not change the Codex build/u);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(change).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(/Could not change the Codex build/u)).not.toBeInTheDocument());
+  });
+
+  it("shows an install failure and retries the update for an already enabled build", async () => {
+    const value = snapshot(advisory({ installer: "pwragent", upgradeCommand: undefined }));
+    value.models.codex.managedBuilds = { value: true, source: "config" };
+    value.models.codex.managedBuildsRequiredBy = "token-miser";
+    value.runtime = { tokenMiser: { managedCodex: { state: "pending-switch" } } } as DesktopSettingsSnapshot["runtime"];
+    const check = vi.fn(async () => undefined);
+    const change = vi.fn(async () => true);
+    render(<Host snapshot={value} onManagedBuildsChange={change} onCheckManagedBuildUpdates={check}
+      onOpenCodexSettings={vi.fn()} desktopApi={{
+        readManagedRuntimeProgress: async () => [{ runtime: "codex", phase: "failed", error: "Archive verification failed", updatedAt: Date.now() }],
+        onManagedRuntimeProgress: () => () => undefined,
+      }} />);
+    await screen.findByText("Archive verification failed");
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("switch"));
+    expect(change).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(check).toHaveBeenCalledOnce());
+    expect(change).not.toHaveBeenCalled();
   });
 });

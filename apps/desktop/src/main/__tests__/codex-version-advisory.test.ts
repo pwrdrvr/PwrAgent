@@ -9,7 +9,7 @@ import {
 
 describe("Codex version floor", () => {
   it("pins the floor the new models need", () => {
-    expect(CODEX_MINIMUM_RECOMMENDED_VERSION).toBe("0.155.0");
+    expect(CODEX_MINIMUM_RECOMMENDED_VERSION).toBe("0.159.0");
   });
 
   it("parses the number out of what `codex --version` prints", () => {
@@ -20,16 +20,17 @@ describe("Codex version floor", () => {
   });
 
   it("compares numbers, not strings", () => {
-    expect(isCodexVersionBelowMinimum("0.154.9")).toBe(true);
+    expect(isCodexVersionBelowMinimum("0.155.0")).toBe(true);
+    expect(isCodexVersionBelowMinimum("0.158.9")).toBe(true);
     expect(isCodexVersionBelowMinimum("0.99.0")).toBe(true);
-    expect(isCodexVersionBelowMinimum("0.155.0")).toBe(false);
-    expect(isCodexVersionBelowMinimum("0.155.1")).toBe(false);
+    expect(isCodexVersionBelowMinimum("0.159.0")).toBe(false);
+    expect(isCodexVersionBelowMinimum("0.159.1")).toBe(false);
     expect(isCodexVersionBelowMinimum("0.160.0")).toBe(false);
     expect(isCodexVersionBelowMinimum("1.0.0")).toBe(false);
   });
 
   it("does not call a prerelease of the floor old, or an unknown version old", () => {
-    expect(isCodexVersionBelowMinimum("0.155.0-alpha.2")).toBe(false);
+    expect(isCodexVersionBelowMinimum("0.159.0-alpha.2")).toBe(false);
     expect(isCodexVersionBelowMinimum("garbage")).toBe(false);
     expect(isCodexVersionBelowMinimum(undefined)).toBe(false);
   });
@@ -116,7 +117,7 @@ describe("Codex version advisory", () => {
       resolvePath: async () => "/opt/homebrew/Cellar/codex/0.152.0/bin/codex",
     })).resolves.toEqual({
       version: "0.152.0",
-      minimumVersion: "0.155.0",
+      minimumVersion: "0.159.0",
       command: "/opt/homebrew/bin/codex",
       installer: "homebrew",
       upgradeCommand: "brew upgrade codex",

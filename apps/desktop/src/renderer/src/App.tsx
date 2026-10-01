@@ -875,6 +875,16 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
+    const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
+    if (saved) await props.settings.refresh();
+    return saved;
+  }, [props.settings.writeConfig, props.settings.refresh]);
+  const checkCodexManagedBuildUpdates = useCallback(async () => {
+    if (!desktopApi?.refreshCodexDiscovery) throw new Error("Codex update checks are unavailable.");
+    await desktopApi.refreshCodexDiscovery({ discoveryIntent: "settings-user-action" });
+    await props.settings.refresh();
+  }, [desktopApi, props.settings.refresh]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
@@ -3525,6 +3535,8 @@ function DesktopAppShell(props: {
           snapshot={settings.snapshot}
           onNoticeChanged={syncCodexVersionNotice}
           onOpenCodexSettings={openCodexSettings}
+          onManagedBuildsChange={changeCodexManagedBuilds}
+          onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
         />
         <CodexRestartNotice
           desktopApi={desktopApi}

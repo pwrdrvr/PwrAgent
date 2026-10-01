@@ -8115,6 +8115,20 @@ a.button {
   padding-right: 6px;
 }
 
+.codex-version-build {
+  display: grid;
+  gap: 8px;
+}
+
+.codex-version-build__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
 .quit-blocker-queue__list {
   max-height: min(240px, 40vh);
   overflow-y: auto;

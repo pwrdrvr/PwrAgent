@@ -417,7 +417,7 @@ describe("DesktopSettingsService", () => {
     expect((await old.readSettingsProjection()).models.codex.versionAdvisory)
       .toEqual({
         version: "0.152.0",
-        minimumVersion: "0.155.0",
+        minimumVersion: "0.159.0",
         command: shim,
         installer: "homebrew",
         upgradeCommand: "brew upgrade codex",
@@ -425,7 +425,7 @@ describe("DesktopSettingsService", () => {
 
     // The running process keeps the executable it started with, so an in-place
     // upgrade is not credited until PwrAgent restarts.
-    const restarted = serviceAt("0.156.0");
+    const restarted = serviceAt("0.159.0");
     await restarted.refreshCodexDiscovery(permit());
     expect((await restarted.readSettingsProjection()).models.codex.versionAdvisory)
       .toBeUndefined();
