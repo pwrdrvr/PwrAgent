@@ -205,6 +205,7 @@ import {
   requestQuit,
   type QuitRequestSource,
 } from "./quit-manager";
+import { retryQuitAfterDispatch } from "./quit-retry";
 import {
   installTranscriptImageProtocol,
   registerTranscriptImageProtocolScheme,
@@ -892,11 +893,17 @@ function quitAfterResourceShutdown(source: string): void {
     })
     .finally(() => {
       mainProcessShutdownComplete = true;
-      // An accepted update may take ownership while this normal quit waits.
-      if (!isUpdateInstallInProgress()) {
-        appQuitManager.allowImmediateQuit();
-        app.quit();
-      }
+      // Never from this chain. When shutdown waited on no task (it failed
+      // early, or had no window to close), the chain settles inside the
+      // native before-quit dispatch that started it, and Electron overwrites
+      // the nested pass's quit; see quit-retry.ts.
+      retryQuitAfterDispatch(() => {
+        // An accepted update may take ownership while this normal quit waits.
+        if (!isUpdateInstallInProgress()) {
+          appQuitManager.allowImmediateQuit();
+          app.quit();
+        }
+      });
     });
 }
 
@@ -926,9 +933,12 @@ function cancelQuitInProgress(source: string): void {
  * release the app wedges: the window stays held open (preventDefault) and
  * window creation stays blocked, with no path back.
  */
-function beginQuitWithRelease(source: QuitRequestSource): void {
+function beginQuitWithRelease(
+  source: QuitRequestSource,
+  performQuit?: () => void,
+): void {
   beginQuitInProgress(source);
-  void requestQuit({ source })
+  void requestQuit(performQuit ? { performQuit, source } : { source })
     .then((didQuit) => {
       if (!didQuit) {
         cancelQuitInProgress(source);
@@ -1858,7 +1868,12 @@ export function bootstrapApp(): void {
     }
     if (!appQuitManager.isQuitAllowed()) {
       event?.preventDefault();
-      beginQuitWithRelease("before-quit");
+      // With nothing blocking, the quit manager allows the quit synchronously,
+      // still inside this dispatch. Its app.quit() must wait for the dispatch
+      // to return, or Electron overwrites that pass; see quit-retry.ts.
+      beginQuitWithRelease("before-quit", () => {
+        retryQuitAfterDispatch(() => app.quit());
+      });
       return;
     }
     beginQuitInProgress("before-quit");

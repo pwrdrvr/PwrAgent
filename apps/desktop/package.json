@@ -44,6 +44,7 @@
     "eval:pdf": "tsx eval/pdf.ts",
     "eval:typecheck": "tsc --noEmit -p eval/tsconfig.json",
     "preview": "node ../../scripts/linux-sandbox.mjs --warn && electron-vite preview",
+    "probe:quit-reentry": "node scripts/ensure-electron-runtime.mjs && electron ./scripts/electron-quit-reentry-probe.mjs",
     "test:e2e": "playwright test -c playwright.config.ts",
     "inspect:e2e:branch-drift": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/thread-branch-drift.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:workspace-handoff": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/workspace-handoff-dialog.inspect.spec.ts --headed --timeout=0",
