@@ -630,6 +630,9 @@ export class DesktopSettingsService {
   // callers must never wait on those, and the pending signal must not stay
   // set while only they are outstanding.
   private codexDiscoveryPromise?: Promise<void>;
+  // Executable readiness can precede discovery completion: runtime owners
+  // drain clients whose initialization is already waiting for this selection.
+  private codexCommandSelectionPromise?: Promise<void>;
   private codexDiscoverySettled = false;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
@@ -2561,21 +2564,31 @@ export class DesktopSettingsService {
     permit: ProviderDiscoveryPermit,
   ): Promise<void> {
     assertProviderDiscoveryPermit(permit);
-    const attempt = this.runCodexDiscoveryAttempt(permit).finally(() => {
+    let releaseCommandSelection!: () => void;
+    const commandSelection = new Promise<void>((resolve) => {
+      releaseCommandSelection = resolve;
+    });
+    const attempt = this.runCodexDiscoveryAttempt(permit, releaseCommandSelection).finally(() => {
       // Settled marks the attempt, not its outcome. A discovery that ran and
       // found nothing is a real answer that surfaces must be free to act on;
       // only a discovery that has not run yet leaves them without one.
       this.codexDiscoverySettled = true;
       if (this.codexDiscoveryPromise === attempt) {
         this.codexDiscoveryPromise = undefined;
+        this.codexCommandSelectionPromise = undefined;
       }
     });
     this.codexDiscoveryPromise = attempt;
+    this.codexCommandSelectionPromise = Promise.race([commandSelection, attempt]);
+    // Discovery's caller reports failures even if no executable consumer
+    // awaits this signal. Keep its rejection observable by waiting consumers.
+    void this.codexCommandSelectionPromise.catch(() => undefined);
     await attempt;
   }
 
   private async runCodexDiscoveryAttempt(
     permit: ProviderDiscoveryPermit,
+    releaseCommandSelection: () => void,
   ): Promise<void> {
     await this.sessionCodexRetention;
     this.codexSpawnEnvHydratedAt = undefined;
@@ -2602,6 +2615,12 @@ export class DesktopSettingsService {
         available: Boolean(this.managedCodexRuntime),
         failed: Boolean(this.managedCodexError),
       });
+    }
+    if (this.managedCodexRuntime) {
+      // Release callers already awaiting selection before a listener closes
+      // their client. close() drains initialization, which would otherwise
+      // await this discovery while discovery awaited the listener's close().
+      releaseCommandSelection();
     }
     if (
       this.managedCodexRuntime
@@ -2678,19 +2697,15 @@ export class DesktopSettingsService {
     // "Refresh Codex in Settings" about a Codex that was seconds from
     // resolving normally.
     //
-    // This waits on the Codex leg alone, never on `startupDiscoveryPromise`,
-    // which also bundles gh, git, and the desktop-application scan: a Codex
-    // spawn must not block on probes it does not use.
-    //
-    // Re-entrancy: `publishManagedCodexSelectionChange` can reach this method
-    // from inside the discovery it would await. That is safe only because
-    // `readSelectedCodexCommand()` above returns the managed runtime, which
-    // `runCodexDiscoveryAttempt` assigns before publishing. Any future caller
-    // reached earlier in that function would await its own discovery — resolve
-    // it from state, not by awaiting here.
-    const codexDiscovery = this.codexDiscoveryPromise;
-    if (codexDiscovery) {
-      await codexDiscovery;
+    // Wait only for executable readiness. Managed discovery releases this
+    // before notifying runtime owners, whose close() drains clients already
+    // initializing through this resolver. Awaiting all of discovery here
+    // would make those clients and the selection-change listener deadlock.
+    // Without a managed runtime, the full Codex discovery supplies the result.
+    // Unrelated gh, git, and application probes never hold a Codex spawn open.
+    const commandSelection = this.codexCommandSelectionPromise;
+    if (commandSelection) {
+      await commandSelection;
       const discovered = this.readSelectedCodexCommand();
       if (discovered) {
         this.sessionCodexCommand ??= discovered;
