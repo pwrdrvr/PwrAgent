@@ -97,7 +97,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_instance_thread":
-      return "Copy or move an existing idle Codex thread to another enrolled PwrAgent instance, including history, unpublished Git commits, staged, unstaged, and untracked files. Specify sourceThreadId and targetInstanceId; sourceInstanceId selects a remote owner, otherwise the source is local. Get the receiving repository's native absolute path from list_instance_projects and pass targetRepositoryPath for Git threads. Both machines must support thread_handoff; the receiver must allow file push. operation=move archives the source only after destination validation. Queued or running turns, symlinks, submodules, and conflicted indexes are rejected. Source files are retained. Do not retry a slow request; check search_federation_threads after a disconnect. Return threadLink verbatim and report warnings.";
+      return "Copy or move an idle Codex thread to another enrolled PwrAgent instance with history and Git workspace changes. Transfers include unpublished commits, staged changes, unstaged changes, and non-ignored untracked files. Specify sourceThreadId and targetInstanceId. Omit sourceInstanceId for a local source, or set it to the remote owner. For Git threads, get the receiver's native absolute repository path from list_instance_projects and pass targetRepositoryPath. Both machines must support thread_handoff. The receiver must allow file push. operation=move archives the source only after destination validation. Queued or running turns, symlinks, submodules, and conflicted indexes are rejected. Source files are retained. Do not retry a slow request. Check search_federation_threads after a disconnect. Return threadLink verbatim and report warnings.";
     case "push_instance_file":
       return "Push a local file to another enrolled PwrAgent instance. Use list_federation_instances first: the receiver must advertise receiverPermissions.filePush=true and the file_push capability. sourcePath is an absolute path on this machine. name is an optional plain filename. The receiver chooses the folder (Downloads by default) and never overwrites files. Maximum 512 MiB. Returns the saved remote path, size, and SHA-256. Only send files the user asked to transfer.";
     case "list_federation_instances":
@@ -121,7 +121,7 @@ function inputSchemaForOperation(
         required: ["sourceThreadId", "targetInstanceId", "operation"],
         properties: {
           sourceThreadId: { type: "string", description: "Existing idle Codex thread ID." },
-          sourceInstanceId: { type: "string", description: "Owning remote instance; omit for a local source." },
+          sourceInstanceId: { type: "string", description: "Owning remote instance. Omit for a local source." },
           targetInstanceId: { type: "string", description: "Receiving instance from list_federation_instances." },
           targetRepositoryPath: { type: "string", description: "Native absolute path of the receiving repository, required for a Git thread." },
           operation: { type: "string", enum: ["copy", "move"] },

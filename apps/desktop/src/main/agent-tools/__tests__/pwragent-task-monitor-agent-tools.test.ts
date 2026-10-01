@@ -38,8 +38,8 @@ describe("PwrAgent task monitor agent tools", () => {
     // 36 since manage_mcp_connections joined the namespace, 37 with
     // read_star_map_view, 38 with fly_star_map_to, 40 with
     // highlight_star_map_threads and set_star_map_view, 41 with push_instance_file,
-    // 43 with search_mcp_tools and call_mcp_tool.
-    expect(dynamicTools).toHaveLength(43);
+    // 43 with search_mcp_tools and call_mcp_tool, 44 with handoff_instance_thread.
+    expect(dynamicTools).toHaveLength(44);
     expect(mcpTools).toEqual(expect.arrayContaining(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     ));
@@ -61,6 +61,8 @@ describe("PwrAgent task monitor agent tools", () => {
       .toContain("send_messaging_file");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("push_instance_file");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("handoff_instance_thread");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("read_star_map_view");
     expect(mcpTools.map((tool) => tool.name))
