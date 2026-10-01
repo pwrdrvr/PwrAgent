@@ -1530,8 +1530,8 @@ promise chain that can settle in microtasks.
   Quit, logout, Electron's own SIGTERM handling) runs a microtask checkpoint
   before that assignment, so a nested pass's quit is overwritten. The windows
   close, Electron emits `window-all-closed` instead of `will-quit`, and the
-  process can stay alive with no windows. pwrdrvr/PwrSnap#677 shipped that
-  stall.
+  process can stay alive with no windows. PwrSnap shipped that stall in
+  pwrdrvr/PwrSnap#659 and fixed it in pwrdrvr/PwrSnap#677.
 - Here the `window-all-closed` handler re-issues the quit after resource
   shutdown completes, which hid the lost pass. It is not a substitute: it
   stands down during an update install, and a pass that skipped resource
