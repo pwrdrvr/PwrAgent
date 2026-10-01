@@ -1,3 +1,4 @@
+import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
@@ -539,7 +540,7 @@ import type {
   AppUpdateStatus,
 } from "../../../shared/app-metadata";
 
-export type DesktopApi = {
+export type DesktopApi = Partial<NativeVoiceApi> & {
   replayFixtureActive?: boolean;
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;

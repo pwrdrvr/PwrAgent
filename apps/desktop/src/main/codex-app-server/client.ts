@@ -1,3 +1,5 @@
+import type { NativeVoiceNotification } from "./native-voice-protocol";
+import type { ThreadRealtimeStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
@@ -7555,6 +7557,8 @@ export class CodexAppServerClient {
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
   private availableHelperModels: BackendModelOption[] = [];
+  private readonly realtimeListeners = new Set<(event: NativeVoiceNotification) => void>();
+  private readonly realtimeDisconnectListeners = new Set<() => void>();
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
@@ -7705,6 +7709,13 @@ export class CodexAppServerClient {
         }
       }
 
+      // Realtime is ephemeral audio/control traffic. Keep it off ordinary
+      // transcript, federation and persistence paths.
+      if (method.startsWith("thread/realtime/")) {
+        const event = { method, params } as NativeVoiceNotification;
+        for (const listener of this.realtimeListeners) listener(event);
+        return;
+      }
       const normalized = normalizeServerNotification(
         method,
         params,
@@ -7961,6 +7972,7 @@ export class CodexAppServerClient {
   }
 
   private resetConnectionState(helperTurnError: Error): void {
+    for (const listener of this.realtimeDisconnectListeners) listener();
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
@@ -8251,6 +8263,32 @@ export class CodexAppServerClient {
       });
       return { recovered: recoveryResult! };
     });
+  }
+
+  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void): () => void {
+    this.realtimeListeners.add(listener);
+    return () => { this.realtimeListeners.delete(listener); };
+  }
+
+  onRealtimeDisconnect(listener: () => void): () => void {
+    this.realtimeDisconnectListeners.add(listener);
+    return () => { this.realtimeDisconnectListeners.delete(listener); };
+  }
+
+  async startRealtime(params: ThreadRealtimeStartParams): Promise<void> {
+    await this.ensureInitialized();
+    await this.connection.request("thread/realtime/start", params, 20_000);
+  }
+
+  async stopRealtime(threadId: string): Promise<void> {
+    // Never restart a disconnected backend merely to stop voice.
+    if (!this.initialized || this.pendingCloses > 0) return;
+    await this.connection.request("thread/realtime/stop", { threadId }, 10_000);
+  }
+
+  async appendRealtimeText(threadId: string, text: string): Promise<void> {
+    if (!this.initialized || this.pendingCloses > 0) throw new Error("Voice backend disconnected.");
+    await this.connection.request("thread/realtime/appendText", { threadId, text, role: "user" }, 10_000);
   }
 
   onNotification(

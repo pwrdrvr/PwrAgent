@@ -1,4 +1,6 @@
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
+import { supportsNativeVoice, type NativeVoiceBackend } from "../codex-app-server/native-voice-protocol";
+import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
@@ -815,6 +817,11 @@ function assistantOutputForTurn(
 
 type BackendClient = {
   exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
+  startRealtime?: CodexAppServerClient["startRealtime"];
+  stopRealtime?: CodexAppServerClient["stopRealtime"];
+  appendRealtimeText?: CodexAppServerClient["appendRealtimeText"];
+  onRealtimeEvent?: CodexAppServerClient["onRealtimeEvent"];
+  onRealtimeDisconnect?: CodexAppServerClient["onRealtimeDisconnect"];
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
@@ -25363,7 +25370,8 @@ export class DesktopBackendRegistry {
 
   private hasActiveCodexWork(): boolean {
     if (
-      this.reservedCodexStartThreadIds.size > 0
+      this.nativeVoiceLeases > 0
+      || this.reservedCodexStartThreadIds.size > 0
       || this.activeCodexTurnModes.size > 0
     ) {
       return true;
@@ -30542,7 +30550,8 @@ export class DesktopBackendRegistry {
 
   private hasActiveCodexRuntimeWork(): boolean {
     if (
-      this.reservedCodexStartThreadIds.size > 0
+      this.nativeVoiceLeases > 0
+      || this.reservedCodexStartThreadIds.size > 0
       || this.backendActiveCodexThreadIds.size > 0
       || this.liveCodexToolItemsByThread.size > 0
       || this.activeCodexTurnModes.size > 0
@@ -30613,6 +30622,60 @@ export class DesktopBackendRegistry {
         this.codexRuntimeRestartPromise = undefined;
       }
     }
+  }
+
+  private nativeVoiceLeases = 0;
+
+  async nativeVoiceCapability(): Promise<NativeVoiceCapability> {
+    const result = await this.codexClient.getInitializeResult();
+    return supportsNativeVoice(result.userAgent)
+      ? { available: true }
+      : { available: false, reason: "Live voice requires Codex 0.159 or newer with experimental WebRTC support. Update the Codex runtime in Settings." };
+  }
+
+  async acquireNativeVoiceBackend(threadId: string): Promise<NativeVoiceBackend> {
+    return await this.serializeCodexAgentChange(threadId, async () => {
+      return await this.withActiveCodexThreadClient(threadId, async (client) => {
+        const capability = await this.nativeVoiceCapability();
+        if (!capability.available) throw new Error(capability.reason);
+        if (!client.startRealtime || !client.stopRealtime || !client.appendRealtimeText
+          || !client.onRealtimeEvent || !client.onRealtimeDisconnect) {
+          throw new Error("This backend does not support live voice.");
+        }
+        // A running coding task already owns the loaded thread and catalog.
+        // An idle thread must be resumed with the current PwrAgent tools before
+        // realtime can delegate to it. This uses the existing admission path.
+        const running = this.threadHasActiveTurn(threadId);
+        this.reservedCodexStartThreadIds.add(threadId);
+        try {
+          if (!running) {
+            const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+            const dynamicTools = await this.requireCodexAgentRefreshTools(client, overlay);
+            await client.refreshThreadTools!({ threadId, dynamicTools });
+          }
+          this.nativeVoiceLeases += 1;
+          let released = false;
+          return {
+            start: client.startRealtime.bind(client),
+            stop: client.stopRealtime.bind(client),
+            text: client.appendRealtimeText.bind(client),
+            onEvent: client.onRealtimeEvent.bind(client),
+            onDisconnect: client.onRealtimeDisconnect.bind(client),
+            release: () => {
+              if (released) return;
+              released = true;
+              this.nativeVoiceLeases -= 1;
+            },
+          };
+        } finally {
+          this.reservedCodexStartThreadIds.delete(threadId);
+          if (!this.threadHasActiveTurn(threadId)
+            && this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0) {
+            void this.threadTurnQueue.releaseThread({ backend: "codex", threadId, status: "voice_catalog_ready" });
+          }
+        }
+      });
+    });
   }
 
   private async withActiveCodexThreadClient<T>(

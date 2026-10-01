@@ -1,0 +1,141 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NativeVoiceController, type VoiceView, type VoiceBrowser } from "../native-voice-controller";
+import type { NativeVoiceApi, NativeVoiceEvent } from "../../../../../shared/native-voice";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+function fixture() {
+  const listeners = new Set<(event: NativeVoiceEvent) => void>();
+  const api: NativeVoiceApi = {
+    nativeVoiceCapability: vi.fn(async () => ({ available: true })),
+    startNativeVoice: vi.fn(async () => {}), stopNativeVoice: vi.fn(async () => {}), sendNativeVoiceText: vi.fn(async () => {}),
+    onNativeVoiceEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  };
+  const track = { stop: vi.fn(), onended: null };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  const sender = { replaceTrack: vi.fn(async () => {}) };
+  const peer = {
+    connectionState: "new", iceGatheringState: "complete", onconnectionstatechange: null as (() => void) | null,
+    ontrack: null, localDescription: { sdp: "v=0\r\nfixture" },
+    addTransceiver: vi.fn(() => ({ sender })), createDataChannel: vi.fn(),
+    createOffer: vi.fn(async () => ({ type: "offer", sdp: "v=0\r\nfixture" })),
+    setLocalDescription: vi.fn(async () => {}), setRemoteDescription: vi.fn(async () => {}), close: vi.fn(),
+  };
+  const audio = { srcObject: null, autoplay: false, pause: vi.fn(), play: vi.fn(async () => {}), removeAttribute: vi.fn() };
+  vi.stubGlobal("MediaStream", class MediaStream {});
+  const platform: VoiceBrowser = {
+    peer: () => peer as unknown as RTCPeerConnection,
+    audio: () => audio as unknown as HTMLAudioElement,
+    microphone: vi.fn(async () => stream as unknown as MediaStream), id: () => "fixture-session",
+  };
+  const views: VoiceView[] = [];
+  const controller = new NativeVoiceController(api, (view) => views.push(view), platform);
+  const send = (event: NativeVoiceEvent) => { for (const listener of listeners) listener(event); };
+  const connect = () => {
+    send({ type: "started", version: "v3", sessionId: "fixture-session" });
+    peer.connectionState = "connected";
+    peer.onconnectionstatechange?.();
+  };
+  return { controller, api, peer, sender, audio, platform, stream, track, listeners, views, send, connect };
+}
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+describe("native voice browser lifecycle", () => {
+  it("gates unsupported runtimes before microphone access or peer creation", async () => {
+    const f = fixture();
+    vi.mocked(f.api.nativeVoiceCapability).mockResolvedValue({ available: false, reason: "Unsupported runtime." });
+    await f.controller.start("fixture-thread");
+    expect(f.platform.microphone).not.toHaveBeenCalled();
+    expect(f.peer.createOffer).not.toHaveBeenCalled();
+    expect(f.api.startNativeVoice).not.toHaveBeenCalled();
+    expect(f.views.at(-1)).toMatchObject({ status: "error", error: "Unsupported runtime." });
+  });
+
+  it("captures only after peer connection, service started and RPC accepted", async () => {
+    const f = fixture();
+    const accepted = deferred<void>();
+    vi.mocked(f.api.startNativeVoice).mockReturnValue(accepted.promise);
+    const start = f.controller.start("fixture-thread");
+    await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce());
+    f.connect();
+    expect(f.platform.microphone).not.toHaveBeenCalled();
+    accepted.resolve();
+    await start;
+    expect(f.platform.microphone).toHaveBeenCalledOnce();
+    expect(f.sender.replaceTrack).toHaveBeenCalledWith(f.track);
+    expect(f.views.at(-1)?.status).toBe("listening");
+    await f.controller.text("Steer the coding task.");
+    expect(f.api.sendNativeVoiceText).toHaveBeenCalledWith({ sessionId: "fixture-session", text: "Steer the coding task." });
+    await f.controller.stop();
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    expect(f.peer.close).toHaveBeenCalledOnce();
+    expect(f.audio.pause).toHaveBeenCalledOnce();
+    expect(f.listeners.size).toBe(0);
+  });
+
+  it("stops tracks from a microphone permission result arriving after stop", async () => {
+    const f = fixture();
+    const permission = deferred<MediaStream>();
+    vi.mocked(f.platform.microphone).mockReturnValue(permission.promise);
+    await f.controller.start("fixture-thread");
+    f.connect();
+    await vi.waitFor(() => expect(f.platform.microphone).toHaveBeenCalledOnce());
+    await f.controller.stop();
+    permission.resolve(f.stream as unknown as MediaStream);
+    await vi.waitFor(() => expect(f.track.stop).toHaveBeenCalledOnce());
+    expect(f.sender.replaceTrack).not.toHaveBeenCalled();
+    expect(f.views.at(-1)?.status).toBe("idle");
+  });
+
+  it("cleans permission denial and service errors without allowing stale transcripts", async () => {
+    const f = fixture();
+    vi.mocked(f.platform.microphone).mockRejectedValue(new Error("Microphone permission denied."));
+    await f.controller.start("fixture-thread");
+    f.connect();
+    await vi.waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
+    expect(f.listeners.size).toBe(0);
+    f.send({ sessionId: "fixture-session", type: "transcript", role: "user", text: "stale", done: true });
+    expect(f.views.at(-1)).toMatchObject({ status: "error", error: "Microphone permission denied.", transcript: [] });
+    expect(f.peer.close).toHaveBeenCalledOnce();
+  });
+
+  it("bounds connection establishment and never captures on timeout", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await f.controller.start("fixture-thread");
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(f.platform.microphone).not.toHaveBeenCalled();
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+    expect(f.views.at(-1)?.status).toBe("error");
+    expect(f.listeners.size).toBe(0);
+  });
+
+  it("rejects duplicate start, clears backend loss and ignores unrelated session events", async () => {
+    const f = fixture();
+    await f.controller.start("fixture-thread");
+    await f.controller.start("other-thread");
+    expect(f.api.startNativeVoice).toHaveBeenCalledOnce();
+    f.send({ sessionId: "stale-session", type: "error", message: "ignored" });
+    expect(f.views.at(-1)?.status).toBe("connecting");
+    f.send({ sessionId: "fixture-session", type: "error", message: "Backend disconnected." });
+    await vi.waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
+    expect(f.views.at(-1)).toMatchObject({ status: "error", error: "Backend disconnected." });
+  });
+
+  it("retains a retry control when backend stop fails after local audio cleanup", async () => {
+    const f = fixture();
+    await f.controller.start("fixture-thread");
+    f.connect();
+    await vi.waitFor(() => expect(f.views.at(-1)?.status).toBe("listening"));
+    vi.mocked(f.api.stopNativeVoice).mockRejectedValueOnce(new Error("Stop failed."));
+    await f.controller.stop();
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    expect(f.views.at(-1)?.status).toBe("stop-error");
+    await f.controller.stop();
+    expect(f.api.stopNativeVoice).toHaveBeenCalledTimes(2);
+    expect(f.views.at(-1)?.status).toBe("idle");
+  });
+});

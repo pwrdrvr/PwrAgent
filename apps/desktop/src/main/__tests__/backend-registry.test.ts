@@ -3110,6 +3110,32 @@ describe("DesktopBackendRegistry", () => {
     expect(result.cleanup).toEqual([]);
   });
 
+  it("resumes idle voice threads with the existing PwrAgent catalog and inherits active coding threads", async () => {
+    const codexClient = Object.assign(new MockBackendClient({
+      threads: [], initializeResult: { userAgent: "codex/0.159.0-pwragent.1" },
+      serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+    }), {
+      startRealtime: vi.fn(async () => {}), stopRealtime: vi.fn(async () => {}), appendRealtimeText: vi.fn(async () => {}),
+      onRealtimeEvent: vi.fn(() => () => {}), onRealtimeDisconnect: vi.fn(() => () => {}),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      expect(await registry.nativeVoiceCapability()).toEqual({ available: true });
+      const idle = await registry.acquireNativeVoiceBackend("voice-fixture");
+      expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+      expect(codexClient.refreshThreadTools.mock.calls[0][0].threadId).toBe("voice-fixture");
+      const tools = JSON.stringify(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools);
+      expect(tools).toContain("send_message_to_thread");
+      expect(tools).toContain("get_thread");
+      idle.release();
+      idle.release();
+      await emitStartedTurn(registry, "codex", "voice-fixture", "coding-fixture");
+      const active = await registry.acquireNativeVoiceBackend("voice-fixture");
+      expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+      active.release();
+    } finally { await registry.close(); }
+  });
+
   it("routes an activity detail read directly to one provider turn without reading ledgers or base history", async () => {
     const entry = { type: "activity" as const, id: "activity-command", summary: "Ran build", details: [] };
     const readThreadActivity = vi.fn(async () => entry);

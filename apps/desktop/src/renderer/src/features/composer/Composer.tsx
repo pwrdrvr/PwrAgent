@@ -1,3 +1,4 @@
+import { NativeVoice, isNativeVoiceApi } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -2712,6 +2713,8 @@ function ComposerApplicationButton(props: {
 }
 
 export const Composer = memo(function Composer(props: ComposerProps) {
+  const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
+  const nativeVoiceAvailable = props.thread?.source === "codex" && !props.thread.federation && nativeVoiceApi;
   const threadLinks = useThreadLinks();
   const pullRequestLinks = usePullRequestLinks();
   const rendererFederationTarget = readRendererFederationTarget();
@@ -13038,6 +13041,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ) : null}
 
       </fieldset>
+      {nativeVoiceAvailable && props.thread && nativeVoiceApi ? (
+          <NativeVoice key={props.thread.id} api={nativeVoiceApi} threadId={props.thread.id} />
+        ) : null}
       <div className="composer__footer">
         <fieldset
           className="composer__pending-controls composer__pending-controls--dim"
@@ -13211,7 +13217,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 void stopTurn();
               }}
             >
-              {interrupting ? "Stopping…" : "Stop"}
+              {interrupting ? "Stopping…" : nativeVoiceAvailable ? "Cancel task" : "Stop"}
             </button>
           ) : null}
           {props.launchpad && props.onCancelLaunchpad ? (

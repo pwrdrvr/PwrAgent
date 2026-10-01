@@ -1,5 +1,10 @@
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../shared/federation-receiving-folder";
 import { SETTINGS_RECEIVING_FOLDER_CHANNEL } from "../shared/ipc";
+import {
+  NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
+  NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
+  type NativeVoiceStart, type NativeVoiceTarget, type NativeVoiceText, type NativeVoiceEvent,
+} from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
@@ -1037,6 +1042,15 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
 let federationJumpSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
+  nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
+  startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
+  stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
+  sendNativeVoiceText: (request: NativeVoiceText) => ipcRenderer.invoke(NATIVE_VOICE_TEXT_CHANNEL, request),
+  onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, notification: NativeVoiceEvent) => callback(notification);
+    ipcRenderer.on(NATIVE_VOICE_EVENT_CHANNEL, listener);
+    return () => { ipcRenderer.removeListener(NATIVE_VOICE_EVENT_CHANNEL, listener); };
+  },
   ping: () => "pong",
   replayFixtureActive: Boolean(process.env.PWRAGENT_REPLAY_FIXTURE_PATH),
   // Clipboard writes go through the main process: the sandboxed preload's

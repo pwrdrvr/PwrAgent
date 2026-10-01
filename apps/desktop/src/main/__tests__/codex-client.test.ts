@@ -259,6 +259,11 @@ class MockTransport implements JsonRpcTransport {
       params?: Record<string, unknown>;
     };
 
+    if (payload.method?.startsWith("thread/realtime/")) {
+      this.messageHandler(JSON.stringify({ id: payload.id, result: {} }));
+      return;
+    }
+
     if (MockTransport.requireLoadedThreads
       && ["review/start", "turn/start", "turn/steer", "turn/interrupt", "thread/compact/start", "thread/settings/update"]
         .includes(payload.method ?? "")
@@ -14254,6 +14259,35 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it("keeps realtime traffic isolated, uses protocol fields, and disconnects voice on close", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    const ordinary = vi.fn();
+    const realtime = vi.fn();
+    const disconnected = vi.fn();
+    const off = client.onRealtimeEvent(realtime);
+    client.onRealtimeDisconnect(disconnected);
+    client.onNotification(ordinary);
+    await client.startRealtime({ threadId: "voice-fixture", version: "v3", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0\r\nfixture" } });
+    const transport = MockTransport.instances.at(-1)!;
+    transport.emitInbound({ method: "thread/realtime/transcript/delta", params: { threadId: "voice-fixture", role: "user", delta: "Hello" } });
+    await vi.waitFor(() => expect(realtime).toHaveBeenCalledOnce());
+    expect(ordinary).not.toHaveBeenCalled();
+    await client.appendRealtimeText("voice-fixture", "Check progress.");
+    await client.stopRealtime("voice-fixture");
+    const requests = transport.sentMessages.map((message) => JSON.parse(message));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "thread/realtime/appendText", params: { threadId: "voice-fixture", text: "Check progress.", role: "user" } }));
+    expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+    off();
+    transport.emitInbound({ method: "thread/realtime/sdp", params: { threadId: "voice-fixture", sdp: "ignored" } });
+    await client.close();
+    expect(realtime).toHaveBeenCalledOnce();
+    expect(disconnected).toHaveBeenCalled();
+    const connects = transport.connectCount;
+    await client.stopRealtime("voice-fixture");
+    expect(transport.connectCount).toBe(connects);
   });
 
 });
