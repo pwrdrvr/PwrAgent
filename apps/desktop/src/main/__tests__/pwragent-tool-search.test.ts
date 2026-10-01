@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
-import { buildPwrAgentToolSearchDefinition, PWRAGENT_TOOL_SEARCH_DESCRIPTION, searchPwrAgentTools, withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";
+import {
+  buildPwrAgentToolSearchDefinition,
+  MESSAGING_EAGER_TOOLS,
+  PWRAGENT_TOOL_SEARCH_DESCRIPTION,
+  searchPwrAgentTools,
+  VOICE_MANAGER_EAGER_TOOLS,
+  withPwrAgentToolDiscovery,
+} from "../agent-tools/pwragent-tool-search";
+import { VOICE_MANAGER_AGENT_INSTRUCTIONS } from "../native-voice/voice-manager-thread";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 
 const catalog: DynamicToolSpec[] = [{
@@ -25,6 +33,56 @@ describe("PwrAgent tool discovery", () => {
     expect(PWRAGENT_TOOL_SEARCH_DESCRIPTION.length).toBeLessThan(4_000);
     expect(JSON.stringify(tools[0]).length).toBeLessThan(4_000);
     expect(new AgentToolRouter([buildPwrAgentToolSearchDefinition(catalog)]).buildMcpTools()).toEqual([]);
+  });
+
+  it("keeps a thread's eager set loaded and defers the rest", () => {
+    const names = catalog.flatMap((spec) => spec.type === "namespace" ? spec.tools.map((tool) => tool.name) : []);
+    for (const eager of [VOICE_MANAGER_EAGER_TOOLS, MESSAGING_EAGER_TOOLS]) {
+      // A renamed or removed tool would otherwise silently fall back to search.
+      expect(names).toEqual(expect.arrayContaining([...eager]));
+      const tools = withPwrAgentToolDiscovery(catalog, true, eager)
+        .flatMap((spec) => spec.type === "namespace" ? spec.tools : []);
+      expect(tools.filter((tool) => !tool.deferLoading).map((tool) => tool.name).sort())
+        .toEqual(["tool_search", ...eager].sort());
+      expect(tools).toHaveLength(names.length + 1);
+      // Each eager schema is sent on every turn. Character budget, not tokens.
+      const eagerCharacters = tools.filter((tool) => eager.has(tool.name))
+        .reduce((total, tool) => total + JSON.stringify(tool).length, 0);
+      expect(eagerCharacters).toBeLessThan(20_000);
+    }
+  });
+
+  it("loads every catalog tool the Voice manager's instructions name", () => {
+    const names = catalog.flatMap((spec) => spec.type === "namespace" ? spec.tools.map((tool) => tool.name) : []);
+    const lines = VOICE_MANAGER_AGENT_INSTRUCTIONS.split("\n");
+    const mentions = (name: string, line: string) => new RegExp(`\\b${name}\\b`).test(line);
+    // A tool named only in a "Never use X" line is forbidden, not used.
+    const forbidden = names.filter((name) => lines.some((line) => /\bnever use\b/i.test(line) && mentions(name, line)));
+    const used = names.filter((name) => !forbidden.includes(name)
+      && lines.some((line) => mentions(name, line)));
+    expect(used.length).toBeGreaterThan(0);
+    expect(used.filter((name) => !VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
+    expect(forbidden.filter((name) => VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
+    // Every eager tool earns its per-turn cost by being one the instructions use.
+    expect([...VOICE_MANAGER_EAGER_TOOLS].filter((name) => !used.includes(name))).toEqual([]);
+  });
+
+  it("returns every exact tool name in a query regardless of limit", () => {
+    // The 2026-10-01 Voice manager turn: four names, limit 2, two returned.
+    const query = "read_operator_focus list_federation_instances list_instance_projects create_instance_thread";
+    expect(searchPwrAgentTools(catalog, query, 2).map((tool) => tool.name)).toEqual([
+      "read_operator_focus",
+      "list_federation_instances",
+      "list_instance_projects",
+      "create_instance_thread",
+    ]);
+    // Prefixed and comma-separated names count; the limit still caps ranked fill.
+    expect(searchPwrAgentTools(catalog, "tools.pwragent__steer_thread, pwragent.stop_thread", 1).map((tool) => tool.name))
+      .toEqual(["steer_thread", "stop_thread"]);
+    const mixed = searchPwrAgentTools(catalog, "read_thread watch pull request", 3).map((tool) => tool.name);
+    expect(mixed[0]).toBe("read_thread");
+    expect(mixed).toContain("watch_thread_pull_request");
+    expect(mixed).toHaveLength(3);
   });
 
   it.each([

@@ -140,6 +140,7 @@ import {
   PwrAgentFederatedThreadMessageError,
   type PwrAgentFederatedThreadMessageRequest,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
+import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools/pwragent-tool-search";
 
 const jeepStickerPageFixture = fileURLToPath(
   new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
@@ -4883,6 +4884,46 @@ describe("DesktopBackendRegistry", () => {
       }) as { success: boolean; contentItems: Array<{ text: string }> };
       expect(result.success).toBe(true);
       expect(JSON.parse(result.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("loads a known working set eagerly for the Voice manager and messaging-bound threads", async () => {
+    let discovery = true;
+    const overlayStore = Object.assign(createOverlayStoreMock(), {
+      getVoiceManagerThread: () => ({ backend: "codex", threadId: "voice-manager" }),
+    });
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore,
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [{ id: "binding-bound", backend: "codex", threadId: "bound-thread" }],
+      }),
+      resolveCodexToolDiscovery: () => discovery,
+    });
+    const eagerNames = async (threadId: string) => {
+      await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Continue." }] });
+      await emitCompletedTurn(registry, "codex", threadId);
+      return pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools)
+        .filter((tool) => !(tool as { deferLoading?: boolean }).deferLoading)
+        .map((tool) => tool.name)
+        .sort();
+    };
+    try {
+      // The 2026-10-01 Voice manager turn had only tool_search eager and
+      // searched seven times before its first useful call.
+      expect(await eagerNames("voice-manager")).toEqual(["tool_search", ...VOICE_MANAGER_EAGER_TOOLS].sort());
+      expect(await eagerNames("bound-thread")).toEqual(["tool_search", ...MESSAGING_EAGER_TOOLS].sort());
+      expect(await eagerNames("thread-1")).toEqual(["tool_search"]);
+      // Without discovery nothing is deferred, so the sets change nothing.
+      discovery = false;
+      expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).length).toBeGreaterThan(0);
+      await registry.startTurn({ backend: "codex", threadId: "voice-manager", input: [{ type: "text", text: "Continue." }] });
+      expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).some((tool) => tool.name === "tool_search")).toBe(false);
     } finally {
       await registry.close();
     }

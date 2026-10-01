@@ -534,7 +534,12 @@ import {
 } from "../agent-tools/agent-tool-router";
 import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
-import { buildPwrAgentToolSearchDefinition, withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";
+import {
+  buildPwrAgentToolSearchDefinition,
+  MESSAGING_EAGER_TOOLS,
+  VOICE_MANAGER_EAGER_TOOLS,
+  withPwrAgentToolDiscovery,
+} from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
@@ -8197,6 +8202,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "upsertThreadSubAgents"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
+    | "getVoiceManagerThread"
   >
 >;
 
@@ -11595,7 +11601,7 @@ export class DesktopBackendRegistry {
         // Negotiate now, without resuming an active thread. Unsupported runtimes
         // must not accept a request which they can never apply.
         await this.withCodexThreadClient(params.threadId, async (client) => {
-          await this.requireCodexAgentRefreshTools(client, current);
+          await this.requireCodexAgentRefreshTools(client, params.threadId, current);
         });
         if (current?.queuedAgentChange && !current.queuedAgentChange.error
           && sameAgent(current.queuedAgentChange.agent)) return current;
@@ -11613,9 +11619,14 @@ export class DesktopBackendRegistry {
     return result;
   }
 
-  private async requireCodexAgentRefreshTools(client: BackendClient, overlay: ThreadOverlayState | undefined) {
+  private async requireCodexAgentRefreshTools(
+    client: BackendClient,
+    threadId: string,
+    overlay: ThreadOverlayState | undefined,
+  ) {
     const tools = await this.buildSupportedCodexDynamicToolsRefresh({
       client,
+      threadId,
       tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
     });
     if (tools === undefined || !client.refreshThreadTools) {
@@ -11639,7 +11650,7 @@ export class DesktopBackendRegistry {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
         await this.withCodexThreadClient(params.threadId, async (client) => {
           const overlay = await this.overlayStore.getThreadOverlayState(params);
-          const dynamicTools = await this.requireCodexAgentRefreshTools(client, overlay);
+          const dynamicTools = await this.requireCodexAgentRefreshTools(client, params.threadId, overlay);
           await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
         });
       }
@@ -17882,6 +17893,7 @@ export class DesktopBackendRegistry {
           const dynamicTools =
             await this.buildSupportedCodexDynamicToolsRefresh({
               client,
+              threadId: params.threadId,
               tokenMiserEnabled: tokenMiserEnabledForThread,
             });
           const pwrdrvrTokenMiser =
@@ -18633,6 +18645,7 @@ export class DesktopBackendRegistry {
         const dynamicTools =
           await this.buildSupportedCodexDynamicToolsRefresh({
             client,
+            threadId: params.threadId,
             tokenMiserEnabled,
           });
         return await client.startReview({
@@ -24487,6 +24500,7 @@ export class DesktopBackendRegistry {
   private buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
     discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
+    eagerTools?: ReadonlySet<string>,
   ): CodexDynamicToolSpec[] {
     return withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
@@ -24504,17 +24518,44 @@ export class DesktopBackendRegistry {
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
       }),
-    ), discoveryEnabled);
+    ), discoveryEnabled, eagerTools);
   }
 
   private async buildSupportedCodexDynamicToolsRefresh(params: {
     client: BackendClient;
+    threadId: string;
     tokenMiserEnabled: boolean;
   }): Promise<CodexDynamicToolSpec[] | undefined> {
     if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
       return undefined;
     }
-    return this.buildCodexParentDynamicTools(params.tokenMiserEnabled);
+    const discoveryEnabled = this.resolveCodexToolDiscoveryFn();
+    return this.buildCodexParentDynamicTools(
+      params.tokenMiserEnabled,
+      discoveryEnabled,
+      discoveryEnabled
+        ? await this.resolveEagerPwrAgentTools(params.threadId)
+        : undefined,
+    );
+  }
+
+  /**
+   * A thread whose working set is known loads it eagerly instead of behind
+   * tool_search. Resolved on every refresh, so a binding made mid-thread
+   * takes effect at the next turn start.
+   */
+  private async resolveEagerPwrAgentTools(
+    threadId: string,
+  ): Promise<ReadonlySet<string> | undefined> {
+    const voiceManager = this.overlayStore.getVoiceManagerThread?.();
+    if (voiceManager?.backend === "codex" && voiceManager.threadId === threadId) {
+      return VOICE_MANAGER_EAGER_TOOLS;
+    }
+    const bindings = await this.getThreadInspectionMessagingBindings({
+      backend: "codex",
+      threadId,
+    });
+    return bindings?.length ? MESSAGING_EAGER_TOOLS : undefined;
   }
 
   private async buildSupportedCodexTokenMiserConfig(params: {
@@ -30652,7 +30693,7 @@ export class DesktopBackendRegistry {
         try {
           if (!running) {
             const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
-            const dynamicTools = await this.requireCodexAgentRefreshTools(client, overlay);
+            const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay);
             const cwd = await this.resolveThreadEnvironmentCwd("codex", threadId, overlay);
             const settings = await this.resolveModelSettings("codex", {
               model: overlay?.model,
