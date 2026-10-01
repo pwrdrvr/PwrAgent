@@ -85,7 +85,7 @@ test("a dropped pin reorder repaints without the pointer leaving the rows", asyn
     // The active drag opens a Keep at top slot above the pins, which moves
     // the first pin down. Measure it after that, so the drop is an ordinary
     // reorder before it rather than a Keep at top drop.
-    await expect(directoryRow.locator(".directory-row__keep-top-slot--ghost")).toBeVisible();
+    await expect(directoryRow.locator(".directory-row__keep-top-slot")).toBeVisible();
     const first = await pinnedRows.nth(0).boundingBox();
     if (!first) {
       throw new Error("Expected the pinned rows to have layout");
