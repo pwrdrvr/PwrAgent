@@ -103,6 +103,8 @@ import type {
   CodexPwrdrvrTokenMiserActivation,
   CodexServerCapabilities,
 } from "../codex-app-server/client";
+import { CodexAppServerClient } from "../codex-app-server/client";
+import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
@@ -143,6 +145,10 @@ const mainLoggerMock = vi.hoisted(() => ({
   error: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
+}));
+
+vi.mock("../codex-app-server/stdio-transport", async () => ({
+  StdioJsonRpcTransport: (await import("./fixtures/archive-cleanup-transport")).ArchiveCleanupTransport,
 }));
 
 vi.mock("../log", () => ({
@@ -51423,6 +51429,121 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("does not restart background archive cleanup after registry close", async () => {
+    let finish!: (threads: AppServerThreadSummary[]) => void;
+    const gate = new Promise<AppServerThreadSummary[]>((resolve) => { finish = resolve; });
+    let archivedReads = 0;
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: async (params?: { archived?: boolean }) => {
+        if (!params?.archived) return [];
+        archivedReads += 1;
+        return await gate;
+      },
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "closing-binding", threadId: "archived" }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    await registry.listThreads({ backend: "codex" });
+    await waitForCondition(() => archivedReads === 1);
+    await registry.close();
+    finish([{ id: "archived", title: "Archived", titleSource: "explicit", source: "codex", linkedDirectories: [] }]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(archivedReads).toBe(1);
+    expect(messagingStore.revokedBindingIds).toEqual([]);
+  });
+
+  it("does not revoke a restored binding from in-flight archive cleanup evidence", async () => {
+    let finish!: (threads: AppServerThreadSummary[]) => void;
+    const gate = new Promise<AppServerThreadSummary[]>((resolve) => { finish = resolve; });
+    let archivedReads = 0;
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: async (params?: { archived?: boolean }) => {
+        if (!params?.archived) return [];
+        archivedReads += 1;
+        return archivedReads === 1 ? gate : [];
+      },
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "restored-binding", threadId: "restored" }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.listThreads({ backend: "codex" });
+    await waitForCondition(() => archivedReads === 1);
+    await codexClient.emit({ method: "thread/unarchived", params: { threadId: "restored" } });
+    finish([{ id: "restored", title: "Restored", titleSource: "explicit", source: "codex", linkedDirectories: [] }]);
+    await waitForCondition(() => archivedReads === 2);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(messagingStore.revokedBindingIds).toEqual([]);
+    expect(messagingStore.deletedPendingThreads).toEqual([]);
+    expect(archivedReads).toBe(2);
+  });
+
+  it("bounds archive cleanup scans across related navigation refreshes", async () => {
+    const budget = navigationListingBudgets["archive-cleanup-related-refreshes"];
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      // The client metadata scheduler has its own budget (#2422). Isolate
+      // registry cleanup while retaining production listing/pagination.
+      listThreads: (...[params, diagnostics]: Parameters<CodexAppServerClient["listThreads"]>) =>
+        provider.listThreads({ ...params, skipArchivedMetadataRefresh: true }, diagnostics),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      // This binding is neither active nor archived. A negative membership
+      // answer must be shared too, rather than rescanning on every turn event.
+      bindings: [{ id: "unresolved-binding", threadId: "missing" }],
+    });
+    const reads = vi.spyOn(messagingStore, "findActiveBindingsForBackend");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(async () => { await registry.close(); await provider.close(); });
+    const refresh = async (method?: "thread/status/changed" | "turn/started") => {
+      if (method === "thread/status/changed") {
+        await codexClient.emit({ method, params: { threadId: "active", status: { type: "idle" } } });
+      } else if (method === "turn/started") {
+        await codexClient.emit({ method, params: { threadId: "active", turn: { id: "turn", status: "inProgress", output: [] } } });
+      }
+      const before = reads.mock.calls.length;
+      await registry.listThreads({
+        backend: "codex",
+        callerReason: method === "turn/started" ? "federation-navigation-query" : "renderer-navigation-query",
+        enrichDirectories: false,
+      });
+      await waitForCondition(() => reads.mock.calls.length > before);
+      // Drain the background cleanup, including its possible second walk.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    };
+    await refresh();
+    await refresh("thread/status/changed");
+    await refresh("turn/started");
+    const transport = ArchiveCleanupTransport.latest;
+    const archivedRpcs = () => transport.listings.filter((rpc) => rpc.archived);
+    expect(transport.listings.filter((rpc) => !rpc.archived)).toHaveLength(budget.activeProviderListings);
+    expect(archivedRpcs()).toHaveLength(budget.archivedPageRpcs);
+    expect(archivedRpcs().filter((rpc) => !rpc.cursor)).toHaveLength(budget.archivedProviderListings);
+    expect(archivedRpcs().map((rpc) => rpc.cursor)).toEqual([undefined, "1", "2"]);
+    expect(reads).toHaveBeenCalledTimes(budget.logicalRequests);
+    await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: false });
+    expect(archivedRpcs()).toHaveLength(budget.archivedPageRpcsAfterUnchangedRefresh);
+    expect(transport.listings.filter((rpc) => !rpc.archived)).toHaveLength(budget.activeProviderListings);
+    await registry.listThreads({ backend: "codex", forceRefresh: true, enrichDirectories: false });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(archivedRpcs()).toHaveLength(budget.archivedPageRpcsAfterExplicitRefresh);
+    // A real disappearance invalidates negative evidence and combines binding
+    // and transition candidates into one new paginated authority read.
+    transport.activeIds = ["active"];
+    transport.archivedIds = ["missing", "transition", "archive-three"];
+    await refresh("thread/status/changed");
+    await waitForCondition(() => messagingStore.revokedBindingIds.length === 1);
+    expect(archivedRpcs()).toHaveLength(budget.archivedPageRpcsAfterMembershipChange);
+    expect(transport.listings.filter((rpc) => !rpc.archived)).toHaveLength(budget.activeProviderListingsAfterMembershipChange);
+    expect(messagingStore.revokedBindingIds).toEqual(["unresolved-binding"]);
+  });
+
   it("cleans messaging state for bound threads missing from the active refresh", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -51451,7 +51572,7 @@ script = "printf setup"
     await waitForCondition(() => messagingStore.revokedBindingIds.length === 1);
 
     expect(codexClient.lastListThreadsDiagnostics).toEqual({
-      callerReason: "archive-bound-binding-cleanup",
+      callerReason: "archive-cleanup",
       ownerId: expect.any(String),
     });
     expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
