@@ -200,6 +200,7 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
+import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
 import { ProjectPicker } from "./ProjectPicker";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
@@ -2882,6 +2883,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const destinationOwner = projectDestinations.state?.request.federationTarget;
   const destinationOwnerKey = destinationOwner?.scope === "remote"
     ? `remote:${destinationOwner.instanceId}` : "local";
+  const projectDestinationsLoaded = destinationOwnerKey === filesystemAuthorityKey
+    && projectDestinations.state?.page !== undefined;
   const projectDirectories = destinationOwnerKey === filesystemAuthorityKey
     ? projectDestinations.state?.page?.directories ?? [] : [];
   useEffect(() => {
@@ -10612,39 +10615,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
               </p>
               {handoffDialog === "to-project" ? (
-                <>
-                  <ProjectPicker
-                    value={projectDirectories.find((directory) => directory.path === projectTargetPath)}
+                <div className="workspace-handoff-dialog__field">
+                  <span aria-hidden="true">Destination project</span>
+                  <ProjectDestinationCombobox
                     directories={projectDirectories}
-                    onQueryChange={setProjectSearch}
-                    pickError={projectDestinations.state?.error}
                     disabled={handoffSubmitting}
-                    nativePickingDisabled={Boolean(filesystemFederationTarget)}
-                    onSelect={(directory) => setProjectTargetPath(directory.path ?? "")}
-                    onPickFromDisk={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
-                      ? () => {
-                          void props.desktopApi!.pickDirectoryFromDisk!().then((result) => {
-                            if (!result.canceled) setProjectTargetPath(result.path);
-                          }).catch((error: unknown) => {
-                            setHandoffError(error instanceof Error ? error.message : String(error));
-                          });
-                        }
-                      : undefined}
+                    error={projectDestinations.state?.error}
+                    loaded={projectDestinationsLoaded}
+                    remote={filesystemFederationTarget?.scope === "remote"}
+                    value={projectTargetPath}
+                    onChange={setProjectTargetPath}
+                    onQueryChange={setProjectSearch}
                   />
-                  <label className="workspace-handoff-dialog__field">
-                    Destination project
-                    <input
-                      aria-label="Destination project"
-                      className="workspace-handoff-dialog__text-input"
-                      disabled={handoffSubmitting}
-                      placeholder="Absolute path to a Git checkout"
-                      spellCheck={false}
-                      type="text"
-                      value={projectTargetPath}
-                      onChange={(event) => setProjectTargetPath(event.target.value)}
-                    />
-                  </label>
-                </>
+                </div>
               ) : (
                 <dl className="workspace-handoff-dialog__summary">
                   <div>

@@ -1,0 +1,202 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import { FolderIcon } from "../../icons";
+import { filterDirectoryReferenceCandidates } from "../../lib/directory-references";
+import { getHomeDir, tildifyPath } from "../../lib/tildify-path";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+
+/**
+ * Destination field for the composer's Move to Project dialog.
+ *
+ * One text field that is also the search: typing narrows the thread
+ * owner's tracked projects in the same compact list the composer's `@`
+ * autocomplete draws, and picking a row fills in its path. A typed
+ * absolute path is still a valid destination on its own.
+ *
+ * There are no "Add directory…" / "Add file…" rows. A destination is a
+ * project the owner already tracks, or a path typed by hand; the native
+ * dialogs could only browse this machine, which is the wrong machine for a
+ * federated thread.
+ *
+ * `directories` must already belong to the thread's owner. The parent
+ * drops a page answered by any other instance.
+ */
+export type ProjectDestinationComboboxProps = {
+  value: string;
+  onChange: (path: string) => void;
+  /** Owner-side search for a bounded directory page. */
+  onQueryChange: (query: string) => void;
+  directories: readonly NavigationDirectorySummary[];
+  /** The owner has answered at least once, so an empty list means none. */
+  loaded: boolean;
+  /** The owner could not answer the search. */
+  error?: string;
+  disabled?: boolean;
+  /**
+   * The owner is another instance. Its paths are shown as they are: the
+   * local home directory says nothing about where a peer's `~` is.
+   */
+  remote: boolean;
+};
+
+function isDestination(directory: NavigationDirectorySummary): boolean {
+  // Only real projects. The synthesized "Workspaces" collector and the
+  // "unlinked" bucket are not Git checkouts a conversation can move into.
+  return directory.kind === "directory" && Boolean(directory.path);
+}
+
+export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProps): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listboxId = useId();
+  // A layer, not a keydown handler on the input: the dialog around this
+  // field owns Escape otherwise, and one press would close both.
+  useDismissableLayer({
+    open,
+    onDismiss: () => setOpen(false),
+    surfaceRef: containerRef,
+    triggerRef: inputRef,
+  });
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
+
+  const candidates = useMemo(
+    () => filterDirectoryReferenceCandidates(props.directories.filter(isDestination), query),
+    [props.directories, query],
+  );
+  const showList = open && !props.disabled;
+  const active = Math.min(activeIndex, candidates.length - 1);
+
+  const formatPath = (path: string): string =>
+    tildifyPath(path, props.remote ? undefined : getHomeDir());
+
+  const select = (directory: NavigationDirectorySummary): void => {
+    props.onChange(directory.path ?? "");
+    setOpen(false);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!showList) {
+        setOpen(true);
+        setActiveIndex(0);
+        return;
+      }
+      if (candidates.length === 0) {
+        return;
+      }
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((active + step + candidates.length) % candidates.length);
+      return;
+    }
+    if (event.key === "Enter" && showList && candidates[active]) {
+      event.preventDefault();
+      select(candidates[active]);
+    }
+  };
+
+  const empty = props.loaded && candidates.length === 0
+    ? (query.trim() ? "No matching projects." : "No tracked projects yet.")
+    : undefined;
+
+  return (
+    <div ref={containerRef} className="project-destination">
+      <input
+        ref={inputRef}
+        aria-activedescendant={showList && candidates[active] ? `${listboxId}-option-${active}` : undefined}
+        aria-autocomplete="list"
+        aria-controls={showList ? listboxId : undefined}
+        aria-expanded={showList}
+        aria-label="Destination project"
+        autoComplete="off"
+        className="workspace-handoff-dialog__text-input"
+        disabled={props.disabled}
+        placeholder="Search projects or enter a path"
+        role="combobox"
+        spellCheck={false}
+        type="text"
+        value={props.value}
+        onBlur={(event) => {
+          if (!containerRef.current?.contains(event.relatedTarget as Node | null)) {
+            setOpen(false);
+          }
+        }}
+        onChange={(event) => {
+          const next = event.target.value;
+          props.onChange(next);
+          props.onQueryChange(next);
+          setQuery(next);
+          setActiveIndex(0);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+        onMouseDown={() => setOpen(true)}
+      />
+      {showList ? (
+        <div className="composer__autocomplete composer__autocomplete--directories composer__autocomplete--below project-destination__list">
+          <div aria-label="Projects" id={listboxId} role="listbox">
+            {candidates.map((directory, index) => (
+              <button
+                key={directory.key}
+                aria-selected={index === active}
+                className={`composer__autocomplete-option${index === active ? " is-active" : ""}`}
+                id={`${listboxId}-option-${index}`}
+                role="option"
+                tabIndex={-1}
+                title={directory.path}
+                type="button"
+                onMouseDown={(event) => {
+                  // Keep focus in the field so the list's keyboard state holds.
+                  event.preventDefault();
+                }}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => select(directory)}
+              >
+                <span className="composer__autocomplete-title">
+                  <FolderIcon size={13} aria-hidden="true" />
+                  <HighlightedAutocompleteLabel
+                    label={directory.label}
+                    matchAnywhere
+                    query={query.trim()}
+                  />
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {formatPath(directory.path ?? "")}
+                </span>
+              </button>
+            ))}
+          </div>
+          {props.error ? (
+            <div className="project-picker__error" role="alert">
+              {props.error}
+            </div>
+          ) : empty ? (
+            <div className="project-picker__empty">{empty}</div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}

@@ -14870,20 +14870,69 @@ describe("Composer", () => {
     />);
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    fireEvent.focus(destination);
     await screen.findByRole("option", { name: /Owner demo/ });
     expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
     expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: target, query: { kind: "directory-index", filter: "" },
     }), expect.any(String));
-    fireEvent.change(screen.getByPlaceholderText("Find a directory"), { target: { value: "demo" } });
+    // The destination field is the search: typing asks the owner, not a
+    // separate picker.
+    fireEvent.change(destination, { target: { value: "demo" } });
     await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: target, query: { kind: "directory-index", filter: "demo" },
     }), expect.any(String)));
     fireEvent.click(await screen.findByRole("option", { name: /Owner demo/ }));
+    expect(destination).toHaveValue("/owner/demo");
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
     await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
       direction: "to-project", targetPath: "/owner/demo",
+    }));
+  });
+
+  it("picks a move destination from the keyboard and offers only real projects", async () => {
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      directories: [
+        { key: "workspaces", kind: "workspace", label: "Workspaces", path: "/owner/.pwragent/workspaces" },
+        { key: "/owner/alpha", kind: "directory", label: "Alpha", path: "/owner/alpha", latestUpdatedAt: 2 },
+        { key: "/owner/beta", kind: "directory", label: "Beta", path: "/owner/beta", latestUpdatedAt: 1 },
+      ],
+    }));
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage, pickDirectoryFromDisk: vi.fn() }}
+      onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    fireEvent.focus(destination);
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Alpha"),
+      expect.stringContaining("Beta"),
+    ]);
+    expect(screen.queryByText(/Add directory/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Add file/)).not.toBeInTheDocument();
+
+    fireEvent.keyDown(destination, { key: "ArrowDown" });
+    expect(destination).toHaveAttribute("aria-activedescendant", options[1]!.id);
+    fireEvent.keyDown(destination, { key: "Enter" });
+    expect(destination).toHaveValue("/owner/beta");
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/owner/beta",
     }));
   });
 
@@ -14907,7 +14956,7 @@ describe("Composer", () => {
     />);
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    fireEvent.focus(screen.getByRole("combobox", { name: "Destination project" }));
     await screen.findByText("Peer unavailable");
     expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
@@ -14939,7 +14988,7 @@ describe("Composer", () => {
     }));
   });
 
-  it("keeps Move to Project keyboard-contained, and gives Escape to its project picker first", async () => {
+  it("keeps Move to Project keyboard-contained, and gives Escape to its destination list first", async () => {
     const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
       directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
     }));
@@ -14966,14 +15015,13 @@ describe("Composer", () => {
     expect(dialog.contains(document.activeElement)).toBe(true);
     expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
 
-    const picker = within(dialog).getByRole("button", { name: "Choose a project" });
-    picker.focus();
-    act(() => picker.click());
+    const destination = within(dialog).getByRole("combobox", { name: "Destination project" });
+    act(() => destination.focus());
     await within(dialog).findByRole("option", { name: /Demo/ });
     pressEscape();
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
-    expect(document.activeElement).toBe(picker);
+    expect(document.activeElement).toBe(destination);
 
     pressEscape();
     expect(screen.queryByRole("dialog", { name: "Move to Project" })).not.toBeInTheDocument();
