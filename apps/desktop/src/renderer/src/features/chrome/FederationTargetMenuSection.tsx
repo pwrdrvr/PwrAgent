@@ -1,6 +1,7 @@
 import { useId, type ReactElement } from "react";
 import {
   describeFederationThreadTargetAvailability,
+  FEDERATION_PROJECT_STATE_LABEL,
   FEDERATION_TARGET_AVAILABILITY_LABEL,
   type FederationThreadTarget,
 } from "./federation-thread-targets";
@@ -49,9 +50,9 @@ export function FederationTargetMenuSection(props: {
         // indistinguishable from a bug.
         const missingProject = projectState === "missing";
         const stateLabel = missingProject
-          ? "No project"
+          ? FEDERATION_PROJECT_STATE_LABEL.missing
           : projectState === "checking"
-            ? "Checking…"
+            ? FEDERATION_PROJECT_STATE_LABEL.checking
             : FEDERATION_TARGET_AVAILABILITY_LABEL[target.availability];
         const unavailable = target.availability !== "available" || missingProject;
         return (

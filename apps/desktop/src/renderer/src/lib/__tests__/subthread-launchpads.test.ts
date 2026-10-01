@@ -55,8 +55,12 @@ describe("pickSubthreadWorktreeBase", () => {
       currentBranch: "main",
       worktreeCreationAvailable: false,
       worktreeCreationUnavailableReason: "The repository has no commits yet",
-    })).toEqual({ available: false, reason: "The repository has no commits yet" });
+    })).toEqual({
+      available: false,
+      cause: "no-worktrees",
+      reason: "The repository has no commits yet",
+    });
     expect(pickSubthreadWorktreeBase("main", undefined))
-      .toEqual({ available: false, reason: "No branch" });
+      .toEqual({ available: false, cause: "no-branch" });
   });
 });

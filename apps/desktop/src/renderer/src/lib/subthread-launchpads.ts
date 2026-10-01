@@ -64,7 +64,13 @@ export function getSubthreadProjectIdentity(
 
 export type SubthreadWorktreeBase =
   | { available: true; baseBranch: string }
-  | { available: false; reason: string };
+  | {
+      available: false;
+      /** The checkout has no branch to name, or Git will not add a worktree. */
+      cause: "no-branch" | "no-worktrees";
+      /** Git's own explanation, when it gave one. */
+      reason?: string;
+    };
 
 /**
  * The branch a new worktree for a sub-thread starts from on another machine.
@@ -89,7 +95,10 @@ export function pickSubthreadWorktreeBase(
   if (gitStatus?.worktreeCreationAvailable === false) {
     return {
       available: false,
-      reason: gitStatus.worktreeCreationUnavailableReason ?? "No worktrees",
+      cause: "no-worktrees",
+      ...(gitStatus.worktreeCreationUnavailableReason
+        ? { reason: gitStatus.worktreeCreationUnavailableReason }
+        : {}),
     };
   }
   const currentBranch =
@@ -108,7 +117,7 @@ export function pickSubthreadWorktreeBase(
   const fallback = currentBranch ?? gitStatus?.defaultBranch;
   return fallback
     ? { available: true, baseBranch: fallback }
-    : { available: false, reason: "No branch" };
+    : { available: false, cause: "no-branch" };
 }
 
 /**

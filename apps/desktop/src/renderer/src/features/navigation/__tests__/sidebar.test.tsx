@@ -2111,19 +2111,25 @@ describe("Sidebar", () => {
     fireEvent.keyDown(reopened, { key: "ArrowRight" });
     const flyout = screen.getByRole("menu", { name: "New workspace on" });
     const machines = within(flyout).getAllByRole("menuitem");
-    // The parent's machine leads; an offline peer stays listed, disabled.
+    // The parent's machine leads, set off by a separator; an offline peer
+    // stays listed, disabled, below the machines that can take the child.
     expect(machines.map((item) => item.textContent)).toEqual([
       "Harbor MacParent",
-      "Attic MiniOffline",
       "Studio Mac / work",
+      "Attic MiniOffline",
     ]);
+    expect(within(flyout).getAllByRole("separator")).toHaveLength(1);
+    expect(machines[0]!.nextElementSibling).toHaveAttribute("role", "separator");
     expect(machines[0]).toHaveFocus();
-    expect(machines[1]).toHaveAttribute("aria-disabled", "true");
-
-    fireEvent.click(machines[1]!);
-    expect(onCreateSubthread).toHaveBeenCalledTimes(1);
+    expect(machines[2]).toHaveAttribute("aria-disabled", "true");
+    expect(machines.map((item) =>
+      item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
+      .toEqual(["available", "available", "offline"]);
 
     fireEvent.click(machines[2]!);
+    expect(onCreateSubthread).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(machines[1]!);
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
       "new-workspace",
@@ -2133,12 +2139,24 @@ describe("Sidebar", () => {
 
   it("cascades a new-worktree machine list that names each machine's base branch", async () => {
     const onCreateSubthread = vi.fn(async () => undefined);
-    const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) =>
-      instanceId === "studio-work"
-        ? { available: true as const, baseBranch: "main" }
-        : instanceId === "mini"
-          ? { available: false as const, reason: "The repository has no commits yet" }
-          : undefined);
+    const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) => {
+      switch (instanceId) {
+        case "studio-work":
+          return { available: true as const, baseBranch: "main" };
+        case "mini":
+          return {
+            available: false as const,
+            cause: "no-worktrees" as const,
+            reason: "The repository has no commits yet",
+          };
+        case "cart":
+          return { available: false as const, cause: "no-branch" as const };
+        case "rack":
+          throw new Error("Rack Server did not answer");
+        default:
+          return undefined;
+      }
+    });
     render(
       <Sidebar
         backends={backends}
@@ -2154,6 +2172,8 @@ describe("Sidebar", () => {
           { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
           { availability: "available", instanceId: "lab", label: "Lab Box" },
           { availability: "available", instanceId: "mini", label: "Mac Mini" },
+          { availability: "available", instanceId: "cart", label: "Cart Box" },
+          { availability: "available", instanceId: "rack", label: "Rack Server" },
         ]}
         readSubthreadWorktreeBase={readSubthreadWorktreeBase}
         onBrowseModeChange={() => undefined}
@@ -2176,40 +2196,63 @@ describe("Sidebar", () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 
     let flyout = openFlyout();
-    expect(within(flyout).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+    const checking = within(flyout).getAllByRole("menuitem");
+    expect(checking.map((item) => item.textContent)).toEqual([
       "Harbor Macfrom codex/thread-centric-uiParent",
-      "Attic MiniOffline",
       "Studio Mac / workChecking…",
       "Lab BoxChecking…",
       "Mac MiniChecking…",
+      "Cart BoxChecking…",
+      "Rack ServerChecking…",
+      "Attic MiniOffline",
     ]);
+    // Disabled until the machine answers, with its reachable dot.
+    expect(checking[1]).toHaveAttribute("aria-disabled", "true");
+    expect(checking[1]).toHaveAttribute("title", "Looking for PwrAgent on Studio Mac / work");
+    expect(checking[1]!.querySelector(".new-thread-menu__target-dot"))
+      .toHaveAttribute("data-availability", "available");
     await act(async () => {});
     const machines = within(flyout).getAllByRole("menuitem");
     // The peer's checkout is not on the parent's branch, and the row says so.
     expect(machines.map((item) => item.textContent)).toEqual([
       "Harbor Macfrom codex/thread-centric-uiParent",
-      "Attic MiniOffline",
       "Studio Mac / workfrom main",
       "Lab BoxNo project",
-      "Mac MiniUnavailable",
+      "Mac MiniNo worktrees",
+      "Cart BoxNo branch",
+      "Rack ServerCouldn't check",
+      "Attic MiniOffline",
     ]);
-    expect(machines[3]).toHaveAttribute("aria-disabled", "true");
-    expect(machines[4]).toHaveAttribute("aria-disabled", "true");
-    expect(machines[4]).toHaveAttribute("title", "The repository has no commits yet");
+    expect(machines.map((item) => item.getAttribute("aria-disabled"))).toEqual([
+      null, null, "true", "true", "true", "true", "true",
+    ]);
+    expect(machines.map((item) => item.getAttribute("title"))).toEqual([
+      "codex/thread-centric-ui",
+      "main",
+      "Lab Box has no project named PwrAgent",
+      "The repository has no commits yet",
+      "PwrAgent there is on no branch to start a worktree from",
+      "Rack Server did not answer",
+      "Not connected",
+    ].map((title, index) => index < 2 ? `from ${title}` : title));
+    expect(machines.map((item) =>
+      item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
+      .toEqual(["available", "available", "no-project", "no-project", "no-project", "no-project", "offline"]);
     // Offline machines are not asked; the parent's own machine needs no answer.
     expect(readSubthreadWorktreeBase.mock.calls.map(([instanceId]) => instanceId).sort())
-      .toEqual(["lab", "mini", "studio-work"]);
+      .toEqual(["cart", "lab", "mini", "rack", "studio-work"]);
     expect(readSubthreadWorktreeBase).toHaveBeenCalledWith(
       "studio-work",
       { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent" },
       "codex/thread-centric-ui",
     );
 
-    fireEvent.click(machines[3]!);
-    fireEvent.click(machines[4]!);
+    for (const machine of machines.slice(2)) {
+      fireEvent.click(machine);
+    }
     expect(onCreateSubthread).not.toHaveBeenCalled();
 
-    fireEvent.click(machines[2]!);
+    fireEvent.click(machines[1]!);
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
       "new-worktree",
@@ -2328,6 +2371,100 @@ describe("Sidebar", () => {
       "new-workspace",
       { instanceId: "studio-work" },
     );
+  });
+
+  it("reaches the machine list by keyboard while the owner's worktree check runs", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        ]}
+        readThreadWorktreeAvailability={() => new Promise<boolean>(() => undefined)}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    const row = screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    // Only the row's click waits on the check, so the arrows still stop on it.
+    for (let step = 0; step < 20 && document.activeElement !== row; step += 1) {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowDown" });
+    }
+    expect(row).toHaveFocus();
+
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    const flyout = screen.getByRole("menu", { name: "New workspace on" });
+    expect(within(flyout).getAllByRole("menuitem")[0]).toHaveFocus();
+  });
+
+  it("walks every flyout row by keyboard and keeps Home and End inside it", async () => {
+    const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) =>
+      instanceId === "studio-work"
+        ? { available: true as const, baseBranch: "main" }
+        : undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+          { availability: "available", instanceId: "lab", label: "Lab Box" },
+        ]}
+        readSubthreadWorktreeBase={readSubthreadWorktreeBase}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    const row = screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" });
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    await act(async () => {});
+    const flyout = screen.getByRole("menu", { name: "New worktree on" });
+    const [harbor, studio, lab, attic] = within(flyout).getAllByRole("menuitem");
+    expect(harbor).toHaveFocus();
+
+    const press = (key: string) =>
+      fireEvent.keyDown(document.activeElement ?? document.body, { key });
+    press("ArrowDown");
+    expect(studio).toHaveFocus();
+    // Disabled machines are stops too, so their reason can be heard.
+    press("ArrowDown");
+    expect(lab).toHaveFocus();
+    expect(lab).toHaveAttribute("aria-disabled", "true");
+    // The outer menu counts every item in it; the flyout keeps Home and End.
+    press("End");
+    expect(attic).toHaveFocus();
+    press("Home");
+    expect(harbor).toHaveFocus();
+    press("ArrowUp");
+    expect(attic).toHaveFocus();
+
+    press("ArrowLeft");
+    expect(screen.queryByRole("menu", { name: "New worktree on" })).toBeNull();
+    expect(row).toHaveFocus();
   });
 
   it.each([false, true])("waits for owner Git capability before enabling creation (%s)", async (available) => {

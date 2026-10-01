@@ -12,15 +12,17 @@ export type CheckFederationTargetProject = (
 
 /**
  * A check may say more than present or missing: a line the menu shows for
- * the machine, such as the branch a worktree there starts from.
+ * the machine, such as the branch a worktree there starts from, and a
+ * longer explanation for its tooltip.
  */
 export type FederationProjectCheckResult =
   | boolean
-  | { present: boolean; detail?: string };
+  | { present: boolean; detail?: string; title?: string };
 
 export type FederationProjectCheck = {
   state: FederationTargetProjectState;
   detail?: string;
+  title?: string;
 };
 
 /**
@@ -91,11 +93,13 @@ export function useFederationProjectChecks(params: {
     for (const id of ids) {
       void check(id, project)
         .then((result): FederationProjectCheck => {
-          const present = typeof result === "boolean" ? result : result.present;
-          const detail = typeof result === "boolean" ? undefined : result.detail;
+          if (typeof result === "boolean") {
+            return { state: result ? "present" : "missing" };
+          }
           return {
-            state: present ? "present" : "missing",
-            ...(detail !== undefined ? { detail } : {}),
+            state: result.present ? "present" : "missing",
+            ...(result.detail !== undefined ? { detail: result.detail } : {}),
+            ...(result.title !== undefined ? { title: result.title } : {}),
           };
         })
         .catch((): FederationProjectCheck => ({ state: "present" }))

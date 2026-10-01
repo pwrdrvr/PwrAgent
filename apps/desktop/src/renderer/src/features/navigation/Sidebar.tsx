@@ -60,7 +60,10 @@ import {
   type IconProps,
 } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
-import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
+import {
+  FEDERATION_PROJECT_STATE_LABEL,
+  type FederationThreadTarget,
+} from "../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
 import {
   SubthreadMachineCascade,
@@ -1858,15 +1861,27 @@ export function Sidebar(props: SidebarProps) {
         if (!base) {
           return false;
         }
-        return base.available
-          ? { present: true, detail: base.baseBranch }
-          : { present: false, detail: base.reason };
+        if (base.available) {
+          return { present: true, detail: base.baseBranch };
+        }
+        return base.cause === "no-branch"
+          ? {
+              present: false,
+              detail: "No branch",
+              title: `${project.label} there is on no branch to start a worktree from`,
+            }
+          : {
+              present: false,
+              detail: "No worktrees",
+              ...(base.reason ? { title: base.reason } : {}),
+            };
       } catch (error) {
         // Unlike a chat, a worktree cannot start without a branch to show,
         // so a failed read blocks the row instead of reading as present.
         return {
           present: false,
-          detail: error instanceof Error ? error.message : String(error),
+          detail: "Couldn't check",
+          title: error instanceof Error ? error.message : String(error),
         };
       }
     },
@@ -1889,23 +1904,37 @@ export function Sidebar(props: SidebarProps) {
   });
   const subthreadWorktreeChoice = (
     key: string,
-  ): Pick<SubthreadMachineChoice, "baseBranch" | "blocked" | "blockedTitle"> => {
-    if (!subthreadWorktreeFlyout) {
+    machineLabel: string,
+  ): Pick<SubthreadMachineChoice, "baseBranch" | "blocked" | "blockedTitle" | "pending"> => {
+    if (!subthreadWorktreeFlyout || !subthreadProject) {
       return {};
     }
     const check = subthreadWorktreeChecks?.[key];
     if (!check || check.state === "checking") {
-      return { blocked: "Checking…" };
+      // Disabled until it answers, unlike "New chat on": a worktree's row
+      // names the branch it starts from, and there is none to name yet.
+      return {
+        blocked: FEDERATION_PROJECT_STATE_LABEL.checking,
+        blockedTitle: `Looking for ${subthreadProject.label} on ${machineLabel}`,
+        pending: true,
+      };
     }
     if (check.state === "missing") {
       return check.detail
-        ? { blocked: "Unavailable", blockedTitle: check.detail }
-        : { blocked: "No project" };
+        ? {
+            blocked: check.detail,
+            ...(check.title ? { blockedTitle: check.title } : {}),
+          }
+        : {
+            blocked: FEDERATION_PROJECT_STATE_LABEL.missing,
+            blockedTitle: `${machineLabel} has no project named ${subthreadProject.label}`,
+          };
     }
     return check.detail
       ? { baseBranch: check.detail }
-      : { blocked: "Unavailable" };
+      : { blocked: "Couldn't check" };
   };
+  const localMachineLabel = props.localMachineLabel ?? "This machine";
   const subthreadMachines: SubthreadMachineChoice[] | undefined =
     contextMenuCanCreateSubthread && federationThreadTargets.length > 0
       ? [
@@ -1927,23 +1956,29 @@ export function Sidebar(props: SidebarProps) {
               }]
             : []),
           {
-            label: props.localMachineLabel ?? "This machine",
+            label: localMachineLabel,
             availability: "available" as const,
             parent: !contextMenuParentInstanceId,
             ...(contextMenuParentInstanceId
-              ? subthreadWorktreeChoice(SUBTHREAD_THIS_MACHINE)
+              ? subthreadWorktreeChoice(SUBTHREAD_THIS_MACHINE, localMachineLabel)
               : subthreadWorktreeFlyout && contextMenuParentBranch
                 ? { baseBranch: contextMenuParentBranch }
                 : {}),
           },
+          // Reachable machines first and offline or unsupported ones last,
+          // each group in the federation's own order, so the rows that can
+          // take the child sit under the parent's.
           ...federationThreadTargets
             .filter((target) => target.instanceId !== contextMenuParentInstanceId)
+            .sort((a, b) =>
+              Number(a.availability !== "available")
+              - Number(b.availability !== "available"))
             .map((target) => ({
               instanceId: target.instanceId,
               label: target.label,
               availability: target.availability,
               parent: false,
-              ...subthreadWorktreeChoice(target.instanceId),
+              ...subthreadWorktreeChoice(target.instanceId, target.label),
             })),
         ]
       : undefined;

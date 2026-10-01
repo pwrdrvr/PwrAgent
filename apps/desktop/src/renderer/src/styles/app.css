@@ -7313,27 +7313,32 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* Capped and scrolling like the "New chat on" card, because a federation
+   can outgrow the window. `SubthreadMachineCascade` measures the row and
+   moves the flyout to the row's left, or up, when this placement would
+   cross the window edge. */
 .thread-context-menu.thread-context-menu__flyout {
   position: absolute;
   top: -6px;
   left: calc(100% + 2px);
-  min-width: 200px;
+  min-width: 220px;
   max-width: 320px;
+  max-height: min(420px, calc(100vh - 96px));
+  overflow-y: auto;
 }
 
-.thread-context-menu__group-label {
-  padding: 4px 10px 6px;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+.thread-context-menu.thread-context-menu__flyout--start {
+  left: auto;
+  right: calc(100% + 2px);
 }
 
-.thread-context-menu__machine-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* A machine row: the "New chat on" row (`.new-thread-menu__item--target`)
+   inside the context menu. Its dot, name and state reuse that list's own
+   classes, so the two read as one family. */
+.thread-context-menu .thread-context-menu__machine {
+  min-height: 36px;
+  gap: 8px;
+  font-weight: 400;
 }
 
 /* A machine row that names the branch a new worktree there starts from. */
@@ -7349,19 +7354,12 @@ a.button {
 }
 
 /* One line, so a long branch widens the flyout up to its cap and then
-   ellipsizes; the row's tooltip carries the whole name. */
+   ellipsizes; the row's tooltip carries the whole name. Regular weight, so
+   it never reads heavier than the machine name above it. */
 .thread-context-menu__machine-label .thread-context-menu__item-detail {
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-context-menu__machine-state {
-  margin-left: auto;
-  padding-left: 16px;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -7370,15 +7368,17 @@ a.button {
   cursor: default;
 }
 
-.thread-context-menu button[aria-disabled="true"]:hover,
-.thread-context-menu button[aria-disabled="true"]:focus-visible {
+.thread-context-menu button[aria-disabled="true"]:hover {
   background: transparent;
   color: var(--text-muted);
 }
 
-.thread-context-menu button:hover:not(:disabled):not([aria-disabled="true"]) .thread-context-menu__machine-state,
-.thread-context-menu button:focus-visible:not(:disabled):not([aria-disabled="true"]) .thread-context-menu__machine-state {
-  color: var(--accent-bright);
+/* Disabled rows stay in the arrow walk so their reason can be heard; give
+   focus a surface there, as the "New chat on" list does, or a keyboard user
+   loses their place. */
+.thread-context-menu button[aria-disabled="true"]:focus-visible {
+  background: var(--surface-overlay-soft);
+  color: var(--text-muted);
 }
 
 .rename-thread-backdrop {

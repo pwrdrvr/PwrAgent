@@ -5764,7 +5764,11 @@ export function useThreadNavigation(
           return;
         }
         if (!counterpart.base.available) {
-          setCreateThreadError(`${counterpart.directory.label} on that machine cannot start a worktree: ${counterpart.base.reason}.`);
+          setCreateThreadError(
+            counterpart.base.cause === "no-branch"
+              ? `${counterpart.directory.label} on that machine has no branch to start a worktree from.`
+              : `${counterpart.directory.label} on that machine cannot start a worktree${counterpart.base.reason ? `: ${counterpart.base.reason}` : ""}.`,
+          );
           return;
         }
         // The menu named the base branch. A checkout that moved since then
