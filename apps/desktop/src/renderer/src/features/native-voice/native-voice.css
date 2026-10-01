@@ -1,19 +1,14 @@
-.native-voice {
-  border-top: 1px solid var(--border-subtle);
-  padding: 8px 0;
-  font-size: 12px;
-}
-.native-voice__controls, .native-voice__text {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.native-voice__status { color: var(--text-muted); }
-/* A hot microphone uses the selected-row accent, never hint grey. */
-.native-voice__status--live {
+/* Live voice. A hot microphone uses the selected-row accent, never hint grey:
+   the most privacy-sensitive state in the app has to read from across the room. */
+.native-voice__status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.native-voice__status--live {
   color: var(--accent-bright);
   font-weight: 600;
 }
@@ -25,7 +20,196 @@
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.native-voice__error { color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
-.native-voice__transcript { max-height: 160px; overflow-y: auto; color: var(--text-secondary); }
-.native-voice__transcript p { margin: 4px 0; white-space: pre-wrap; }
-.native-voice__text input { flex: 1; min-width: 0; }
+.native-voice-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
+}
+.native-voice-meter i {
+  display: block;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent-bright);
+  transform: scaleY(0.35);
+}
+.native-voice__error {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.native-voice__text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.native-voice__input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+.native-voice__input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.native-voice__end {
+  color: var(--text-primary);
+}
+
+/* Thread voice: docked above the composer, outside its disabled fieldset so
+   End voice works even while a send is being prepared. */
+.native-voice-bar {
+  margin: 0 0 8px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-row-active);
+  font-size: 12px;
+}
+.native-voice-bar__row,
+.overseer-voice__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.native-voice-bar__tick {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-voice-bar__tick strong,
+.native-voice-feed strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.native-voice-bar .button,
+.overseer-voice .button {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.native-voice-bar__panel {
+  margin-top: 6px;
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.native-voice-feed {
+  max-height: 180px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+}
+.native-voice-feed__say {
+  margin: 4px 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.native-voice-feed__action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 4px 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+.native-voice-feed__tool {
+  flex: 0 0 auto;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.native-voice-feed__target {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-voice-feed__instance {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.native-voice-feed__outcome {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 7px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+}
+.native-voice-feed__action--failed .native-voice-feed__outcome {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* Overseer voice floats over the sidebar's foot, the one corner that is not
+   transcript, composer or thread chrome, and stays there across navigation. */
+.overseer-voice {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 90;
+  width: min(360px, calc(100vw - 24px));
+  padding: 6px 8px 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow-base) 52%, transparent);
+  font-size: 12px;
+}
+.overseer-voice__spacer {
+  flex: 1;
+}
+.overseer-voice__context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  color: var(--text-muted);
+}
+.overseer-voice__chip {
+  max-width: 220px;
+  overflow: hidden;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overseer-voice__chip--machine {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: inherit;
+}
+.overseer-voice .native-voice-feed {
+  max-height: 220px;
+}

@@ -34,6 +34,7 @@ export { HistoryIcon } from "./HistoryIcon";
 export { InfoIcon } from "./InfoIcon";
 export { LightningIcon } from "./LightningIcon";
 export { MattermostIcon } from "./MattermostIcon";
+export { MicIcon } from "./MicIcon";
 export { MoreVerticalIcon } from "./MoreVerticalIcon";
 export { LineIcon } from "./LineIcon";
 export { NewThreadIcon } from "./NewThreadIcon";

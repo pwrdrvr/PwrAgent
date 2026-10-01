@@ -24,6 +24,7 @@ export const PWRAGENT_STAR_MAP_OPERATION_NAMES = [
   "fly_star_map_to",
   "highlight_star_map_threads",
   "set_star_map_view",
+  "read_operator_focus",
 ] as const;
 
 export type PwrAgentStarMapOperationName =
@@ -32,6 +33,7 @@ export type PwrAgentStarMapOperationName =
 export const PWRAGENT_STAR_MAP_ERROR_CODES = [
   "invalid_arguments",
   "star_map_not_open",
+  "focus_not_published",
   "not_found",
   "unsupported_operation",
   "internal_error",
@@ -337,11 +339,57 @@ export type SetStarMapViewToolData = {
   hideOfflineInstances: boolean;
 };
 
+/**
+ * What the operator is looking at in a main PwrAgent window, for the
+ * `read_operator_focus` tool.
+ *
+ * It is the referent for "this thread" in a request that did not come from
+ * that thread: a voice or Star Map manager turn runs in its own thread, so
+ * the selection in the window is the only thing that says which thread the
+ * operator means. Published by the renderer, held in memory by main, and
+ * never persisted or federated.
+ */
+export const OPERATOR_FOCUS_VIEWS = [
+  "thread",
+  "settings",
+  "automations",
+  "search",
+] as const;
+
+export type OperatorFocusView = (typeof OPERATOR_FOCUS_VIEWS)[number];
+
+export type OperatorFocusThread = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  title: string;
+  /** Set when a connected peer instance owns the thread. */
+  instanceId?: FederationInstanceId | string;
+  /** The peer's display name, as the sidebar shows it. */
+  instanceLabel?: string;
+};
+
+export type OperatorFocusSnapshot = {
+  view: OperatorFocusView;
+  /** The sidebar lens, by its route value. */
+  lens?: string;
+  /** The selected thread. Absent when nothing is selected. */
+  thread?: OperatorFocusThread;
+};
+
+export type ReadOperatorFocusToolArgs = Record<string, never>;
+
+export type ReadOperatorFocusToolData = {
+  /** How stale the focus is; the window republishes when it changes. */
+  ageMs: number;
+  focus: OperatorFocusSnapshot;
+};
+
 export type PwrAgentStarMapToolArgsByOperation = {
   read_star_map_view: ReadStarMapViewToolArgs;
   fly_star_map_to: FlyStarMapToToolArgs;
   highlight_star_map_threads: HighlightStarMapThreadsToolArgs;
   set_star_map_view: SetStarMapViewToolArgs;
+  read_operator_focus: ReadOperatorFocusToolArgs;
 };
 
 export type PwrAgentStarMapToolArgs<
@@ -361,6 +409,7 @@ export type PwrAgentStarMapDataByOperation = {
   fly_star_map_to: FlyStarMapToToolData;
   highlight_star_map_threads: HighlightStarMapThreadsToolData;
   set_star_map_view: SetStarMapViewToolData;
+  read_operator_focus: ReadOperatorFocusToolData;
 };
 
 export type PwrAgentStarMapContext = {

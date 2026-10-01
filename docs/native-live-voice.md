@@ -1,13 +1,66 @@
-# Native live voice vertical slice
+# Native live voice
 
-This opt-in experimental slice connects an existing local Codex coding thread
-through `thread/realtime/start`. Select **Start voice** in its composer, allow
-microphone access after negotiation, and speak. **End voice** closes the voice
-session. **Stop** remains the existing coding-turn interrupt operation and keeps
-its name on every thread. The idle composer shows only **Start voice**; while
-voice is live, an accent **Microphone live** indicator replaces the hint text.
-Typing in the normal composer continues to use the ordinary coding flow. The
-small **Message voice** field appends text to the voice conversation.
+Opt-in experimental voice runs on Codex `thread/realtime/start`. It has two
+modes. Both use the same realtime session, and only one session runs at a time.
+
+## Thread voice
+
+Thread voice talks to one local Codex coding thread. The **Voice** mic toggle in
+that thread's composer starts it. While it runs, a bar docked above the composer
+shows an accent **Microphone live** state with a level meter, the last line
+spoken, **Mute**, **Transcript**, and **End voice**. **Transcript** opens the
+running transcript, tool receipts, and a **Message voice** field that appends
+typed text to the voice conversation. Typing in the normal composer still uses
+the ordinary coding flow. **Stop** remains the coding-turn interrupt and keeps
+its name on every thread.
+
+Leaving the thread ends its voice. A failed stop stays visible on the composer
+the window lands on, so **End voice** can be retried there.
+
+## Overseer voice
+
+Overseer voice runs across threads and machines. The **Overseer voice** mic
+starts it, as does ⌘⇧Space (Ctrl+Shift+Space on Windows and Linux). The mic sits
+first in the window actions: in the sidebar masthead, in the thread header's
+copy of those actions when the sidebar is hidden, and in the title bar on
+Windows and Linux. Federation windows do not show it, and they do not accept
+the shortcut.
+
+Overseer voice talks to the **Voice manager** thread, which is a Codex thread
+that PwrAgent creates once and remembers. Like the Star Map manager, it is an
+ordinary thread in a PwrAgent-owned workspace (`voice-manager` in the profile).
+PwrAgent rewrites its `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `QWEN.md`
+whenever the thread opens. If the remembered thread was archived, PwrAgent
+makes a new one. Main gives the overseer prompt only to that thread.
+
+Overseer voice does its work through the existing PwrAgent dynamic tools. It
+uses `search_threads` with an `instanceId` to find a thread on another machine.
+It uses `send_message_to_thread` and `steer_thread` to direct it, and
+`stop_thread` only after the operator confirms. Status tools answer "what is
+running?" The realtime model delegates to the Voice manager's Codex turn. That
+turn calls the tools, so thread and tool policies and federation RBAC apply as
+usual.
+
+To resolve "this thread", the Voice manager calls `read_operator_focus`. This
+is a star map family tool and needs the same `tools.thread_inspection`
+permission. It returns what the operator's local main window shows: the view,
+the lens, and the selected thread with its backend, id, title, and instance.
+It also returns how long ago the window published that. Each local main window
+publishes its focus 150 ms after a change, and again when it gains focus. Main
+keeps the latest snapshot in memory only and accepts it only from local main
+windows. When no window has published, the tool returns `focus_not_published`,
+and the manager asks the operator which thread they mean.
+
+A floating panel in the bottom-left corner shows the session. It has the live
+state, **Mute**, **Hide**, **End voice**, and the thread the window is looking
+at. It also shows the transcript, the receipts, and **Message voice**. Overseer
+voice continues across navigation. While it runs, the composer **Voice** toggle
+is unavailable and its tooltip explains why.
+
+Each dynamic tool call that the voice session's thread makes becomes a receipt.
+A receipt names the tool, the target thread and machine when the result names
+them, and the outcome. Main observes the calls at the registry's dynamic tool
+chokepoint after each call settles. It reports only what the tool returned.
 
 ## Protocol and trust boundary
 
@@ -58,8 +111,9 @@ startup waits for the startup RPC to settle, then stops the accepted session
 before admitting a replacement. Failed stop RPCs retain ownership and offer a
 retry instead of allowing a potentially overlapping session.
 
-The window owns the voice controller; composers subscribe to its state. A thread
-change or composer unmount stops local media immediately. If backend stop fails,
+The window owns the voice controller. The composer and the overseer panel
+subscribe to its state. A thread change or composer unmount stops thread voice's
+local media immediately. Overseer voice is not tied to a composer. If backend stop fails,
 the window retains the original session token and exposes **End voice** retry
 on the replacement composer, including a non-Codex thread, until stop is
 acknowledged. The window also observes page teardown independently of composer
@@ -92,12 +146,15 @@ Focused tests cover version gating, protocol fields, ordinary-notification
 isolation, active-thread catalog inheritance, idle-thread refresh, cross-window
 ownership, duplicate starts, stop during startup, startup/service failure,
 backend loss, permission gating/denial, late capture results, establishment
-expiry, stale events, local audio cleanup and failed-stop retries.
+expiry, stale events, local audio cleanup and failed-stop retries. They also
+cover the mode prompts, the overseer gate, the Voice manager's identity,
+`read_operator_focus`, focus and open-manager sender checks, receipts, mute,
+and overseer voice surviving navigation.
 
 Run the feature and affected backend suites from the repository root:
 
 ```sh
-pnpm test apps/desktop/src/main/__tests__/codex-client.test.ts apps/desktop/src/main/__tests__/backend-registry.test.ts apps/desktop/src/main/__tests__/native-voice-session.test.ts apps/desktop/src/main/__tests__/native-voice-ipc.test.ts apps/desktop/src/renderer/src/features/native-voice/__tests__/native-voice-controller.test.ts
+pnpm test apps/desktop/src/main/__tests__/codex-client.test.ts apps/desktop/src/main/__tests__/backend-registry.test.ts apps/desktop/src/main/__tests__/native-voice-session.test.ts apps/desktop/src/main/__tests__/native-voice-ipc.test.ts apps/desktop/src/main/__tests__/voice-manager-thread.test.ts apps/desktop/src/main/__tests__/star-map-agent-tools.test.ts apps/desktop/src/renderer/src/features/native-voice
 pnpm lint:eslint
 pnpm typecheck
 pnpm lint:codex-storage
@@ -124,8 +181,9 @@ This is an experimental slice, not a claim of broad plan entitlement or
 production latency. Physical-microphone, signed-package and headed Electron
 validation remain separate from the synthetic protocol/browser checks. The
 current implementation uses the default input/output device and default voice;
-it does not add a voice/device picker, federation voice, reconnection, session
-resumption, or short-lived planner threads. A connection loss ends voice and
+it does not add a voice/device picker, voice in federation windows,
+reconnection, session resumption, or short-lived planner threads. Overseer voice
+reaches other machines only through the federated thread tools. A connection loss ends voice and
 requires a new explicit start.
 
 Official context: [Codex App Server](https://learn.chatgpt.com/docs/app-server),

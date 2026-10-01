@@ -709,3 +709,46 @@ describe("highlight_star_map_threads and set_star_map_view", () => {
     expect(sendCommand).not.toHaveBeenCalled();
   });
 });
+
+describe("read_operator_focus", () => {
+  const focus = {
+    view: "thread" as const,
+    lens: "inbox",
+    thread: {
+      backend: "codex" as const,
+      threadId: "sample-thread",
+      title: "Sample thread",
+      instanceId: "sample-peer",
+      instanceLabel: "Sample peer",
+    },
+  };
+
+  it("reports the operator's selection and how stale it is", async () => {
+    const handler = createStarMapAgentToolsHandler({
+      readFocus: () => ({ focus, receivedAt: 4_000 }),
+      now: () => 4_250,
+    });
+    const response = await handler({ operation: "read_operator_focus", context: {}, args: {} });
+    expect(response).toEqual({ ok: true, data: { ageMs: 250, focus } });
+  });
+
+  it("asks the operator instead of guessing when no window has published", async () => {
+    const handler = createStarMapAgentToolsHandler({ readFocus: () => undefined });
+    const response = await handler({ operation: "read_operator_focus", context: {}, args: {} });
+    expect(response.ok).toBe(false);
+    if (response.ok) return;
+    expect(response.error.code).toBe("focus_not_published");
+    expect(response.error.message).toMatch(/Ask the operator/);
+  });
+
+  it("takes no arguments", async () => {
+    const definition = buildPwrAgentStarMapToolDefinitions(
+      createStarMapAgentToolsHandler({ readFocus: () => ({ focus, receivedAt: 1 }) }),
+    ).find((tool) => tool.name === "read_operator_focus")!;
+    const context = {} as AgentToolCallContext;
+    const rejected: AgentToolDispatchResult = await definition.dispatch({ threadId: "sample" }, context);
+    expect(rejected.ok).toBe(false);
+    const accepted: AgentToolDispatchResult = await definition.dispatch({}, context);
+    expect(accepted.ok).toBe(true);
+  });
+});

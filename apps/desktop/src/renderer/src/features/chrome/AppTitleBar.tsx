@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { SearchIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";
@@ -54,6 +54,8 @@ export function AppTitleBar(props: {
   /** Star Map toggle, left of the MSG chip. Absent in federation windows. */
   starMap?: StarMapToggleControls;
   actions?: {
+    /** Overseer voice's mic, first in the actions. It subscribes to voice itself. */
+    voiceControl?: ReactNode;
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
     threadSearchActive?: boolean;
@@ -92,6 +94,7 @@ export function AppTitleBar(props: {
         <AppMenuBar />
         {actions ? (
           <div className="app-titlebar__actions">
+            {isFederationWindow ? null : actions.voiceControl}
             {/* Search leads, the same order the sidebar masthead uses. It is
                 NOT local-only, so it renders in a federation window too — the
                 sidebar masthead is hidden on these platforms, and this strip

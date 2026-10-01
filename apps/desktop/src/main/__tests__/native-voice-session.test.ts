@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { NativeVoiceSessionManager } from "../codex-app-server/native-voice-session";
-import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceNotification } from "../codex-app-server/native-voice-protocol";
+import { NATIVE_VOICE_PROMPTS, NativeVoiceSessionManager } from "../codex-app-server/native-voice-session";
+import {
+  describeNativeVoiceAction,
+  supportsNativeVoice,
+  type NativeVoiceBackend,
+  type NativeVoiceNotification,
+  type NativeVoiceToolCall,
+} from "../codex-app-server/native-voice-protocol";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -10,17 +16,20 @@ function deferred<T>() {
 function fixture() {
   const events = new Set<(event: NativeVoiceNotification) => void>();
   const disconnects = new Set<() => void>();
+  const toolCalls = new Set<(call: NativeVoiceToolCall) => void>();
   const backend: NativeVoiceBackend = {
     start: vi.fn(async () => {}), stop: vi.fn(async () => {}), text: vi.fn(async () => {}), release: vi.fn(),
     onEvent: (listener) => { events.add(listener); return () => { events.delete(listener); }; },
     onDisconnect: (listener) => { disconnects.add(listener); return () => { disconnects.delete(listener); }; },
+    onToolCall: (listener) => { toolCalls.add(listener); return () => { toolCalls.delete(listener); }; },
   };
   const acquire = vi.fn(async () => backend);
   const manager = new NativeVoiceSessionManager(acquire);
   const emit = vi.fn();
   const request = { threadId: "fixture-thread", sessionId: "fixture-session", sdp: "v=0\r\nfixture" };
   const send = (event: NativeVoiceNotification) => { for (const listener of events) listener(event); };
-  return { backend, acquire, manager, emit, request, events, disconnects, send };
+  const call = (toolCall: NativeVoiceToolCall) => { for (const listener of toolCalls) listener(toolCall); };
+  return { backend, acquire, manager, emit, request, events, disconnects, toolCalls, send, call };
 }
 
 describe("native voice ownership", () => {
@@ -103,5 +112,50 @@ describe("native voice ownership", () => {
     f.send({ method: "thread/realtime/error", params: { threadId: f.request.threadId, message: "Voice rollout unavailable." } });
     await vi.waitFor(() => expect(f.backend.release).toHaveBeenCalledOnce());
     expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "error", message: "Voice rollout unavailable." }));
+  });
+
+  it("tells the realtime model which mode it is in", async () => {
+    const thread = fixture();
+    await thread.manager.start(1, thread.request, thread.emit);
+    expect(thread.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.thread }));
+    await thread.manager.stopOwner(1);
+    const overseer = fixture();
+    await overseer.manager.start(1, { ...overseer.request, mode: "overseer" }, overseer.emit);
+    expect(overseer.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.overseer }));
+    expect(NATIVE_VOICE_PROMPTS.overseer).toContain("read_operator_focus");
+    await overseer.manager.stopOwner(1);
+  });
+
+  it("reports only its own thread's tool calls as receipts, and stops listening when it ends", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    const result = (data: unknown, success = true) => ({ success, contentItems: [{ type: "inputText", text: JSON.stringify(data) }] });
+    f.call({ threadId: "other-thread", tool: "steer_thread", response: result({ disposition: "steered" }) });
+    expect(f.emit).not.toHaveBeenCalled();
+    f.call({
+      threadId: f.request.threadId,
+      tool: "send_message_to_thread",
+      response: result({ threadLink: "[Sample target](pwragent://thread/codex/sample)", queueStatus: "queued", instanceId: "sample-peer" }),
+    });
+    expect(f.emit).toHaveBeenCalledWith({
+      sessionId: f.request.sessionId, type: "action", tool: "send_message_to_thread", ok: true,
+      target: "Sample target", instance: "sample-peer", outcome: "queued",
+    });
+    await f.manager.stop(1, f.request);
+    expect(f.toolCalls.size).toBe(0);
+  });
+});
+
+describe("native voice receipts", () => {
+  it("reads disposition and title from PwrAgent tool results and never more than the tool said", () => {
+    const response = (text: string, success = true) => ({ success, contentItems: [{ type: "inputText", text }] });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "steer_thread", response: response(JSON.stringify({ disposition: "started" })) }))
+      .toEqual({ tool: "steer_thread", ok: true, outcome: "started" });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "handoff_task", response: response(JSON.stringify({ title: "Sample handoff" })) }))
+      .toEqual({ tool: "handoff_task", ok: true, target: "Sample handoff" });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "stop_thread", response: response("not json", false) }))
+      .toEqual({ tool: "stop_thread", ok: false });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", response: undefined }))
+      .toEqual({ tool: "read_thread", ok: false });
   });
 });

@@ -1,9 +1,24 @@
-import type { NativeVoiceApi, NativeVoiceEvent } from "../../../../shared/native-voice";
+import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
 
 export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "stopping" | "stop-error" | "error";
-export type VoiceView = { status: VoiceStatus; error?: string; transcript: Array<{ role: string; text: string }> };
+/** `seq` orders transcript rows and action receipts against each other. */
+export type VoiceTranscriptRow = { role: string; text: string; seq: number };
+export type VoiceActionRow = NativeVoiceAction & { seq: number };
+export type VoiceView = {
+  status: VoiceStatus;
+  error?: string;
+  /** Which kind of session this is, and the thread it talks through. Kept while stopping. */
+  mode?: NativeVoiceMode;
+  threadId?: string;
+  /** The operator muted their microphone; the session stays open. */
+  muted: boolean;
+  transcript: VoiceTranscriptRow[];
+  actions: VoiceActionRow[];
+};
+type Meter = { read: () => number; close: () => void };
 type Resources = {
   id: string;
+  meter?: Meter;
   peer?: RTCPeerConnection;
   stream?: MediaStream;
   audio?: HTMLAudioElement;
@@ -21,19 +36,44 @@ export type VoiceBrowser = {
   audio: () => HTMLAudioElement;
   microphone: () => Promise<MediaStream>;
   id: () => string;
+  /** Input level for the live meter. Optional: voice works without one. */
+  meter?: (stream: MediaStream) => Meter | undefined;
 };
 const browser: VoiceBrowser = {
   peer: () => new RTCPeerConnection(),
   audio: () => new Audio(),
   microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }),
   id: () => crypto.randomUUID(),
+  meter: (stream) => {
+    if (typeof AudioContext !== "function") return undefined;
+    const context = new AudioContext();
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 256;
+    // Analysis only: the source is never connected to the destination, so
+    // the operator does not hear their own microphone.
+    context.createMediaStreamSource(stream).connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+    return {
+      read: () => {
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const sample of samples) sum += ((sample - 128) / 128) ** 2;
+        return Math.min(1, Math.sqrt(sum / samples.length) * 4);
+      },
+      close: () => { void context.close().catch(() => undefined); },
+    };
+  },
 };
+
+const MAX_TRANSCRIPT_ROWS = 40;
+const MAX_ACTION_ROWS = 20;
 
 /** Owns every track, peer, audio element and listener for one window. */
 export class NativeVoiceController {
   private resources?: Resources;
-  private view: VoiceView = { status: "idle", transcript: [] };
+  private view: VoiceView = { status: "idle", muted: false, transcript: [], actions: [] };
   private partialRole?: string;
+  private seq = 0;
   private readonly listeners = new Set<(view: VoiceView) => void>();
   constructor(
     private readonly api: NativeVoiceApi,
@@ -58,12 +98,39 @@ export class NativeVoiceController {
     return this.resources === resources && !resources.cancelled;
   }
 
-  async start(threadId: string): Promise<void> {
+  /** Microphone input level, 0 to 1, or 0 when nothing is measuring it. */
+  readLevel(): number {
+    const resources = this.resources;
+    if (!resources?.meter || this.view.muted || this.view.status !== "listening") return 0;
+    return resources.meter.read();
+  }
+
+  /** Clear a startup failure once the operator has read it. */
+  dismissError(): void {
+    if (this.resources || this.view.status !== "error") return;
+    this.publish({ status: "idle", error: undefined, mode: undefined, threadId: undefined, muted: false });
+  }
+
+  /** Show a failure that happened before a session existed, such as resolving its thread. */
+  reportError(message: string, mode: NativeVoiceMode): void {
+    if (this.resources) return;
+    this.publish({ status: "error", error: message, mode, threadId: undefined, muted: false, transcript: [], actions: [] });
+  }
+
+  /** Mute or unmute the microphone without closing the session. */
+  setMuted(muted: boolean): void {
+    const resources = this.resources;
+    if (!resources || this.view.status !== "listening") return;
+    for (const track of resources.stream?.getAudioTracks() ?? []) track.enabled = !muted;
+    this.publish({ muted });
+  }
+
+  async start(threadId: string, mode: NativeVoiceMode = "thread"): Promise<void> {
     if (this.resources) return;
     const resources: Resources = { id: this.platform.id(), started: false, accepted: false, activating: false, cancelled: false };
     this.resources = resources;
     this.partialRole = undefined;
-    this.publish({ status: "checking", error: undefined, transcript: [] });
+    this.publish({ status: "checking", error: undefined, mode, threadId, muted: false, transcript: [], actions: [] });
     try {
       const capability = await this.api.nativeVoiceCapability();
       if (!this.current(resources)) return;
@@ -100,7 +167,7 @@ export class NativeVoiceController {
       // trickle-ICE RPC in the Codex protocol.
       await this.gatherIce(resources);
       if (!this.current(resources)) return;
-      await this.api.startNativeVoice({ threadId, sessionId: resources.id, sdp: peer.localDescription!.sdp });
+      await this.api.startNativeVoice({ threadId, sessionId: resources.id, sdp: peer.localDescription!.sdp, mode });
       if (!this.current(resources)) return;
       resources.accepted = true;
       await this.activate(resources, transceiver.sender);
@@ -139,13 +206,20 @@ export class NativeVoiceController {
         const transcript = [...this.view.transcript];
         if (this.partialRole === event.role && transcript.length) {
           const last = transcript[transcript.length - 1];
-          transcript[transcript.length - 1] = { role: event.role, text: event.done ? event.text : last.text + event.text };
+          transcript[transcript.length - 1] = { ...last, text: event.done ? event.text : last.text + event.text };
         } else {
-          transcript.push({ role: event.role, text: event.text });
+          transcript.push({ role: event.role, text: event.text, seq: ++this.seq });
         }
         this.partialRole = event.done ? undefined : event.role;
         // Voice text is memory-only, bounded and discarded on the next session.
-        this.publish({ transcript: transcript.slice(-40).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
+        this.publish({ transcript: transcript.slice(-MAX_TRANSCRIPT_ROWS).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
+        break;
+      }
+      case "action": {
+        const { type: _type, sessionId: _sessionId, ...action } = event;
+        // A receipt splits the transcript: the next spoken line starts a new row.
+        this.partialRole = undefined;
+        this.publish({ actions: [...this.view.actions, { ...action, seq: ++this.seq }].slice(-MAX_ACTION_ROWS) });
         break;
       }
       case "error":
@@ -174,6 +248,7 @@ export class NativeVoiceController {
       if (!track) throw new Error("No microphone audio track is available.");
       track.onended = () => this.fail(resources, new Error("Microphone disconnected."));
       await sender.replaceTrack(track);
+      try { resources.meter = this.platform.meter?.(stream); } catch { resources.meter = undefined; }
       if (!this.current(resources)) return;
       clearTimeout(resources.timer);
       this.publish({ status: "listening" });
@@ -201,6 +276,8 @@ export class NativeVoiceController {
       resources.peer.close();
     }
     for (const track of resources.stream?.getTracks() ?? []) { track.onended = null; track.stop(); }
+    resources.meter?.close();
+    resources.meter = undefined;
     if (resources.audio) {
       resources.audio.pause();
       const remote = resources.audio.srcObject;
@@ -217,7 +294,7 @@ export class NativeVoiceController {
     }).finally(() => {
       if (stopped) {
         if (this.resources === resources) this.resources = undefined;
-        if (!preserveError && this.view.status !== "error") this.publish({ status: "idle" });
+        if (!preserveError && this.view.status !== "error") this.publish({ status: "idle", muted: false });
       } else resources.stop = undefined;
     });
     return resources.stop;

@@ -4,6 +4,7 @@ import type {
   PwrAgentStarMapOperationName,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
+  ReadOperatorFocusToolArgs,
   ReadStarMapViewToolArgs,
   SetStarMapViewToolArgs,
   StarMapThreadOpenMode,
@@ -145,6 +146,16 @@ function descriptionForOperation(
         "hideOfflineInstances drops disconnected instances from the map.",
         "Fails when no Star Map surface is open.",
       ].join(" ");
+    case "read_operator_focus":
+      return [
+        "Read what the operator is looking at in the main PwrAgent window.",
+        "Reports the selected thread with its backend, threadId and title.",
+        "A thread owned by a connected peer also carries instanceId and instanceLabel.",
+        "Also reports the open view and the sidebar lens.",
+        "Call this to resolve \"this thread\" or \"the one I'm looking at\" in a request.",
+        "The selection is the operator's, not yours: it can change between calls.",
+        "Fails when no main window has published its focus.",
+      ].join(" ");
   }
 }
 
@@ -152,6 +163,8 @@ function inputSchemaForOperation(
   operation: PwrAgentStarMapOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "read_operator_focus":
+      return { type: "object", additionalProperties: false, properties: {} };
     case "read_star_map_view":
       return {
         type: "object",
@@ -275,7 +288,8 @@ type ParsedArgs =
         | ReadStarMapViewToolArgs
         | FlyStarMapToToolArgs
         | HighlightStarMapThreadsToolArgs
-        | SetStarMapViewToolArgs;
+        | SetStarMapViewToolArgs
+        | ReadOperatorFocusToolArgs;
     }
   | { error: string };
 
@@ -292,6 +306,10 @@ function parseArgs(
       return parseHighlightArgs(args);
     case "set_star_map_view":
       return parseSetViewArgs(args);
+    case "read_operator_focus":
+      return Object.keys(args).length === 0
+        ? { args: {} }
+        : { error: "read_operator_focus takes no arguments." };
   }
 }
 

@@ -202,6 +202,14 @@ import {
 } from "../../shared/github-pr-access";
 import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-info";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
+import { isNativeVoiceApi } from "./features/native-voice/NativeVoice";
+import {
+  OverseerVoiceButton,
+  OverseerVoiceHud,
+  operatorFocusFor,
+  useOperatorFocusPublisher,
+  useOverseerVoiceShortcut,
+} from "./features/native-voice/OverseerVoice";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 import {
   ThreadSearchPanel,
@@ -1739,6 +1747,26 @@ function DesktopAppShell(props: {
     threads: navigation.threads,
     retainedRemoteThreads: recentRemoteThreads,
   });
+  // Overseer voice and the focus it resolves "this thread" against are local
+  // surfaces: a federation window fronts a peer's threads, not this machine.
+  const overseerVoiceApi =
+    !readRendererFederationTarget() && isNativeVoiceApi(desktopApi) && desktopApi.openVoiceManager
+      ? desktopApi
+      : undefined;
+  useOverseerVoiceShortcut(overseerVoiceApi);
+  const operatorFocus = useMemo(
+    () => operatorFocusFor({
+      view: mainView,
+      lens: navigation.browseMode,
+      thread: navigation.selectedThread,
+    }),
+    [mainView, navigation.browseMode, navigation.selectedThread],
+  );
+  useOperatorFocusPublisher(overseerVoiceApi, operatorFocus);
+  const overseerVoiceControl = useMemo(
+    () => overseerVoiceApi ? <OverseerVoiceButton api={overseerVoiceApi} /> : undefined,
+    [overseerVoiceApi],
+  );
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
   const selectedLaunchpadFederationTarget =
@@ -2693,6 +2721,7 @@ function DesktopAppShell(props: {
     };
   })();
   const mastheadActions = {
+    voiceControl: overseerVoiceControl,
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
     settingsActive: mainView === "settings",
@@ -3232,6 +3261,7 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
+          mastheadVoiceControl={overseerVoiceControl}
           inert={layerView !== undefined}
           directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
@@ -3717,6 +3747,9 @@ function DesktopAppShell(props: {
           />
         </AppNoticeStack>
       </div>
+      {overseerVoiceApi ? (
+        <OverseerVoiceHud api={overseerVoiceApi} focus={navigation.selectedThread} />
+      ) : null}
     </TranscriptLinkProvider>
   );
 }

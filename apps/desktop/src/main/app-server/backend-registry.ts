@@ -1,5 +1,5 @@
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
-import { supportsNativeVoice, type NativeVoiceBackend } from "../codex-app-server/native-voice-protocol";
+import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
@@ -30622,6 +30622,9 @@ export class DesktopBackendRegistry {
   }
 
   private nativeVoiceLeases = 0;
+  // Live voice sessions watch their thread's tool calls so the operator sees
+  // what a delegation did. Empty unless a voice session is open.
+  private readonly nativeVoiceToolListeners = new Set<(call: NativeVoiceToolCall) => void>();
 
   async nativeVoiceCapability(): Promise<NativeVoiceCapability> {
     const result = await this.codexClient.getInitializeResult();
@@ -30676,6 +30679,10 @@ export class DesktopBackendRegistry {
             text: client.appendRealtimeText.bind(client),
             onEvent: client.onRealtimeEvent.bind(client),
             onDisconnect: client.onRealtimeDisconnect.bind(client),
+            onToolCall: (listener) => {
+              this.nativeVoiceToolListeners.add(listener);
+              return () => { this.nativeVoiceToolListeners.delete(listener); };
+            },
             release: () => {
               if (released) return;
               released = true;
@@ -33562,7 +33569,11 @@ export class DesktopBackendRegistry {
         ? request.params.callId.trim()
         : "";
     if (!callId) {
-      return await this.performServerRequest(backend, request);
+      return await this.observeNativeVoiceToolCall(
+        backend,
+        request,
+        this.performServerRequest(backend, request),
+      );
     }
     const key = [backend, request.params.threadId, request.params.turnId, callId]
       .join("\u0000");
@@ -33601,7 +33612,29 @@ export class DesktopBackendRegistry {
 
     const promise = this.performServerRequest(backend, request);
     this.acceptedDynamicToolCalls.set(key, { promise, signature });
-    return await promise;
+    return await this.observeNativeVoiceToolCall(backend, request, promise);
+  }
+
+  /** Reports a settled dynamic tool call to open voice sessions; never alters it. */
+  private async observeNativeVoiceToolCall(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+    promise: Promise<unknown>,
+  ): Promise<unknown> {
+    const response = await promise;
+    if (backend === "codex" && request.method === "item/tool/call" && this.nativeVoiceToolListeners.size > 0) {
+      const call: NativeVoiceToolCall = {
+        threadId: request.params.threadId,
+        tool: String(request.params.tool),
+        response,
+      };
+      for (const listener of this.nativeVoiceToolListeners) {
+        try { listener(call); } catch (error) {
+          backendRegistryLog.warn("voice tool-call listener failed", { error: String(error) });
+        }
+      }
+    }
+    return response;
   }
 
   private async performServerRequest(

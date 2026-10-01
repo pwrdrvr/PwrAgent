@@ -3,7 +3,9 @@ import { SETTINGS_RECEIVING_FOLDER_CHANNEL } from "../shared/ipc";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
   NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
+  NATIVE_VOICE_OPEN_MANAGER_CHANNEL, OPERATOR_FOCUS_PUBLISH_CHANNEL,
   type NativeVoiceStart, type NativeVoiceTarget, type NativeVoiceText, type NativeVoiceEvent,
+  type OpenVoiceManagerResponse,
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
@@ -441,6 +443,7 @@ import type {
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   OpenStarMapManagerRequest,
+  OperatorFocusSnapshot,
   OpenStarMapManagerResponse,
   OpenStarMapWindowRequest,
   StarMapCommand,
@@ -1046,6 +1049,8 @@ const desktopApi = Object.freeze({
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
   sendNativeVoiceText: (request: NativeVoiceText) => ipcRenderer.invoke(NATIVE_VOICE_TEXT_CHANNEL, request),
+  openVoiceManager: (): Promise<OpenVoiceManagerResponse> => ipcRenderer.invoke(NATIVE_VOICE_OPEN_MANAGER_CHANNEL),
+  publishOperatorFocus: (focus: OperatorFocusSnapshot): Promise<void> => ipcRenderer.invoke(OPERATOR_FOCUS_PUBLISH_CHANNEL, focus),
   onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, notification: NativeVoiceEvent) => callback(notification);
     ipcRenderer.on(NATIVE_VOICE_EVENT_CHANNEL, listener);
