@@ -14,6 +14,7 @@ import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
+  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
   RefObject,
@@ -51,6 +52,7 @@ import { copyText } from "../../lib/copy-text";
 import {
   BranchIcon,
   CalendarPlusIcon,
+  CheckIcon,
   DraftIcon,
   FolderIcon,
   HistoryIcon,
@@ -1353,13 +1355,13 @@ export function Sidebar(props: SidebarProps) {
     void props.onSetThreadParent?.(thread, undefined);
   };
 
+  // Pinned and Keep at Top are checkable items: a toggle leaves the menu
+  // open so both can be set before dismissing it.
   const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
-    setContextMenu(undefined);
     void hoverReleasedListHandlers.setThreadPin?.(thread, !thread.pinnedRank);
   };
 
   const toggleKeepAtTopFromContextMenu = (thread: NavigationThreadSummary): void => {
-    setContextMenu(undefined);
     const keepAtTop = !isKeptAtTopThread(thread);
     void (async () => {
       // Keep at Top on an unpinned row pins it first; the owner then moves
@@ -1746,6 +1748,17 @@ export function Sidebar(props: SidebarProps) {
       || contextMenu?.thread.gitBranch,
     );
   const contextMenuThreadKey = contextMenu ? threadSummaryIdentityKey(contextMenu.thread) : undefined;
+  // `contextMenu.thread` is a snapshot from when the menu opened. The pin
+  // checks toggle with the menu still open, so pin state reads the live row.
+  const contextMenuPinThread = contextMenu
+    ? navigationThreadByKey.get(contextMenuThreadKey!) ?? contextMenu.thread
+    : undefined;
+  // Return on a checkable item closes the menu instead of toggling it again.
+  const closeContextMenuOnEnter = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    setContextMenu(undefined);
+  };
   // The row whose ⋮ button owns the open menu, for its `aria-expanded`. A PR
   // chip's right-click menu is a different menu, so it leaves ⋮ collapsed.
   const actionsMenuThreadKey = contextMenu?.pullRequest
@@ -1876,7 +1889,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuShowMoveItems = Boolean(
     !contextMenuIsBulk &&
       browseMode === "directories" &&
-      contextMenu?.thread.pinnedRank &&
+      contextMenuPinThread?.pinnedRank &&
       props.onReorderThreadPins,
   );
   const contextMenuPinTierKeys = contextMenu
@@ -2425,7 +2438,9 @@ export function Sidebar(props: SidebarProps) {
       {contextMenu ? (
         <div
           ref={contextMenuRef}
-          className="thread-context-menu"
+          className={`thread-context-menu${
+            contextMenuHasPinAction ? " thread-context-menu--check-column" : ""
+          }`}
           role="menu"
           aria-label={
             contextMenuIsBulk
@@ -2560,21 +2575,29 @@ export function Sidebar(props: SidebarProps) {
               {contextMenuHasPinAction ? (
                 <div className="thread-context-menu__section">
                   <button
-                    role="menuitem"
+                    role="menuitemcheckbox"
+                    aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
                     type="button"
-                    onClick={() => togglePinFromContextMenu(contextMenu.thread)}
+                    onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
+                    onKeyDown={closeContextMenuOnEnter}
                   >
-                    {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
+                    <span className="thread-context-menu__check" aria-hidden="true">
+                      <CheckIcon size={12} strokeWidth={3} />
+                    </span>
+                    Pinned
                   </button>
                   {contextMenuCanKeepAtTop ? (
                     <button
-                      role="menuitem"
+                      role="menuitemcheckbox"
+                      aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
                       type="button"
-                      onClick={() => toggleKeepAtTopFromContextMenu(contextMenu.thread)}
+                      onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
+                      onKeyDown={closeContextMenuOnEnter}
                     >
-                      {isKeptAtTopThread(contextMenu.thread)
-                        ? "Stop Keeping at Top"
-                        : "Keep at Top"}
+                      <span className="thread-context-menu__check" aria-hidden="true">
+                        <CheckIcon size={12} strokeWidth={3} />
+                      </span>
+                      Keep at Top
                     </button>
                   ) : null}
                 </div>

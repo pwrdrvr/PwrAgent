@@ -6955,12 +6955,17 @@ a.button {
     0 0 14px var(--accent-shadow);
 }
 
-/* The Keep at top seam between pins kept at top and ordinary pins. It mounts
-   inside the same zero-height `.directory-row__pin-drop-boundary`, so a drag
-   never moves a row. Unlike the append slot it sits between two pinned rows,
-   so its hit band is centered on the seam. Its line and label appear only
-   while a pin drag is live. */
-.directory-row__keep-top-slot {
+/* The Keep at top target, shown only while a pin drag is live. Two forms
+   share `.directory-row__keep-top-slot`, which is what the drag session hit-tests:
+
+   - The seam, between pins kept at top and ordinary pins. It mounts inside the
+     same zero-height `.directory-row__pin-drop-boundary` as the append slot,
+     so a drag never moves a row. Unlike the append slot it sits between two
+     pinned rows, so its hit band is centered on the seam.
+   - The ghost slot, when no pin is kept yet. The top of the pins stays the
+     ordinary top-pin drop point, so the lane gets a compact slot of its own
+     above it. Opening it shifts the list once, by about 40px. */
+.directory-row__keep-top-slot--seam {
   position: absolute;
   top: -16px;
   right: 6px;
@@ -6970,11 +6975,11 @@ a.button {
   pointer-events: none;
 }
 
-.directory-row__keep-top-slot.is-drag-enabled {
+.directory-row__keep-top-slot--seam.is-drag-enabled {
   pointer-events: auto;
 }
 
-.directory-row__keep-top-slot::after {
+.directory-row__keep-top-slot--seam::after {
   content: "";
   position: absolute;
   top: 16px;
@@ -6988,7 +6993,7 @@ a.button {
   transform: translateY(-50%);
 }
 
-.directory-row__keep-top-slot::before {
+.directory-row__keep-top-slot--seam::before {
   content: "Keep at top";
   position: absolute;
   z-index: 1;
@@ -7008,12 +7013,12 @@ a.button {
   transform: translateY(-50%);
 }
 
-.directory-row__keep-top-slot.is-drag-enabled::after,
-.directory-row__keep-top-slot.is-drag-enabled::before {
+.directory-row__keep-top-slot--seam.is-drag-enabled::after,
+.directory-row__keep-top-slot--seam.is-drag-enabled::before {
   opacity: 1;
 }
 
-.directory-row__keep-top-slot.is-drop-target-before::after {
+.directory-row__keep-top-slot--seam.is-drop-target-before::after {
   height: 3px;
   background: var(--accent);
   box-shadow:
@@ -7023,8 +7028,59 @@ a.button {
 
 /* The held card covers this label while it is the target and carries its own
    copy (`.thread-row__drop-label`). */
-.directory-row__keep-top-slot.is-drop-target-before::before {
+.directory-row__keep-top-slot--seam.is-drop-target-before::before {
   opacity: 0;
+}
+
+/* The ghost slot's boundary grows only while its slot is open. */
+.directory-row__pin-drop-boundary:has(> .directory-row__keep-top-slot--ghost.is-drag-enabled) {
+  height: auto;
+  margin-block: 0;
+  padding: 2px 2px 11px;
+}
+
+.directory-row__keep-top-slot--ghost {
+  position: relative;
+  display: none;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: grabbing;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.directory-row__keep-top-slot--ghost.is-drag-enabled {
+  display: flex;
+}
+
+/* The kept pin's glyph: filled, as on a kept row. */
+.directory-row__keep-top-slot--ghost path {
+  fill: currentColor;
+}
+
+/* The seam under the lane, above the ordinary pins. */
+.directory-row__keep-top-slot--ghost::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  bottom: -7px;
+  left: 6px;
+  height: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+
+.directory-row__keep-top-slot--ghost.is-drop-target-before {
+  border-style: solid;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--text-primary);
 }
 
 .directory-row__thread-divider {
@@ -7375,6 +7431,35 @@ a.button {
      shortcut chip doesn't visually drop out of the highlighted
      row. */
   color: var(--accent-bright);
+}
+
+/* Checkable items (Pinned, Keep at Top). The labels never change; the box
+   carries the state. On: solid accent box with a check. Off: muted outline
+   with a muted check, so the item still reads as checkable. */
+.thread-context-menu__check {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  place-items: center;
+  margin-right: 7px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1.5px var(--text-muted);
+  color: var(--text-muted);
+}
+
+.thread-context-menu button[aria-checked="true"] .thread-context-menu__check {
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--accent-on);
+}
+
+/* A menu with checkable items gives every other item the same check column,
+   so labels align down the menu. 10px button padding + 16px box + 7px gap. */
+.thread-context-menu--check-column
+  > .thread-context-menu__section
+  > button:not([role="menuitemcheckbox"]) {
+  padding-left: 33px;
 }
 
 .thread-context-menu__separator {

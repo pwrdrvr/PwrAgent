@@ -38,6 +38,7 @@ import {
 import {
   ChevronDownIcon,
   NewThreadIcon,
+  PinIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -1649,9 +1650,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
       props.onReorderThreadPins
       && directoryUnpinnedThreadCount > 0
     );
-    // Kept pins sort first, so the seam sits before the first ordinary pin.
-    // With no ordinary pin loaded it would share the append target's
-    // boundary; dropping on the last kept row's lower half keeps there.
+    // Kept pins sort first, so the Keep at top target sits before the first
+    // ordinary pin: a zero-height seam after kept pins, or a ghost slot above
+    // the pins when none is kept yet. With no ordinary pin loaded it would
+    // share the append target's boundary; dropping on the last kept row's
+    // lower half keeps there.
     const keepAtTopSeamIndex = props.onReorderThreadPins
       ? directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread))
       : -1;
@@ -2111,9 +2114,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   <div
                                     aria-label={`Keep thread at top of pinned threads for ${directory.label}`}
                                     aria-hidden="true"
-                                    className="directory-row__keep-top-slot"
+                                    className={`directory-row__keep-top-slot directory-row__keep-top-slot--${
+                                      pinnedIndex === 0 ? "ghost" : "seam"
+                                    }`}
                                     role="separator"
-                                  />
+                                  >
+                                    {pinnedIndex === 0 ? (
+                                      <>
+                                        <PinIcon size={12} />
+                                        Keep at top
+                                      </>
+                                    ) : null}
+                                  </div>
                                 </div>
                               ) : null}
 	                        <ThreadRow

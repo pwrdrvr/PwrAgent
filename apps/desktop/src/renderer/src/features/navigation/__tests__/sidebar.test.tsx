@@ -1871,7 +1871,7 @@ describe("Sidebar", () => {
 
     // …the VIEWER-owned pin is offered (rank lives on the pin row, never
     // the owner's list)…
-    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
     expect(onSetThreadPin).toHaveBeenCalledWith(remotePinnedThread, true);
 
     // …and the viewer-side removal dispatches even while disconnected.
@@ -4777,7 +4777,7 @@ describe("Sidebar", () => {
       child.classList.contains("thread-context-menu__section"),
     );
     expect(sections).toHaveLength(4);
-    expect(sections[0]).toHaveTextContent("Unpin Thread");
+    expect(sections[0]).toHaveTextContent("Pinned");
     expect(sections[1]).toHaveTextContent("Sub-thread in Same Worktree");
     expect(sections[1]).toHaveTextContent("Fork into New Worktree");
     expect(sections[2]).toHaveTextContent("Move Up");
@@ -4935,7 +4935,7 @@ describe("Sidebar", () => {
       .closest(".thread-row-shell")
       ?.querySelector(".thread-row__overflow-button") as HTMLButtonElement;
     fireEvent.click(overflowButton);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
 
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
   });
@@ -5073,20 +5073,25 @@ describe("Sidebar", () => {
     expect(
       await screen.findByRole("menuitem", { name: /Move Down/i }),
     ).toBeDisabled();
-    await clickElement(
-      await screen.findByRole("menuitem", { name: "Stop Keeping at Top" }),
-    );
+    const keepChecked = await screen.findByRole("menuitemcheckbox", { name: "Keep at Top" });
+    expect(keepChecked).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Pinned" }))
+      .toHaveAttribute("aria-checked", "true");
+    await clickElement(keepChecked);
     expect(onReorderThreadPins).toHaveBeenLastCalledWith([], {
       key: "codex:thread-kept",
       keepAtTop: false,
     });
+    // The label never changes and the menu stays open after a toggle.
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    pressEscape();
 
     fireEvent.click(
       ordinaryRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
     );
-    await clickElement(
-      await screen.findByRole("menuitem", { name: "Keep at Top" }),
-    );
+    const keepUnchecked = await screen.findByRole("menuitemcheckbox", { name: "Keep at Top" });
+    expect(keepUnchecked).toHaveAttribute("aria-checked", "false");
+    await clickElement(keepUnchecked);
     expect(onReorderThreadPins).toHaveBeenLastCalledWith([], {
       key: "codex:thread-ordinary",
       keepAtTop: true,
@@ -5120,7 +5125,7 @@ describe("Sidebar", () => {
       row.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
     );
 
-    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    await screen.findByRole("menuitemcheckbox", { name: "Pinned" });
     expect(
       screen.queryByRole("menuitem", { name: /Move Up/i }),
     ).not.toBeInTheDocument();
@@ -5621,6 +5626,7 @@ describe("Sidebar", () => {
     const seam = container.querySelector(
       ".directory-row__keep-top-slot",
     ) as HTMLElement;
+    expect(seam).toHaveClass("directory-row__keep-top-slot--seam");
     expect(seam).toHaveAttribute("aria-hidden", "true");
     const keptRow = screen
       .getByRole("button", { name: /Release manager/i })
@@ -5671,6 +5677,94 @@ describe("Sidebar", () => {
       });
     });
     expect(onSetThreadPin).not.toHaveBeenCalled();
+  });
+
+  it("opens a ghost Keep at top slot above the pins while the lane is empty", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const first = {
+      ...sharedThread,
+      id: "thread-first",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+    const second = {
+      ...sharedThread,
+      id: "thread-second",
+      title: "Release manager",
+      pinnedRank: "2048",
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{ threadKeys: ["codex:thread-first", "codex:thread-second"] },
+          },
+        ]}
+        inboxThreads={[first, second]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-first"
+        threads={[first, second]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // No pin is kept yet, so the lane's target is a ghost slot above the
+    // pins, leaving the top of the pins as the ordinary drop point.
+    const ghost = container.querySelector(
+      ".directory-row__keep-top-slot",
+    ) as HTMLElement;
+    expect(ghost).toHaveClass("directory-row__keep-top-slot--ghost");
+    expect(ghost).toHaveAttribute("aria-hidden", "true");
+    expect(ghost).not.toHaveClass("is-drag-enabled");
+    const firstRow = screen
+      .getByRole("button", { name: /Fresh pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(ghost.compareDocumentPosition(firstRow)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const sourceRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(ghost, "getBoundingClientRect").mockReturnValue(rect(40, 34));
+    vi.spyOn(firstRow, "getBoundingClientRect").mockReturnValue(rect(90, 50));
+    vi.spyOn(sourceRow, "getBoundingClientRect").mockReturnValue(rect(150, 50));
+
+    startThreadPinPointerDrag(sourceRow, { x: 50, y: 175 });
+    moveThreadPinPointer({ x: 50, y: 55 });
+    expect(ghost).toHaveClass("is-drag-enabled");
+    await waitFor(() => {
+      expect(ghost).toHaveClass("is-drop-target-before");
+    });
+
+    releaseThreadPinPointer({ x: 50, y: 55 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+        key: "codex:thread-second",
+        keepAtTop: true,
+      });
+    });
+    expect(ghost).not.toHaveClass("is-drag-enabled");
   });
 
   it("uses the source row's live bounds after directory-list scrolling", async () => {
@@ -7729,7 +7823,7 @@ describe("Sidebar directory pinning", () => {
       .closest(".thread-row-shell") as HTMLElement;
     fireEvent.contextMenu(threadRow);
 
-    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    await screen.findByRole("menuitemcheckbox", { name: "Pinned" });
     expect(
       screen.queryByRole("menuitem", { name: "Unpin Directory" }),
     ).not.toBeInTheDocument();
@@ -8110,10 +8204,11 @@ describe("Sidebar menus from the keyboard", () => {
       />,
     );
 
+  // Document order across every item role, as the menu's arrow keys see it.
   const enabledItems = (menu: HTMLElement): HTMLElement[] =>
-    within(menu)
-      .getAllByRole("menuitem")
-      .filter((item) => !item.hasAttribute("disabled"));
+    [...menu.querySelectorAll<HTMLElement>(
+      '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]',
+    )].filter((item) => !item.hasAttribute("disabled"));
 
   /** Focus a ⋮ button and press it, as Enter or Space would. */
   const openThreadActions = (
@@ -8200,22 +8295,29 @@ describe("Sidebar menus from the keyboard", () => {
     expect(document.activeElement).toBe(stops[at - 1]);
   });
 
-  it("returns focus to ⋮ after a thread action", () => {
+  it("keeps the menu open on a pin toggle and returns focus to ⋮ on Return", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderThreadSidebar({ onSetThreadPin });
     const actions = openThreadActions();
-    const pin = screen.getByRole("menuitem", { name: "Pin Thread" });
+    const pin = screen.getByRole("menuitemcheckbox", { name: "Pinned" });
+    expect(pin).toHaveAttribute("aria-checked", "false");
     // Bounded: a menu that ignores the arrows must fail here, not hang.
     for (let i = 0; i < 20 && document.activeElement !== pin; i++) {
       pressKey("ArrowDown");
     }
     expect(pin).toHaveFocus();
 
+    // A checkable item toggles in place, so both checks can be set.
     act(() => pin.click());
     expect(onSetThreadPin).toHaveBeenCalledWith(
       expect.objectContaining({ id: sharedThread.id }),
       true,
     );
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // Return closes rather than toggling the check back.
+    pressKey("Enter");
+    expect(onSetThreadPin).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(actions).toHaveFocus();
   });

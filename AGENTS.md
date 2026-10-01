@@ -653,9 +653,13 @@ Render a brand through `BrandLockup`
     Every rank sort, store, and federation hop already orders it first.
   - A new pin, including an auto-pinned new thread, lands at the top of the
     ordinary pins and never above a kept pin.
-  - Cross tiers only explicitly: **Keep at Top** in the context menu, or a
-    drop on the Keep at top seam that a pin drag shows. Move Up, Move Down,
-    and the shortcuts stay inside the pin's tier.
+  - Cross tiers only explicitly: the **Keep at Top** check item in the
+    context menu, or a drop on the Keep at top target that a pin drag shows
+    (a ghost slot above the pins while no pin is kept, else the seam between
+    the tiers). Move Up, Move Down, and the shortcuts stay inside the pin's
+    tier.
+  - The **Pinned** and **Keep at Top** check items toggle in place and keep
+    the menu open. Return or a click outside closes it.
 - Sort unpinned directory threads by thread creation time.
 
 ### Unread behavior
