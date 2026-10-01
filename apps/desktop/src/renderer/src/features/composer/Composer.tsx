@@ -10625,6 +10625,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     remote={filesystemFederationTarget?.scope === "remote"}
                     value={projectTargetPath}
                     onChange={setProjectTargetPath}
+                    onPickDirectory={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
+                      ? () => {
+                          void props.desktopApi!.pickDirectoryFromDisk!().then((result) => {
+                            if (!result.canceled) setProjectTargetPath(result.path);
+                          }).catch((error: unknown) => {
+                            setHandoffError(error instanceof Error ? error.message : String(error));
+                          });
+                        }
+                      : undefined}
                     onQueryChange={setProjectSearch}
                   />
                 </div>

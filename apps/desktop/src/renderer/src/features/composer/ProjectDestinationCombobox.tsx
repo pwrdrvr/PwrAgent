@@ -14,10 +14,10 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
  * autocomplete draws, and picking a row fills in its path. A typed
  * absolute path is still a valid destination on its own.
  *
- * There are no "Add directory…" / "Add file…" rows. A destination is a
- * project the owner already tracks, or a path typed by hand; the native
- * dialogs could only browse this machine, which is the wrong machine for a
- * federated thread.
+ * A local thread also gets the `@` popover's "Add directory…" row, which
+ * opens the native folder dialog. A remote thread does not: that dialog can
+ * only browse this machine, which is the wrong machine for a federated
+ * thread. There is never an "Add file…" row, because a file is not a project.
  *
  * `directories` must already belong to the thread's owner. The parent
  * drops a page answered by any other instance.
@@ -33,6 +33,8 @@ export type ProjectDestinationComboboxProps = {
   /** The owner could not answer the search. */
   error?: string;
   disabled?: boolean;
+  /** Browse for a folder on this machine. Pass it only for a local thread. */
+  onPickDirectory?: () => void;
   /**
    * The owner is another instance. Its paths are shown as they are: the
    * local home directory says nothing about where a peer's `~` is.
@@ -82,7 +84,10 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
     [props.directories, query],
   );
   const showList = open && !props.disabled;
-  const active = Math.min(activeIndex, candidates.length - 1);
+  // The browse row is the last item, so the arrow keys reach it too.
+  const pickIndex = props.onPickDirectory ? candidates.length : undefined;
+  const itemCount = candidates.length + (pickIndex === undefined ? 0 : 1);
+  const active = Math.min(activeIndex, itemCount - 1);
 
   const formatPath = (path: string): string =>
     tildifyPath(path, props.remote ? undefined : getHomeDir());
@@ -90,6 +95,11 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
   const select = (directory: NavigationDirectorySummary): void => {
     props.onChange(directory.path ?? "");
     setOpen(false);
+  };
+
+  const pickDirectory = (): void => {
+    setOpen(false);
+    props.onPickDirectory?.();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -103,16 +113,20 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
         setActiveIndex(0);
         return;
       }
-      if (candidates.length === 0) {
+      if (itemCount === 0) {
         return;
       }
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((active + step + candidates.length) % candidates.length);
+      setActiveIndex((active + step + itemCount) % itemCount);
       return;
     }
-    if (event.key === "Enter" && showList && candidates[active]) {
+    if (event.key === "Enter" && showList && active >= 0) {
       event.preventDefault();
-      select(candidates[active]);
+      if (active === pickIndex) {
+        pickDirectory();
+      } else if (candidates[active]) {
+        select(candidates[active]);
+      }
     }
   };
 
@@ -124,7 +138,7 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
     <div ref={containerRef} className="project-destination">
       <input
         ref={inputRef}
-        aria-activedescendant={showList && candidates[active] ? `${listboxId}-option-${active}` : undefined}
+        aria-activedescendant={showList && active >= 0 ? `${listboxId}-option-${active}` : undefined}
         aria-autocomplete="list"
         aria-controls={showList ? listboxId : undefined}
         aria-expanded={showList}
@@ -156,6 +170,13 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
       />
       {showList ? (
         <div className="composer__autocomplete composer__autocomplete--directories composer__autocomplete--below project-destination__list">
+          {props.error ? (
+            <div className="project-picker__error" role="alert">
+              {props.error}
+            </div>
+          ) : empty ? (
+            <div className="project-picker__empty">{empty}</div>
+          ) : null}
           <div aria-label="Projects" id={listboxId} role="listbox">
             {candidates.map((directory, index) => (
               <button
@@ -187,14 +208,30 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
                 </span>
               </button>
             ))}
+            {pickIndex === undefined ? null : (
+              <>
+                {candidates.length > 0 ? (
+                  // Decorative: a listbox may own only options.
+                  <div aria-hidden="true" className="composer__autocomplete-separator" />
+                ) : null}
+                <button
+                  aria-selected={active === pickIndex}
+                  className={`composer__autocomplete-option composer__autocomplete-option--action${active === pickIndex ? " is-active" : ""}`}
+                  id={`${listboxId}-option-${pickIndex}`}
+                  role="option"
+                  tabIndex={-1}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                  }}
+                  onMouseEnter={() => setActiveIndex(pickIndex)}
+                  onClick={pickDirectory}
+                >
+                  <span className="composer__autocomplete-title">+ Add directory…</span>
+                </button>
+              </>
+            )}
           </div>
-          {props.error ? (
-            <div className="project-picker__error" role="alert">
-              {props.error}
-            </div>
-          ) : empty ? (
-            <div className="project-picker__empty">{empty}</div>
-          ) : null}
         </div>
       ) : null}
     </div>

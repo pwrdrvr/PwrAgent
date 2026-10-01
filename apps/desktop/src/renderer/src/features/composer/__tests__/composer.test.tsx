@@ -14916,12 +14916,14 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
-    const options = await screen.findAllByRole("option");
+    await screen.findByRole("option", { name: /Alpha/ });
+    const options = screen.getAllByRole("option");
+    // A local thread can still browse this machine; a file is never a project.
     expect(options.map((option) => option.textContent)).toEqual([
       expect.stringContaining("Alpha"),
       expect.stringContaining("Beta"),
+      "+ Add directory…",
     ]);
-    expect(screen.queryByText(/Add directory/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Add file/)).not.toBeInTheDocument();
 
     fireEvent.keyDown(destination, { key: "ArrowDown" });
@@ -14933,6 +14935,52 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
     await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
       direction: "to-project", targetPath: "/owner/beta",
+    }));
+  });
+
+  it.each([false, true])("offers Add directory for a move destination only on a local thread (remote: %s)", async (remote) => {
+    const target = remote ? { scope: "remote" as const, instanceId: "remote-instance" } : undefined;
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      directories: [{ key: "/owner/demo", kind: "directory", label: "Demo", path: "/owner/demo" }],
+    }));
+    const pickDirectoryFromDisk = vi.fn(async () => ({ canceled: false as const, path: "/picked/repo" }));
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage, pickDirectoryFromDisk }}
+      onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+        ...(target ? { federation: {
+          instanceLabel: "Remote instance",
+          ref: { backend: "codex", threadId: "scratch-thread", target },
+        } } : {}),
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    fireEvent.focus(destination);
+    await screen.findByRole("option", { name: /Demo/ });
+    if (remote) {
+      expect(screen.queryByRole("option", { name: "+ Add directory…" })).not.toBeInTheDocument();
+      return;
+    }
+    // The browse row is the last item, reachable by arrow keys.
+    fireEvent.keyDown(destination, { key: "ArrowDown" });
+    expect(destination).toHaveAttribute(
+      "aria-activedescendant",
+      screen.getByRole("option", { name: "+ Add directory…" }).id,
+    );
+    fireEvent.keyDown(destination, { key: "Enter" });
+    expect(pickDirectoryFromDisk).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(destination).toHaveValue("/picked/repo"));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/picked/repo",
     }));
   });
 
