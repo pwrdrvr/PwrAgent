@@ -8281,7 +8281,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // Always leave one space after the chip — including at the end of the
     // draft — and park the caret after it, so typing straight on never
     // glues onto the chip's serialized form.
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;
@@ -8430,7 +8430,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // caret after it.
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;
@@ -8497,7 +8497,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ?? { start: selectionStart, end: selectionEnd };
     const before = draft.slice(0, referenceTrigger.start);
     const after = draft.slice(Math.max(referenceTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;
@@ -8574,7 +8574,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${" ".repeat(paths.length - 1)}${nextAfter}`;
     const nextSelection = before.length + paths.length;
     const nextSkillTokens = [
@@ -8668,7 +8668,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
     const nextSelection = before.length + directories.length;
     const nextSkillTokens = [

@@ -54,7 +54,10 @@ it("reads on open, skips offline peers, names outdated ones, and analyzes the se
 
   fireEvent.click(screen.getByRole("button", { name: "Inspect Fixture thread" }));
   expect(screen.getByText(/This is a model call of its own, and it uses your limit/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
+  // Settle the analysis and its automatic tab selection before clicking Details.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
+  });
   await screen.findByText("A bounded diagnosis.");
   expect(screen.getByRole("button", { name: "Analyze turn again" })).toBeEnabled();
   // An analyzed turn splits the inspector, landing on its answer.

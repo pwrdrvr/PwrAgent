@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Editor } from "@tiptap/react";
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
@@ -762,6 +763,41 @@ describe("CompactComposer markdown", () => {
         fireEvent.keyDown(input, { key: "Enter" });
       });
       expect(onSend).toHaveBeenCalledWith("look in [@app](/dev/app)");
+    });
+
+    it.each([
+      ["code block", "\n\n```sh\npnpm lint\n```"],
+      ["blockquote", "\n\n> Quoted text"],
+    ])("keeps typing after an @ project reference before a %s", async (_label, suffix) => {
+      renderComposer({
+        mentionSources: {
+          directories: [{
+            key: "directory:/dev/app",
+            kind: "directory",
+            label: "app",
+            path: "/dev/app",
+            latestUpdatedAt: 1,
+          }],
+        },
+      });
+      const input = screen.getByRole("textbox", { name: "Message Thread t1" }) as HTMLInputElement & { editor: Editor };
+      fireEvent.change(input, { target: { value: `Look in ${suffix}` } });
+      const followingBlocks = input.editor.getJSON().content!.slice(1);
+      act(() => {
+        input.setSelectionRange("Look in ".length, "Look in ".length);
+        input.editor.view.dispatch(input.editor.state.tr.insertText("@ap"));
+      });
+      await screen.findByRole("listbox", { name: "Directories" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "Tab" });
+      await waitFor(() => expect(input.selectionStart).toBe("Look in  ".length));
+      act(() => input.editor.view.dispatch(input.editor.state.tr.insertText("continue")));
+      expect(input.editor.getJSON().content![0].content).toEqual([
+        { type: "text", text: "Look in " },
+        expect.objectContaining({ type: "mention", attrs: expect.objectContaining({ kind: "directory", name: "app" }) }),
+        { type: "text", text: " continue" },
+      ]);
+      expect(input.editor.getJSON().content!.slice(1)).toEqual(followingBlocks);
     });
 
     it("offers threads on # and serializes the thread url", async () => {
