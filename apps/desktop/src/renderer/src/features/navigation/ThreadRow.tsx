@@ -15,6 +15,7 @@ import type {
   NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
+import { isKeptAtTopThread } from "@pwragent/shared";
 import { MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
@@ -217,10 +218,16 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     Boolean(props.thread.pinnedRank) && !props.nested;
   const isRetainedRow = Boolean(props.retainedForSelection) && !isPinnedRow && !props.nested;
   const hasHeadingPin = isPinnedRow || isRetainedRow;
+  // A pin kept at top draws the same glyph filled; the tier is otherwise
+  // visible only while a pin drag is live.
+  const isKeptAtTopRow = isPinnedRow && isKeptAtTopThread(props.thread);
+  const pinGlyphClass = isKeptAtTopRow ? " thread-row__heading-pin--kept" : "";
   const pinAction = isPinnedRow ? "Unpin thread" : "Pin thread";
   const pinTooltip = isRetainedRow
     ? "Shown for the open transcript. Pin thread to keep it here."
-    : pinAction;
+    : isKeptAtTopRow
+      ? "Kept at top. Unpin thread"
+      : pinAction;
   const pinTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -500,7 +507,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 <button
                   aria-label={pinAction}
                   aria-describedby={pinTooltipController.visible ? pinTooltipController.tooltipId : undefined}
-                  className="thread-row__heading-pin"
+                  className={`thread-row__heading-pin${pinGlyphClass}`}
                   onMouseEnter={(event) => pinTooltipController.show(event.currentTarget, pinTooltip)}
                   onMouseLeave={pinTooltipController.hide}
                   onFocus={(event) => pinTooltipController.show(event.currentTarget, pinTooltip)}
@@ -526,7 +533,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               ) : (
                 <span
                   aria-hidden="true"
-                  className="thread-row__heading-pin thread-row__heading-pin--static"
+                  className={`thread-row__heading-pin thread-row__heading-pin--static${pinGlyphClass}`}
                 >
                   <PinIcon size={11} strokeDasharray={isRetainedRow ? "3 3" : undefined} />
                 </span>

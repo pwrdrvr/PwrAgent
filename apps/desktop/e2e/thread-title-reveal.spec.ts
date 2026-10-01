@@ -243,7 +243,9 @@ test("thread title reveals a linked child hidden by collapsed directory sections
       .filter({ hasText: "Pinned anchor thread" });
     await anchorShell.hover();
     await anchorShell.getByRole("button", { name: "Open thread actions" }).click();
-    await app.window.getByRole("menuitem", { name: "Pin Thread" }).click();
+    await app.window.getByRole("menuitemcheckbox", { name: "Pinned" }).click();
+    // Pinned is a checkable item: the menu stays open after a toggle.
+    await app.window.keyboard.press("Escape");
 
     await threadBrowser
       .getByRole("button", {
@@ -346,7 +348,9 @@ test("quick jump reveals a hidden child before restoring a hidden sidebar", asyn
       .filter({ hasText: "Pinned anchor thread" });
     await anchorShell.hover();
     await anchorShell.getByRole("button", { name: "Open thread actions" }).click();
-    await app.window.getByRole("menuitem", { name: "Pin Thread" }).click();
+    await app.window.getByRole("menuitemcheckbox", { name: "Pinned" }).click();
+    // Pinned is a checkable item: the menu stays open after a toggle.
+    await app.window.keyboard.press("Escape");
 
     await threadBrowser
       .getByRole("button", {

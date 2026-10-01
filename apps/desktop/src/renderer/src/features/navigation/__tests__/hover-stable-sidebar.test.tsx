@@ -328,7 +328,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     fireEvent.contextMenu(
       within(alphaRow).getByRole("button", { name: /^Alpha thread/ }),
     );
-    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin Thread" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
     expect(onSetThreadPin).toHaveBeenCalledWith(pinnedAlpha, false);
 
     view.rerender(renderSidebar({
