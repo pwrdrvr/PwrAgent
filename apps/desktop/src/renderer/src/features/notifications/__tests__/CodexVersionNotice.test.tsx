@@ -12,6 +12,7 @@ import {
 } from "../CodexVersionNotice";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../AppNoticeToast";
 import type { ManagedRuntimeProgress } from "../../../../../shared/managed-runtime-progress";
+import { checkForManagedCodexUpdates } from "../../settings/managed-codex-actions";
 
 afterEach(() => {
   cleanup();
@@ -113,6 +114,13 @@ describe("CodexVersionNotice", () => {
     return { models: { codex: { versionAdvisory: value } } } as unknown as DesktopSettingsSnapshot;
   }
 
+  it("stays quiet while a bootstrap snapshot has no model settings", () => {
+    const onNoticeChanged = vi.fn();
+    render(<CodexVersionNotice snapshot={{} as DesktopSettingsSnapshot}
+      onNoticeChanged={onNoticeChanged} onOpenCodexSettings={vi.fn()} />);
+    expect(onNoticeChanged).toHaveBeenCalledWith(undefined);
+  });
+
   it("shows once at startup and does not re-show for an unchanged advisory", () => {
     // App passes stable callbacks (`useCallback`), so the test does too.
     const openSettings = () => undefined;
@@ -173,6 +181,20 @@ describe("CodexVersionNotice", () => {
       <AppNoticeToast notice={notice} onDismiss={() => setNotice(undefined)} />
     </>;
   }
+
+  it("uses the shared Settings update action only after the user clicks, with a discovery intent", async () => {
+    const value = snapshot(advisory({ installer: "pwragent", upgradeCommand: undefined }));
+    value.models.codex.managedBuilds = { value: true, source: "config" };
+    const api = { refreshCodexDiscovery: vi.fn(async () => ({ snapshot: value })) };
+    const check = async () => { await checkForManagedCodexUpdates(api); };
+    render(<Host snapshot={value} onManagedBuildsChange={vi.fn(async () => true)}
+      onCheckManagedBuildUpdates={check} onOpenCodexSettings={vi.fn()} />);
+    expect(api.refreshCodexDiscovery).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => expect(api.refreshCodexDiscovery).toHaveBeenCalledExactlyOnceWith({
+      discoveryIntent: "settings-user-action",
+    }));
+  });
 
   it("enables the custom build from the toast and keeps progress when the advisory clears", async () => {
     let sendProgress: ((event: ManagedRuntimeProgress) => void) | undefined;

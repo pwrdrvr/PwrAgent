@@ -59,6 +59,7 @@ import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
+import { checkForManagedCodexUpdates } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
   useDesktopSettings,
@@ -881,8 +882,7 @@ function DesktopAppShell(props: {
     return saved;
   }, [props.settings.writeConfig, props.settings.refresh]);
   const checkCodexManagedBuildUpdates = useCallback(async () => {
-    if (!desktopApi?.refreshCodexDiscovery) throw new Error("Codex update checks are unavailable.");
-    await desktopApi.refreshCodexDiscovery({ discoveryIntent: "settings-user-action" });
+    await checkForManagedCodexUpdates(desktopApi);
     await props.settings.refresh();
   }, [desktopApi, props.settings.refresh]);
 

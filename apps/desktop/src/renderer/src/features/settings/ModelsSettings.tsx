@@ -32,6 +32,7 @@ import {
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { sourceBadge } from "./settings-fields";
+import { checkForManagedCodexUpdates } from "./managed-codex-actions";
 import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
@@ -243,18 +244,10 @@ export function ModelsSettings(props: {
   };
 
   const checkManagedCodexUpdates = async (): Promise<void> => {
-    if (!props.desktopApi?.refreshCodexDiscovery) {
-      setManagedCodexCheckError(
-        "Managed Codex release checks are unavailable in this build.",
-      );
-      return;
-    }
     setManagedCodexCheckError(undefined);
     setCheckingManagedCodex(true);
     try {
-      const { snapshot } = await props.desktopApi.refreshCodexDiscovery({
-        discoveryIntent: "settings-user-action",
-      });
+      const { snapshot } = await checkForManagedCodexUpdates(props.desktopApi);
       await props.onRefresh();
       const updatedVersion = snapshot.runtime.tokenMiser?.managedCodex?.version;
       if (

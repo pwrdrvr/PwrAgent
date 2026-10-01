@@ -48,8 +48,8 @@ export function CodexVersionNotice(props: {
   const [pendingNext, setPendingNext] = useState<boolean>();
   const [operationError, setOperationError] = useState<string>();
   const inFlight = useRef(false);
-  const managedRequired = props.snapshot?.models.codex.managedBuildsRequiredBy !== undefined;
-  const managedOn = managedRequired || props.snapshot?.models.codex.managedBuilds?.value === true;
+  const managedRequired = props.snapshot?.models?.codex?.managedBuildsRequiredBy !== undefined;
+  const managedOn = managedRequired || props.snapshot?.models?.codex?.managedBuilds?.value === true;
   const runtime = props.snapshot?.runtime?.tokenMiser?.managedCodex;
   const busy = pendingNext !== undefined
     || (progress !== undefined && progress.phase !== "ready" && progress.phase !== "failed");
