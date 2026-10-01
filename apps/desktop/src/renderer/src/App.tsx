@@ -2911,7 +2911,9 @@ function DesktopAppShell(props: {
         setFindRequest(undefined);
       }
     },
-    onHandoffThreadWorkspace: navigation.selectedThread ? handleHandoffThreadWorkspace : undefined,
+    workspaceActionsBlocked: navigation.selectedWorkspaceHandoffPending,
+    onHandoffThreadWorkspace: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+      ? handleHandoffThreadWorkspace : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,

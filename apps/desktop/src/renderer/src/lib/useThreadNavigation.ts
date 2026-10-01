@@ -2937,6 +2937,7 @@ export function useThreadNavigation(
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   selectedThreadConfigurationReady: boolean;
+  selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
   refreshSelectedThreadConfiguration: () => Promise<void>;
   selectedThreadKey?: string;
@@ -3341,6 +3342,10 @@ export function useThreadNavigation(
       ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
       : undefined,
   });
+  const [pendingWorkspaceHandoff, setPendingWorkspaceHandoff] = useState<{
+    threadKey: string;
+    directory: LinkedDirectorySummary;
+  }>();
   const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewVisible,
     directoryKey: getLaunchpadSelectionDirectoryKey(selectedItemKey), federationTarget: rendererFederationTarget,
   });
@@ -4881,8 +4886,26 @@ export function useThreadNavigation(
     });
   }, [pendingEnvironmentFailures, selectedDetail.state?.detail?.thread, state.rows]);
 
+  const selectedWorkspaceHandoffPending = Boolean(
+    pendingWorkspaceHandoff
+    && selectedThreadKey === pendingWorkspaceHandoff.threadKey
+    && !selectedDetail.state?.detail?.thread?.linkedDirectories.some((directory) =>
+      directory.id === pendingWorkspaceHandoff.directory.id
+      && directory.kind === pendingWorkspaceHandoff.directory.kind
+      && directory.path === pendingWorkspaceHandoff.directory.path
+      && directory.worktreePath === pendingWorkspaceHandoff.directory.worktreePath
+    )
+  );
+  useEffect(() => {
+    if (pendingWorkspaceHandoff
+      && selectedThreadKey === pendingWorkspaceHandoff.threadKey
+      && !selectedWorkspaceHandoffPending) {
+      setPendingWorkspaceHandoff(undefined);
+    }
+  }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
   const selectedThreadConfigurationReady =
-    navigationSelectionAuthorizesComposer(selectedDetail.state);
+    navigationSelectionAuthorizesComposer(selectedDetail.state)
+    && !selectedWorkspaceHandoffPending;
   const selectedThread = useMemo(() => {
     const authoritativeThread = selectedDetail.state?.detail?.thread;
     if (!authoritativeThread) return selectedRow;
@@ -7741,15 +7764,26 @@ export function useThreadNavigation(
 
       try {
         thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
-        await handoffThreadWorkspaceRequest({
+        const response = await handoffThreadWorkspaceRequest({
           ...request,
           backend: thread.source,
           federationTarget: thread.federation?.ref.target ??
             readRendererFederationTarget(),
           threadId: thread.id,
         });
-        await refresh(threadSummaryIdentityKey(thread));
-        if (selectedItemKeyRef.current === threadSummaryIdentityKey(thread)) await selectedDetail.refresh();
+        const threadKey = threadSummaryIdentityKey(thread);
+        setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
+        // The main process has committed the workspace change before its IPC
+        // response. Keep workspace actions gated until selected detail reflects
+        // that commit, while the dialog can close before Git-backed reads finish.
+        void (async () => {
+          await Promise.all([
+            refresh(threadKey),
+            selectedItemKeyRef.current === threadKey ? selectedDetail.refresh() : Promise.resolve(),
+          ]);
+        })().catch((error) => {
+          setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);
@@ -8704,6 +8738,7 @@ export function useThreadNavigation(
     selectedLaunchpad,
     selectedThread,
     selectedThreadConfigurationReady,
+    selectedWorkspaceHandoffPending,
     selectedThreadConfigurationError: selectedDetail.state?.error
       ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
         ? `This thread is ${selectedDetail.state.detail.identity}.` : undefined),

@@ -1973,7 +1973,7 @@ describe("Composer", () => {
   it("opens a remote thread workspace on its owning instance", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 
-    render(
+    const composer = (
       <Composer
         applications={{
           editors: [
@@ -2048,8 +2048,9 @@ describe("Composer", () => {
           ],
           inbox: { inInbox: false },
         }}
-      />,
+      />
     );
+    const { rerender } = render(composer);
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
     await waitFor(() => {
@@ -2076,6 +2077,11 @@ describe("Composer", () => {
         targetPath: "/repo/PwrAgent",
       });
     });
+
+    rerender(<Composer {...composer.props} workspaceActionsBlocked />);
+    expect(screen.queryByRole("button", { name: "VS Code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ghostty" })).not.toBeInTheDocument();
+    expect(openApplication).toHaveBeenCalledTimes(2);
   });
 
   it("collapses a launcher to an icon-only chip when the app has a real icon", () => {

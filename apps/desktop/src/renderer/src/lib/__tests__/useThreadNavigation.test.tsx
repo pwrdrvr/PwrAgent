@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AppServerThreadTitleSource,
   FederationRemoteTarget,
+  HandoffThreadWorkspaceResponse,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -170,6 +171,113 @@ describe("useThreadNavigation", () => {
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  it("gates workspace actions until selected detail reflects a committed handoff", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-handoff",
+      title: "Handoff thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{ id: "repo", kind: "local", label: "Repo", path: "/repo" }],
+      inbox: { inInbox: true, reason: "new-thread" },
+      updatedAt: 1,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-handoff"],
+      threads: [thread],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    let blockRefresh = false;
+    let releaseRefresh: () => void = () => undefined;
+    let signalRefresh: () => void = () => undefined;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>((resolve) => { signalRefresh = resolve; });
+    let blockDetail = false;
+    let releaseDetail: () => void = () => undefined;
+    let signalDetail: () => void = () => undefined;
+    const detailGate = new Promise<void>((resolve) => { releaseDetail = resolve; });
+    const detailStarted = new Promise<void>((resolve) => { signalDetail = resolve; });
+    const getNavigationQueryPage: NonNullable<DesktopApi["getNavigationQueryPage"]> = async (request) => {
+      if (blockRefresh) {
+        signalRefresh();
+        await refreshGate;
+      }
+      return { ...navigationQueryFixture(request, snapshot), coverage: { state: "complete" } };
+    };
+    const response: HandoffThreadWorkspaceResponse = {
+      backend: "codex",
+      threadId: thread.id,
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      workMode: "worktree",
+      repositoryPath: "/repo",
+      targetPath: "/worktree",
+      linkedDirectory: {
+        id: "worktree", kind: "worktree", label: "Worktree", path: "/repo", worktreePath: "/worktree",
+      },
+      warnings: [],
+      completedAt: 2,
+    };
+    let detailThread = thread;
+    const handoffThreadWorkspace = vi.fn<NonNullable<DesktopApi["handoffThreadWorkspace"]>>(async () => {
+      detailThread = { ...thread, linkedDirectories: [response.linkedDirectory] };
+      blockDetail = true;
+      return response;
+    });
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+      if (blockDetail) {
+        signalDetail();
+        await detailGate;
+      }
+      return {
+        protocol: 2, ref: request.ref, revision: detailThread.linkedDirectories[0]?.id ?? "none",
+        readiness: "ready", identity: "present", thread: detailThread,
+        workspaceDirectories: [],
+      };
+    });
+    const desktopApi: DesktopApi = {
+      readPopulation: async () => snapshot,
+      getNavigationQueryPage,
+      getNavigationSelectedDetail,
+      handoffThreadWorkspace,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    act(() => result.current.selectThread(result.current.threads[0]!));
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+
+    blockRefresh = true;
+    let handoffSettled = false;
+    let handoffPromise: Promise<void> | undefined;
+    act(() => {
+      handoffPromise = result.current.handoffThreadWorkspace(thread, {
+        direction: "local-to-worktree",
+      }).then(() => { handoffSettled = true; });
+    });
+    try {
+      await refreshStarted;
+      await detailStarted;
+      await Promise.resolve();
+      expect(handoffSettled).toBe(true);
+      expect(handoffThreadWorkspace).toHaveBeenCalledOnce();
+      await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(true));
+      expect(result.current.selectedThreadConfigurationReady).toBe(false);
+      expect(result.current.selectedThread?.linkedDirectories[0]?.path).toBe("/repo");
+      releaseDetail();
+      await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(false));
+      expect(result.current.selectedThreadConfigurationReady).toBe(true);
+      expect(result.current.selectedThread?.linkedDirectories[0]?.worktreePath).toBe("/worktree");
+    } finally {
+      releaseDetail();
+      releaseRefresh();
+      await act(async () => { await handoffPromise; });
+    }
   });
 
   it.each(["inbox", "directories"] as const)("loads navigation before a visible window gains focus (%s)", async (browseMode) => {
