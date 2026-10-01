@@ -1743,6 +1743,7 @@ export function registerSettingsIpcHandlers(
       const activeService = getService(service);
       const discoveryPermit = (
         request.patch.models?.codex?.path !== undefined
+        || request.patch.models?.codex?.managedBuilds !== undefined
         || request.patch.experimental?.tokenMiserEnabled !== undefined
       )
         ? issueProviderDiscoveryPermit("settings-user-action")
