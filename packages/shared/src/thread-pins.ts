@@ -54,6 +54,21 @@ export function buildAppendPinRank(existingRanks: Array<string | undefined>): st
   return String(maxRank + PIN_RANK_STEP);
 }
 
+/**
+ * The next rank at the TOP of the pin list: one step before the lowest rank
+ * in use. Ranks may go to zero or below — `parsePinRank` accepts any finite
+ * number, and `relativePinRanks` already produces them for a drag to the top.
+ */
+export function buildPrependPinRank(existingRanks: Array<string | undefined>): string {
+  const minRank = existingRanks.reduce((min, rank) => {
+    const parsed = parsePinRank(rank);
+    return Number.isFinite(parsed) ? Math.min(min, parsed) : min;
+  }, Number.POSITIVE_INFINITY);
+  return String(
+    Number.isFinite(minRank) ? minRank - PIN_RANK_STEP : PIN_RANK_STEP,
+  );
+}
+
 export function buildPinnedRanks(threadIds: string[]): Record<string, string> {
   return Object.fromEntries(
     threadIds.map((threadId, index) => [

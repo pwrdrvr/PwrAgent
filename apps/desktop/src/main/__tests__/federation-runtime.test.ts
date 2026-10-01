@@ -847,9 +847,9 @@ describe("DesktopFederationRuntime", () => {
         summary: parentSummary,
       });
       // The raw backend snapshot contains no viewer-owned remote pins. The
-      // visibility calculation still sees that Pins is active and appends
-      // after its existing rank without colliding.
-      expect(pin?.localPinnedRank).toBe("2048");
+      // visibility calculation still sees that Pins is active and prepends
+      // before its existing rank without colliding.
+      expect(pin?.localPinnedRank).toBe("0");
 
       await overlayStore.addRemoteThreadPin({
         ref: pin!.ref,

@@ -217,7 +217,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PULL_REQUEST_PROVIDER,
-  buildAppendPinRank,
+  buildPrependPinRank,
   buildFederatedThreadRef,
   buildPullRequestStatusKey,
   resolvePullRequestIdentity,
@@ -6905,9 +6905,10 @@ class DesktopAppServerService {
    * when the freshly pinned remote thread's home directory group has its
    * Directory Threads section collapsed and the pinned section is in use,
    * the row would be invisible — give its top-level row a VIEWER-owned rank
-   * so it surfaces in Pins. The top-level row is the companion parent when
-   * one is pinned; otherwise the thread itself, since a child whose parent
-   * is absent from the list renders top-level. Reads overlay-store scans and
+   * so it surfaces at the top of Pins. The top-level row is the companion
+   * parent when one is pinned; otherwise the thread itself, since a child
+   * whose parent is absent from the list renders top-level. Reads
+   * overlay-store scans and
    * the cached directory summaries from the last snapshot build — never a
    * fresh snapshot, so pin latency stays independent of backends and peers.
    * Best-effort; the pin itself must succeed regardless.
@@ -6958,7 +6959,7 @@ class DesktopAppServerService {
       if (!hasPinnedTopLevelThread) {
         return;
       }
-      const pinnedRank = buildAppendPinRank([
+      const pinnedRank = buildPrependPinRank([
         ...localRanks.map((entry) => entry.pinnedRank),
         ...pins.map((pin) => pin.localPinnedRank),
       ]);

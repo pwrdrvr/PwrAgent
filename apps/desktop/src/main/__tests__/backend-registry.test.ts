@@ -11913,7 +11913,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("auto-pins a new local thread after the existing local and remote pins", async () => {
+  it("auto-pins a new local thread before the existing local and remote pins", async () => {
     const directoryPath = expectedDir(
       path.join(os.tmpdir(), "pwragent-auto-pin-project"),
     );
@@ -11990,21 +11990,21 @@ describe("DesktopBackendRegistry", () => {
     expect(response).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
-      pinnedRank: "66560",
+      pinnedRank: "0",
     });
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId: "thread-1",
       }),
-    ).resolves.toMatchObject({ pinnedRank: "66560" });
+    ).resolves.toMatchObject({ pinnedRank: "0" });
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
         method: "thread/pin/added",
         params: {
           threadId: "thread-1",
-          pinnedRank: "66560",
+          pinnedRank: "0",
         },
       },
     });
@@ -12284,14 +12284,14 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "thread-unpinned-parent",
       }),
-    ).resolves.toMatchObject({ pinnedRank: "2048" });
+    ).resolves.toMatchObject({ pinnedRank: "0" });
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
         method: "thread/pin/added",
         params: {
           threadId: "thread-unpinned-parent",
-          pinnedRank: "2048",
+          pinnedRank: "0",
         },
       },
     });
@@ -12530,7 +12530,7 @@ describe("DesktopBackendRegistry", () => {
         method: "thread/pin/added",
         params: {
           threadId: "thread-top",
-          pinnedRank: "2048",
+          pinnedRank: "0",
         },
       },
     });
@@ -12740,14 +12740,14 @@ describe("DesktopBackendRegistry", () => {
       parentThreadBackend: "codex",
     });
 
-    expect(response).toMatchObject({ pinnedRank: "2048" });
+    expect(response).toMatchObject({ pinnedRank: "0" });
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
         method: "thread/pin/added",
         params: {
           threadId: "thread-1",
-          pinnedRank: "2048",
+          pinnedRank: "0",
         },
       },
     });
