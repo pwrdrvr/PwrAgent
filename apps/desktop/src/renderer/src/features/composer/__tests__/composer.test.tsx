@@ -14870,21 +14870,185 @@ describe("Composer", () => {
     />);
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    fireEvent.focus(destination);
     await screen.findByRole("option", { name: /Owner demo/ });
     expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
     expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: target, query: { kind: "directory-index", filter: "" },
     }), expect.any(String));
-    fireEvent.change(screen.getByPlaceholderText("Find a directory"), { target: { value: "demo" } });
+    // The destination field is the search: typing asks the owner, not a
+    // separate picker.
+    fireEvent.change(destination, { target: { value: "demo" } });
     await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: target, query: { kind: "directory-index", filter: "demo" },
     }), expect.any(String)));
     fireEvent.click(await screen.findByRole("option", { name: /Owner demo/ }));
+    expect(destination).toHaveValue("/owner/demo");
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
     await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
       direction: "to-project", targetPath: "/owner/demo",
     }));
+  });
+
+  it("picks a move destination from the keyboard and offers only real projects", async () => {
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      directories: [
+        { key: "workspaces", kind: "workspace", label: "Workspaces", path: "/owner/.pwragent/workspaces" },
+        { key: "/owner/alpha", kind: "directory", label: "Alpha", path: "/owner/alpha", latestUpdatedAt: 2 },
+        { key: "/owner/beta", kind: "directory", label: "Beta", path: "/owner/beta", latestUpdatedAt: 1 },
+      ],
+    }));
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage, pickDirectoryFromDisk: vi.fn() }}
+      onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    fireEvent.focus(destination);
+    await screen.findByRole("option", { name: /Alpha/ });
+    const options = screen.getAllByRole("option");
+    // A local thread can still browse this machine; a file is never a project.
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Alpha"),
+      expect.stringContaining("Beta"),
+      "+ Add directory…",
+    ]);
+    expect(screen.queryByText(/Add file/)).not.toBeInTheDocument();
+
+    fireEvent.keyDown(destination, { key: "ArrowDown" });
+    expect(destination).toHaveAttribute("aria-activedescendant", options[1]!.id);
+    fireEvent.keyDown(destination, { key: "Enter" });
+    expect(destination).toHaveValue("/owner/beta");
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/owner/beta",
+    }));
+  });
+
+  it.each([false, true])("offers Add directory for a move destination only on a local thread (remote: %s)", async (remote) => {
+    const target = remote ? { scope: "remote" as const, instanceId: "remote-instance" } : undefined;
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      directories: [{ key: "/owner/demo", kind: "directory", label: "Demo", path: "/owner/demo" }],
+    }));
+    const pickDirectoryFromDisk = vi.fn(async () => ({ canceled: false as const, path: "/picked/repo" }));
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage, pickDirectoryFromDisk }}
+      onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+        ...(target ? { federation: {
+          instanceLabel: "Remote instance",
+          ref: { backend: "codex", threadId: "scratch-thread", target },
+        } } : {}),
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    fireEvent.focus(destination);
+    await screen.findByRole("option", { name: /Demo/ });
+    if (remote) {
+      expect(screen.queryByRole("option", { name: "+ Add directory…" })).not.toBeInTheDocument();
+      return;
+    }
+    // The browse row is the last item, reachable by arrow keys.
+    fireEvent.keyDown(destination, { key: "ArrowDown" });
+    expect(destination).toHaveAttribute(
+      "aria-activedescendant",
+      screen.getByRole("option", { name: "+ Add directory…" }).id,
+    );
+    fireEvent.keyDown(destination, { key: "Enter" });
+    expect(pickDirectoryFromDisk).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(destination).toHaveValue("/picked/repo"));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/picked/repo",
+    }));
+  });
+
+  it("keeps the owner's last destinations listed while a narrower search is pending", async () => {
+    let calls = 0;
+    const getNavigationQueryPage = vi.fn((request) => {
+      calls += 1;
+      // The first page answers; every later search stays in flight.
+      return calls === 1
+        ? Promise.resolve(navigationQueryFixture(request, {
+          directories: [
+            { key: "/owner/demo", kind: "directory", label: "Demo", path: "/owner/demo" },
+            { key: "/owner/other", kind: "directory", label: "Other", path: "/owner/other" },
+          ],
+        }))
+        : new Promise<never>(() => {});
+    });
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage }}
+      onHandoffThreadWorkspace={vi.fn()}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    // The visible caption labels the field, so clicking it reaches the input.
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    expect(screen.getByText("Destination project", { selector: "label" })).toHaveAttribute("for", destination.id);
+    fireEvent.focus(destination);
+    await screen.findByRole("option", { name: /Other/ });
+    fireEvent.change(destination, { target: { value: "dem" } });
+    await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("option", { name: /Demo/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Other/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("No matching projects.")).not.toBeInTheDocument();
+  });
+
+  it("draws no destination list, and leaves Escape to the dialog, until the owner answers", async () => {
+    const getNavigationQueryPage = vi.fn(() => new Promise<never>(() => {}));
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage }}
+      onHandoffThreadWorkspace={vi.fn()}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+        federation: {
+          instanceLabel: "Remote instance",
+          ref: { backend: "codex", threadId: "scratch-thread", target: { scope: "remote", instanceId: "remote-instance" } },
+        },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    act(() => destination.focus());
+    await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalled());
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+    expect(destination).toHaveAttribute("aria-expanded", "false");
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Move to Project" })).not.toBeInTheDocument();
   });
 
   it("does not offer viewer projects when the destination owner is unavailable", async () => {
@@ -14907,7 +15071,7 @@ describe("Composer", () => {
     />);
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    fireEvent.focus(screen.getByRole("combobox", { name: "Destination project" }));
     await screen.findByText("Peer unavailable");
     expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
@@ -14939,7 +15103,7 @@ describe("Composer", () => {
     }));
   });
 
-  it("keeps Move to Project keyboard-contained, and gives Escape to its project picker first", async () => {
+  it("keeps Move to Project keyboard-contained, and gives Escape to its destination list first", async () => {
     const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
       directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
     }));
@@ -14966,14 +15130,13 @@ describe("Composer", () => {
     expect(dialog.contains(document.activeElement)).toBe(true);
     expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
 
-    const picker = within(dialog).getByRole("button", { name: "Choose a project" });
-    picker.focus();
-    act(() => picker.click());
+    const destination = within(dialog).getByRole("combobox", { name: "Destination project" });
+    act(() => destination.focus());
     await within(dialog).findByRole("option", { name: /Demo/ });
     pressEscape();
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
-    expect(document.activeElement).toBe(picker);
+    expect(document.activeElement).toBe(destination);
 
     pressEscape();
     expect(screen.queryByRole("dialog", { name: "Move to Project" })).not.toBeInTheDocument();

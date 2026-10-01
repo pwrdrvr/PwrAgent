@@ -163,7 +163,7 @@ describe("useModalDialog, Escape", () => {
   });
 });
 
-/** ProjectPicker inside the composer's Move to Project dialog. */
+/** A picker popup inside a dialog, like Move to Project's destination list. */
 function Picker() {
   const [open, setOpen] = useState(false);
   const surfaceRef = useRef<HTMLSpanElement>(null);

@@ -33859,6 +33859,21 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 1px;
 }
 
+/* Move to Project's destination field. The list is the composer's `@`
+   directory popover, anchored under the field and as wide as it rather than
+   the composer's 440px, so long owner paths keep their room. The field
+   label's weight and color must not leak into the rows. */
+.project-destination {
+  position: relative;
+}
+
+.project-destination__list.composer__autocomplete--directories {
+  top: calc(100% + 4px);
+  right: 0;
+  width: auto;
+  font-weight: 400;
+}
+
 .workspace-handoff-dialog__strategy-list {
   display: grid;
   gap: 8px;
