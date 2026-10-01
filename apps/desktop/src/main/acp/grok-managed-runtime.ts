@@ -365,7 +365,14 @@ async function ensureManagedGrokRuntimeInner(
   const progress = createManagedRuntimeProgressReporter("grok");
   progress.checking();
   try {
-    const slots = await fetchCompatibleReleaseSlots(options, channel);
+    // Development discovery checks only once per process. With no installed
+    // runtime, deferring that first lookup would leave Grok unavailable for
+    // the lifetime of this process even after the startup cooldown expires.
+    const slots = await fetchCompatibleReleaseSlots(
+      options,
+      channel,
+      checkMode === "once-per-process" && !cached,
+    );
     const release = slots[channel];
     if (!release) {
       throw new Error(
@@ -435,6 +442,7 @@ async function ensureManagedGrokRuntimeInner(
 async function fetchCompatibleReleaseSlots(
   options: ManagedGrokRuntimeOptions,
   channel: DesktopUpdateChannel,
+  initialInstall: boolean,
 ): Promise<ManagedGrokReleaseSlots> {
   const assetPlatform = managedGrokAssetPlatform(
     options.platform ?? process.platform,
@@ -445,7 +453,7 @@ async function fetchCompatibleReleaseSlots(
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const response = await (options.fetch ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
-    manual: options.checkMode === "force", ttlMs: 24 * 60 * 60_000,
+    manual: options.checkMode === "force" || initialInstall, ttlMs: 24 * 60 * 60_000,
   })))(MANAGED_GROK_RELEASES_URL, {
     headers: {
       Accept: "application/vnd.github+json",
