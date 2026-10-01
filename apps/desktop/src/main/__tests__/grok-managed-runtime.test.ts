@@ -354,6 +354,36 @@ describe("ensureManagedGrokRuntime", () => {
     expect(network).not.toHaveBeenCalled();
   });
 
+  it("installs on the first once-per-process discovery without a startup delay", async () => {
+    const rootDir = await temporaryRoot();
+    vi.stubEnv("PWRAGENT_HOME", rootDir);
+    const tag = "pwragent-v2.0.0-pwragent.1";
+    const archiveName = "pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("first install archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const network = releaseFetch(tag, archiveName, archive, digest);
+    vi.stubGlobal("fetch", network);
+    const options = {
+      arch: "x64" as const,
+      checkMode: "once-per-process" as const,
+      extractArchive: async (_archivePath: string, targetDir: string) => {
+        await writeFakeBundle(targetDir);
+      },
+      platform: "linux" as const,
+      probeVersion: async () => "grok 2.0.0-test",
+      rootDir,
+    };
+
+    const installed = await ensureManagedGrokRuntime(options);
+    expect(installed?.metadata.tag).toBe(tag);
+    expect(network).toHaveBeenCalledWith(MANAGED_GROK_RELEASES_URL, expect.any(Object));
+    const requestsAfterInstall = vi.mocked(network).mock.calls.length;
+
+    const reused = await ensureManagedGrokRuntime(options);
+    expect(reused?.command).toBe(installed?.command);
+    expect(network).toHaveBeenCalledTimes(requestsAfterInstall);
+  });
+
   it.each(["live 403", "cached 403", "cached 429"])("installs from the release feed after %s", async (scenario) => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v2.1.0-pwragent.1";
