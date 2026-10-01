@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import {
   describeFederationThreadTargetAvailability,
+  FEDERATION_TARGET_AVAILABILITY_LABEL,
   type FederationThreadTargetAvailability,
 } from "../chrome/federation-thread-targets";
 
@@ -11,13 +12,6 @@ export type SubthreadMachineChoice = {
   availability: FederationThreadTargetAvailability;
   /** The machine the parent thread lives on. */
   parent: boolean;
-};
-
-const AVAILABILITY_STATE_LABEL: Partial<
-  Record<FederationThreadTargetAvailability, string>
-> = {
-  offline: "Offline",
-  unsupported: "Unsupported",
 };
 
 function enabledItems(menu: HTMLElement | null): HTMLElement[] {
@@ -41,7 +35,11 @@ function enabledItems(menu: HTMLElement | null): HTMLElement[] {
  */
 export function SubthreadMachineCascade(props: {
   label: string;
-  disabled?: boolean;
+  /**
+   * Only the row's own click waits (on the owner's worktree check); a new
+   * workspace needs nothing from it, so the machine list stays reachable.
+   */
+  rowDisabled?: boolean;
   machines: readonly SubthreadMachineChoice[];
   onSelect: () => void;
   onSelectMachine: (instanceId: string | undefined) => void;
@@ -89,10 +87,17 @@ export function SubthreadMachineCascade(props: {
   return (
     <div
       className="thread-context-menu__cascade"
-      onMouseEnter={() => {
-        if (!props.disabled) setOpen(true);
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => {
+        // Keep the keyboard inside the menu when the pointer wanders off
+        // while focus is in the flyout: unmounting it would drop focus to
+        // <body>, where the outer menu no longer hears its keys.
+        if (flyoutRef.current?.contains(document.activeElement)) {
+          closeToRow();
+          return;
+        }
+        setOpen(false);
       }}
-      onMouseLeave={() => setOpen(false)}
     >
       <button
         ref={rowRef}
@@ -101,8 +106,10 @@ export function SubthreadMachineCascade(props: {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? flyoutId : undefined}
-        disabled={props.disabled}
-        onClick={props.onSelect}
+        aria-disabled={props.rowDisabled || undefined}
+        onClick={() => {
+          if (!props.rowDisabled) props.onSelect();
+        }}
         onKeyDown={(event) => {
           if (event.key === "ArrowRight") {
             event.preventDefault();
@@ -131,7 +138,7 @@ export function SubthreadMachineCascade(props: {
           {props.machines.map((machine) => {
             const unavailable = machine.availability !== "available";
             const state = unavailable
-              ? AVAILABILITY_STATE_LABEL[machine.availability]
+              ? FEDERATION_TARGET_AVAILABILITY_LABEL[machine.availability]
               : machine.parent
                 ? "Parent"
                 : undefined;

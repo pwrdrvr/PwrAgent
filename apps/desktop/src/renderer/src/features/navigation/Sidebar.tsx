@@ -1768,6 +1768,10 @@ export function Sidebar(props: SidebarProps) {
     contextMenuParentTarget && isRemoteFederationTarget(contextMenuParentTarget)
       ? contextMenuParentTarget.instanceId
       : undefined;
+  const contextMenuParentMachine = contextMenuParentInstanceId
+    ? federationThreadTargets.find((target) =>
+      target.instanceId === contextMenuParentInstanceId)
+    : undefined;
   const subthreadMachines: SubthreadMachineChoice[] | undefined =
     contextMenuCanCreateSubthread && federationThreadTargets.length > 0
       ? [
@@ -1775,11 +1779,13 @@ export function Sidebar(props: SidebarProps) {
             ? [{
                 instanceId: contextMenuParentInstanceId,
                 label:
-                  federationThreadTargets.find((target) =>
-                    target.instanceId === contextMenuParentInstanceId)?.label
+                  contextMenuParentMachine?.label
                   ?? contextMenu?.thread.federation?.instanceLabel
                   ?? contextMenuParentInstanceId,
-                availability: "available" as const,
+                // A parent on an offline peer is disabled like any offline
+                // machine. A parent missing from the target list has already
+                // passed this menu's capability gate, so it can host the child.
+                availability: contextMenuParentMachine?.availability ?? "available",
                 parent: true,
               }]
             : []),
@@ -2543,7 +2549,7 @@ export function Sidebar(props: SidebarProps) {
                           label={canCreateContextMenuWorktree
                             ? "Sub-thread in New Worktree"
                             : "Sub-thread in New Workspace"}
-                          disabled={checkingWorktreeAvailability}
+                          rowDisabled={checkingWorktreeAvailability}
                           machines={subthreadMachines}
                           onSelect={() => createSubthreadFromContextMenu(
                             contextMenu.thread,

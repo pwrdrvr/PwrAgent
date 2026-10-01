@@ -2131,6 +2131,45 @@ describe("Sidebar", () => {
     );
   });
 
+  it("keeps the machine list reachable while the owner's worktree check runs", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        ]}
+        readThreadWorktreeAvailability={() => new Promise<boolean>(() => undefined)}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    const row = screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(row);
+    expect(onCreateSubthread).not.toHaveBeenCalled();
+
+    fireEvent.mouseEnter(row.parentElement!);
+    const flyout = screen.getByRole("menu", { name: "New workspace on" });
+    fireEvent.click(within(flyout).getByRole("menuitem", { name: "Studio Mac / work" }));
+    expect(onCreateSubthread).toHaveBeenCalledWith(
+      localThread,
+      "new-workspace",
+      { instanceId: "studio-work" },
+    );
+  });
+
   it.each([false, true])("waits for owner Git capability before enabling creation (%s)", async (available) => {
     let resolveAvailability!: (available: boolean) => void;
     const readThreadWorktreeAvailability = vi.fn(() => new Promise<boolean>((resolve) => { resolveAvailability = resolve; }));

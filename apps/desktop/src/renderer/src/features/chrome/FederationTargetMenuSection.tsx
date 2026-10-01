@@ -1,16 +1,9 @@
 import { useId, type ReactElement } from "react";
 import {
   describeFederationThreadTargetAvailability,
+  FEDERATION_TARGET_AVAILABILITY_LABEL,
   type FederationThreadTarget,
-  type FederationThreadTargetAvailability,
 } from "./federation-thread-targets";
-
-const AVAILABILITY_STATE_LABEL: Partial<
-  Record<FederationThreadTargetAvailability, string>
-> = {
-  offline: "Offline",
-  unsupported: "Unsupported",
-};
 
 /**
  * Whether a peer has the project a directory row's menu was opened from.
@@ -59,7 +52,7 @@ export function FederationTargetMenuSection(props: {
           ? "No project"
           : projectState === "checking"
             ? "Checking…"
-            : AVAILABILITY_STATE_LABEL[target.availability];
+            : FEDERATION_TARGET_AVAILABILITY_LABEL[target.availability];
         const unavailable = target.availability !== "available" || missingProject;
         return (
           <button

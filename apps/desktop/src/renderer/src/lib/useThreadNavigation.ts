@@ -5956,6 +5956,31 @@ export function useThreadNavigation(
   );
 
   /**
+   * The owner's whole directory index. Callers check the bridge first. An
+   * index the owner is still loading throws rather than reading as complete,
+   * so a half-loaded peer never answers "no such project".
+   */
+  const readOwnerDirectoryIndex = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      consumerId: string,
+      isCancelled: () => boolean = () => false,
+    ): Promise<NavigationDirectorySummary[]> => {
+      const page = await readNavigationQueryRange({
+        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
+        read: (request) => desktopApi!.getNavigationQueryPage!(request, consumerId),
+        isCancelled: () => !mountedRef.current || isCancelled(),
+        maxBytes: 8 * 1024 * 1024,
+      }).finally(() => desktopApi?.releaseNavigationQuery?.(consumerId));
+      if (page.coverage.state !== "complete") {
+        throw new Error("The owner is still loading its directories. Retry when it is ready.");
+      }
+      return page.directories ?? [];
+    },
+    [desktopApi],
+  );
+
+  /**
    * Read the owner's directory index, pick one row, and open its launchpad.
    * `pick` returns undefined when the owner has no row to offer; the message
    * it names then surfaces as the launchpad error instead of the composer
@@ -5979,15 +6004,11 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
       try {
-        const consumerId = `workspace-launchpad:${attentionViewId}:${openRevision}`;
-        const page = await readNavigationQueryRange({
-          request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
-          read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
-          isCancelled: () => !mountedRef.current || federatedLaunchpadOpenRevisionRef.current !== openRevision,
-          maxBytes: 8 * 1024 * 1024,
-        }).finally(() => desktopApi.releaseNavigationQuery?.(consumerId));
-        if (page.coverage.state !== "complete") throw new Error("The owner is still loading its directories. Retry when it is ready.");
-        const ownerDirectories = page.directories ?? [];
+        const ownerDirectories = await readOwnerDirectoryIndex(
+          target,
+          `workspace-launchpad:${attentionViewId}:${openRevision}`,
+          () => federatedLaunchpadOpenRevisionRef.current !== openRevision,
+        );
         if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
           return;
         }
@@ -6007,7 +6028,7 @@ export function useThreadNavigation(
         }
       }
     },
-    [desktopApi, openFederatedDirectoryLaunchpad, attentionViewId],
+    [desktopApi, openFederatedDirectoryLaunchpad, attentionViewId, readOwnerDirectoryIndex],
   );
 
   const openFederatedWorkspaceLaunchpad = useCallback(
@@ -6053,18 +6074,13 @@ export function useThreadNavigation(
       // The whole index, not a label filter: the origin match is what lets
       // "PwrAgnt" here find "PwrAgent" there, and a name filter would drop it
       // before the comparison ever ran.
-      const consumerId = `project-target:${attentionViewId}:${target.instanceId}:${localDirectory.label}`;
-      const page = await readNavigationQueryRange({
-        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
-        read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
-        isCancelled: () => !mountedRef.current,
-        maxBytes: 8 * 1024 * 1024,
-      }).finally(() => desktopApi.releaseNavigationQuery?.(consumerId));
-      return Boolean(
-        findPeerCounterpartDirectory(localDirectory, page.directories ?? []),
+      const ownerDirectories = await readOwnerDirectoryIndex(
+        target,
+        `project-target:${attentionViewId}:${target.instanceId}:${localDirectory.label}`,
       );
+      return Boolean(findPeerCounterpartDirectory(localDirectory, ownerDirectories));
     },
-    [attentionViewId, desktopApi],
+    [attentionViewId, desktopApi, readOwnerDirectoryIndex],
   );
 
   const restoreFederatedLaunchpad = useCallback(
@@ -6186,6 +6202,9 @@ export function useThreadNavigation(
       instanceId: string | undefined,
       targetLabel?: string,
     ): Promise<{ directoryKey: string; open: () => Promise<void> } | undefined> => {
+      // A later pick supersedes this one, so a slow peer's index read cannot
+      // land after a faster one and open the machine the operator left.
+      const openRevision = ++federatedLaunchpadOpenRevisionRef.current;
       setLaunchpadError(undefined);
       if (instanceId === undefined) {
         const directory = project.kind === "workspace"
@@ -6205,18 +6224,16 @@ export function useThreadNavigation(
         return undefined;
       }
       const target = { scope: "remote", instanceId } as const;
-      const consumerId = `launchpad-machine:${attentionViewId}:${instanceId}`;
+      const superseded = () => federatedLaunchpadOpenRevisionRef.current !== openRevision;
       try {
-        const page = await readNavigationQueryRange({
-          request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
-          read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
-          isCancelled: () => !mountedRef.current,
-          maxBytes: 8 * 1024 * 1024,
-        }).finally(() => desktopApi.releaseNavigationQuery?.(consumerId));
-        if (page.coverage.state !== "complete") {
-          throw new Error("The owner is still loading its directories. Retry when it is ready.");
+        const ownerDirectories = await readOwnerDirectoryIndex(
+          target,
+          `launchpad-machine:${attentionViewId}:${openRevision}`,
+          superseded,
+        );
+        if (superseded()) {
+          return undefined;
         }
-        const ownerDirectories = page.directories ?? [];
         const directory = project.kind === "workspace"
           ? pickOwnerWorkspaceDirectory(ownerDirectories)
           : findPeerCounterpartDirectory(project, ownerDirectories);
@@ -6225,10 +6242,12 @@ export function useThreadNavigation(
         }
         return {
           directoryKey: directory.key,
-          open: () => openFederatedDirectoryLaunchpad(target, directory, ownerDirectories),
+          open: () => openFederatedDirectoryLaunchpad(target, directory, ownerDirectories, openRevision),
         };
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        if (!superseded()) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
         return undefined;
       }
     },
@@ -6238,6 +6257,7 @@ export function useThreadNavigation(
       directories,
       openDirectoryLaunchpad,
       openFederatedDirectoryLaunchpad,
+      readOwnerDirectoryIndex,
     ],
   );
 

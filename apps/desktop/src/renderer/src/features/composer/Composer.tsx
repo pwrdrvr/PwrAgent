@@ -12304,8 +12304,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               disabled={launchpadSubmitting}
               onRetarget={(instanceId) => {
                 void (async () => {
+                  const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
                   const plan = await launchpadMachine.planRetarget?.(instanceId);
-                  if (!plan) {
+                  // The peer read can take a while. A draft only follows the
+                  // operator if they are still on the launchpad it came from.
+                  if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
                     return;
                   }
                   prepareDraftRetarget(plan.directoryKey);

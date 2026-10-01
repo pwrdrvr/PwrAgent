@@ -2,7 +2,10 @@ import { useCallback, useMemo, useState } from "react";
 import type { CelestialIconId } from "@pwragent/shared";
 import { CelestialIcon, ServerIcon } from "../../icons";
 import type { ProjectIdentity } from "../../lib/federation-project-match";
-import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
+import {
+  FEDERATION_TARGET_AVAILABILITY_LABEL,
+  type FederationThreadTarget,
+} from "../chrome/federation-thread-targets";
 import {
   useFederationProjectStates,
   type CheckFederationTargetProject,
@@ -107,11 +110,13 @@ export function LaunchpadMachineChip(props: {
     },
     ...control.targets.map((target): ComposerDropdownOption => {
       const isCurrent = target.instanceId === control.currentInstanceId;
-      if (!isCurrent && target.availability === "offline") {
-        return { label: target.label, value: target.instanceId, description: "Offline", disabled: true };
-      }
-      if (!isCurrent && target.availability === "unsupported") {
-        return { label: target.label, value: target.instanceId, description: "Unsupported", disabled: true };
+      if (!isCurrent && target.availability !== "available") {
+        return {
+          label: target.label,
+          value: target.instanceId,
+          description: FEDERATION_TARGET_AVAILABILITY_LABEL[target.availability],
+          disabled: true,
+        };
       }
       const projectState = isCurrent ? undefined : projectStates?.[target.instanceId];
       if (projectState === "missing") {

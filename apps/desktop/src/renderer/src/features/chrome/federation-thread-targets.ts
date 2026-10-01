@@ -110,6 +110,14 @@ export function buildFederationThreadTargets(
     );
 }
 
+/** The short state a target row shows beside its label when unavailable. */
+export const FEDERATION_TARGET_AVAILABILITY_LABEL: Partial<
+  Record<FederationThreadTargetAvailability, string>
+> = {
+  offline: "Offline",
+  unsupported: "Unsupported",
+};
+
 /** Tooltip/title text explaining a row the operator cannot click. */
 export function describeFederationThreadTargetAvailability(
   availability: FederationThreadTargetAvailability,
