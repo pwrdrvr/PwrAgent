@@ -23,5 +23,13 @@
   "concurrent-enriched-navigation-and-title-lookup": {
     "logicalRequests": 2,
     "providerListings": 1
+  },
+  "archived-metadata-per-filter": {
+    "activeListingRequests": 3,
+    "archivedListingScans": 1,
+    "archivedPageRpcs": 2,
+    "pagesPerArchivedScan": 2,
+    "archivedPageRpcsAfterLaterRefresh": 4,
+    "archivedPageRpcsAfterIndependentFilter": 6
   }
 }

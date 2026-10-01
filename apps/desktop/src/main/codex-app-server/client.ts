@@ -7548,6 +7548,7 @@ export class CodexAppServerClient {
     string,
     Promise<RawCodexThreadSummary[]>
   >();
+  private readonly archivedThreadMetadataScheduledByFilter = new Set<string>();
   private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
   private initialized = false;
   private tokenMiserActivationNegotiated = false;
@@ -8885,6 +8886,7 @@ export class CodexAppServerClient {
     const lastRefreshAt = this.archivedThreadMetadataLastRefreshByFilter.get(cacheKey) ?? 0;
     const hasCachedMetadata = this.archivedThreadMetadataByFilter.has(cacheKey);
     if (
+      this.archivedThreadMetadataScheduledByFilter.has(cacheKey) ||
       this.archivedThreadMetadataInFlightByFilter.has(cacheKey) ||
       (hasCachedMetadata &&
         Date.now() - lastRefreshAt < ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS)
@@ -8892,7 +8894,12 @@ export class CodexAppServerClient {
       return;
     }
 
+    // Reserve the filter before yielding to the timer. Otherwise several
+    // active listings can queue callbacks that start sequential full archive
+    // walks after the first callback's page sequence has already settled.
+    this.archivedThreadMetadataScheduledByFilter.add(cacheKey);
     setTimeout(() => {
+      this.archivedThreadMetadataScheduledByFilter.delete(cacheKey);
       void this.refreshArchivedThreadMetadata(filter, diagnostics).catch((error) => {
         codexClientLog.warn("archived thread metadata refresh failed", {
           error: error instanceof Error ? error.message : String(error),

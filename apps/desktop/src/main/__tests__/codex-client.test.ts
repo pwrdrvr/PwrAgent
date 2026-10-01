@@ -7,6 +7,7 @@ import type { AppServerNotification, AppServerThreadSummary, AppServerTurnInputI
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
+import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import type {
   ConfigWriteResponse,
@@ -2675,6 +2676,58 @@ describe("CodexAppServerClient", () => {
       expect(enrich).toHaveBeenCalledTimes(50);
     } finally {
       release();
+      await client.close();
+    }
+  });
+
+  it("schedules one archived metadata page sequence for concurrent active listings", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const budget = navigationListingBudgets["archived-metadata-per-filter"];
+    MockTransport.threadListResultBySearchTerm.set("archive-schedule", [{
+      id: "active-thread", name: "Active", source: "vscode",
+    }]);
+    MockTransport.threadListNextCursor = "repeated-cursor";
+    const client = new CodexAppServerClient({ command: "codex" });
+    const requests = () => MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { archived?: boolean } })
+      .filter((message) => message.method === "thread/list");
+    try {
+      const limits = [50, 75, 100];
+      const results = await Promise.all(limits.map((limit) => client.listThreads({
+        filter: "archive-schedule", limit, maxPages: 1, enrichDirectories: false,
+      })));
+      expect(results).toHaveLength(budget.activeListingRequests);
+      expect(requests().filter((request) => request.params?.archived === false)).toHaveLength(budget.activeListingRequests);
+      await vi.waitFor(() => expect(requests().filter((request) => request.params?.archived === true).length)
+        .toBeGreaterThanOrEqual(budget.archivedPageRpcs));
+      // Drain every queued zero-delay callback, including one that would start
+      // an obsolete second scan after the first page sequence has completed.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const archivedRequests = requests().filter((request) => request.params?.archived === true);
+      expect(archivedRequests).toHaveLength(budget.archivedPageRpcs);
+      expect(archivedRequests.length / budget.pagesPerArchivedScan).toBe(budget.archivedListingScans);
+
+      await client.listThreads({ filter: "archive-schedule", limit: 125, maxPages: 1, enrichDirectories: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requests().filter((request) => request.params?.archived === true)).toHaveLength(budget.archivedPageRpcs);
+
+      const later = Date.now() + 60_001;
+      const now = vi.spyOn(Date, "now").mockReturnValue(later);
+      try {
+        await client.listThreads({ filter: "archive-schedule", limit: 150, maxPages: 1, enrichDirectories: false });
+        await vi.waitFor(() => expect(requests().filter((request) => request.params?.archived === true))
+          .toHaveLength(budget.archivedPageRpcsAfterLaterRefresh));
+      } finally {
+        now.mockRestore();
+      }
+
+      MockTransport.threadListResultBySearchTerm.set("independent-filter", [{
+        id: "other-thread", name: "Other", source: "vscode",
+      }]);
+      await client.listThreads({ filter: "independent-filter", limit: 50, maxPages: 1, enrichDirectories: false });
+      await vi.waitFor(() => expect(requests().filter((request) => request.params?.archived === true))
+        .toHaveLength(budget.archivedPageRpcsAfterIndependentFilter));
+    } finally {
       await client.close();
     }
   });
