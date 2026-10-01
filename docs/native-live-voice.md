@@ -7,8 +7,9 @@ modes. Both use the same realtime session, and only one session runs at a time.
 
 Thread voice talks to one local Codex coding thread. The **Voice** mic toggle in
 that thread's composer starts it. While it runs, a bar docked above the composer
-shows an accent **Microphone live** state with a level meter, the last line
-spoken, **Mute**, **Transcript**, and **End voice**. **Transcript** opens the
+shows an accent **Microphone live** state with a level meter, the session
+clock, the last line spoken, the microphone toggle, **Transcript**, and **End
+voice**. **Transcript** opens the
 running transcript, tool receipts, and a **Message voice** field that appends
 typed text to the voice conversation. Typing in the normal composer still uses
 the ordinary coding flow. **Stop** remains the coding-turn interrupt and keeps
@@ -88,7 +89,8 @@ The panel shows:
 
 - the live state;
 - the thread or launchpad the window is looking at;
-- **Mute**, copy, and **End director voice**, which ends the session;
+- the session clock, the microphone toggle, copy, and **End director voice**,
+  which ends the session;
 - the transcript with its receipts, and **Message voice**.
 
 The panel also shows any question that the Voice manager's turn is waiting on.
@@ -98,6 +100,27 @@ is answered in the panel. An approval offers **Open Voice manager** instead.
 
 Director voice continues across navigation. While it runs, the composer
 **Voice** toggle is unavailable and its tooltip explains why.
+
+### Session clock and muting
+
+Both modes show how long the session has been live, in the turn timer's
+format: `45s`, `1m 06s`, `1h 2m 3s`. That is the time the realtime session has
+been open.
+
+The microphone toggle is the masthead mic's button. The button is accented
+while the microphone is live and shows a slashed mic while it is muted.
+
+Muting never interrupts a reply. The microphone sends silence, so the voice
+model hears no new speech and finishes its answer. A muted session then ends
+itself 30 seconds after it goes quiet (`MUTED_IDLE_END_MS`). It is quiet when
+no line is streaming and no turn is running on its thread. A tool receipt, a
+typed message, or the start of a turn restarts the countdown. Unmuting cancels
+it.
+
+So "ask, mute, listen" plays the whole answer, including a delegated turn's
+result, and the session does not stay open afterwards. When this happens, an
+ordinary notice says that voice ended after its reply. The voice manager or
+coding turn itself is billed as usual, whatever the microphone does.
 
 A voice failure in either mode is an ordinary app notice titled **Live voice**,
 raised through the notice library. The voice controls clear as the notice

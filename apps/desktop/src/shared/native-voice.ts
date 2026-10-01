@@ -1,4 +1,4 @@
-import type { OperatorFocusSnapshot } from "@pwragent/shared";
+import type { AgentEvent, OperatorFocusSnapshot } from "@pwragent/shared";
 
 /** Window-local voice ownership. No credentials or service URLs cross IPC. */
 export const NATIVE_VOICE_CAPABILITY_CHANNEL = "native-voice:capability";
@@ -52,4 +52,9 @@ export type NativeVoiceApi = {
   onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => () => void;
   openVoiceManager?: () => Promise<OpenVoiceManagerResponse>;
   publishOperatorFocus?: (focus: OperatorFocusSnapshot) => Promise<void>;
+  /**
+   * The window's backend event stream. Voice reads only the turn lifecycle
+   * of its own thread, to know when a muted session has finished its reply.
+   */
+  onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
 };

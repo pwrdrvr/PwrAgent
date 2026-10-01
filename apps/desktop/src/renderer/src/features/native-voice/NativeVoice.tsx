@@ -2,9 +2,11 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NativeVoiceApi } from "../../../../shared/native-voice";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
-import { MicIcon } from "../../icons";
+import { MicIcon, MicOffIcon } from "../../icons";
+import { formatElapsedMs } from "../../lib/format-duration";
 import {
   getWindowNativeVoiceController,
+  MUTED_IDLE_END_MS,
   type NativeVoiceController,
   type VoiceView,
 } from "./native-voice-controller";
@@ -24,6 +26,7 @@ export function useNativeVoice(api: NativeVoiceApi): { controller: NativeVoiceCo
 }
 
 export const NATIVE_VOICE_ERROR_NOTICE_ID = "native-voice-error";
+export const NATIVE_VOICE_ENDED_NOTICE_ID = "native-voice-ended";
 
 /**
  * A voice failure is an ordinary app notice, raised through the notice
@@ -39,8 +42,18 @@ export function useNativeVoiceNotices(
   useEffect(() => {
     if (!api) return;
     const controller = getWindowNativeVoiceController(api);
+    let previous = controller.getView().status;
     return controller.subscribe((view) => {
-      if (view.status === "error") {
+      const ended = previous !== "idle" && view.status === "idle";
+      previous = view.status;
+      if (ended && view.endedAfterReply) {
+        showNotice({
+          id: NATIVE_VOICE_ENDED_NOTICE_ID,
+          title: "Live voice",
+          message: "Voice ended after its reply because the microphone was muted.",
+          tone: "neutral",
+        });
+      } else if (view.status === "error") {
         showNotice({
           id: NATIVE_VOICE_ERROR_NOTICE_ID,
           title: "Live voice",
@@ -65,7 +78,7 @@ export function voiceStateLabel(view: VoiceView): string {
   switch (view.status) {
     case "checking": return "Checking voice access…";
     case "connecting": return "Connecting voice…";
-    case "listening": return view.muted ? "Microphone muted" : "Microphone live";
+    case "listening": return view.muted ? "Muted, ends after the reply" : "Microphone live";
     case "stopping": return "Ending voice…";
     case "stop-error": return "Voice is still open. End voice again.";
     case "error": return "Voice ended";
@@ -116,6 +129,54 @@ export function VoiceStatus({ controller, view }: { controller: NativeVoiceContr
       {live ? <VoiceLevelMeter controller={controller} /> : null}
       {voiceStateLabel(view)}
     </span>
+  );
+}
+
+/**
+ * How long the session has been live, ticking each second: the time the
+ * operator is paying for. Its own state, so the tick re-renders only this.
+ */
+export function VoiceElapsed({ since }: { since?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (since === undefined) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [since]);
+  if (since === undefined) return null;
+  const elapsed = formatElapsedMs(now - since);
+  return (
+    <span className="native-voice__elapsed" title="Time this voice session has been open">
+      {elapsed}
+    </span>
+  );
+}
+
+const MUTED_IDLE_END_SECONDS = Math.round(MUTED_IDLE_END_MS / 1000);
+
+/**
+ * The microphone, as a toggle. Muting never cuts a reply off: the voice keeps
+ * answering, and once it has finished and its turn is done the session ends
+ * itself, so "ask, mute, listen" does not leave voice open.
+ */
+export function VoiceMicToggle({ controller, view }: { controller: NativeVoiceController; view: VoiceView }) {
+  if (view.status !== "listening") return null;
+  const label = view.muted ? "Unmute microphone" : "Mute microphone";
+  const hint = view.muted
+    ? `Muted. Voice ends ${MUTED_IDLE_END_SECONDS} seconds after its reply finishes. Unmute to keep talking.`
+    : `Mute. The reply keeps playing, then voice ends ${MUTED_IDLE_END_SECONDS} seconds after it finishes.`;
+  return (
+    <button
+      // The masthead mic's own class: the same button, active while live.
+      className={`sidebar__icon-button${view.muted ? "" : " is-active"}`}
+      type="button"
+      aria-label={label}
+      title={hint}
+      onClick={() => controller.setMuted(!view.muted)}
+    >
+      {view.muted ? <MicOffIcon size={16} aria-hidden="true" /> : <MicIcon size={16} aria-hidden="true" />}
+    </button>
   );
 }
 
@@ -262,12 +323,9 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
     <section className="native-voice-bar" aria-label="Thread voice">
       <div className="native-voice-bar__row">
         <VoiceStatus controller={controller} view={view} />
+        <VoiceElapsed since={view.liveSince} />
         <span className="native-voice-bar__spacer" />
-        {listening ? (
-          <button className="button button--ghost" type="button" aria-pressed={view.muted} onClick={() => controller.setMuted(!view.muted)}>
-            {view.muted ? "Unmute" : "Mute"}
-          </button>
-        ) : null}
+        <VoiceMicToggle controller={controller} view={view} />
         {listening || view.transcript.length || view.actions.length ? (
           <button className="button button--ghost" type="button" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(!open)}>
             Transcript

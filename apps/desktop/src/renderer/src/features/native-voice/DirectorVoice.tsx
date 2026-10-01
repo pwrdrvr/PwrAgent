@@ -21,7 +21,15 @@ import {
   type PendingQuestionnaireState,
 } from "../thread-detail/questionnaire";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "./native-voice-controller";
-import { isVoiceActive, useNativeVoice, VoiceFeed, VoiceStatus, VoiceTextInput } from "./NativeVoice";
+import {
+  isVoiceActive,
+  useNativeVoice,
+  VoiceElapsed,
+  VoiceFeed,
+  VoiceMicToggle,
+  VoiceStatus,
+  VoiceTextInput,
+} from "./NativeVoice";
 
 export function directorVoiceShortcutLabel(): string {
   return formatPrimaryAccel("Space", { shift: true });
@@ -408,17 +416,9 @@ export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenTh
       <header className="director-voice-panel__head" {...moveHandleProps}>
         <p className="director-voice-panel__title">Director voice</p>
         <VoiceStatus controller={controller} view={view} />
+        <VoiceElapsed since={view.liveSince} />
         <div className="director-voice-panel__actions">
-          {listening ? (
-            <button
-              className="button button--ghost director-voice-panel__mute"
-              type="button"
-              aria-pressed={view.muted}
-              onClick={() => controller.setMuted(!view.muted)}
-            >
-              {view.muted ? "Unmute" : "Mute"}
-            </button>
-          ) : null}
+          <VoiceMicToggle controller={controller} view={view} />
           <button
             className="app-notice-toast__icon-button"
             type="button"

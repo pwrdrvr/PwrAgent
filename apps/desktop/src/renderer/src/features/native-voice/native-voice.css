@@ -213,11 +213,6 @@
   gap: 2px;
   margin-left: auto;
 }
-.director-voice-panel__mute {
-  height: 24px;
-  margin-right: 4px;
-  padding: 0 10px;
-}
 .director-voice-panel__focus {
   flex: none;
   margin: 0;
@@ -338,4 +333,12 @@
   padding: 0;
   list-style: none;
   color: var(--text-primary);
+}
+
+/* Session clock. Tabular digits so the tick does not shift its neighbours. */
+.native-voice__elapsed {
+  flex: none;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

@@ -7,7 +7,7 @@ import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNot
 import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
-import { getWindowNativeVoiceController, type NativeVoiceController } from "../native-voice-controller";
+import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, type NativeVoiceController } from "../native-voice-controller";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
 
 const owners = new Set<NativeVoiceController>();
@@ -21,6 +21,7 @@ afterEach(async () => {
 
 function voiceFixture() {
   const listeners = new Set<(event: NativeVoiceEvent) => void>();
+  const agentListeners = new Set<(event: AgentEvent) => void>();
   const track = { stop: vi.fn(), onended: null, enabled: true };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   const capture = vi.fn(async () => stream);
@@ -43,11 +44,15 @@ function voiceFixture() {
     stopNativeVoice: vi.fn(async () => {}), sendNativeVoiceText: vi.fn(async () => {}),
     onNativeVoiceEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     openVoiceManager: vi.fn(async () => ({ status: "ready" as const, threadId: "sample-voice-manager", created: false })),
+    onAgentEvent: (listener) => { agentListeners.add(listener); return () => { agentListeners.delete(listener); }; },
   };
   const owner = getWindowNativeVoiceController(api);
   owners.add(owner);
   const emit = (event: NativeVoiceEvent) => { act(() => { for (const listener of listeners) listener(event); }); };
-  return { api, owner, capture, peer, track, listeners, emit };
+  const agent = (notification: { method: string; params: Record<string, unknown> }) => {
+    act(() => { for (const listener of agentListeners) listener({ backend: "codex", notification } as unknown as AgentEvent); });
+  };
+  return { api, owner, capture, peer, track, listeners, emit, agent };
 }
 
 function Composer({ api, threadId }: { api: NativeVoiceApi; threadId?: string }) {
@@ -114,11 +119,66 @@ it("starts thread voice from the composer toggle and shows the microphone as liv
   expect(screen.getByRole("button", { name: "Voice" })).toHaveAttribute("aria-pressed", "true");
   expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-thread", mode: "thread" });
 
-  fireEvent.click(screen.getByRole("button", { name: "Mute" }));
+  // The session clock runs from the moment voice went live.
+  expect(screen.getByTitle("Time this voice session has been open")).toHaveTextContent(/^\d+s$/);
+  fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
   expect(f.track.enabled).toBe(false);
-  expect(screen.getByRole("status", { name: "Voice status" })).toHaveTextContent("Microphone muted");
-  fireEvent.click(screen.getByRole("button", { name: "Unmute" }));
+  expect(screen.getByRole("status", { name: "Voice status" })).toHaveTextContent("Muted, ends after the reply");
+  fireEvent.click(screen.getByRole("button", { name: "Unmute microphone" }));
   expect(f.track.enabled).toBe(true);
+});
+
+// "Ask, mute, listen": muting must not cut the reply off, and must not leave
+// a session open (and billing) for hours after the reply.
+it("ends a muted session only after its reply and its turn are done", async () => {
+  const f = voiceFixture();
+  render(<><Composer api={f.api} threadId="sample-thread" /><Notices api={f.api} /></>);
+  fireEvent.click(screen.getByRole("button", { name: "Voice" }));
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    f.emit({ sessionId, type: "transcript", role: "user", text: "What is running?", done: true });
+    f.agent({ method: "turn/started", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
+    fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+
+    // A running turn and a reply mid-sentence both hold the session open.
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
+    f.emit({ sessionId, type: "transcript", role: "assistant", text: "Two threads", done: false });
+    f.agent({ method: "turn/completed", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+
+    // Another thread's turn is not this session's.
+    f.emit({ sessionId, type: "transcript", role: "assistant", text: "Two threads are running.", done: true });
+    f.agent({ method: "turn/started", params: { threadId: "sample-other-thread", turn: { id: "sample-other" } } });
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS - 1); });
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+  await waitFor(() => expect(f.owner.getView().status).toBe("idle"));
+  expect(noticeCard("native-voice-ended")).toHaveTextContent("Voice ended after its reply because the microphone was muted.");
+});
+
+it("keeps an unmuted or re-unmuted session open while it is quiet", async () => {
+  const f = voiceFixture();
+  render(<Composer api={f.api} threadId="sample-thread" />);
+  fireEvent.click(screen.getByRole("button", { name: "Voice" }));
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 2); });
+    fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS - 1); });
+    fireEvent.click(screen.getByRole("button", { name: "Unmute microphone" }));
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 2); });
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("sends voice text by click and Enter without submitting or changing the coding draft", async () => {

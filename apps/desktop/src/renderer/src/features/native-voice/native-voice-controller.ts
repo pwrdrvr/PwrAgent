@@ -12,6 +12,10 @@ export type VoiceView = {
   threadId?: string;
   /** The operator muted their microphone; the session stays open. */
   muted: boolean;
+  /** When the session went live, for the elapsed-time label. Billing runs from here. */
+  liveSince?: number;
+  /** The last session ended itself: muted, with its reply finished. */
+  endedAfterReply?: boolean;
   transcript: VoiceTranscriptRow[];
   actions: VoiceActionRow[];
 };
@@ -23,7 +27,11 @@ type Resources = {
   stream?: MediaStream;
   audio?: HTMLAudioElement;
   off?: () => void;
+  offTurns?: () => void;
   timer?: ReturnType<typeof setTimeout>;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  /** A turn is running on the voice session's thread: the reply is not done. */
+  turnActive: boolean;
   finishIce?: () => void;
   started: boolean;
   accepted: boolean;
@@ -64,6 +72,17 @@ const browser: VoiceBrowser = {
     };
   },
 };
+
+/**
+ * How long a muted session waits, with nothing said and no turn running,
+ * before it ends itself. Muting never interrupts a reply: the microphone sends
+ * silence and the voice keeps answering. The session then stays open only
+ * for this long after its last word, so "ask, mute, listen" cannot leave a
+ * session open for hours.
+ */
+export const MUTED_IDLE_END_MS = 30_000;
+const TURN_STARTED = new Set(["turn/started"]);
+const TURN_ENDED = new Set(["turn/completed", "turn/failed", "turn/cancelled"]);
 
 const MAX_TRANSCRIPT_ROWS = 40;
 const MAX_ACTION_ROWS = 20;
@@ -123,20 +142,59 @@ export class NativeVoiceController {
     this.publish({ status: "error", error: message, mode, threadId: undefined, muted: false, transcript: [], actions: [] });
   }
 
-  /** Mute or unmute the microphone without closing the session. */
+  /**
+   * Mute or unmute the microphone without closing the session. A reply in
+   * progress continues; once it is done the muted session ends itself.
+   */
   setMuted(muted: boolean): void {
     const resources = this.resources;
     if (!resources || this.view.status !== "listening") return;
     for (const track of resources.stream?.getAudioTracks() ?? []) track.enabled = !muted;
     this.publish({ muted });
+    this.armMutedIdleEnd(resources);
+  }
+
+  /**
+   * (Re)start the muted-idle countdown. Anything that shows the session is
+   * still working (a word streaming in, a tool receipt, a turn running on
+   * its thread, the operator unmuting) clears it.
+   */
+  private armMutedIdleEnd(resources: Resources): void {
+    clearTimeout(resources.idleTimer);
+    resources.idleTimer = undefined;
+    if (!this.current(resources) || !this.view.muted || this.view.status !== "listening"
+      || this.openRows.size > 0 || resources.turnActive) return;
+    resources.idleTimer = setTimeout(() => {
+      if (!this.current(resources) || !this.view.muted || this.view.status !== "listening") return;
+      this.publish({ endedAfterReply: true });
+      void this.stop();
+    }, MUTED_IDLE_END_MS);
+  }
+
+  private watchTurns(resources: Resources, threadId: string): void {
+    resources.offTurns = this.api.onAgentEvent?.((event) => {
+      if (!this.current(resources)) return;
+      const params = event.notification.params as { threadId?: unknown };
+      if (params.threadId !== threadId) return;
+      if (TURN_STARTED.has(event.notification.method)) resources.turnActive = true;
+      else if (TURN_ENDED.has(event.notification.method)) resources.turnActive = false;
+      else return;
+      this.armMutedIdleEnd(resources);
+    });
   }
 
   async start(threadId: string, mode: NativeVoiceMode = "thread"): Promise<void> {
     if (this.resources) return;
-    const resources: Resources = { id: this.platform.id(), started: false, accepted: false, activating: false, cancelled: false };
+    const resources: Resources = {
+      id: this.platform.id(), started: false, accepted: false, activating: false, cancelled: false, turnActive: false,
+    };
     this.resources = resources;
     this.openRows.clear();
-    this.publish({ status: "checking", error: undefined, mode, threadId, muted: false, transcript: [], actions: [] });
+    this.publish({
+      status: "checking", error: undefined, mode, threadId, muted: false,
+      liveSince: undefined, endedAfterReply: undefined, transcript: [], actions: [],
+    });
+    this.watchTurns(resources, threadId);
     try {
       const capability = await this.api.nativeVoiceCapability();
       if (!this.current(resources)) return;
@@ -223,11 +281,13 @@ export class NativeVoiceController {
         if (event.done) this.openRows.delete(event.role);
         // Voice text is memory-only, bounded and discarded on the next session.
         this.publish({ transcript: transcript.slice(-MAX_TRANSCRIPT_ROWS).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
+        this.armMutedIdleEnd(resources);
         break;
       }
       case "action": {
         const { type: _type, sessionId: _sessionId, ...action } = event;
         this.publish({ actions: [...this.view.actions, { ...action, seq: ++this.seq }].slice(-MAX_ACTION_ROWS) });
+        this.armMutedIdleEnd(resources);
         break;
       }
       case "error":
@@ -259,7 +319,7 @@ export class NativeVoiceController {
       try { resources.meter = this.platform.meter?.(stream); } catch { resources.meter = undefined; }
       if (!this.current(resources)) return;
       clearTimeout(resources.timer);
-      this.publish({ status: "listening" });
+      this.publish({ status: "listening", liveSince: Date.now() });
     } catch (error) { this.fail(resources, error); }
   }
 
@@ -276,8 +336,10 @@ export class NativeVoiceController {
     if (resources.stop) return resources.stop;
     resources.cancelled = true;
     clearTimeout(resources.timer);
+    clearTimeout(resources.idleTimer);
     resources.finishIce?.();
     resources.off?.();
+    resources.offTurns?.();
     if (resources.peer) {
       resources.peer.ontrack = null;
       resources.peer.onconnectionstatechange = null;
@@ -313,6 +375,8 @@ export class NativeVoiceController {
     if (!resources || this.view.status !== "listening") return;
     try { await this.api.sendNativeVoiceText({ sessionId: resources.id, text }); }
     catch (error) { this.fail(resources, error); }
+    // A typed message is the operator still talking, even while muted.
+    this.armMutedIdleEnd(resources);
   }
 }
 
