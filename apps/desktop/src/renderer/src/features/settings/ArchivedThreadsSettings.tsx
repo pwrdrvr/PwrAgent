@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   buildThreadIdentityKey,
   isToolManagedWorktreePath,
@@ -32,8 +39,20 @@ type ArchivedProjectGroup = {
 
 type ArchivedProjectIdentity = Omit<ArchivedProjectGroup, "threads">;
 
+/** A row's in-flight action, or the error its last action left behind. */
+type ArchivedRowAction = {
+  pending?: "restore" | "archive";
+  error?: string;
+};
+
+type OpenThreadTarget = {
+  backend: AppServerBackendKind;
+  threadId: string;
+};
+
 const ARCHIVED_THREADS_PER_PROJECT_LIMIT = 20;
 const COPIED_FEEDBACK_MS = 1_500;
+const SHORT_THREAD_ID_LENGTH = 8;
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -42,26 +61,35 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 export function ArchivedThreadsSettings(props: {
   desktopApi?: DesktopApi;
-  onOpenThread?: (target: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }) => void;
+  onOpenThread?: (target: OpenThreadTarget) => void;
 }) {
   const [state, setState] = useState<ArchivedThreadsState>({
     loading: true,
     threads: [],
     workspaceRoots: [],
   });
-  const [restoringThreadKey, setRestoringThreadKey] = useState<string>();
-  // Newest first. A restored thread leaves the archived list, so this is the
-  // only place on the pane that still names it, its ID, and a way to open it.
+  // Threads restored during this visit, by key. A restored row keeps its
+  // place in its project group so the operator never loses track of it, and
+  // it outranks the fetched list: a refresh that still reports the thread as
+  // archived (a stale response) or no longer reports it at all leaves it put.
   const [restoredThreads, setRestoredThreads] = useState<
-    AppServerThreadSummary[]
-  >([]);
+    ReadonlyMap<string, AppServerThreadSummary>
+  >(() => new Map());
+  const [rowActions, setRowActions] = useState<
+    ReadonlyMap<string, ArchivedRowAction>
+  >(() => new Map());
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [filter, setFilter] = useState("");
-  const restoredThreadKeysRef = useRef(new Set<string>());
+  const pendingRowKeysRef = useRef(new Set<string>());
 
   const loadArchivedThreads = useCallback(async () => {
     const listThreads = props.desktopApi?.listThreads;
@@ -81,18 +109,13 @@ export function ArchivedThreadsSettings(props: {
       setState({
         fetchedAt: response.fetchedAt,
         loading: false,
-        threads: sortArchivedThreads(
-          response.threads.filter(
-            (thread) =>
-              !restoredThreadKeysRef.current.has(buildArchivedThreadKey(thread)),
-          ),
-        ),
+        threads: response.threads,
         workspaceRoots: response.workspaceRoots ?? [],
       });
     } catch (error) {
       setState((current) => ({
         ...current,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
         loading: false,
       }));
     }
@@ -104,90 +127,174 @@ export function ArchivedThreadsSettings(props: {
 
   const filterQuery = filter.trim();
   const isFiltering = filterQuery.length > 0;
-  const projectGroups = useMemo(() => {
-    const groups = groupArchivedThreadsByProject(
-      state.threads,
-      state.workspaceRoots,
-    );
-    return filterQuery ? filterArchivedProjectGroups(groups, filterQuery) : groups;
-  }, [filterQuery, state.threads, state.workspaceRoots]);
-  const visibleThreadCount = useMemo(
-    () =>
-      projectGroups.reduce(
-        (count, group) => count + group.threads.length,
-        0,
-      ),
-    [projectGroups],
+  const queryTerms = useMemo(
+    () => filterQuery.toLocaleLowerCase().split(/\s+/).filter(Boolean),
+    [filterQuery],
   );
+  const displayThreads = useMemo(
+    () =>
+      sortArchivedThreads([
+        ...state.threads.filter(
+          (thread) => !restoredThreads.has(buildArchivedThreadKey(thread)),
+        ),
+        ...restoredThreads.values(),
+      ]),
+    [restoredThreads, state.threads],
+  );
+  const allGroups = useMemo(
+    () => groupArchivedThreadsByProject(displayThreads, state.workspaceRoots),
+    [displayThreads, state.workspaceRoots],
+  );
+  const projectGroups = useMemo(
+    () =>
+      queryTerms.length > 0
+        ? filterArchivedProjectGroups(allGroups, queryTerms)
+        : allGroups,
+    [allGroups, queryTerms],
+  );
+  const totalRowCount = countGroupThreads(allGroups);
+  const visibleRowCount = countGroupThreads(projectGroups);
+  const restoredCount = restoredThreads.size;
+  // Only a thread from a less common source is tagged with it; the usual
+  // source goes without saying.
+  const primarySource = useMemo(
+    () => mostCommonSource(displayThreads),
+    [displayThreads],
+  );
+  const updatedLabel = useMemo(
+    () =>
+      state.fetchedAt === undefined
+        ? undefined
+        : `Updated ${formatFetchedAt(state.fetchedAt)}`,
+    [state.fetchedAt],
+  );
+  const hasLoaded = state.fetchedAt !== undefined;
 
-  const fetchedAtLabel = useMemo(() => {
-    return state.fetchedAt
-      ? `Updated ${formatTimestamp(state.fetchedAt)}`
-      : "Archived Threads";
-  }, [state.fetchedAt]);
+  const setRowAction = (key: string, action: ArchivedRowAction | undefined) => {
+    setRowActions((current) => {
+      const next = new Map(current);
+      if (action) {
+        next.set(key, action);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  };
 
   const restoreThread = async (thread: AppServerThreadSummary) => {
+    const threadKey = buildArchivedThreadKey(thread);
+    if (pendingRowKeysRef.current.has(threadKey)) {
+      return;
+    }
     const restoreThreadRequest = props.desktopApi?.restoreThread;
     if (!restoreThreadRequest) {
-      setState((current) => ({
-        ...current,
+      setRowAction(threadKey, {
         error: "Desktop bridge is missing restoreThread().",
-      }));
+      });
       return;
     }
 
-    const threadKey = buildArchivedThreadKey(thread);
-    setState((current) => ({ ...current, error: undefined }));
-    setRestoringThreadKey(threadKey);
+    pendingRowKeysRef.current.add(threadKey);
+    setRowAction(threadKey, { pending: "restore" });
     try {
       await restoreThreadRequest({
         backend: thread.source,
         threadId: thread.id,
       });
-      restoredThreadKeysRef.current.add(threadKey);
-      setState((current) => ({
-        ...current,
-        threads: current.threads.filter(
-          (candidate) => buildArchivedThreadKey(candidate) !== threadKey,
-        ),
-      }));
-      setRestoredThreads((current) => [
-        thread,
-        ...current.filter(
-          (candidate) => buildArchivedThreadKey(candidate) !== threadKey,
-        ),
-      ]);
+      setRestoredThreads((current) => new Map(current).set(threadKey, thread));
+      setRowAction(threadKey, undefined);
     } catch (error) {
-      setState((current) => ({
-        ...current,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      setRowAction(threadKey, {
+        error: `Restore failed: ${errorMessage(error)}`,
+      });
     } finally {
-      setRestoringThreadKey(undefined);
+      pendingRowKeysRef.current.delete(threadKey);
     }
   };
+
+  // Not an undo: this is the normal archive path, worktree snapshots
+  // included, so the row goes back to the archived list as a fresh archive.
+  const archiveThreadAgain = async (thread: AppServerThreadSummary) => {
+    const threadKey = buildArchivedThreadKey(thread);
+    if (pendingRowKeysRef.current.has(threadKey)) {
+      return;
+    }
+    const archiveThreadRequest = props.desktopApi?.archiveThread;
+    if (!archiveThreadRequest) {
+      setRowAction(threadKey, {
+        error: "Desktop bridge is missing archiveThread().",
+      });
+      return;
+    }
+
+    pendingRowKeysRef.current.add(threadKey);
+    setRowAction(threadKey, { pending: "archive" });
+    try {
+      await archiveThreadRequest({
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      setState((current) =>
+        current.threads.some(
+          (candidate) => buildArchivedThreadKey(candidate) === threadKey,
+        )
+          ? current
+          : { ...current, threads: [...current.threads, thread] },
+      );
+      setRestoredThreads((current) => {
+        const next = new Map(current);
+        next.delete(threadKey);
+        return next;
+      });
+      setRowAction(threadKey, undefined);
+    } catch (error) {
+      setRowAction(threadKey, {
+        error: `Archive failed: ${errorMessage(error)}`,
+      });
+    } finally {
+      pendingRowKeysRef.current.delete(threadKey);
+    }
+  };
+
+  let toolbarStatus: ReactNode;
+  if (state.loading && !hasLoaded) {
+    toolbarStatus = (
+      <>
+        <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+        <span>Loading…</span>
+      </>
+    );
+  } else if (!hasLoaded) {
+    toolbarStatus = <span>Not loaded</span>;
+  } else {
+    toolbarStatus = joinWithDots([
+      isFiltering ? (
+        <span key="count">
+          <b>{visibleRowCount}</b> of {totalRowCount}
+        </span>
+      ) : (
+        <span key="count">
+          <b>{totalRowCount - restoredCount}</b>{" "}
+          {totalRowCount - restoredCount === 1 ? "thread" : "threads"}
+        </span>
+      ),
+      !isFiltering && restoredCount > 0 ? (
+        <span key="restored">{restoredCount} restored</span>
+      ) : null,
+      <span key="updated">{updatedLabel}</span>,
+    ]);
+  }
 
   return (
     <SettingsSectionStack paneId="archived" aria-label="Archived Threads settings">
       <SettingsPanelHead
         eyebrow="Archived Threads"
         title="Archived threads"
-        help="Archived threads stay out of Inbox, Recents, and Directories. Restore one from its project group to make it visible again."
-        action={
-          <button
-            className="button button--secondary"
-            disabled={state.loading}
-            type="button"
-            onClick={() => {
-              void loadArchivedThreads();
-            }}
-          >
-            Refresh
-          </button>
-        }
+        help="Archived threads stay out of Inbox, Recents, and Directories until you restore them."
       />
 
-      <div className="settings-archive-filter-control">
+      <div className="settings-archive-toolbar">
         <div
           className="settings-archive-filter"
           role="search"
@@ -196,12 +303,12 @@ export function ArchivedThreadsSettings(props: {
           <SearchIcon
             aria-hidden
             className="settings-archive-filter__icon"
-            size={15}
+            size={13}
           />
           <input
             className="settings-input settings-archive-filter__input"
             aria-label="Filter archived threads"
-            placeholder="Filter by title, summary, project, branch, or source"
+            placeholder="Filter by title, thread ID, branch, or project"
             spellCheck={false}
             type="search"
             value={filter}
@@ -224,101 +331,127 @@ export function ArchivedThreadsSettings(props: {
             </button>
           ) : null}
         </div>
-        {isFiltering && !state.loading && visibleThreadCount > 0 ? (
-          <p className="settings-archive-filter__summary" role="status">
-            Showing {visibleThreadCount} matching archived{" "}
-            {visibleThreadCount === 1 ? "thread" : "threads"} in{" "}
-            {projectGroups.length}{" "}
-            {projectGroups.length === 1 ? "project folder" : "project folders"}.
-          </p>
-        ) : null}
+        <p className="settings-archive-toolbar__status" role="status">
+          {toolbarStatus}
+        </p>
+        <button
+          className="button button--ghost settings-section-controls__button"
+          disabled={state.loading}
+          type="button"
+          onClick={() => {
+            void loadArchivedThreads();
+          }}
+        >
+          Refresh
+        </button>
       </div>
 
-      {(state.loading && state.threads.length === 0) ||
-      (!state.loading && projectGroups.length === 0) ||
-      state.error ? (
-        <SettingsSection
-          eyebrow="Archived Threads"
-          title="Project folders"
-          description="Review archived work by project and restore threads that should return to the main thread lists."
-          chip={state.loading ? "loading" : fetchedAtLabel}
-          chipKind="muted"
-        >
-          {state.loading && state.threads.length === 0 ? (
-            <p className="settings-empty settings-archive-empty">
-              Loading archived threads...
-            </p>
-          ) : null}
-          {!state.loading && projectGroups.length === 0 ? (
-            <p
-              className="settings-empty settings-archive-empty"
-              role={isFiltering ? "status" : undefined}
-            >
-              {isFiltering
-                ? `No archived threads match “${filterQuery}”.`
-                : "No archived threads."}
-            </p>
-          ) : null}
-          {state.error ? (
-            <p
-              className="settings-row__error settings-archive-status"
-              role="alert"
-            >
-              {state.error}
-            </p>
-          ) : null}
-        </SettingsSection>
+      {state.error ? (
+        <div className="settings-archive-banner" role="alert">
+          <p className="settings-archive-banner__text">
+            <b>
+              {hasLoaded
+                ? `Couldn’t refresh. Showing the list from ${formatFetchedAt(state.fetchedAt ?? 0)}.`
+                : "Couldn’t load archived threads"}
+            </b>
+            <span>{state.error}</span>
+          </p>
+          <button
+            className="button button--secondary settings-section-controls__button"
+            disabled={state.loading}
+            type="button"
+            onClick={() => {
+              void loadArchivedThreads();
+            }}
+          >
+            Retry
+          </button>
+        </div>
       ) : null}
 
-      {restoredThreads.length > 0 ? (
-        <SettingsSection
-          eyebrow="Restored"
-          title="Restored threads"
-          description="Back in Inbox, Recents, and Directories."
-          chip={`${restoredThreads.length} restored`}
-          chipKind="muted"
-        >
-          <div className="settings-archive-project__threads" role="status">
-            {restoredThreads.map((thread) => (
-              <RestoredThreadRow
-                key={buildArchivedThreadKey(thread)}
-                desktopApi={props.desktopApi}
-                thread={thread}
-                onOpenThread={props.onOpenThread}
-              />
-            ))}
+      {state.loading && !hasLoaded ? <ArchivedThreadsSkeleton /> : null}
+
+      {hasLoaded && totalRowCount === 0 ? (
+        <div className="settings-archive-empty">
+          <p className="settings-archive-empty__title">No archived threads</p>
+          <p className="settings-archive-empty__detail">
+            Threads you archive are listed here by project, ready to restore.
+          </p>
+        </div>
+      ) : null}
+
+      {isFiltering && totalRowCount > 0 && visibleRowCount === 0 ? (
+        <div className="settings-archive-empty">
+          <p className="settings-archive-empty__title">
+            No archived threads match “{filterQuery}”.
+          </p>
+          <p className="settings-archive-empty__detail">
+            Matching checks the title, summary, thread ID, branch, and project
+            path.
+          </p>
+          <div className="settings-archive-empty__actions">
+            <button
+              className="button button--ghost settings-section-controls__button"
+              type="button"
+              onClick={() => setFilter("")}
+            >
+              Clear filter
+            </button>
           </div>
-        </SettingsSection>
+        </div>
       ) : null}
 
       {projectGroups.map((group) => {
-        const visibleThreads = isFiltering
+        const showAll = isFiltering || expandedGroupKeys.has(group.key);
+        const visibleThreads = showAll
           ? group.threads
           : group.threads.slice(0, ARCHIVED_THREADS_PER_PROJECT_LIMIT);
         const hiddenThreadCount = group.threads.length - visibleThreads.length;
-        const groupThreadNoun = isFiltering
-          ? group.threads.length === 1
-            ? "match"
-            : "matches"
-          : group.threads.length === 1
-            ? "thread"
-            : "threads";
+        const groupRestoredCount = group.threads.filter((thread) =>
+          restoredThreads.has(buildArchivedThreadKey(thread)),
+        ).length;
         return (
           <SettingsSection
             key={group.key}
-            eyebrow="Project folder"
+            className="settings-archive-group"
             title={group.label}
-            description={group.path}
-            chip={`${group.threads.length} ${groupThreadNoun}`}
+            description={
+              group.path ? (
+                <span className="settings-archive-path">{group.path}</span>
+              ) : undefined
+            }
+            chip={
+              groupRestoredCount > 0
+                ? `${group.threads.length - groupRestoredCount} · ${groupRestoredCount} restored`
+                : String(group.threads.length)
+            }
             chipKind="muted"
           >
             <div className="settings-archive-project__threads">
               {visibleThreads.map((thread) => {
                 const threadKey = buildArchivedThreadKey(thread);
-                return (
+                const action = rowActions.get(threadKey);
+                return restoredThreads.has(threadKey) ? (
+                  <RestoredThreadRow
+                    key={threadKey}
+                    action={action}
+                    desktopApi={props.desktopApi}
+                    queryTerms={queryTerms}
+                    showSource={thread.source !== primarySource}
+                    thread={thread}
+                    onArchiveAgain={() => {
+                      void archiveThreadAgain(thread);
+                    }}
+                    onOpenThread={props.onOpenThread}
+                  />
+                ) : (
                   <ArchivedThreadRow
                     key={threadKey}
-                    restoring={restoringThreadKey === threadKey}
+                    action={action}
+                    desktopApi={props.desktopApi}
+                    groupLabel={group.label}
+                    queryTerms={queryTerms}
+                    showSource={thread.source !== primarySource}
                     thread={thread}
                     onRestore={() => {
                       void restoreThread(thread);
@@ -326,11 +459,21 @@ export function ArchivedThreadsSettings(props: {
                   />
                 );
               })}
-              {!isFiltering && hiddenThreadCount > 0 ? (
-                <p className="settings-archive-status">
-                  Showing {ARCHIVED_THREADS_PER_PROJECT_LIMIT} of{" "}
-                  {group.threads.length} most recent archived threads.
-                </p>
+              {hiddenThreadCount > 0 ? (
+                <div className="settings-archive-more">
+                  <span>{hiddenThreadCount} older</span>
+                  <button
+                    className="settings-archive-more__button"
+                    type="button"
+                    onClick={() =>
+                      setExpandedGroupKeys((current) =>
+                        new Set(current).add(group.key),
+                      )
+                    }
+                  >
+                    Show all {group.threads.length}
+                  </button>
+                </div>
               ) : null}
             </div>
           </SettingsSection>
@@ -341,50 +484,95 @@ export function ArchivedThreadsSettings(props: {
 }
 
 function ArchivedThreadRow(props: {
-  restoring: boolean;
+  action?: ArchivedRowAction;
+  desktopApi?: DesktopApi;
+  groupLabel: string;
+  queryTerms: readonly string[];
+  showSource: boolean;
   thread: AppServerThreadSummary;
   onRestore: () => void;
 }) {
   const thread = props.thread;
-  const directories = thread.linkedDirectories
-    .map((directory) => directory.label || directory.path)
-    .filter(Boolean);
-  const archivedAt = resolveArchiveTimestamp(thread);
-  const activityLabel = archivedAt
-    ? `Archived ${formatTimestamp(archivedAt)}`
-    : thread.updatedAt
-    ? `Updated ${formatTimestamp(thread.updatedAt)}`
-    : thread.createdAt
-      ? `Created ${formatTimestamp(thread.createdAt)}`
-      : "No timestamp";
+  const terms = props.queryTerms;
+  const restoring = props.action?.pending === "restore";
+  // An ID match swaps the summary for the full ID, so the operator can see
+  // what the filter matched.
+  const idMatched = terms.some((term) =>
+    thread.id.toLocaleLowerCase().includes(term),
+  );
+  const otherDirectories = [
+    ...new Set(
+      thread.linkedDirectories
+        .map((directory) => directory.label || pathBaseName(directory.path))
+        .filter((label) => label && label !== props.groupLabel),
+    ),
+  ];
+  const timestamp =
+    resolveArchiveTimestamp(thread) ?? thread.updatedAt ?? thread.createdAt;
 
   return (
     <article className="settings-archive-row">
       <div className="settings-archive-row__body">
-        <h3 className="settings-archive-row__title">{thread.title}</h3>
-        {thread.summary ? (
-          <p className="settings-archive-row__summary">{thread.summary}</p>
-        ) : null}
-        <p className="settings-archive-row__meta">
-          <span>{activityLabel}</span>
-          {directories.length ? <span>{directories.join(", ")}</span> : null}
-          <span className="settings-archive-row__id">{thread.id}</span>
-        </p>
-      </div>
-      <div className="settings-archive-row__side">
-        <div className="settings-pathrow__chips">
-          <span className="settings-pathrow__chip">{thread.source}</span>
-          {thread.gitBranch ? (
-            <span className="settings-pathrow__chip">{thread.gitBranch}</span>
+        <div className="settings-archive-row__line">
+          <h3 className="settings-archive-row__title">
+            {highlightMatches(thread.title, terms)}
+          </h3>
+          {props.showSource ? (
+            <span className="settings-pathrow__chip">{thread.source}</span>
           ) : null}
         </div>
+        {!idMatched && thread.summary ? (
+          <p className="settings-archive-row__summary">
+            {highlightMatches(thread.summary, terms)}
+          </p>
+        ) : null}
+        <p className="settings-archive-row__meta">
+          {joinWithDots([
+            timestamp ? (
+              <span key="time">{formatTimestamp(timestamp)}</span>
+            ) : null,
+            thread.gitBranch ? (
+              <span key="branch">{highlightMatches(thread.gitBranch, terms)}</span>
+            ) : null,
+            idMatched ? null : (
+              <CopyThreadIdButton
+                key="id"
+                desktopApi={props.desktopApi}
+                thread={thread}
+                variant="short"
+              />
+            ),
+            otherDirectories.length > 0 ? (
+              <span key="dirs">also {otherDirectories.join(", ")}</span>
+            ) : null,
+          ])}
+        </p>
+        {idMatched ? (
+          <p className="settings-archive-row__meta">
+            <span className="settings-archive-row__id">
+              {highlightMatches(thread.id, terms)}
+            </span>
+            <CopyThreadIdButton
+              desktopApi={props.desktopApi}
+              thread={thread}
+              variant="link"
+            />
+          </p>
+        ) : null}
+        {props.action?.error ? (
+          <p className="settings-archive-row__error" role="alert">
+            {props.action.error}
+          </p>
+        ) : null}
+      </div>
+      <div className="settings-archive-row__side">
         <button
+          aria-disabled={restoring || undefined}
           className="button button--secondary settings-archive-row__button"
-          disabled={props.restoring}
           type="button"
-          onClick={props.onRestore}
+          onClick={restoring ? undefined : props.onRestore}
         >
-          {props.restoring ? "Restoring..." : "Restore"}
+          {restoring ? "Restoring…" : props.action?.error ? "Retry" : "Restore"}
         </button>
       </div>
     </article>
@@ -392,59 +580,59 @@ function ArchivedThreadRow(props: {
 }
 
 function RestoredThreadRow(props: {
+  action?: ArchivedRowAction;
   desktopApi?: DesktopApi;
+  queryTerms: readonly string[];
+  showSource: boolean;
   thread: AppServerThreadSummary;
-  onOpenThread?: (target: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }) => void;
+  onArchiveAgain: () => void;
+  onOpenThread?: (target: OpenThreadTarget) => void;
 }) {
   const thread = props.thread;
-  const [copied, setCopied] = useState(false);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
-  const directories = thread.linkedDirectories
-    .map((directory) => directory.label || directory.path)
-    .filter(Boolean);
-
-  const copyThreadId = async () => {
-    try {
-      await copyText(thread.id, props.desktopApi);
-    } catch {
-      return;
-    }
-    setCopied(true);
-    clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(
-      () => setCopied(false),
-      COPIED_FEEDBACK_MS,
-    );
-  };
+  const archiving = props.action?.pending === "archive";
 
   return (
-    <article className="settings-archive-row">
+    <article className="settings-archive-row settings-archive-row--restored">
       <div className="settings-archive-row__body">
-        <h3 className="settings-archive-row__title">{thread.title}</h3>
-        <p className="settings-archive-row__meta">
-          <span className="settings-archive-row__id">{thread.id}</span>
-          {directories.length ? <span>{directories.join(", ")}</span> : null}
+        <div className="settings-archive-row__line">
+          <span className="settings-pathrow__chip settings-pathrow__chip--ok">
+            Restored
+          </span>
+          <h3 className="settings-archive-row__title">
+            {highlightMatches(thread.title, props.queryTerms)}
+          </h3>
+          {props.showSource ? (
+            <span className="settings-pathrow__chip">{thread.source}</span>
+          ) : null}
+        </div>
+        <p className="settings-archive-row__restored-note">
+          Back in Inbox, Recents, and Directories.
         </p>
+        <p className="settings-archive-row__meta">
+          <span className="settings-archive-row__id">
+            {highlightMatches(thread.id, props.queryTerms)}
+          </span>
+          <CopyThreadIdButton
+            desktopApi={props.desktopApi}
+            thread={thread}
+            variant="link"
+          />
+        </p>
+        {props.action?.error ? (
+          <p className="settings-archive-row__error" role="alert">
+            {props.action.error}
+          </p>
+        ) : null}
       </div>
       <div className="settings-archive-row__side">
-        <div className="settings-pathrow__chips">
-          <span className="settings-pathrow__chip">{thread.source}</span>
-        </div>
         <button
-          aria-label={`Copy thread ID for ${thread.title}`}
+          aria-disabled={archiving || undefined}
+          aria-label={`Archive ${thread.title} again`}
           className="button button--ghost settings-archive-row__button"
           type="button"
-          onClick={() => {
-            void copyThreadId();
-          }}
+          onClick={archiving ? undefined : props.onArchiveAgain}
         >
-          {copied ? "Copied" : "Copy ID"}
+          {archiving ? "Archiving…" : "Archive again"}
         </button>
         {props.onOpenThread ? (
           <button
@@ -464,6 +652,164 @@ function RestoredThreadRow(props: {
       </div>
     </article>
   );
+}
+
+function CopyThreadIdButton(props: {
+  desktopApi?: DesktopApi;
+  thread: AppServerThreadSummary;
+  /** `short` shows the ID's first characters; `link` sits beside a full ID. */
+  variant: "short" | "link";
+}) {
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
+
+  const copyThreadId = async () => {
+    try {
+      await copyText(props.thread.id, props.desktopApi);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(
+      () => setCopied(false),
+      COPIED_FEEDBACK_MS,
+    );
+  };
+
+  const label =
+    props.variant === "short"
+      ? props.thread.id.slice(0, SHORT_THREAD_ID_LENGTH)
+      : "Copy ID";
+  return (
+    <button
+      aria-label={`Copy thread ID for ${props.thread.title}`}
+      className={`settings-archive-copy-id settings-archive-copy-id--${props.variant}${
+        copied ? " is-copied" : ""
+      }`}
+      type="button"
+      onClick={() => {
+        void copyThreadId();
+      }}
+    >
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function ArchivedThreadsSkeleton() {
+  return (
+    <div className="settings-archive-skeleton" aria-hidden="true">
+      <div className="settings-archive-skeleton__head">
+        <span className="settings-archive-skeleton__bar" />
+      </div>
+      {[0, 1].map((index) => (
+        <div key={index} className="settings-archive-skeleton__row">
+          <span className="settings-archive-skeleton__bar" />
+          <span className="settings-archive-skeleton__bar" />
+          <span className="settings-archive-skeleton__bar" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Interleaves `·` separators between the present items. */
+function joinWithDots(items: ReactNode[]): ReactNode[] {
+  const present = items.filter((item) => item !== null && item !== undefined);
+  return present.flatMap((item, index) =>
+    index === 0
+      ? [item]
+      : [
+          <span
+            key={`dot-${index}`}
+            aria-hidden="true"
+            className="settings-archive-dot"
+          >
+            ·
+          </span>,
+          item,
+        ],
+  );
+}
+
+/** Wraps each case-insensitive occurrence of a filter term in `<mark>`. */
+function highlightMatches(text: string, terms: readonly string[]): ReactNode {
+  if (terms.length === 0 || !text) {
+    return text;
+  }
+  const lowerText = text.toLocaleLowerCase();
+  const ranges: Array<[number, number]> = [];
+  for (const term of terms) {
+    let index = lowerText.indexOf(term);
+    while (index !== -1) {
+      ranges.push([index, index + term.length]);
+      index = lowerText.indexOf(term, index + term.length);
+    }
+  }
+  if (ranges.length === 0) {
+    return text;
+  }
+
+  ranges.sort((left, right) => left[0] - right[0]);
+  const merged: Array<[number, number]> = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([range[0], range[1]]);
+    }
+  }
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const [start, end] of merged) {
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+    parts.push(
+      <mark key={start} className="settings-archive-hit">
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts;
+}
+
+function countGroupThreads(groups: ArchivedProjectGroup[]): number {
+  return groups.reduce((count, group) => count + group.threads.length, 0);
+}
+
+/** The failure without the "Error invoking remote method …" wrapper Electron adds. */
+function errorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "");
+}
+
+function mostCommonSource(
+  threads: readonly AppServerThreadSummary[],
+): AppServerThreadSummary["source"] | undefined {
+  const counts = new Map<AppServerThreadSummary["source"], number>();
+  for (const thread of threads) {
+    counts.set(thread.source, (counts.get(thread.source) ?? 0) + 1);
+  }
+  let primary: AppServerThreadSummary["source"] | undefined;
+  let primaryCount = 0;
+  for (const [source, count] of counts) {
+    if (count > primaryCount) {
+      primary = source;
+      primaryCount = count;
+    }
+  }
+  return primary;
 }
 
 function sortArchivedThreads(
@@ -517,16 +863,8 @@ function groupArchivedThreadsByProject(
 
 function filterArchivedProjectGroups(
   groups: ArchivedProjectGroup[],
-  query: string,
+  queryTerms: readonly string[],
 ): ArchivedProjectGroup[] {
-  const queryTerms = query
-    .toLocaleLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (queryTerms.length === 0) {
-    return groups;
-  }
-
   return groups.flatMap((group) => {
     const threads = group.threads.filter((thread) =>
       archivedThreadMatchesFilter(thread, group, queryTerms),
@@ -538,7 +876,7 @@ function filterArchivedProjectGroups(
 function archivedThreadMatchesFilter(
   thread: AppServerThreadSummary,
   group: ArchivedProjectGroup,
-  queryTerms: string[],
+  queryTerms: readonly string[],
 ): boolean {
   const searchText = [
     group.label,
@@ -800,6 +1138,14 @@ function buildArchivedThreadKey(thread: AppServerThreadSummary): string {
 
 function formatTimestamp(timestamp: number): string {
   return dateFormatter.format(timestamp);
+}
+
+/** Time only when the list was fetched today; otherwise date and time. */
+function formatFetchedAt(timestamp: number): string {
+  const fetched = new Date(timestamp);
+  return fetched.toDateString() === new Date().toDateString()
+    ? timeFormatter.format(fetched)
+    : dateFormatter.format(fetched);
 }
 
 function pathBaseName(pathname: string): string {

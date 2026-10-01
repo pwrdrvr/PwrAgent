@@ -386,6 +386,8 @@ export function SettingsSection(props: {
   chipKind?: SettingsChipTone;
   "aria-label"?: string;
   sectionId?: string;
+  /** Extra class on the card, for a pane that restyles its section chrome. */
+  className?: string;
 }) {
   const generatedId = useId();
   const pane = useContext(SettingsSectionPaneContext);
@@ -475,7 +477,7 @@ export function SettingsSection(props: {
       aria-label={props["aria-label"]}
       className={`settings-panel settings-panel--has-body settings-panel--collapsible${
         collapsed ? " settings-panel--is-collapsed" : ""
-      }`}
+      }${props.className ? ` ${props.className}` : ""}`}
     >
       <div
         ref={headerRef}

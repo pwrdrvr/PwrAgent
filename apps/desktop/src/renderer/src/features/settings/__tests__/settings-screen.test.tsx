@@ -2464,13 +2464,18 @@ describe("SettingsScreen", () => {
       threadId: "thread-archived",
       restoredAt: 4_000,
     }));
-
+    const archiveThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-archived",
+      archivedAt: 5_000,
+      cleanup: [],
+    }));
     const copyText = vi.fn(async () => undefined);
     const onOpenThread = vi.fn();
 
     render(
       <SettingsScreen
-        desktopApi={{ copyText, listThreads, restoreThread }}
+        desktopApi={{ archiveThread, copyText, listThreads, restoreThread }}
         settings={createSettingsState()}
         initialSection="archived"
         onClose={() => undefined}
@@ -2494,16 +2499,17 @@ describe("SettingsScreen", () => {
         threadId: "thread-archived",
       });
     });
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Restore" }),
-      ).not.toBeInTheDocument();
-    });
+    // The row stays in its project group, in its restored state.
+    const pwrAgentGroup = screen
+      .getByRole("heading", { name: "PwrAgnt" })
+      .closest("section")!;
+    expect(await within(pwrAgentGroup).findByText("Restored")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Restored threads" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Archived code review")).toBeInTheDocument();
-    expect(screen.getByText("thread-archived")).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Restore" }),
+    ).not.toBeInTheDocument();
+    expect(within(pwrAgentGroup).getByText("Archived code review")).toBeInTheDocument();
+    expect(within(pwrAgentGroup).getByText("thread-archived")).toBeInTheDocument();
+    expect(within(pwrAgentGroup).getByText("0 · 1 restored")).toBeInTheDocument();
 
     const copyButton = screen.getByRole("button", {
       name: "Copy thread ID for Archived code review",
@@ -2521,6 +2527,65 @@ describe("SettingsScreen", () => {
       backend: "codex",
       threadId: "thread-archived",
     });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Archive Archived code review again" }),
+    );
+    await waitFor(() => {
+      expect(archiveThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-archived",
+      });
+    });
+    expect(
+      await screen.findByRole("button", { name: "Restore" }),
+    ).toBeInTheDocument();
+    expect(within(pwrAgentGroup).queryByText("Restored")).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed restore on its row", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [
+        {
+          id: "thread-stuck",
+          title: "Stuck restore",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+    const restoreThread = vi.fn(async () => {
+      throw new Error("the Codex App Server did not respond");
+    });
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads, restoreThread }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+
+    const row = (await screen.findByText(
+      "Restore failed: the Codex App Server did not respond",
+    )).closest("article")!;
+    expect(within(row).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(within(row).getByText("Stuck restore")).toBeInTheDocument();
   });
 
   it("groups archived threads by project before restoration", async () => {
@@ -2598,7 +2663,7 @@ describe("SettingsScreen", () => {
     const pwrAgentGroup = (await screen.findByRole("heading", {
       name: "PwrAgnt",
     })).closest("section")!;
-    expect(within(pwrAgentGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(within(pwrAgentGroup).getByText("2")).toBeInTheDocument();
     const firstPwrAgentThread = within(pwrAgentGroup).getByText(
       "First PwrAgent thread",
     );
@@ -2613,7 +2678,7 @@ describe("SettingsScreen", () => {
     const otherGroup = screen.getByRole("heading", {
       name: "OtherProject",
     }).closest("section")!;
-    expect(within(otherGroup).getByText("1 thread")).toBeInTheDocument();
+    expect(within(otherGroup).getByText("1")).toBeInTheDocument();
     expect(
       within(otherGroup).getByText("Other project thread"),
     ).toBeInTheDocument();
@@ -2677,7 +2742,7 @@ describe("SettingsScreen", () => {
     const pwrSnapGroup = (await screen.findByRole("heading", {
       name: "PwrSnap",
     })).closest("section")!;
-    expect(within(pwrSnapGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(within(pwrSnapGroup).getByText("2")).toBeInTheDocument();
     expect(
       within(pwrSnapGroup).getByText("Testing env setup"),
     ).toBeInTheDocument();
@@ -2756,7 +2821,7 @@ describe("SettingsScreen", () => {
     const workspacesGroup = (await screen.findByRole("heading", {
       name: "Workspaces",
     })).closest("section")!;
-    expect(within(workspacesGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText("2")).toBeInTheDocument();
     expect(within(workspacesGroup).getByText("lions roar")).toBeInTheDocument();
     expect(within(workspacesGroup).getByText("what's up")).toBeInTheDocument();
     expect(within(workspacesGroup).getByText(activeWorkspaceRoot)).toBeInTheDocument();
@@ -2820,35 +2885,37 @@ describe("SettingsScreen", () => {
     expect(
       within(pwrAgentGroup).queryByText("Archived thread 05"),
     ).not.toBeInTheDocument();
-    expect(
-      within(pwrAgentGroup).getByText(
-        "Showing 20 of 25 most recent archived threads.",
-      ),
-    ).toBeInTheDocument();
+    expect(within(pwrAgentGroup).getByText("5 older")).toBeInTheDocument();
+    const toolbarStatus = document.querySelector(
+      ".settings-archive-toolbar__status",
+    )!;
+    expect(toolbarStatus).toHaveTextContent(/^25 threads·Updated /);
 
     fireEvent.change(screen.getByLabelText("Filter archived threads"), {
       target: { value: "05" },
     });
 
+    // A highlighted match splits the title into text and <mark> nodes, so
+    // rows are found by their heading's accessible name.
+    const matchedTitle = within(pwrAgentGroup).getByRole("heading", {
+      name: "Archived thread 05",
+    });
     expect(
-      within(pwrAgentGroup).getByText("Archived thread 05"),
-    ).toBeInTheDocument();
+      matchedTitle.querySelector("mark.settings-archive-hit"),
+    ).toHaveTextContent("05");
     expect(
-      within(pwrAgentGroup).queryByText("Archived thread 25"),
+      within(pwrAgentGroup).queryByRole("heading", { name: "Archived thread 25" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("1 match")).toBeInTheDocument();
-    expect(
-      screen.getByText("Showing 1 matching archived thread in 1 project folder."),
-    ).toBeInTheDocument();
+    expect(toolbarStatus).toHaveTextContent(/^1 of 25·Updated /);
 
     fireEvent.change(screen.getByLabelText("Filter archived threads"), {
       target: { value: "Archived" },
     });
 
-    expect(screen.getByText("25 matches")).toBeInTheDocument();
     expect(
-      screen.getByText("Showing 25 matching archived threads in 1 project folder."),
-    ).toBeInTheDocument();
+      within(pwrAgentGroup).getAllByRole("heading", { level: 3 }),
+    ).toHaveLength(25);
+    expect(toolbarStatus).toHaveTextContent(/^25 of 25·Updated /);
 
     fireEvent.change(screen.getByLabelText("Filter archived threads"), {
       target: { value: "not found" },
@@ -2857,9 +2924,18 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByText("No archived threads match “not found”."),
     ).toBeInTheDocument();
+    expect(toolbarStatus).toHaveTextContent(/^0 of 25·Updated /);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all 25" }));
+    // The no-match filter unmounted the group, so look it up again.
+    const expandedGroup = screen
+      .getByRole("heading", { name: "PwrAgnt" })
+      .closest("section")!;
     expect(
-      screen.queryByText("Showing 0 matching archived threads in 0 project folders."),
-    ).not.toBeInTheDocument();
+      within(expandedGroup).getByText("Archived thread 05"),
+    ).toBeInTheDocument();
+    expect(within(expandedGroup).queryByText("5 older")).not.toBeInTheDocument();
   });
 
   it("does not re-add a restored thread when a stale archive refresh resolves", async () => {
@@ -2925,14 +3001,12 @@ describe("SettingsScreen", () => {
       });
     });
 
-    // Only the Restored threads row names it; the archived list stays empty.
+    // The stale response still lists it as archived; the restored row wins.
     expect(
       screen.queryByRole("button", { name: "Restore" }),
     ).not.toBeInTheDocument();
     expect(screen.getAllByText("Archived code review")).toHaveLength(1);
-    expect(
-      screen.getByRole("heading", { name: "Restored threads" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Restored")).toBeInTheDocument();
   });
 
   it("shows ACP agents inside the consolidated AI Providers section", async () => {
