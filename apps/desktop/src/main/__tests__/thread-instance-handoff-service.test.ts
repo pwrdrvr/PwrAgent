@@ -24,7 +24,7 @@ async function setup() {
     withThreadHandoff: async <T>(_threadId: string, work: () => Promise<T>) => await work(),
     exportThreadForHandoff: vi.fn(async () => source),
     archiveThread: archive,
-    forkThread: vi.fn(async (_request: { directoryPath: string }) => ({ threadId: "destination-thread" })),
+    forkThread: vi.fn(async (_request: { directoryPath: string; importedWorktree?: { repositoryPath: string; worktreePath: string } }) => ({ threadId: "destination-thread" })),
     readThread: vi.fn(async () => ({ replay })),
     renameThread: vi.fn(async () => {}),
   };
@@ -95,8 +95,10 @@ it("transfers a Git workspace and keeps the thread's subdirectory cwd", async ()
   expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("unstaged\n");
   expect(backend.forkThread).toHaveBeenCalledWith(expect.objectContaining({
     directoryPath: result.directoryPath, directoryLabel: "destination-repo", workMode: "worktree",
-    importedWorktree: { repositoryPath: canonicalDestinationRepo, worktreePath: worktree },
+    importedWorktree: { repositoryPath: expect.any(String), worktreePath: worktree },
   }));
+  const importedRepository = backend.forkThread.mock.calls[0]![0].importedWorktree!.repositoryPath;
+  expect(path.resolve(importedRepository)).toBe(path.resolve(canonicalDestinationRepo));
 });
 
 it("retains the workspace when fork rejection leaves provider creation uncertain", async () => {
