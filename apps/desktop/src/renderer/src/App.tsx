@@ -1593,7 +1593,7 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
-  const providerModelDefaults = useMemo(() => settings.snapshot
+  const providerModelDefaults = useMemo(() => settings.snapshot?.models
     ? settings.snapshot.models.providerDefaults ?? {}
     : undefined, [settings.snapshot]);
   const navigation = useThreadNavigation(desktopApi, {
