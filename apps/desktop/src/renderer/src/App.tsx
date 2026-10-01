@@ -1764,8 +1764,9 @@ function DesktopAppShell(props: {
       view: mainView,
       lens: navigation.browseMode,
       thread: navigation.selectedThread,
+      launchpad: navigation.selectedLaunchpad,
     }),
-    [mainView, navigation.browseMode, navigation.selectedThread],
+    [mainView, navigation.browseMode, navigation.selectedThread, navigation.selectedLaunchpad],
   );
   useOperatorFocusPublisher(directorVoiceApi, operatorFocus);
   const directorVoiceControl = useMemo(
@@ -3750,6 +3751,7 @@ function DesktopAppShell(props: {
               api={directorVoiceApi}
               desktopApi={desktopApi}
               focus={navigation.selectedThread}
+              launchpad={navigation.selectedLaunchpad}
             />
           ) : null}
           <AppUpdateBanner

@@ -17,9 +17,17 @@ its name on every thread.
 Leaving the thread ends its voice. A failed stop stays visible on the composer
 the window lands on, so **End voice** can be retried there.
 
-Thread voice runs on this machine's Codex App Server. On a peer's thread, or a
-thread on another provider, the toggle stays visible but disabled, and its
-tooltip points to director voice, which can reach both.
+Thread voice runs on this machine's Codex App Server, and its handoffs run
+turns in that thread, so it opens only on a local Codex thread. Everywhere else
+the composer's **Voice** mic starts director voice instead, and its tooltip says
+what that will do:
+
+- On a new-thread launchpad, say what the thread should do. Director voice
+  creates the thread in that project, on the launchpad's machine, with the
+  settings the composer shows. Those settings are the launchpad's saved draft,
+  which `create_instance_thread` applies.
+- On a peer's thread, or a thread on another provider, director voice talks to
+  that thread through the thread tools.
 
 ## Director voice
 
@@ -55,7 +63,10 @@ To resolve "this thread", the Voice manager calls `read_operator_focus`. This
 is a star map family tool and needs the same `tools.thread_inspection`
 permission. It returns what the operator's local main window shows: the view,
 the lens, and the selected thread with its backend, id, title, and instance.
-It also returns how long ago the window published that. Each local main window
+With no thread selected, it reports an open new-thread launchpad instead: the
+project key and label, the peer instance it will start on, and the composer's
+backend, model, effort, execution mode and work mode. It never reports the
+draft text. It also returns how long ago the window published that. Each local main window
 publishes its focus 150 ms after a change, and again when it gains focus. Main
 keeps the latest snapshot in memory only and accepts it only from local main
 windows. When no window has published, the tool returns `focus_not_published`,

@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceToast, toggleDirectorVoice } from "../DirectorVoice";
+import { DirectorVoiceComposerToggle, DirectorVoiceToast, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "../native-voice-controller";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
@@ -218,24 +218,59 @@ it("reports a Voice manager that cannot be opened instead of starting voice", as
   expect(f.capture).not.toHaveBeenCalled();
 });
 
-// A peer's thread was the case that hid the mic without a word: live voice
-// runs on this machine's App Server, so the composer has to say so and point
-// at the voice that can reach it.
-it("explains why thread voice cannot open on a peer's or another provider's thread", async () => {
-  const peerThread = { id: "sample-peer", source: "codex", federation: { instanceLabel: "Sample Mac mini" } };
-  expect(threadVoiceTarget({ id: "sample-local", source: "codex" }, false)).toEqual({ threadId: "sample-local" });
-  expect(threadVoiceTarget({ id: "sample-local", source: "codex" }, true)).toEqual({});
-  expect(threadVoiceTarget(undefined, false)).toEqual({});
-  expect(threadVoiceTarget({ id: "sample-acp", source: "acp:grok" }, false).unavailableReason).toContain("Codex threads");
-  const peer = threadVoiceTarget(peerThread, false);
-  expect(peer.threadId).toBeUndefined();
-  expect(peer.unavailableReason).toContain("Sample Mac mini");
+// Thread voice opens only on a local Codex thread. Everywhere else the mic
+// starts director voice rather than vanishing or going grey: a peer's thread,
+// another provider's, and a new-thread launchpad, where the spoken request
+// becomes the new thread's task.
+it("routes the mic to director voice where thread voice cannot open", async () => {
+  expect(threadVoiceTarget({ id: "sample-local", source: "codex" }, undefined)).toEqual({ threadId: "sample-local" });
+  expect(threadVoiceTarget(undefined, undefined)).toEqual({});
+  expect(threadVoiceTarget({ id: "sample-acp", source: "acp:grok" }, undefined).directorHint).toContain("director voice");
+  expect(threadVoiceTarget(
+    { id: "sample-peer", source: "codex", federation: { instanceLabel: "Sample Mac mini" } },
+    undefined,
+  ).directorHint).toContain("Sample Mac mini");
+  const launchpad = threadVoiceTarget(undefined, { directoryLabel: "Sample project" });
+  expect(launchpad.threadId).toBeUndefined();
+  expect(launchpad.directorHint).toContain("Sample project");
 
-  const { api } = voiceFixture();
-  render(<NativeVoiceToggle api={api} unavailableReason={peer.unavailableReason} />);
+  const f = voiceFixture();
+  render(<DirectorVoiceComposerToggle api={f.api} hint={launchpad.directorHint!} />);
   const toggle = screen.getByRole("button", { name: "Voice" });
-  expect(toggle).toHaveAttribute("aria-disabled", "true");
-  expect(toggle).toHaveAttribute("data-tooltip", expect.stringContaining("director voice"));
+  expect(toggle).toHaveAttribute("data-tooltip", expect.stringContaining("new thread"));
   fireEvent.click(toggle);
-  expect(api.startNativeVoice).not.toHaveBeenCalled();
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-voice-manager", mode: "director" });
+  expect(toggle).toHaveAttribute("aria-pressed", "true");
+});
+
+it("publishes a launchpad's project and settings, never its draft, and only with no thread selected", () => {
+  const launchpad = {
+    directoryKey: "dir:/sample/project",
+    directoryLabel: "Sample project",
+    federationTarget: { scope: "remote" as const, instanceId: "sample-peer" },
+    backend: "codex" as const,
+    model: "sample-model",
+    reasoningEffort: "medium",
+    executionMode: "default" as const,
+    workMode: "worktree" as const,
+    prompt: "Sample unsent draft",
+  };
+  const focus = operatorFocusFor({ view: "thread", launchpad });
+  expect(focus.launchpad).toEqual({
+    projectKey: "dir:/sample/project",
+    projectLabel: "Sample project",
+    instanceId: "sample-peer",
+    backend: "codex",
+    model: "sample-model",
+    reasoningEffort: "medium",
+    executionMode: "default",
+    workMode: "worktree",
+  });
+  expect(JSON.stringify(focus)).not.toContain("Sample unsent draft");
+  expect(operatorFocusFor({
+    view: "thread",
+    launchpad,
+    thread: { id: "sample-thread", source: "codex", title: "Sample thread" },
+  }).launchpad).toBeUndefined();
 });

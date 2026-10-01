@@ -151,6 +151,8 @@ function descriptionForOperation(
         "Read what the operator is looking at in the main PwrAgent window.",
         "Reports the selected thread with its backend, threadId and title.",
         "A thread owned by a connected peer also carries instanceId and instanceLabel.",
+        "With no thread selected, it can report an open new-thread launchpad instead.",
+        "A launchpad gives the projectKey, an instanceId for a peer machine, and the composer's settings.",
         "Also reports the open view and the sidebar lens.",
         "Call this to resolve \"this thread\" or \"the one I'm looking at\" in a request.",
         "The selection is the operator's, not yours: it can change between calls.",

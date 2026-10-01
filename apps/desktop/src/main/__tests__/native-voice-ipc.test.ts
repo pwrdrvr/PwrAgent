@@ -95,5 +95,13 @@ describe("native voice IPC permission boundary", () => {
     expect(readOperatorFocus()).toBeUndefined();
     await mocks.handlers.get(OPERATOR_FOCUS_PUBLISH_CHANNEL)!({ sender: window }, focus);
     expect(readOperatorFocus()?.focus).toEqual(focus);
+
+    // A launchpad is validated like a thread: a known backend, bounded text.
+    const launchpad = { view: "thread", launchpad: { projectKey: "dir:/sample", projectLabel: "Sample project", backend: "codex", model: "sample-model" } };
+    await mocks.handlers.get(OPERATOR_FOCUS_PUBLISH_CHANNEL)!({ sender: window }, { ...launchpad, launchpad: { ...launchpad.launchpad, backend: "unknown" } });
+    await mocks.handlers.get(OPERATOR_FOCUS_PUBLISH_CHANNEL)!({ sender: window }, { ...launchpad, launchpad: { ...launchpad.launchpad, projectKey: "x".repeat(600) } });
+    expect(readOperatorFocus()?.focus).toEqual(focus);
+    await mocks.handlers.get(OPERATOR_FOCUS_PUBLISH_CHANNEL)!({ sender: window }, launchpad);
+    expect(readOperatorFocus()?.focus).toEqual(launchpad);
   });
 });

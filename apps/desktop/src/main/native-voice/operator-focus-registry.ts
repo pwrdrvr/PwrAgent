@@ -60,12 +60,35 @@ export function isOperatorFocusSnapshot(value: unknown): value is OperatorFocusS
   const focus = value as Record<string, unknown>;
   if (!OPERATOR_FOCUS_VIEWS.includes(focus.view as OperatorFocusSnapshot["view"])) return false;
   if (focus.lens !== undefined && !boundedString(focus.lens)) return false;
-  if (focus.thread === undefined) return true;
-  const thread = focus.thread as Record<string, unknown> | null;
-  if (!thread || typeof thread !== "object" || Array.isArray(thread)) return false;
-  return typeof thread.backend === "string" && isAppServerBackendKind(thread.backend)
-    && boundedString(thread.threadId)
-    && typeof thread.title === "string" && thread.title.length <= MAX_TEXT
-    && (thread.instanceId === undefined || boundedString(thread.instanceId))
-    && (thread.instanceLabel === undefined || boundedString(thread.instanceLabel));
+  return (focus.thread === undefined || isFocusThread(focus.thread))
+    && (focus.launchpad === undefined || isFocusLaunchpad(focus.launchpad));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || boundedString(value);
+}
+
+function isFocusThread(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.backend === "string" && isAppServerBackendKind(value.backend)
+    && boundedString(value.threadId)
+    && typeof value.title === "string" && value.title.length <= MAX_TEXT
+    && optionalString(value.instanceId)
+    && optionalString(value.instanceLabel);
+}
+
+function isFocusLaunchpad(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.backend === "string" && isAppServerBackendKind(value.backend)
+    && boundedString(value.projectKey)
+    && typeof value.projectLabel === "string" && value.projectLabel.length <= MAX_TEXT
+    && optionalString(value.instanceId)
+    && optionalString(value.model)
+    && optionalString(value.reasoningEffort)
+    && optionalString(value.executionMode)
+    && optionalString(value.workMode);
 }

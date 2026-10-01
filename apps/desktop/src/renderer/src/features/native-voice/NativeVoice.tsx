@@ -177,52 +177,39 @@ export function VoiceTextInput({ controller }: { controller: NativeVoiceControll
 }
 
 /**
- * Whether thread voice can open on a composer's thread. Live voice runs on
- * this machine's Codex App Server, so a peer's thread and another provider's
- * get a reason instead; director voice still reaches both. A launchpad has no
- * thread yet and gets neither.
+ * Which voice a composer's mic starts. Thread voice runs on this machine's
+ * Codex App Server, so it opens only on a local Codex thread. Everywhere
+ * else it starts director voice, which reaches a peer's thread, another
+ * provider's, and a new-thread launchpad through the PwrAgent tools; the
+ * hint says what that will do.
  */
 export function threadVoiceTarget(
   thread: { id: string; source: string; federation?: { instanceLabel?: string } } | undefined,
-  launchpad: boolean,
-): { threadId?: string; unavailableReason?: string } {
-  if (!thread || launchpad) return {};
+  launchpad: { directoryLabel: string } | undefined,
+): { threadId?: string; directorHint?: string } {
+  if (launchpad) {
+    return {
+      directorHint: `Say what the new thread should do. Director voice starts it in ${launchpad.directoryLabel} with these settings.`,
+    };
+  }
+  if (!thread) return {};
   if (thread.federation) {
     return {
-      unavailableReason: `Voice talks to threads on this machine. Use director voice to reach threads on ${thread.federation.instanceLabel ?? "another machine"}.`,
+      directorHint: `Talk to this thread on ${thread.federation.instanceLabel ?? "another machine"} through director voice.`,
     };
   }
   if (thread.source !== "codex") {
-    return { unavailableReason: "Voice talks to Codex threads. Use director voice to reach this one." };
+    return { directorHint: "Talk to this thread through director voice." };
   }
   return { threadId: thread.id };
 }
 
 /**
  * The composer's mic toggle. Talks to this thread; ends when the operator
- * leaves it. Unavailable while director voice owns the window's session, and
- * on a thread voice cannot reach, where it says why instead of vanishing.
+ * leaves it. Unavailable while director voice owns the window's session.
  */
-export function NativeVoiceToggle({ api, threadId, unavailableReason }: {
-  api: NativeVoiceApi;
-  threadId?: string;
-  unavailableReason?: string;
-}) {
+export function NativeVoiceToggle({ api, threadId }: { api: NativeVoiceApi; threadId?: string }) {
   const { controller, view } = useNativeVoice(api);
-  if (unavailableReason) {
-    return (
-      <button
-        type="button"
-        className="composer__toggle tooltip-target"
-        aria-label="Voice"
-        aria-disabled="true"
-        data-tooltip={unavailableReason}
-        onClick={() => undefined}
-      >
-        <MicIcon size={15} aria-hidden="true" />
-      </button>
-    );
-  }
   if (!threadId) return null;
   const mine = view.mode === "thread" && view.threadId === threadId && isVoiceActive(view);
   const elsewhere = isVoiceActive(view) && !mine;

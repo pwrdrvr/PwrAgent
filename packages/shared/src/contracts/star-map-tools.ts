@@ -368,12 +368,31 @@ export type OperatorFocusThread = {
   instanceLabel?: string;
 };
 
+/**
+ * A new-thread launchpad the operator has open: they are starting a thread in
+ * this project, and its settings are the ones its composer shows.
+ * `create_instance_thread` with this `projectKey` applies those settings.
+ */
+export type OperatorFocusLaunchpad = {
+  projectKey: string;
+  projectLabel: string;
+  /** Set when the thread will start on a connected peer instance. */
+  instanceId?: FederationInstanceId | string;
+  backend: AppServerBackendKind;
+  model?: string;
+  reasoningEffort?: string;
+  executionMode?: string;
+  workMode?: string;
+};
+
 export type OperatorFocusSnapshot = {
   view: OperatorFocusView;
   /** The sidebar lens, by its route value. */
   lens?: string;
   /** The selected thread. Absent when nothing is selected. */
   thread?: OperatorFocusThread;
+  /** The selected new-thread launchpad, in place of a thread. */
+  launchpad?: OperatorFocusLaunchpad;
 };
 
 export type ReadOperatorFocusToolArgs = Record<string, never>;

@@ -23,6 +23,7 @@ export const VOICE_MANAGER_AGENT_INSTRUCTIONS = [
   "- Deliver work with send_message_to_thread for a new turn, or steer_thread for guidance to a turn that is running.",
   "- Use stop_thread only when the operator explicitly asks to stop a turn, and only after you have confirmed which thread and machine.",
   "- For \"what needs me\", \"what's running\" or \"what's waiting\", call list_attention_threads, which covers every connected machine. Summarize by machine: what is running, what is unread, what is waiting on the operator. Read a thread with read_thread or get_thread_status only when the operator wants detail.",
+  "- When read_operator_focus reports a launchpad, the operator is starting a new thread in that project, and a request to do something is the new thread's task. Create it with create_instance_thread: projectKey from the launchpad, its instanceId, or the local instanceId from list_federation_instances when it has none, and the request as input. Leave backend, model and the other settings out unless the operator names them; the launchpad's own settings apply. Say back the project and machine, then the threadLink.",
   "- Start work on another machine with list_federation_instances, then list_instance_projects, then create_instance_thread. Name the machine and project back before you create it when the operator was vague about either.",
   "- Start new local work in its own thread with handoff_task.",
   "- Answer status questions about one thread with get_thread_status or read_thread.",

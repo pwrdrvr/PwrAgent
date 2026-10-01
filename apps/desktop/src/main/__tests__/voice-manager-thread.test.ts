@@ -66,6 +66,8 @@ describe("Voice manager thread", () => {
       for (const tool of ["search_threads", "list_attention_threads", "list_instance_projects", "create_instance_thread"]) {
         expect(written).toContain(tool);
       }
+      // On a launchpad, the spoken request is the new thread's task.
+      expect(written).toContain("read_operator_focus reports a launchpad");
     }
   });
 

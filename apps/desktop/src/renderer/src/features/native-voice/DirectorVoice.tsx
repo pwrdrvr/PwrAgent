@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   isRemoteFederationTarget,
+  type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
   type OperatorFocusSnapshot,
   type OperatorFocusView,
@@ -77,6 +78,36 @@ function DirectorVoiceCard({ live }: { live: boolean }) {
   );
 }
 
+/**
+ * The composer's mic where thread voice cannot open: a new-thread launchpad,
+ * a peer's thread, or another provider's. It starts director voice, which
+ * reads the same focus the window publishes, so it knows which project or
+ * thread the operator means.
+ */
+export function DirectorVoiceComposerToggle({ api, hint }: { api: NativeVoiceApi; hint: string }) {
+  const { controller, view } = useNativeVoice(api);
+  const live = view.mode === "director" && isVoiceActive(view);
+  const elsewhere = isVoiceActive(view) && !live;
+  const blocked = elsewhere || view.status === "stopping";
+  return (
+    <button
+      type="button"
+      className={`composer__toggle tooltip-target${live ? " is-active" : ""}`}
+      aria-label="Voice"
+      aria-pressed={live}
+      aria-disabled={blocked ? true : undefined}
+      data-tooltip={elsewhere
+        ? "Voice is on in a thread. End it to start director voice."
+        : live ? "End director voice" : hint}
+      onClick={() => {
+        if (!blocked) void toggleDirectorVoice(api, controller);
+      }}
+    >
+      <MicIcon size={15} aria-hidden="true" />
+    </button>
+  );
+}
+
 export function DirectorVoiceButton({ api }: { api: NativeVoiceApi }) {
   const { controller, view } = useNativeVoice(api);
   const tooltip = useViewportTooltip({ className: "director-voice-card" });
@@ -125,18 +156,45 @@ export function useDirectorVoiceShortcut(api: NativeVoiceApi | undefined): void 
 }
 
 export type DirectorFocusThread = Pick<NavigationThreadSummary, "id" | "source" | "title" | "federation">;
+export type DirectorFocusLaunchpad = Pick<
+  NavigationLaunchpadDraft,
+  "directoryKey" | "directoryLabel" | "federationTarget" | "backend" | "model" | "reasoningEffort" | "executionMode" | "workMode"
+>;
 
+/**
+ * What the operator is looking at. A launchpad is reported only with no
+ * thread selected, and never its draft text: settings only.
+ */
 export function operatorFocusFor(params: {
   view: OperatorFocusView;
   lens?: string;
   thread?: DirectorFocusThread;
+  launchpad?: DirectorFocusLaunchpad;
 }): OperatorFocusSnapshot {
   const thread = params.thread;
   const target = thread?.federation?.ref.target;
   const instanceId = target && isRemoteFederationTarget(target) ? target.instanceId : undefined;
+  const launchpad = thread ? undefined : params.launchpad;
+  const launchpadTarget = launchpad?.federationTarget;
   return {
     view: params.view,
     ...(params.lens ? { lens: params.lens } : {}),
+    ...(launchpad
+      ? {
+          launchpad: {
+            projectKey: launchpad.directoryKey,
+            projectLabel: launchpad.directoryLabel.slice(0, 500),
+            ...(launchpadTarget && isRemoteFederationTarget(launchpadTarget)
+              ? { instanceId: launchpadTarget.instanceId }
+              : {}),
+            backend: launchpad.backend,
+            ...(launchpad.model ? { model: launchpad.model } : {}),
+            ...(launchpad.reasoningEffort ? { reasoningEffort: launchpad.reasoningEffort } : {}),
+            ...(launchpad.executionMode ? { executionMode: launchpad.executionMode } : {}),
+            ...(launchpad.workMode ? { workMode: launchpad.workMode } : {}),
+          },
+        }
+      : {}),
     ...(thread
       ? {
           thread: {
@@ -185,17 +243,18 @@ export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus
  * leaves this card and arrives as an ordinary notice instead
  * (`useNativeVoiceNotices`).
  */
-export function DirectorVoiceToast({ api, desktopApi, focus }: {
+export function DirectorVoiceToast({ api, desktopApi, focus, launchpad }: {
   api: NativeVoiceApi;
   desktopApi?: Pick<DesktopApi, "copyText">;
   focus?: DirectorFocusThread;
+  launchpad?: Pick<NavigationLaunchpadDraft, "directoryLabel">;
 }) {
   const { controller, view } = useNativeVoice(api);
   if (view.mode !== "director" || view.status === "idle" || view.status === "error") return null;
   const listening = view.status === "listening";
   const looking = focus
     ? `Looking at ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}.`
-    : "No thread selected.";
+    : launchpad ? `Starting a new thread in ${launchpad.directoryLabel}.` : "No thread selected.";
   const transcript = [...view.transcript]
     .map((row) => `${row.role === "user" ? "You" : "Voice"}: ${row.text}`)
     .join("\n");
