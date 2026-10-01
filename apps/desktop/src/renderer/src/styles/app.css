@@ -14164,6 +14164,12 @@ a.button {
   padding: 14px 18px;
 }
 
+.settings-archive-status {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .settings-archive-filter-control {
   display: grid;
   gap: 6px;
@@ -14290,6 +14296,11 @@ a.button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.settings-archive-row__id {
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .settings-archive-row__button {

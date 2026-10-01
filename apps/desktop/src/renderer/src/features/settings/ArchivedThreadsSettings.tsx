@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildThreadIdentityKey,
   isToolManagedWorktreePath,
+  type AppServerBackendKind,
   type AppServerThreadSummary,
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsPanelHead,
@@ -31,6 +33,7 @@ type ArchivedProjectGroup = {
 type ArchivedProjectIdentity = Omit<ArchivedProjectGroup, "threads">;
 
 const ARCHIVED_THREADS_PER_PROJECT_LIMIT = 20;
+const COPIED_FEEDBACK_MS = 1_500;
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -41,6 +44,10 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
 
 export function ArchivedThreadsSettings(props: {
   desktopApi?: DesktopApi;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
 }) {
   const [state, setState] = useState<ArchivedThreadsState>({
     loading: true,
@@ -48,7 +55,11 @@ export function ArchivedThreadsSettings(props: {
     workspaceRoots: [],
   });
   const [restoringThreadKey, setRestoringThreadKey] = useState<string>();
-  const [restoreMessage, setRestoreMessage] = useState<string>();
+  // Newest first. A restored thread leaves the archived list, so this is the
+  // only place on the pane that still names it, its ID, and a way to open it.
+  const [restoredThreads, setRestoredThreads] = useState<
+    AppServerThreadSummary[]
+  >([]);
   const [filter, setFilter] = useState("");
   const restoredThreadKeysRef = useRef(new Set<string>());
 
@@ -126,7 +137,6 @@ export function ArchivedThreadsSettings(props: {
     }
 
     const threadKey = buildArchivedThreadKey(thread);
-    setRestoreMessage(undefined);
     setState((current) => ({ ...current, error: undefined }));
     setRestoringThreadKey(threadKey);
     try {
@@ -141,7 +151,12 @@ export function ArchivedThreadsSettings(props: {
           (candidate) => buildArchivedThreadKey(candidate) !== threadKey,
         ),
       }));
-      setRestoreMessage(`Restored ${thread.title}.`);
+      setRestoredThreads((current) => [
+        thread,
+        ...current.filter(
+          (candidate) => buildArchivedThreadKey(candidate) !== threadKey,
+        ),
+      ]);
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -221,7 +236,6 @@ export function ArchivedThreadsSettings(props: {
 
       {(state.loading && state.threads.length === 0) ||
       (!state.loading && projectGroups.length === 0) ||
-      restoreMessage ||
       state.error ? (
         <SettingsSection
           eyebrow="Archived Threads"
@@ -245,11 +259,6 @@ export function ArchivedThreadsSettings(props: {
                 : "No archived threads."}
             </p>
           ) : null}
-          {restoreMessage ? (
-            <p className="settings-archive-status" role="status">
-              {restoreMessage}
-            </p>
-          ) : null}
           {state.error ? (
             <p
               className="settings-row__error settings-archive-status"
@@ -258,6 +267,27 @@ export function ArchivedThreadsSettings(props: {
               {state.error}
             </p>
           ) : null}
+        </SettingsSection>
+      ) : null}
+
+      {restoredThreads.length > 0 ? (
+        <SettingsSection
+          eyebrow="Restored"
+          title="Restored threads"
+          description="Back in Inbox, Recents, and Directories."
+          chip={`${restoredThreads.length} restored`}
+          chipKind="muted"
+        >
+          <div className="settings-archive-project__threads" role="status">
+            {restoredThreads.map((thread) => (
+              <RestoredThreadRow
+                key={buildArchivedThreadKey(thread)}
+                desktopApi={props.desktopApi}
+                thread={thread}
+                onOpenThread={props.onOpenThread}
+              />
+            ))}
+          </div>
         </SettingsSection>
       ) : null}
 
@@ -338,6 +368,7 @@ function ArchivedThreadRow(props: {
         <p className="settings-archive-row__meta">
           <span>{activityLabel}</span>
           {directories.length ? <span>{directories.join(", ")}</span> : null}
+          <span className="settings-archive-row__id">{thread.id}</span>
         </p>
       </div>
       <div className="settings-archive-row__side">
@@ -355,6 +386,81 @@ function ArchivedThreadRow(props: {
         >
           {props.restoring ? "Restoring..." : "Restore"}
         </button>
+      </div>
+    </article>
+  );
+}
+
+function RestoredThreadRow(props: {
+  desktopApi?: DesktopApi;
+  thread: AppServerThreadSummary;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
+}) {
+  const thread = props.thread;
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
+  const directories = thread.linkedDirectories
+    .map((directory) => directory.label || directory.path)
+    .filter(Boolean);
+
+  const copyThreadId = async () => {
+    try {
+      await copyText(thread.id, props.desktopApi);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(
+      () => setCopied(false),
+      COPIED_FEEDBACK_MS,
+    );
+  };
+
+  return (
+    <article className="settings-archive-row">
+      <div className="settings-archive-row__body">
+        <h3 className="settings-archive-row__title">{thread.title}</h3>
+        <p className="settings-archive-row__meta">
+          <span className="settings-archive-row__id">{thread.id}</span>
+          {directories.length ? <span>{directories.join(", ")}</span> : null}
+        </p>
+      </div>
+      <div className="settings-archive-row__side">
+        <div className="settings-pathrow__chips">
+          <span className="settings-pathrow__chip">{thread.source}</span>
+        </div>
+        <button
+          aria-label={`Copy thread ID for ${thread.title}`}
+          className="button button--ghost settings-archive-row__button"
+          type="button"
+          onClick={() => {
+            void copyThreadId();
+          }}
+        >
+          {copied ? "Copied" : "Copy ID"}
+        </button>
+        {props.onOpenThread ? (
+          <button
+            aria-label={`Open ${thread.title}`}
+            className="button button--secondary settings-archive-row__button"
+            type="button"
+            onClick={() =>
+              props.onOpenThread?.({
+                backend: thread.source,
+                threadId: thread.id,
+              })
+            }
+          >
+            Open thread
+          </button>
+        ) : null}
       </div>
     </article>
   );

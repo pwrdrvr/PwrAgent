@@ -2465,12 +2465,16 @@ describe("SettingsScreen", () => {
       restoredAt: 4_000,
     }));
 
+    const copyText = vi.fn(async () => undefined);
+    const onOpenThread = vi.fn();
+
     render(
       <SettingsScreen
-        desktopApi={{ listThreads, restoreThread }}
+        desktopApi={{ copyText, listThreads, restoreThread }}
         settings={createSettingsState()}
         initialSection="archived"
         onClose={() => undefined}
+        onOpenThread={onOpenThread}
       />,
     );
 
@@ -2491,9 +2495,32 @@ describe("SettingsScreen", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Restore" }),
+      ).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Restored threads" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Archived code review")).toBeInTheDocument();
+    expect(screen.getByText("thread-archived")).toBeInTheDocument();
+
+    const copyButton = screen.getByRole("button", {
+      name: "Copy thread ID for Archived code review",
+    });
+    fireEvent.click(copyButton);
+    await waitFor(() => {
+      expect(copyButton).toHaveTextContent("Copied");
+    });
+    expect(copyText).toHaveBeenCalledWith("thread-archived");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Archived code review" }),
+    );
+    expect(onOpenThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-archived",
+    });
   });
 
   it("groups archived threads by project before restoration", async () => {
@@ -2885,7 +2912,9 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     await waitFor(() => {
-      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Restore" }),
+      ).not.toBeInTheDocument();
     });
 
     await act(async () => {
@@ -2896,10 +2925,14 @@ describe("SettingsScreen", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
-    });
-    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+    // Only the Restored threads row names it; the archived list stays empty.
+    expect(
+      screen.queryByRole("button", { name: "Restore" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("Archived code review")).toHaveLength(1);
+    expect(
+      screen.getByRole("heading", { name: "Restored threads" }),
+    ).toBeInTheDocument();
   });
 
   it("shows ACP agents inside the consolidated AI Providers section", async () => {
