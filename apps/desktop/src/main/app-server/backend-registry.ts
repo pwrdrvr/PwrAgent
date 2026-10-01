@@ -6270,6 +6270,22 @@ async function resetLaunchpadAfterMaterialize(params: {
     launchpad,
     overlayStore,
   } = params;
+  // Registration belongs to the project, not the submitted message. Replace
+  // a registered draft in one write so it remains in the owner directory index
+  // throughout workspace setup and after the thread is archived or removed.
+  if (launchpad.registeredAt !== undefined) {
+    const persisted = await overlayStore.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey });
+    await overlayStore.upsertDirectoryLaunchpad({
+      ...(persisted ?? launchpad),
+      registeredAt: launchpad.registeredAt,
+      prompt: "",
+      imageAttachments: [],
+      fileAttachments: [],
+      editorDocument: undefined,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
   await overlayStore.resetDirectoryLaunchpad({
     directoryKey: launchpad.directoryKey,
   });

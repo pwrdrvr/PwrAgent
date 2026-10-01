@@ -13219,7 +13219,7 @@ describe("useThreadNavigation", () => {
       const { result } = renderHook(() => useThreadNavigation(desktopApi));
       await waitFor(() => expect(result.current.loading).toBe(false));
 
-      let pick!: Promise<void>;
+      let pick!: ReturnType<typeof result.current.pickAndRegisterDirectory>;
       act(() => {
         pick = result.current.pickAndRegisterDirectory();
       });
@@ -13349,7 +13349,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickingDirectory).toBe(false);
     });
 
-    it("addProjectDirectory tracks an empty repo and reveals the Directories lens", async () => {
+    it.each([false, true])("addProjectDirectory selects the registered repo's composer and reveals the Directories lens (metadata failure: %s)", async (metadataFailure) => {
       const launchpad = buildPickedLaunchpad({ registeredAt: 1_500 });
       const readPopulation = vi.fn(async () => buildSnapshot());
       const desktopApi = buildBaseDesktopApi({
@@ -13367,9 +13367,14 @@ describe("useThreadNavigation", () => {
           launchpad,
           defaults: launchpadDefaults,
         })),
+        refreshDirectoryGitStatuses: vi.fn(async () => {
+          if (metadataFailure) throw new Error("Git metadata unavailable");
+          return { scheduledCount: 1 };
+        }),
       });
 
-      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() => useThreadNavigation(desktopApi, { onThreadActionError }));
       await waitFor(() => expect(result.current.loading).toBe(false));
 
       await act(async () => {
@@ -13378,7 +13383,11 @@ describe("useThreadNavigation", () => {
 
       expect(result.current.browseMode).toBe("directories");
       expect(readPopulation).toHaveBeenCalledTimes(2);
-      expect(result.current.selectedItemKey).toBeUndefined();
+      expect(result.current.selectedItemKey).toBe(`launchpad:${launchpad.directoryKey}`);
+      expect(result.current.selectedLaunchpad).toMatchObject(launchpad);
+      expect(result.current.selectedDirectory?.key).toBe(launchpad.directoryKey);
+      expect(latestThreadActionError(onThreadActionError, "add-directory"))
+        .toBe(metadataFailure ? "Git metadata unavailable" : undefined);
       expect(result.current.directories).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -13390,6 +13399,20 @@ describe("useThreadNavigation", () => {
           }),
         ]),
       );
+
+      // Another selected thread and a refreshed index must not remove the
+      // newly registered, threadless directory from the renderer's list.
+      const unrelatedThread: NavigationThreadSummary = {
+        id: "unrelated", source: "codex", title: "Thread in another directory", titleSource: "explicit",
+        linkedDirectories: [{ id: "other", kind: "local", label: "Other", path: "/repos/other" }],
+        inbox: { inInbox: false },
+      };
+      readPopulation.mockResolvedValue({ ...buildSnapshot(), threads: [unrelatedThread] });
+      act(() => result.current.selectThread(unrelatedThread));
+      await act(async () => result.current.refresh());
+      expect(result.current.selectedThread?.id).toBe(unrelatedThread.id);
+      expect(result.current.directories.map((directory) => directory.key))
+        .toContain(launchpad.directoryKey);
     });
 
     it("pickDirectoryForReference surfaces validation failures and resolves undefined", async () => {

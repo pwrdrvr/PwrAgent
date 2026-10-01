@@ -733,6 +733,57 @@ test("directory launchpad does not show workspace application buttons before a t
   }
 });
 
+test("add-project menu selects and reveals the new directory and retains it after starting elsewhere", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    appearance: { theme: "light" },
+    env: { PWRAGENT_E2E_PICK_DIRECTORY_PATH: fixture.pickedRepoDir },
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("tab", { name: "directories" }).click();
+    await app.window.getByRole("button", { name: "Open new thread launchpad for FixtureRepo" }).click();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
+    await mastheadAction(app.window, "New thread").hover();
+    await app.window.getByRole("menuitem", { name: "Add a Project Directory…" }).click();
+
+    await expectDirectoryLaunchpadHeader(app, "PickedRepo");
+    const composer = app.window.getByRole("textbox", { name: "New thread", exact: true });
+    await expect(composer).toBeFocused();
+    const sidebar = app.window.getByRole("complementary", { name: "Threads" });
+    const pickedHeader = sidebar.getByRole("button", { name: "PickedRepo", exact: true });
+    await expect(pickedHeader).toHaveClass(/is-selected/);
+    await expect(pickedHeader).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(() => pickedHeader.evaluate((header) => {
+      const viewport = header.closest(".sidebar__scroll-region")!.getBoundingClientRect();
+      const rect = header.getBoundingClientRect();
+      return rect.top >= viewport.top && rect.bottom <= viewport.bottom;
+    })).toBe(true);
+    await app.window.screenshot({ path: test.info().outputPath("added-project.png") });
+
+    await sidebar.getByRole("button", { name: "Open new thread launchpad for OtherRepo" }).click();
+    await expectDirectoryLaunchpadHeader(app, "OtherRepo");
+    await composer.fill("Start a thread in the other fixture directory");
+    await app.window.getByRole("button", { name: "Start thread", exact: true }).click();
+    await expect.poll(async () => navigationPath(
+      ((await app.getLastStartTurn()) as { cwd?: string } | undefined)?.cwd ?? "",
+    )).toBe(navigationPath(path.join(path.dirname(fixture.pickedRepoDir), "OtherRepo")));
+    // Changing lenses replaces the sidebar's query resources. The added
+    // project has no thread membership to keep it alive in that refreshed list.
+    await app.window.getByRole("tab", { name: "Updated" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
+    await expect(pickedHeader).toBeVisible();
+    await sidebar.getByRole("button", { name: "Open new thread launchpad for PickedRepo" }).click();
+    await expectDirectoryLaunchpadHeader(app, "PickedRepo");
+    await app.window.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(pickedHeader).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("new-thread picker hydrates git status for a newly added directory", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({

@@ -608,6 +608,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "registered-project-launchpad-submit": {
+    "commits": 1,
+    "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "runtime-lease-dead-owner-takeover": {
     "commits": 7,
     "note": "observe one dead owner, wait one minute, replace all profile runtime leases",

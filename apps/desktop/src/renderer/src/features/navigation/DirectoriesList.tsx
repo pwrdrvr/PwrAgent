@@ -113,7 +113,7 @@ type DirectoriesListProps = {
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
   directories: NavigationDirectorySummary[];
-  projectReveal?: { key: string };
+  projectReveal?: { key: string; focus?: boolean };
   onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
@@ -877,7 +877,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
-  const handledProjectReveal = useRef<{ key: string } | undefined>(undefined);
+  const handledProjectReveal = useRef<{ key: string; focus?: boolean } | undefined>(undefined);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -958,7 +958,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // edge while the project's threads are scrolled out above it. Reveal the
       // section's normal-flow start, then focus without moving the scroll.
       header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
-      header.focus({ preventScroll: true });
+      if (request.focus !== false) header.focus({ preventScroll: true });
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });

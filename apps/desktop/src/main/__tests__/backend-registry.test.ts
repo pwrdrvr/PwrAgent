@@ -117,6 +117,11 @@ import {
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -12899,6 +12904,59 @@ describe("DesktopBackendRegistry", () => {
 
       expect(promptDuringSetup).toBe("");
       expect(await readPrompt(overlayStore)).toBe("");
+      await registry.close();
+    });
+
+    it("keeps a registered project when its submitted draft is cleared", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-registered-project-submit-");
+      const db = StateDb.open(temp.dbPath);
+      const persisted = new SqliteOverlayStore(db);
+      onTestFinished(() => {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      });
+      const registered = { ...submitted, registeredAt: 1500, model: "project-model" };
+      const unrelated = {
+        ...registered,
+        directoryKey: "directory:/repo/libuv",
+        directoryLabel: "libuv",
+        directoryPath: "/repo/libuv",
+        prompt: "",
+      };
+      let registeredDuringSetup: number | undefined;
+      const { overlayStore, registry } = createRegistry(async (store) => {
+        registeredDuringSetup = (await store.getDirectoryLaunchpad({ directoryKey }))?.registeredAt;
+        return { cwd: "/repo/project", workMode: "local" };
+      });
+      vi.spyOn(overlayStore, "getDirectoryLaunchpad").mockImplementation((request) => persisted.getDirectoryLaunchpad(request));
+      vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((launchpad) => persisted.upsertDirectoryLaunchpad(launchpad));
+      vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((request) => persisted.resetDirectoryLaunchpad(request));
+      await overlayStore.upsertDirectoryLaunchpad(registered);
+      await overlayStore.upsertDirectoryLaunchpad(unrelated);
+
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.materializeDirectoryLaunchpad({
+          directoryKey,
+          launchpad: registered,
+          input: [{ type: "text", text: registered.prompt }],
+          releaseLaunchpadOnSubmit: true,
+        });
+      });
+      expectSqliteWriteBudget({ scenario: "registered-project-launchpad-submit", writes,
+        note: "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes" });
+
+      expect(registeredDuringSetup).toBe(registered.registeredAt);
+      await expect(overlayStore.getDirectoryLaunchpad({ directoryKey })).resolves.toMatchObject({
+        registeredAt: registered.registeredAt,
+        model: registered.model,
+        prompt: "",
+      });
+      await expect(overlayStore.getDirectoryLaunchpad({ directoryKey: unrelated.directoryKey }))
+        .resolves.toEqual(unrelated);
+      expect(persisted.readNavigationQueryIndex({ backend: "all", threads: [] }).directories.map((directory) => directory.key))
+        .toEqual(expect.arrayContaining([directoryKey, unrelated.directoryKey]));
       await registry.close();
     });
 

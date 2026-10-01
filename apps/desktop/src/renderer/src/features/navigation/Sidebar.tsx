@@ -481,7 +481,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
+  const [projectReveal, setProjectReveal] = useState<{ key: string; focus?: boolean }>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -921,6 +921,13 @@ export function Sidebar(props: SidebarProps) {
       return;
     }
 
+    if (browseMode === "directories" && selectedItemKey.startsWith("launchpad:")) {
+      handledRevealRequestRef.current = request;
+      releaseHoverStableSnapshot();
+      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length), focus: false });
+      return;
+    }
+
     const selectedThread = navigationThreadByKey.get(selectedItemKey);
     if (!selectedThread) {
       return;
@@ -957,6 +964,7 @@ export function Sidebar(props: SidebarProps) {
     browseMode,
     navigationThreadByKey,
     revealSelectedThreadRequest,
+    releaseHoverStableSnapshot,
     selectedItemKey,
     setSubthreadsCollapsed,
   ]);
