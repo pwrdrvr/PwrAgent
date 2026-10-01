@@ -48,6 +48,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "automation-run-prune-without-usage": {
+    "commits": 2,
+    "note": "Creating a run and pruning an older execution with no visible usage writes no retained title",
+    "observedWalBytes": 70040,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",

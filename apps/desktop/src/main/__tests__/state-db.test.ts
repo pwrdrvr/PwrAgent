@@ -60,6 +60,42 @@ afterEach(() => {
 });
 
 describe("StateDb", () => {
+  it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
+    stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread_valid");
+    stateDb.raw.prepare(`
+      INSERT INTO automations
+        (automation_id, backend, thread_id, name, status, backlog_policy,
+         created_at, updated_at, payload)
+      VALUES ('automation-1', 'codex', 'owner', 'Agent', 'active', 'skip', 1, 1, '{}')
+    `).run();
+    stateDb.raw.prepare(`
+      INSERT INTO automation_runs
+        (run_id, automation_id, backend, thread_id, status, trigger,
+         created_at, updated_at, payload)
+      VALUES ('run-1', 'automation-1', 'codex', 'owner', 'failed', 'scheduled', 1, 1, ?)
+    `).run(legacyIndexPresent ? '{"backendThreadId":"execution"}' : "{not-json");
+    if (legacyIndexPresent) {
+      stateDb.raw.exec(`
+        CREATE INDEX idx_automation_runs_execution_thread
+          ON automation_runs(json_extract(payload, '$.backendThreadId'), backend)
+      `);
+    }
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    // Upgrades must also replace an already-created unsafe index, so a
+    // tolerated corrupt payload cannot make subsequent run writes fail.
+    expect(() => stateDb.raw.prepare(
+      "UPDATE automation_runs SET payload = ? WHERE run_id = 'run-1'",
+    ).run("{not-json")).not.toThrow();
+    expect(stateDb.raw.prepare(
+      "SELECT payload FROM automation_runs WHERE run_id = 'run-1'",
+    ).get()).toEqual({ payload: "{not-json" });
+  });
+
   it("creates additive runtime cache tables", () => {
     const tables = stateDb.raw
       .prepare(

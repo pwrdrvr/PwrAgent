@@ -177,6 +177,13 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       writes,
       note: "One automation run insert, including indexed owner and execution thread identities, remains one commit",
     });
+    stateDb.raw.prepare(`
+      INSERT INTO automation_runs
+        (run_id, automation_id, backend, thread_id, status, trigger,
+         created_at, updated_at, payload)
+      VALUES ('run-corrupt', 'automation-1', 'codex', 'agent-thread', 'failed',
+              'schedule', ?, ?, '{not-json')
+    `).run(start, start);
 
     const prepare = vi.spyOn(stateDb.raw, "prepare");
     const snapshot = await store.readUsageActivity({ from: start, to: start + 5000 });
@@ -187,7 +194,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     const plan = stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${automationQuery}`).all(
       JSON.stringify(["headless-thread"]),
     ) as Array<{ detail: string }>;
-    expect(plan.some((row) => row.detail.includes("idx_automation_runs_execution_thread"))).toBe(true);
+    expect(plan.some((row) => row.detail.includes("idx_automation_runs_execution_thread_valid"))).toBe(true);
     expect(snapshot.rows[0].title).toBe("Search/Signals Agent");
     new ThreadSearchStore(stateDb).deleteThread({
       backend: "codex", threadId: "agent-thread",
@@ -224,9 +231,18 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       threadId: "headless-thread",
     }) });
     expect(automations.getRun("run-1")?.backendThreadId).toBe("headless-thread");
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
     const { writes } = await measureSqliteWrites(() => automations.createRun({
       id: "run-2", automationId: "automation-1", trigger: "scheduled", now: start + 2,
     }));
+    const usageQuery = prepare.mock.calls.map(([sql]) => sql).find((sql) =>
+      sql.includes("SELECT 1 FROM thread_usage_lines"));
+    prepare.mockRestore();
+    expect(usageQuery).toBeDefined();
+    const plan = stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${usageQuery}`).all(
+      "codex", "headless-thread",
+    ) as Array<{ detail: string }>;
+    expect(plan.some((row) => /SEARCH thread_usage_lines USING.*idx_thread_usage_lines_read_thread/.test(row.detail))).toBe(true);
     expectSqliteWriteBudget({
       scenario: "automation-run-prune-retain-usage-title",
       writes,
@@ -241,6 +257,53 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     ), title: "Search/Signals Agent" }]);
     expect((await store.readUsageActivity({ from: start, to: start + 5000 })).rows[0].title)
       .toBe("Search/Signals Agent");
+  });
+
+  it.each(["none", "other-backend", "superseded", "corrupt-run"] as const)("does not retain pruned execution titles with %s usage", async (usage) => {
+    if (usage === "none") {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      useFileStateDb();
+    }
+    const start = PRICING_CATALOG_TIME;
+    const automations = new AutomationStore(stateDb, { runHistoryLimit: 1 });
+    automations.createAutomation({
+      id: "automation-1", backend: "codex", threadId: "agent-thread",
+      name: "Search Bots", taskPrompt: "Search", now: start,
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+    });
+    for (let index = 0; index < 3; index += 1) {
+      const { writes } = await measureSqliteWrites(() => automations.createRun({
+        id: `run-${index}`, automationId: "automation-1", trigger: "scheduled",
+        now: start + index * 2,
+      }));
+      if (usage === "none" && index > 0) {
+        expectSqliteWriteBudget({
+          scenario: "automation-run-prune-without-usage",
+          writes,
+          note: "Creating a run and pruning an older execution with no visible usage writes no retained title",
+        });
+      }
+      automations.markRunStarted({
+        runId: `run-${index}`, backendThreadId: `headless-${index}`,
+        backendTurnId: `turn-${index}`, now: start + index * 2 + 1,
+      });
+      if (usage === "corrupt-run") {
+        stateDb.raw.prepare("UPDATE automation_runs SET payload = ? WHERE run_id = ?")
+          .run("{not-json", `run-${index}`);
+      } else if (usage !== "none") {
+        await store.upsertThreadUsageLine({ line: buildUsageLine({
+          usageLineId: `usage-${index}`, threadId: `headless-${index}`,
+          backend: usage === "other-backend" ? "acp:qwen" : "codex",
+          status: usage === "superseded" ? "superseded" : "pending",
+        }) });
+      }
+    }
+
+    expect(automations.getRun("run-0")).toBeUndefined();
+    expect(automations.getRun("run-1")).toBeUndefined();
+    expect(stateDb.raw.prepare("SELECT run_id FROM automation_runs").all())
+      .toEqual([{ run_id: "run-2" }]);
+    expect(stateDb.raw.prepare("SELECT * FROM thread_usage_titles").all()).toEqual([]);
   });
 
   it("keeps the last indexed title for usage after navigation prunes the thread", async () => {
