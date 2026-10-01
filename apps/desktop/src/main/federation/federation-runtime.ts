@@ -1099,16 +1099,15 @@ export class DesktopFederationRuntime {
     ) {
       return undefined;
     }
-    const release = setTimeout(() => {
-      this.directorySetWatches.delete(instanceId);
-      this.sendDirectorySetSubscriptions();
-    }, DIRECTORY_SET_WATCH_IDLE_MS);
-    release.unref?.();
     let watch = this.directorySetWatches.get(instanceId);
     if (watch) {
-      clearTimeout(watch.release);
-      watch.release = release;
+      watch.release.refresh();
     } else {
+      const release = setTimeout(() => {
+        this.directorySetWatches.delete(instanceId);
+        this.sendDirectorySetSubscriptions();
+      }, DIRECTORY_SET_WATCH_IDLE_MS);
+      release.unref?.();
       watch = { generation: ++this.directorySetGeneration, live: false, release };
       this.directorySetWatches.set(instanceId, watch);
       this.sendDirectorySetSubscriptions();
