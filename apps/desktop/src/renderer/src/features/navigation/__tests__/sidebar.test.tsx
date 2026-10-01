@@ -2409,6 +2409,45 @@ describe("Sidebar", () => {
     expect(within(flyout).getAllByRole("menuitem")[0]).toHaveFocus();
   });
 
+  it("asks each machine once per opening, however often the provider changes", async () => {
+    const read = vi.fn(async () => ({ available: true as const, baseBranch: "main" }));
+    const sidebar = (provider: typeof read) => (
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        ]}
+        readSubthreadWorktreeBase={provider}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    const { rerender } = render(sidebar(read));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    fireEvent.mouseEnter(
+      screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }).parentElement!,
+    );
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // The navigation hook hands over a new provider on every directory
+    // refresh; an open flyout must not ask again or fall back to "Checking…".
+    rerender(sidebar(vi.fn((...args: Parameters<typeof read>) => read(...args))));
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    const flyout = screen.getByRole("menu", { name: "New worktree on" });
+    expect(within(flyout).getAllByRole("menuitem")[1]).toHaveTextContent("Studio Mac / workfrom main");
+  });
+
   it("walks every flyout row by keyboard and keeps Home and End inside it", async () => {
     const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) =>
       instanceId === "studio-work"

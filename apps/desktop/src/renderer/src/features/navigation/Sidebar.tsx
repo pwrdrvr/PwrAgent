@@ -1843,12 +1843,17 @@ export function Sidebar(props: SidebarProps) {
   const subthreadProject = contextMenuThread
     ? getSubthreadProjectIdentity(contextMenuThread, props.directories)
     : undefined;
-  const readSubthreadWorktreeBase = props.readSubthreadWorktreeBase;
+  // Read through a ref: the provider changes identity whenever this
+  // window's directories do, and a new check callback would ask every
+  // machine again, flashing each row back to "Checking…" while it is open.
+  const readSubthreadWorktreeBaseRef = useRef(props.readSubthreadWorktreeBase);
+  readSubthreadWorktreeBaseRef.current = props.readSubthreadWorktreeBase;
   const checkSubthreadWorktreeMachine = useCallback(
     async (
       instanceId: string,
       project: FederationProjectDirectory,
     ): Promise<FederationProjectCheckResult> => {
+      const readSubthreadWorktreeBase = readSubthreadWorktreeBaseRef.current;
       if (!readSubthreadWorktreeBase) {
         return true;
       }
@@ -1885,7 +1890,7 @@ export function Sidebar(props: SidebarProps) {
         };
       }
     },
-    [contextMenuParentBranch, readSubthreadWorktreeBase],
+    [contextMenuParentBranch],
   );
   const subthreadWorktreeChecks = useFederationProjectChecks({
     check: checkSubthreadWorktreeMachine,
@@ -1906,8 +1911,12 @@ export function Sidebar(props: SidebarProps) {
     key: string,
     machineLabel: string,
   ): Pick<SubthreadMachineChoice, "baseBranch" | "blocked" | "blockedTitle" | "pending"> => {
-    if (!subthreadWorktreeFlyout || !subthreadProject) {
+    if (!subthreadWorktreeFlyout) {
       return {};
+    }
+    if (!subthreadProject) {
+      // Nothing to look for on another machine, so nothing to start there.
+      return { blocked: FEDERATION_PROJECT_STATE_LABEL.missing };
     }
     const check = subthreadWorktreeChecks?.[key];
     if (!check || check.state === "checking") {
