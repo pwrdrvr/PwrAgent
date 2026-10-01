@@ -79,6 +79,7 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
+import type { LaunchpadMachineControl } from "../composer/LaunchpadMachineChip";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { ThreadContextPanel } from "./ThreadContextPanel";
@@ -846,6 +847,7 @@ export type ThreadViewProps = {
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
+  launchpadMachine?: LaunchpadMachineControl;
   selectedThread?: NavigationThreadSummary;
   threads?: NavigationThreadSummary[];
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
@@ -3705,6 +3707,7 @@ export function ThreadView(props: ThreadViewProps) {
                 disabled={props.launchpadConfigurationReady === false || !launchpadBackend?.available}
                 unavailableReason={launchpadBackend?.unavailableReason}
                 launchpad={selectedLaunchpad}
+                launchpadMachine={props.launchpadMachine}
                 launchpadComposerScopeKey={props.pendingLaunchpadCreation?.composerScopeKey}
                 launchpadMaterializing={launchpadMaterializing}
                 launchpadError={props.launchpadError}

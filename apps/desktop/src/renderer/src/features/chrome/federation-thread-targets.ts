@@ -1,18 +1,22 @@
 import {
   formatFederationPeerDisplayLabel,
+  type CelestialIconId,
   type FederationCapability,
   type FederationHealthStatus,
 } from "@pwragent/shared";
 
 /**
  * Capabilities a peer must advertise before this window can start a thread on
- * it. `thread_navigation` supplies the peer-owned project picker, and
- * `environment_actions` covers the environment/script work the launchpad runs
- * once composition begins. A remote viewer window is deliberately not part of
- * this flow: the resulting remote thread is mounted in the current window.
+ * it. `thread_navigation` supplies the peer-owned project picker,
+ * `launchpad_metadata` answers the `ensureDirectoryLaunchpad` that opens the
+ * composer, and `environment_actions` covers the environment/script work the
+ * launchpad runs once composition begins. A remote viewer window is
+ * deliberately not part of this flow: the resulting remote thread is mounted
+ * in the current window.
  */
 const REQUIRED_TARGET_CAPABILITIES: readonly FederationCapability[] = [
   "thread_navigation",
+  "launchpad_metadata",
   "environment_actions",
 ];
 
@@ -35,6 +39,8 @@ export type FederationThreadTarget = {
   instanceId: string;
   label: string;
   availability: FederationThreadTargetAvailability;
+  /** The peer's assigned identity mark, as its thread rows draw it. */
+  celestialIcon?: CelestialIconId;
 };
 
 function resolveAvailability(
@@ -91,6 +97,7 @@ export function buildFederationThreadTargets(
       instanceId: peer.id,
       label: formatFederationPeerDisplayLabel(peer, visibleInstances),
       availability: resolveAvailability(peer),
+      ...(peer.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
     }))
     .sort(
       (left, right) =>

@@ -20,6 +20,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
+import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
@@ -2067,6 +2068,67 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }));
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "new-worktree");
+  });
+
+  it("cascades a new-workspace machine list from the second sub-thread row", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        selectedItemKey="codex:thread-local"
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const openMenu = () =>
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    openMenu();
+    const row = screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" });
+    expect(row).toHaveAttribute("aria-haspopup", "menu");
+    expect(row).toHaveAttribute("aria-expanded", "false");
+
+    // The row's own click is unchanged: a new worktree beside the parent.
+    fireEvent.click(row);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(localThread, "new-worktree");
+
+    openMenu();
+    const reopened = screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" });
+    reopened.focus();
+    fireEvent.keyDown(reopened, { key: "ArrowRight" });
+    const flyout = screen.getByRole("menu", { name: "New workspace on" });
+    const machines = within(flyout).getAllByRole("menuitem");
+    // The parent's machine leads; an offline peer stays listed, disabled.
+    expect(machines.map((item) => item.textContent)).toEqual([
+      "Harbor MacParent",
+      "Attic MiniOffline",
+      "Studio Mac / work",
+    ]);
+    expect(machines[0]).toHaveFocus();
+    expect(machines[1]).toHaveAttribute("aria-disabled", "true");
+
+    fireEvent.click(machines[1]!);
+    expect(onCreateSubthread).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(machines[2]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      localThread,
+      "new-workspace",
+      { instanceId: "studio-work" },
+    );
   });
 
   it.each([false, true])("waits for owner Git capability before enabling creation (%s)", async (available) => {
@@ -6723,6 +6785,7 @@ describe("Sidebar directory pinning", () => {
       ) => Promise<void>;
       onCreateThreadOnFederationTarget?: (
         instanceId: string,
+        directory?: FederationProjectDirectory,
       ) => Promise<void>;
       newThreadFederationTargets?: readonly FederationThreadTarget[];
     } = {},
@@ -7019,7 +7082,7 @@ describe("Sidebar directory pinning", () => {
     expect(onCreateThreadOnFederationTarget).not.toHaveBeenCalled();
 
     const chevron = screen.getByRole("button", {
-      name: "Start a new thread on another machine (from ProjectA)",
+      name: "Start a new thread in ProjectA on another machine",
     });
     // The group hover treatment is gated on this modifier, so that it never
     // applies to a lone launchpad button.
@@ -7034,7 +7097,12 @@ describe("Sidebar directory pinning", () => {
     );
     expect(chevron).toHaveAttribute("aria-expanded", "false");
 
-    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work");
+    // The machine opens this row's project, not its own Workspaces.
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work", {
+      kind: "directory",
+      label: "ProjectA",
+      path: "/Users/fixture-user/pwrdrvr/ProjectA",
+    });
     // Opening a remote launchpad is not also a local launchpad open.
     expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);
   });
@@ -7057,12 +7125,12 @@ describe("Sidebar directory pinning", () => {
     });
 
     const chevron = screen.getByRole("button", {
-      name: "Start a new thread on another machine (from ProjectA)",
+      name: "Start a new thread in ProjectA on another machine",
     });
     chevron.focus();
     act(() => chevron.click());
     const menu = screen.getByRole("menu", {
-      name: "Start a new thread on another machine",
+      name: "Start a new thread in ProjectA on another machine",
     });
     const items = within(menu).getAllByRole("menuitem");
     expect(items).toHaveLength(2);
@@ -7104,8 +7172,7 @@ describe("Sidebar directory pinning", () => {
   it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
     // The unconfigured guard wraps icon AND chevron. Offering "new chat on
     // <machine>" from a row with no local launchpad would reintroduce the
-    // affordance that guard exists to remove, and it is not directory-scoped
-    // anyway — it opens the peer's own launchpad.
+    // affordance that guard exists to remove.
     renderSidebar(
       [{ ...projectADirectory, localAvailability: "unconfigured" }],
       {
@@ -7127,7 +7194,7 @@ describe("Sidebar directory pinning", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Start a new thread on another machine (from ProjectA)",
+        name: "Start a new thread in ProjectA on another machine",
       }),
     ).not.toBeInTheDocument();
   });
@@ -7141,7 +7208,7 @@ describe("Sidebar directory pinning", () => {
     expect(launchpad).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Start a new thread on another machine (from ProjectA)",
+        name: "Start a new thread in ProjectA on another machine",
       }),
     ).not.toBeInTheDocument();
     // Without a second half there is no group to express, and the group tint

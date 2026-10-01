@@ -8754,6 +8754,59 @@ describe("useThreadNavigation", () => {
     }
   });
 
+  it("starts a new-workspace sub-thread on a peer and links it back to this machine's parent", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "workspace-parent", title: "Research", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/scratch/research", linkedDirectories: [
+        { id: "scratch", label: "Research", path: "/scratch/research", kind: "local" },
+      ], inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 2,
+        directoryKey: request.directoryKey, directoryKind: "workspace", directoryLabel: "New Workspace",
+        ...request.patch,
+      },
+      defaults,
+    }));
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:workspace-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, { localFederationInstanceId: "harbor" }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", { instanceId: "studio" });
+    });
+
+    const studio = { scope: "remote", instanceId: "studio" };
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: studio, directoryKind: "workspace", parentThreadId: parent.id,
+    }));
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ federationTarget: studio, parentThreadInstanceId: "harbor" }),
+    }));
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: studio, parentThreadId: parent.id, parentThreadInstanceId: "harbor",
+    });
+
+    // Picking the parent's own machine is the plain new workspace: no link.
+    ensureDirectoryLaunchpad.mockClear();
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", {});
+    });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0].federationTarget).toBeUndefined();
+    expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
+  });
+
   it("forks a parent thread through the desktop bridge and selects the optimistic fork", async () => {
     const parentThread = {
       id: "thread-parent",

@@ -7,6 +7,7 @@ import { buildFederationThreadTargets } from "../federation-thread-targets";
 
 const ALL_CAPABILITIES: FederationCapability[] = [
   "thread_navigation",
+  "launchpad_metadata",
   "environment_actions",
 ];
 
@@ -80,13 +81,31 @@ describe("buildFederationThreadTargets", () => {
     expect(targets[0]?.availability).toBe("unsupported");
   });
 
-  it("does not require remote-viewer capability for a mounted launchpad", () => {
+  it("marks a peer that cannot answer a launchpad open unsupported", () => {
     const targets = buildFederationThreadTargets(
       health([
         peer({
           id: "a",
           label: "Attic Mini",
           capabilities: ["thread_navigation", "environment_actions"],
+        }),
+      ]),
+    );
+
+    expect(targets[0]?.availability).toBe("unsupported");
+  });
+
+  it("does not require remote-viewer capability for a mounted launchpad", () => {
+    const targets = buildFederationThreadTargets(
+      health([
+        peer({
+          id: "a",
+          label: "Attic Mini",
+          capabilities: [
+            "thread_navigation",
+            "launchpad_metadata",
+            "environment_actions",
+          ],
         }),
       ]),
     );

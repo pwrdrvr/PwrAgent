@@ -1,4 +1,7 @@
-import { getThreadPrimaryDirectory } from "../../lib/subthread-launchpads";
+import {
+  getThreadPrimaryDirectory,
+  type SubthreadMachine,
+} from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -32,6 +35,7 @@ import {
   comparePinnedThreads,
   isPinnedDirectory,
   isPinnedThread,
+  isRemoteFederationTarget,
   moveDirectoryKey,
   moveThreadKey,
   resolveThreadParentKey,
@@ -55,6 +59,15 @@ import {
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
+import {
+  SubthreadMachineCascade,
+  type SubthreadMachineChoice,
+} from "./SubthreadMachineCascade";
+import {
+  useFederationProjectStates,
+  type CheckFederationTargetProject,
+  type FederationProjectDirectory,
+} from "../chrome/useFederationProjectStates";
 import { NewThreadButton } from "../chrome/NewThreadButton";
 import { SidebarShowMore } from "./SidebarShowMore";
 import type {
@@ -225,8 +238,20 @@ type SidebarProps = {
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
   onCreateThreadWithoutDirectory?: () => Promise<void>;
-  onCreateThreadOnFederationTarget?: (instanceId: string) => Promise<void>;
+  /**
+   * Start a thread on a peer. From a directory row, `directory` names the
+   * project to open there; the masthead passes none and gets the peer's
+   * Workspaces launchpad.
+   */
+  onCreateThreadOnFederationTarget?: (
+    instanceId: string,
+    directory?: FederationProjectDirectory,
+  ) => Promise<void>;
+  /** Whether a peer has a directory row's project, for its machine menu. */
+  checkFederationTargetProject?: CheckFederationTargetProject;
   newThreadFederationTargets?: readonly FederationThreadTarget[];
+  /** This machine's federation label, for the sub-thread machine list. */
+  localMachineLabel?: string;
   onAddProjectDirectory?: () => Promise<void>;
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
@@ -235,6 +260,7 @@ type SidebarProps = {
   onCreateSubthread?: (
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
+    machine?: SubthreadMachine,
   ) => Promise<void>;
   onForkThread?: (
     thread: NavigationThreadSummary,
@@ -505,9 +531,16 @@ export function Sidebar(props: SidebarProps) {
         position?: { x: number; y: number };
         directoryKey: string;
         directoryLabel: string;
+        directory: FederationProjectDirectory;
       }
     | undefined
   >();
+  const directoryTargetProjectStates = useFederationProjectStates({
+    check: props.checkFederationTargetProject,
+    directory: directoryTargetMenu?.directory,
+    open: Boolean(directoryTargetMenu),
+    targets: federationThreadTargets,
+  });
   const [pendingDetachPullRequest, setPendingDetachPullRequest] = useState<
     | {
         thread: NavigationThreadSummary;
@@ -1291,10 +1324,13 @@ export function Sidebar(props: SidebarProps) {
   const createSubthreadFromContextMenu = (
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
+    machine?: SubthreadMachine,
   ): void => {
     setContextMenu(undefined);
     hoverStableSnapshot.release();
-    void props.onCreateSubthread?.(thread, mode);
+    void (machine
+      ? props.onCreateSubthread?.(thread, mode, machine)
+      : props.onCreateSubthread?.(thread, mode));
   };
 
   const forkThreadFromContextMenu = (
@@ -1372,6 +1408,14 @@ export function Sidebar(props: SidebarProps) {
       requestedPosition: position,
       directoryKey: directory.key,
       directoryLabel: directory.label,
+      directory: {
+        kind: directory.kind,
+        label: directory.label,
+        ...(directory.path !== undefined ? { path: directory.path } : {}),
+        ...(directory.repositoryKey !== undefined
+          ? { repositoryKey: directory.repositoryKey }
+          : {}),
+      },
     });
   };
 
@@ -1717,6 +1761,43 @@ export function Sidebar(props: SidebarProps) {
       contextMenuCanRouteRemoteCapability("environment_actions") &&
       props.onCreateSubthread,
   );
+  // The parent's machine leads, so the first row of the cascade is the one
+  // the plain row click would have used.
+  const contextMenuParentTarget = contextMenu?.thread.federation?.ref.target;
+  const contextMenuParentInstanceId =
+    contextMenuParentTarget && isRemoteFederationTarget(contextMenuParentTarget)
+      ? contextMenuParentTarget.instanceId
+      : undefined;
+  const subthreadMachines: SubthreadMachineChoice[] | undefined =
+    contextMenuCanCreateSubthread && federationThreadTargets.length > 0
+      ? [
+          ...(contextMenuParentInstanceId
+            ? [{
+                instanceId: contextMenuParentInstanceId,
+                label:
+                  federationThreadTargets.find((target) =>
+                    target.instanceId === contextMenuParentInstanceId)?.label
+                  ?? contextMenu?.thread.federation?.instanceLabel
+                  ?? contextMenuParentInstanceId,
+                availability: "available" as const,
+                parent: true,
+              }]
+            : []),
+          {
+            label: props.localMachineLabel ?? "This machine",
+            availability: "available" as const,
+            parent: !contextMenuParentInstanceId,
+          },
+          ...federationThreadTargets
+            .filter((target) => target.instanceId !== contextMenuParentInstanceId)
+            .map((target) => ({
+              instanceId: target.instanceId,
+              label: target.label,
+              availability: target.availability,
+              parent: false,
+            })),
+        ]
+      : undefined;
   const contextMenuCanFork = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
@@ -2457,19 +2538,38 @@ export function Sidebar(props: SidebarProps) {
                           ? "Sub-thread in Same Worktree"
                           : "Sub-thread in This Directory"}
                       </button>
-                      <button
-                        role="menuitem"
-                        type="button"
-                        disabled={checkingWorktreeAvailability}
-                        onClick={() => createSubthreadFromContextMenu(
-                          contextMenu.thread,
-                          canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
-                        )}
-                      >
-                        {canCreateContextMenuWorktree
-                          ? "Sub-thread in New Worktree"
-                          : "Sub-thread in New Workspace"}
-                      </button>
+                      {subthreadMachines ? (
+                        <SubthreadMachineCascade
+                          label={canCreateContextMenuWorktree
+                            ? "Sub-thread in New Worktree"
+                            : "Sub-thread in New Workspace"}
+                          disabled={checkingWorktreeAvailability}
+                          machines={subthreadMachines}
+                          onSelect={() => createSubthreadFromContextMenu(
+                            contextMenu.thread,
+                            canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                          )}
+                          onSelectMachine={(instanceId) => createSubthreadFromContextMenu(
+                            contextMenu.thread,
+                            "new-workspace",
+                            { ...(instanceId ? { instanceId } : {}) },
+                          )}
+                        />
+                      ) : (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          disabled={checkingWorktreeAvailability}
+                          onClick={() => createSubthreadFromContextMenu(
+                            contextMenu.thread,
+                            canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                          )}
+                        >
+                          {canCreateContextMenuWorktree
+                            ? "Sub-thread in New Worktree"
+                            : "Sub-thread in New Workspace"}
+                        </button>
+                      )}
                     </>
                   ) : null}
                   {contextMenuCanFork ? (
@@ -2767,7 +2867,7 @@ export function Sidebar(props: SidebarProps) {
           ref={directoryTargetMenuRef}
           className="new-thread-menu__card new-thread-menu__card--anchored"
           role="menu"
-          aria-label="Start a new thread on another machine"
+          aria-label={`Start a new thread in ${directoryTargetMenu.directoryLabel} on another machine`}
           style={{
             left:
               directoryTargetMenu.position?.x ??
@@ -2781,9 +2881,14 @@ export function Sidebar(props: SidebarProps) {
         >
           <FederationTargetMenuSection
             targets={federationThreadTargets}
+            projectLabel={directoryTargetMenu.directoryLabel}
+            projectStates={directoryTargetProjectStates}
             onSelect={(instanceId) => {
               setDirectoryTargetMenu(undefined);
-              void props.onCreateThreadOnFederationTarget?.(instanceId);
+              void props.onCreateThreadOnFederationTarget?.(
+                instanceId,
+                directoryTargetMenu.directory,
+              );
             }}
           />
         </div>

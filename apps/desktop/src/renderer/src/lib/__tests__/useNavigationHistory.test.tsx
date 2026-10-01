@@ -237,6 +237,44 @@ describe("useNavigationHistory", () => {
     expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo-b"));
   });
 
+  it("records a peer's launchpad, keyed by machine as well as directory", () => {
+    const {
+      hook,
+      navigate,
+      restore,
+      setLiveLaunchpadKeys,
+      settle,
+    } = renderHistory(thread("codex:a"));
+    // This machine's live set never lists a peer's launchpad.
+    setLiveLaunchpadKeys(new Set(["workspace:new-thread"]));
+    const remote: NavigationHistoryLocation = {
+      view: "launchpad",
+      directoryKey: "workspace:new-thread",
+      instanceId: "studio-work",
+    };
+    navigate(launchpad("workspace:new-thread"));
+    navigate(remote);
+    navigate(thread("codex:b"));
+
+    // Same directory key, different machine: two places, not one.
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(remote);
+    settle();
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(launchpad("workspace:new-thread"));
+    settle();
+
+    // Sending from this machine's launchpad prunes it, never the peer's.
+    act(() => hook.result.current.goForward());
+    settle();
+    setLiveLaunchpadKeys(new Set());
+    act(() => hook.result.current.goForward());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
+    settle();
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(remote);
+  });
+
   it("restores the prior thread after cancelling the active launchpad", () => {
     const {
       hook,

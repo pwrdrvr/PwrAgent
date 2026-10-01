@@ -3,14 +3,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 /**
  * One entry in the renderer's browser-style navigation history. Only the
  * three "content" surfaces are recorded: an open thread (by identity key),
- * a project launchpad (by directory key), and the thread-search view.
+ * a project launchpad (by directory key, plus the peer's instance id when the
+ * launchpad starts its thread on another machine), and the thread-search
+ * view.
  * Overlay-ish surfaces — Settings, Automations, and the empty no-selection
  * state — are deliberately untracked: they behave like modal chrome, not
  * places you navigate back to. The caller signals those by passing
  * `current: undefined`.
  */
 export type NavigationHistoryLocation =
-  | { view: "launchpad"; directoryKey: string }
+  | { view: "launchpad"; directoryKey: string; instanceId?: string }
   | { view: "search" }
   | { view: "thread"; threadKey: string };
 
@@ -25,7 +27,11 @@ function sameLocation(
     return b.view === "search";
   }
   if (a.view === "launchpad") {
-    return b.view === "launchpad" && a.directoryKey === b.directoryKey;
+    // Peer directory keys are the peer's paths, which can coincide with this
+    // machine's, so the machine is part of a launchpad's identity.
+    return b.view === "launchpad"
+      && a.directoryKey === b.directoryKey
+      && a.instanceId === b.instanceId;
   }
   return b.view === "thread" && a.threadKey === b.threadKey;
 }
@@ -178,7 +184,9 @@ export function useNavigationHistory(args: {
           || liveThreadKeys.has(location.threadKey);
       }
       if (location.view === "launchpad") {
+        // The live set lists this machine's launchpads; a peer's is not in it.
         return liveLaunchpadKeys === undefined
+          || location.instanceId !== undefined
           || liveLaunchpadKeys.has(location.directoryKey);
       }
       return true;

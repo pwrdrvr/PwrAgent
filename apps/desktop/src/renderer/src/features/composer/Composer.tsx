@@ -201,6 +201,10 @@ import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail"
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
+import {
+  LaunchpadMachineChip,
+  type LaunchpadMachineControl,
+} from "./LaunchpadMachineChip";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
@@ -284,6 +288,8 @@ type ComposerProps = {
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   launchpad?: NavigationLaunchpadDraft;
+  /** Which machine the launchpad starts its thread on, and how to move it. */
+  launchpadMachine?: LaunchpadMachineControl;
   launchpadError?: string;
   launchpadMaterializing?: boolean;
   /**
@@ -10386,10 +10392,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // Keeping the editor live lets an operator inspect, copy, revise, or remove
   // durable text and attachments while federation reconnects.
   const composerDisabled = false;
+  const launchpadMachine = props.launchpadMachine;
+  const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
+    ? launchpadMachine.targets.find(
+      (target) => target.instanceId === launchpadMachine.currentInstanceId,
+    )?.label ?? launchpadMachine.currentInstanceId
+    : undefined;
   const composerPlaceholder = launchpadSubmitting
     ? "Queue a follow-up while this thread starts"
     : isLaunchpad
-    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
+    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}${
+      launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
+    }`
     : "Reply to this thread";
   const handleComposerChange = (
     nextDraft: string,
@@ -12284,6 +12298,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           className="composer__setup"
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
+          {props.launchpad && launchpadMachine ? (
+            <LaunchpadMachineChip
+              control={launchpadMachine}
+              disabled={launchpadSubmitting}
+              onRetarget={(instanceId) => {
+                void (async () => {
+                  const plan = await launchpadMachine.planRetarget?.(instanceId);
+                  if (!plan) {
+                    return;
+                  }
+                  prepareDraftRetarget(plan.directoryKey);
+                  await plan.open();
+                })();
+              }}
+            />
+          ) : null}
           {props.launchpad && providerOptions.length > 0 ? (
             <ComposerDropdown
               id="composer-provider"
