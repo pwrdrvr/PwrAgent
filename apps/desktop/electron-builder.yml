@@ -201,6 +201,11 @@ rpm:
 
 pacman:
   packageName: pwragent
+  # electron-builder combines synopsis and description with a newline. Arch's
+  # .PKGINFO requires a single-line pkgdesc; the later FPM argument overrides it.
+  fpm:
+    - "--description"
+    - "Thread-centric coding agent desktop app"
   # We ship Electron's upstream binary, not Arch's system Electron. Do not
   # inherit electron-builder's list of Chromium build dependencies.
   depends:

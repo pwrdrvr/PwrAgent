@@ -70,6 +70,12 @@ jobs:
               if grep -q "not found" /tmp/ldd.txt; then cat /tmp/ldd.txt; exit 1; fi
             '
 
+      - name: Validate Arch package metadata
+        run: |
+          set -euo pipefail
+          bsdtar -xOf "apps/desktop/release-stage/dist/PwrAgent-linux-${{ matrix.arch }}.pacman" .PKGINFO \
+            | awk '/^#/ || /^$/ {next} !/^[a-z][a-z0-9_]* = / {print; bad=1} END {exit bad}'
+
       - name: Install pacman package on Arch
         if: matrix.arch == 'x64'
         run: |
