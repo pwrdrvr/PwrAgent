@@ -4299,7 +4299,8 @@ a.button {
   color: var(--button-text);
 }
 
-.button[disabled] {
+.button[disabled],
+.incoming-files-folder-actions .button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.45;
 }

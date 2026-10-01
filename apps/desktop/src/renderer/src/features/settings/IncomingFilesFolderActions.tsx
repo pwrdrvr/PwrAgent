@@ -59,15 +59,17 @@ export function IncomingFilesFolderActions(props: {
   };
 
   const current = result?.configured === props.directory ? result.response : undefined;
-  const disabled = props.disabled || busy || !api;
+  // Native disabling drops browser focus without the blur that saves a draft.
+  // Keep pending actions focusable; action() ignores repeat activations.
+  const disabled = props.disabled || !api;
   return (
     <div data-receiving-folder-actions>
       <div className="incoming-files-folder-actions">
-        <button type="button" className="button button--secondary" disabled={disabled} onClick={() => void action("browse")}>Browse…</button>
-        <button type="button" className="button button--secondary" disabled={disabled} onClick={() => void action("reveal")}>Reveal folder</button>
-        <button type="button" className="button button--secondary" disabled={disabled} onClick={() => void action("check")}>Check access</button>
+        <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("browse")}>Browse…</button>
+        <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("reveal")}>Reveal folder</button>
+        <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("check")}>Check access</button>
         {result?.response.privacySettingsSupported ? (
-          <button type="button" className="button button--secondary" disabled={disabled} onClick={() => void action("privacy")}>Open Files & Folders</button>
+          <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("privacy")}>Open Files & Folders</button>
         ) : null}
       </div>
       <div className="settings-field__help" role="status" aria-live="polite">

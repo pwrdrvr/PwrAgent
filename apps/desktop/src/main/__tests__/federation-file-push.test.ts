@@ -216,4 +216,48 @@ describe("Federation push files", () => {
     expect(result.sizeBytes).toBe(0);
     expect(await fs.readFile(result.path, "utf8")).toBe("");
   });
+
+  it("waits beyond the default RPC deadline for a slow fallback copy", async () => {
+    const router = new FederationRouter({ localInstanceId: "pwr_receiver", methodCapabilities: FILE_PUSH_METHOD_CAPABILITIES });
+    registerFilePushHandlers(router, receiver);
+    const sentMethods: string[] = [];
+    const rpc = new Rpc({ localInstanceId: peer, remoteInstanceId: "pwr_receiver", sendEnvelope: (envelope) => {
+      if (envelope.kind === "request") {
+        sentMethods.push(envelope.method);
+      }
+      void router.routeEnvelope({ envelope, sourcePeerId: peer });
+    } });
+    router.registerConnection({ peerId: peer, capabilities: ["file_push"], sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    const source = path.join(root, "slow.txt");
+    await fs.writeFile(source, "abc");
+    let copyStarted!: () => void;
+    let releaseCopy!: () => void;
+    const started = new Promise<void>((resolve) => { copyStarted = resolve; });
+    const release = new Promise<void>((resolve) => { releaseCopy = resolve; });
+    const copyFile = fs.copyFile.bind(fs);
+    vi.spyOn(fs, "link").mockRejectedValueOnce(Object.assign(new Error("link denied"), { code: "EPERM" }));
+    vi.spyOn(fs, "copyFile").mockImplementationOnce(async (...args) => {
+      copyStarted();
+      await release;
+      await copyFile(...args);
+    });
+    vi.useFakeTimers();
+    let settled = false;
+    const outcome = pushFederationFile(rpc, source).then(
+      (result) => { settled = true; return { result }; },
+      (error: unknown) => { settled = true; return { error }; },
+    );
+    try {
+      await started;
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect(settled).toBe(false);
+      expect(sentMethods).toEqual([methods.begin, methods.chunk, methods.finish]);
+    } finally {
+      releaseCopy();
+      await outcome;
+    }
+    expect(await outcome).toEqual({ result: { path: path.join(downloads, "slow.txt"), sizeBytes: 3, sha256: digest("abc") } });
+    expect(await fs.readdir(downloads)).toEqual(["slow.txt"]);
+    expect(await fs.readFile(path.join(downloads, "slow.txt"), "utf8")).toBe("abc");
+  });
 });

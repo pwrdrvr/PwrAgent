@@ -258,7 +258,9 @@ export async function pushFederationFile(
     }
     const after = await file.stat();
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("Source file changed during transfer.");
-    return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") } });
+    // Finalization can copy the whole file on volumes that deny hard links.
+    // Wait for the result or peer disconnect rather than timing out mid-copy.
+    return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") }, timeoutMs: null });
   } catch (error) {
     if (transferId) {
       await rpc.request({ method: FILE_PUSH_METHODS.cancel, params: { transferId }, timeoutMs: 5_000 }).catch(() => undefined);
