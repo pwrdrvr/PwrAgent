@@ -37,6 +37,8 @@ export type AppNoticeToastNotice = {
   /** Optional notice-specific dismissal, including any durable disposition. */
   onDismiss?: () => void;
   detail?: string;
+  /** Interactive controls supplied by an in-window notice producer. */
+  body?: ReactNode;
   /**
    * Machine state (a path, a host, a session id) as label/value rows, set in
    * mono. `detail` stays prose: the card cannot tell a path from a sentence.
@@ -264,8 +266,8 @@ export function AppNoticeToast(props: {
           </>
         ) : null}
       </div>
-      {props.children ? (
-        <div className="app-notice-toast__body">{props.children}</div>
+      {props.notice.body || props.children ? (
+        <div className="app-notice-toast__body">{props.notice.body}{props.children}</div>
       ) : null}
       {props.navigation || customActions.length > 0 ? (
         <div className="app-notice-toast__footer">

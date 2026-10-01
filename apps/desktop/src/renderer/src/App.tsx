@@ -66,6 +66,7 @@ import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
+import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
   useDesktopSettings,
@@ -882,6 +883,18 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
+    const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
+    if (saved) {
+      await props.settings.refresh();
+      await refreshManagedCodexModelCatalog(desktopApi);
+    }
+    return saved;
+  }, [desktopApi, props.settings.writeConfig, props.settings.refresh]);
+  const checkCodexManagedBuildUpdates = useCallback(async () => {
+    await checkForManagedCodexUpdates(desktopApi);
+    await props.settings.refresh();
+  }, [desktopApi, props.settings.refresh]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
@@ -3668,6 +3681,8 @@ function DesktopAppShell(props: {
           snapshot={settings.snapshot}
           onNoticeChanged={syncCodexVersionNotice}
           onOpenCodexSettings={openCodexSettings}
+          onManagedBuildsChange={changeCodexManagedBuilds}
+          onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
         />
         <CodexRestartNotice
           desktopApi={desktopApi}
