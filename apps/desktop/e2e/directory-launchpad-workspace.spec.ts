@@ -32,6 +32,7 @@ async function selectComposerOption(params: {
 async function createDirectoryLaunchpadFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
+  otherRepoDir: string;
   pickedRepoDir: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-e2e-"));
@@ -303,6 +304,7 @@ async function createDirectoryLaunchpadFixture(): Promise<{
 
   return {
     fixturePath,
+    otherRepoDir,
     pickedRepoDir: resolvedPickedRepoDir,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
@@ -768,7 +770,7 @@ test("add-project menu selects and reveals the new directory and retains it afte
     await app.window.getByRole("button", { name: "Start thread", exact: true }).click();
     await expect.poll(async () => navigationPath(
       ((await app.getLastStartTurn()) as { cwd?: string } | undefined)?.cwd ?? "",
-    )).toBe(navigationPath(path.join(path.dirname(fixture.pickedRepoDir), "OtherRepo")));
+    )).toBe(navigationPath(fixture.otherRepoDir));
     // Changing lenses replaces the sidebar's query resources. The added
     // project has no thread membership to keep it alive in that refreshed list.
     await app.window.getByRole("tab", { name: "Updated" }).click();
