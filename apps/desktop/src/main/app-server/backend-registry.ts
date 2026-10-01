@@ -821,6 +821,7 @@ type BackendClient = {
   readConfiguredMcpServerNames?(params?: {
     cwd?: string;
   }): Promise<string[]>;
+  invalidateThreadListings?(notification?: AppServerNotification): void;
   listThreads(
     params?: {
       archived?: boolean;
@@ -11745,13 +11746,14 @@ export class DesktopBackendRegistry {
       return durableThreads;
     }
     if (params.forceRefresh && !params.skipArchivedMetadataRefresh) {
-      this.archiveCleanupReads.invalidate(params.backend);
+      this.invalidateArchiveCleanupReads(params.backend);
     }
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "codex") {
+      const archiveGeneration = this.archiveCleanupReads.generation("codex");
       const threads = await this.filterArchivedThreadsPresentInActiveList({
         archived: params.archived,
         backend: "codex",
@@ -11766,7 +11768,10 @@ export class DesktopBackendRegistry {
           skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
         }, diagnostics),
       });
-      if (!params.skipArchivedMetadataRefresh) {
+      // Listings that began before a restore cannot authorize destructive
+      // cleanup, including archived reads made outside the cleanup pool.
+      if (!params.skipArchivedMetadataRefresh
+        && this.archiveCleanupReads.generation("codex") === archiveGeneration) {
         this.scheduleThreadListArchiveStateCleanup({
           backend: "codex",
           filter: params.filter,
@@ -13606,7 +13611,7 @@ export class DesktopBackendRegistry {
       result = { threadId: request.threadId };
     }
     this.invalidateThreadListCache(backend);
-    this.archiveCleanupReads.invalidate(backend);
+    this.invalidateArchiveCleanupReads(backend);
     if (backend === "codex") await this.archiveTokenMiserThread(result.threadId);
     const messagingCleanup = await this.cleanupMessagingForArchivedThread({
       backend,
@@ -13766,7 +13771,7 @@ export class DesktopBackendRegistry {
       });
     }
     this.invalidateThreadListCache(backend);
-    this.archiveCleanupReads.invalidate(backend);
+    this.invalidateArchiveCleanupReads(backend);
     this.clearArchivedMessagingCleanupCache({
       backend,
       threadId: result.threadId,
@@ -23882,7 +23887,7 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
-    this.archiveCleanupReads.invalidate();
+    this.invalidateArchiveCleanupReads();
     // A recovery drain waiting for other Codex turns gives up now; the final
     // Codex close below still waits for that drain before it runs.
     this.codexInvalidIdRecoveryAbort.abort();
@@ -25733,7 +25738,7 @@ export class DesktopBackendRegistry {
 
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
     if (!backend) {
-      this.archiveCleanupReads.invalidate();
+      this.invalidateArchiveCleanupReads();
       this.threadListCache.clear();
       return;
     }
@@ -25943,7 +25948,7 @@ export class DesktopBackendRegistry {
       previousActiveThreadIds.size !== nextActiveThreadIds.size
       || [...previousActiveThreadIds].some((id) => !nextActiveThreadIds.has(id))
     )) {
-      this.archiveCleanupReads.invalidate(params.backend);
+      this.invalidateArchiveCleanupReads(params.backend);
     }
     this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
     const missingThreadIds = new Set(
@@ -41003,6 +41008,14 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private invalidateArchiveCleanupReads(
+    backend?: AppServerBackendKind,
+    notification?: AppServerNotification,
+  ): void {
+    this.archiveCleanupReads.invalidate(backend);
+    if (!backend || backend === "codex") this.codexClient.invalidateThreadListings?.(notification);
+  }
+
   private invalidateArchiveCleanupForNotification(
     backend: AppServerBackendKind,
     notification: AppServerNotification,
@@ -41016,7 +41029,7 @@ export class DesktopBackendRegistry {
       // Provider notifications enter before async cleanup, then reach emit.
       // One notification must advance the archive generation only once.
       this.archiveCleanupNotifications.add(notification);
-      this.archiveCleanupReads.invalidate(backend);
+      this.invalidateArchiveCleanupReads(backend, notification);
     }
   }
 

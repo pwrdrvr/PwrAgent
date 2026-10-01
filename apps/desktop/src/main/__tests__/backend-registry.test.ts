@@ -51480,6 +51480,121 @@ script = "printf setup"
     expect(archivedReads).toBe(2);
   });
 
+  it("does not authorize cleanup from an archived registry listing started before restore", async () => {
+    const budget = navigationListingBudgets["archive-cleanup-provider-mutation-fence"];
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.activeIds = [];
+    transport.archivedIds = ["restored"];
+    transport.holdNextListing(true);
+    transport.holdNextListing(false);
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: (...[params, diagnostics]: Parameters<CodexAppServerClient["listThreads"]>) =>
+        provider.listThreads(params?.archived ? params : { ...params, skipArchivedMetadataRefresh: true }, diagnostics),
+      invalidateThreadListings: (notification?: AppServerNotification) => provider.invalidateThreadListings(notification),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "restored-binding", threadId: "restored" }],
+      pendingIntentIds: ["restored-intent"],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
+    const listing = registry.listThreads({ backend: "codex", archived: true, enrichDirectories: false });
+    await waitForCondition(() => transport.listings.some((rpc) => rpc.archived));
+    transport.releaseListings(true);
+    // Archived-list filtering also captured a pre-restore active snapshot.
+    await waitForCondition(() => transport.listings.some((rpc) => !rpc.archived));
+    transport.archivedIds = [];
+    transport.activeIds = ["restored"];
+    await codexClient.emit({ method: "thread/unarchived", params: { threadId: "restored" } });
+    transport.releaseListings(false);
+    await listing;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(messagingStore.revokedBindingIds).toEqual([]);
+    expect(messagingStore.deletedPendingThreads).toEqual([]);
+    expect(transport.listings.filter((rpc) => rpc.archived)).toHaveLength(budget.archivedRpcsFromPreMutationRegistryListing);
+  });
+
+  it("does not split a provider generation when a restore notification is forwarded", async () => {
+    const budget = navigationListingBudgets["archive-cleanup-provider-mutation-fence"];
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.archivedIds = [];
+    transport.holdNextListing(true);
+    onTestFinished(async () => { transport.releaseListings(); await provider.close(); });
+    let first!: Promise<AppServerThreadSummary[]>;
+    let second!: Promise<AppServerThreadSummary[]>;
+    let delivered!: () => void;
+    const forwarded = new Promise<void>((resolve) => { delivered = resolve; });
+    provider.onNotification(async (notification) => {
+      // The wire handler already applied this fence. An earlier subscriber
+      // can start a fresh read before the registry forwards the same event.
+      first = provider.listThreads({ archived: true, enrichDirectories: false });
+      await waitForCondition(() => transport.listings.length === 1);
+      provider.invalidateThreadListings(notification);
+      second = provider.listThreads({ archived: true, enrichDirectories: false });
+      delivered();
+    });
+    transport.emitNotification({ method: "thread/unarchived", params: { threadId: "restored" } });
+    await forwarded;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(transport.listings).toHaveLength(budget.pageRpcsForForwardedNotification);
+    transport.releaseListings();
+    const results = await Promise.all([first, second]);
+    expect(results[0]).toBe(results[1]);
+  });
+
+  it("does not borrow pre-restore archive evidence from an unrelated provider reader", async () => {
+    const budget = navigationListingBudgets["archive-cleanup-provider-mutation-fence"];
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.activeIds = [];
+    transport.archivedIds = ["restored"];
+    transport.holdNextListing(true);
+    // An external lookup, not the cleanup pool, owns this stale physical read.
+    const external = provider.listThreads({ archived: true, enrichDirectories: false }, { callerReason: "thread-id-lookup" });
+    await waitForCondition(() => transport.listings.length === 1);
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: (...[params, diagnostics]: Parameters<CodexAppServerClient["listThreads"]>) =>
+        provider.listThreads(params?.archived ? params : { ...params, skipArchivedMetadataRefresh: true }, diagnostics),
+      invalidateThreadListings: (notification?: AppServerNotification) => provider.invalidateThreadListings(notification),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "restored-binding", threadId: "restored" }],
+      pendingIntentIds: ["restored-intent"],
+    });
+    let releaseBindings!: () => void;
+    const bindingGate = new Promise<void>((resolve) => { releaseBindings = resolve; });
+    const findBindings = messagingStore.findActiveBindingsForBackend.bind(messagingStore);
+    const bindingReads = vi.spyOn(messagingStore, "findActiveBindingsForBackend")
+      .mockImplementation(async (params) => { await bindingGate; return await findBindings(params); });
+    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
+    await registry.listThreads({ backend: "codex", enrichDirectories: false });
+    await waitForCondition(() => bindingReads.mock.calls.length === 1);
+    // Registry-local notification: the provider transport cannot independently
+    // invalidate the unrelated listing. Cleanup has not entered its pool yet.
+    transport.archivedIds = [];
+    await codexClient.emit({ method: "thread/unarchived", params: { threadId: "restored" } });
+    transport.holdNextListing(true);
+    const fresh = provider.listThreads({ archived: true, enrichDirectories: false }, { callerReason: "thread-list" });
+    await waitForCondition(() => transport.listings.filter((rpc) => rpc.archived).length === budget.archivedProviderListings);
+    // Cleanup can still share this post-restore read with its existing owner.
+    releaseBindings();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transport.releaseListings();
+    await expect(external).resolves.toMatchObject([{ id: "restored" }]);
+    await expect(fresh).resolves.toEqual([]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(messagingStore.revokedBindingIds).toHaveLength(budget.revokedBindings);
+    expect(messagingStore.deletedPendingThreads).toHaveLength(budget.deletedPendingIntentThreads);
+    expect(transport.listings.filter((rpc) => rpc.archived)).toHaveLength(budget.archivedPageRpcs);
+    expect(transport.listings.filter((rpc) => rpc.archived && !rpc.cursor)).toHaveLength(budget.archivedProviderListings);
+  });
+
   it("bounds archive cleanup scans across related navigation refreshes", async () => {
     const budget = navigationListingBudgets["archive-cleanup-related-refreshes"];
     const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
@@ -51488,6 +51603,7 @@ script = "printf setup"
       // registry cleanup while retaining production listing/pagination.
       listThreads: (...[params, diagnostics]: Parameters<CodexAppServerClient["listThreads"]>) =>
         provider.listThreads({ ...params, skipArchivedMetadataRefresh: true }, diagnostics),
+      invalidateThreadListings: (notification?: AppServerNotification) => provider.invalidateThreadListings(notification),
     });
     const messagingStore = createMessagingArchiveCleanupStoreMock({
       // This binding is neither active nor archived. A negative membership

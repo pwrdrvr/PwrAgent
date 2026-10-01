@@ -1,3 +1,4 @@
+import type { AppServerNotification } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 
 /** Contrived protocol data; exercises the production client paginator. */
@@ -6,6 +7,8 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   activeIds = ["active", "transition"];
   archivedIds = ["archive-one", "archive-two", "archive-three"];
   readonly listings: Array<{ archived: boolean; cursor?: string }> = [];
+  private readonly heldKinds = new Set<boolean>();
+  private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
   private messageHandler: (message: string) => void = () => {};
 
   constructor() {
@@ -17,6 +20,22 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   setCloseHandler(_handler: (error?: Error) => void): void {}
   setMessageHandler(handler: (message: string) => void): void {
     this.messageHandler = handler;
+  }
+
+  emitNotification(notification: AppServerNotification): void {
+    this.messageHandler(JSON.stringify({ jsonrpc: "2.0", ...notification }));
+  }
+
+  holdNextListing(archived: boolean): void {
+    this.heldKinds.add(archived);
+  }
+
+  releaseListings(archived?: boolean): void {
+    const held = this.replies.splice(0);
+    for (const response of held) {
+      if (archived === undefined || response.archived === archived) response.reply();
+      else this.replies.push(response);
+    }
   }
 
   send(message: string): void {
@@ -40,6 +59,11 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
         nextCursor: archived && page + 1 < this.archivedIds.length ? String(page + 1) : null,
       };
     }
-    this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    const reply = () => this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    if (request.method === "thread/list" && this.heldKinds.delete(request.params?.archived === true)) {
+      this.replies.push({ archived: request.params?.archived === true, reply });
+    } else {
+      reply();
+    }
   }
 }

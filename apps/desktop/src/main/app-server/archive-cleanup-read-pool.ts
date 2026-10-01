@@ -28,6 +28,10 @@ export class ArchiveCleanupReadPool {
     }
   }
 
+  generation(backend: AppServerBackendKind): number {
+    return this.scope(backend).generation;
+  }
+
   isCurrent(backend: AppServerBackendKind, evidence: ArchiveEvidence): boolean {
     return this.scope(backend).generation === evidence.generation;
   }
