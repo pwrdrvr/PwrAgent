@@ -1,6 +1,7 @@
 import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -164,6 +165,75 @@ function threadRow(title: string): HTMLElement {
     throw new Error(`Expected a hover-stable row for ${title}`);
   }
   return row;
+}
+
+/**
+ * Drag pinned Alpha below pinned Bravo with a pointer that comes to rest on
+ * Bravo, the way the browser leaves it after a drop.
+ */
+async function dropAlphaAfterBravo(): Promise<void> {
+  const alphaRow = threadRow("Alpha thread");
+  const bravoRow = threadRow("Bravo thread");
+  fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
+  vi.spyOn(alphaRow, "getBoundingClientRect").mockReturnValue({
+    bottom: 200,
+    height: 100,
+    left: 0,
+    right: 300,
+    toJSON: () => ({}),
+    top: 100,
+    width: 300,
+    x: 0,
+    y: 100,
+  });
+  vi.spyOn(bravoRow, "getBoundingClientRect").mockReturnValue({
+    bottom: 100,
+    height: 100,
+    left: 0,
+    right: 300,
+    toJSON: () => ({}),
+    top: 0,
+    width: 300,
+    x: 0,
+    y: 0,
+  });
+  const elementFromPoint = document.elementFromPoint;
+  Object.defineProperty(document, "elementFromPoint", {
+    configurable: true,
+    value: () => bravoRow,
+  });
+  try {
+    fireEvent.pointerDown(alphaRow, {
+      button: 0,
+      clientX: 50,
+      clientY: 150,
+      pointerId: 41,
+    });
+    fireEvent.pointerMove(window, {
+      buttons: 1,
+      clientX: 50,
+      clientY: 75,
+      pointerId: 41,
+    });
+    await waitFor(() => {
+      expect(bravoRow).toHaveClass("is-drop-target-after");
+    });
+    fireEvent.pointerUp(window, {
+      button: 0,
+      clientX: 50,
+      clientY: 75,
+      pointerId: 41,
+    });
+  } finally {
+    if (elementFromPoint) {
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: elementFromPoint,
+      });
+    } else {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
+  }
 }
 
 describe("Sidebar hover-stable thread ordering", () => {
@@ -627,72 +697,48 @@ describe("Sidebar hover-stable thread ordering", () => {
       threads: [pinnedAlpha, pinnedBravo],
       onReorderThreadPins,
     }));
-    const alphaRow = threadRow("Alpha thread");
-    const bravoRow = threadRow("Bravo thread");
-    fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
-    vi.spyOn(alphaRow, "getBoundingClientRect").mockReturnValue({
-      bottom: 200,
-      height: 100,
-      left: 0,
-      right: 300,
-      toJSON: () => ({}),
-      top: 100,
-      width: 300,
-      x: 0,
-      y: 100,
-    });
-    vi.spyOn(bravoRow, "getBoundingClientRect").mockReturnValue({
-      bottom: 100,
-      height: 100,
-      left: 0,
-      right: 300,
-      toJSON: () => ({}),
-      top: 0,
-      width: 300,
-      x: 0,
-      y: 0,
-    });
-    const elementFromPoint = document.elementFromPoint;
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: () => bravoRow,
-    });
-    try {
-      fireEvent.pointerDown(alphaRow, {
-        button: 0,
-        clientX: 50,
-        clientY: 150,
-        pointerId: 41,
-      });
-      fireEvent.pointerMove(window, {
-        buttons: 1,
-        clientX: 50,
-        clientY: 75,
-        pointerId: 41,
-      });
-      await waitFor(() => {
-        expect(bravoRow).toHaveClass("is-drop-target-after");
-      });
-      fireEvent.pointerUp(window, {
-        button: 0,
-        clientX: 50,
-        clientY: 75,
-        pointerId: 41,
-      });
-    } finally {
-      if (elementFromPoint) {
-        Object.defineProperty(document, "elementFromPoint", {
-          configurable: true,
-          value: elementFromPoint,
-        });
-      } else {
-        Reflect.deleteProperty(document, "elementFromPoint");
-      }
-    }
+    await dropAlphaAfterBravo();
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "codex:bravo",
       "codex:alpha",
     ], { key: "codex:alpha", anchorKey: "codex:bravo", placement: "after" });
+
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [directory],
+      selectedItemKey: "codex:alpha",
+      threads: [
+        { ...pinnedAlpha, pinnedRank: "2048" },
+        { ...pinnedBravo, pinnedRank: "1024" },
+      ],
+      onReorderThreadPins,
+    }));
+
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+
+  it("shows a dropped pin reorder without the pointer leaving the rows", async () => {
+    let resolveReorder!: () => void;
+    const onReorderThreadPins = vi.fn(() => new Promise<void>((resolve) => {
+      resolveReorder = resolve;
+    }));
+    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
+    const pinnedBravo = { ...bravo, pinnedRank: "2048" };
+    const view = render(renderSidebar({
+      browseMode: "directories",
+      directories: [directory],
+      selectedItemKey: "codex:alpha",
+      threads: [pinnedAlpha, pinnedBravo],
+      onReorderThreadPins,
+    }));
+    await dropAlphaAfterBravo();
+    expect(onReorderThreadPins).toHaveBeenCalledOnce();
+    // The drop clears its indicator under the resting pointer, so the browser
+    // reports the pointer entering a row before the reorder has landed.
+    fireEvent.pointerOver(threadRow("Bravo thread"), { pointerType: "mouse" });
+    await act(async () => {
+      resolveReorder();
+    });
 
     view.rerender(renderSidebar({
       browseMode: "directories",
