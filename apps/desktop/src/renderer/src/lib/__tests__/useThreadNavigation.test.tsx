@@ -281,6 +281,41 @@ describe("useThreadNavigation", () => {
     }
   });
 
+  it("exposes a failed launchpad configuration read and reloads the selected project", async () => {
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const projects = ["first", "second"].map((name) => ({
+      key: `directory:/repo/${name}`, kind: "directory" as const, label: name, path: `/repo/${name}`,
+      threadKeys: [], needsAttentionCount: 0,
+      launchpad: { ...defaults, directoryKey: `directory:/repo/${name}`, directoryKind: "directory" as const,
+        directoryLabel: name, directoryPath: `/repo/${name}`, prompt: "", workMode: "local" as const,
+        createdAt: 1, updatedAt: 1 },
+    }));
+    let firstReads = 0;
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationLaunchpadConfig"]>>(async (request) => {
+      if (request.directoryKey === projects[0]!.key && ++firstReads === 2) throw new Error("Navigation read cancelled");
+      const project = projects.find((candidate) => candidate.key === request.directoryKey);
+      return { protocol: 2, revision: "config", directoryKey: request.directoryKey, defaults, launchpad: project?.launchpad };
+    });
+    const api: DesktopApi = {
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: [], threads: [], directories: projects, launchpadDefaults: defaults }),
+      getNavigationLaunchpadConfig: read,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.directories).toHaveLength(2));
+    act(() => result.current.selectDirectoryLaunchpad(projects[0]!.key));
+    await waitFor(() => expect(result.current.selectedLaunchpadConfigurationReady).toBe(true));
+    act(() => result.current.selectDirectoryLaunchpad(projects[1]!.key));
+    await waitFor(() => expect(result.current.selectedLaunchpadConfigurationReady).toBe(true));
+    act(() => result.current.selectDirectoryLaunchpad(projects[0]!.key));
+    await waitFor(() => expect(result.current.selectedLaunchpadConfigurationError).toBe("Navigation read cancelled"));
+    expect(result.current.selectedLaunchpadConfigurationReady).toBe(false);
+    await act(async () => result.current.refreshSelectedLaunchpadConfiguration());
+    expect(result.current.selectedLaunchpadConfigurationReady).toBe(true);
+    expect(result.current.selectedLaunchpadConfigurationError).toBeUndefined();
+    expect(read.mock.calls.at(-1)?.[0].directoryKey).toBe(projects[0]!.key);
+  });
+
   it.each(["inbox", "directories"] as const)("loads navigation before a visible window gains focus (%s)", async (browseMode) => {
     vi.mocked(document.hasFocus).mockReturnValue(false);
     (window as unknown as { __pwragentNavigationPreferences: { browseMode: string } })
