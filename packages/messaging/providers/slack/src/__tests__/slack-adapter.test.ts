@@ -4142,10 +4142,10 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("routes Block Kit callbacks from DMs back to the original DM handle", async () => {
+  it("routes private reply and Cancel buttons from user-addressed DMs", async () => {
     const socket = fakeSocket();
     const store = fakeStore();
-    const spies: { posted: unknown[] } = { posted: [] };
+    const spies = { posted: [] as unknown[], postedChannel: "D012ABCDEF0" };
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: store,
@@ -4158,42 +4158,57 @@ describe("SlackAdapter", () => {
       delivered.push(event);
     });
 
+    const resolved = await adapter.resolvePrivateConversation({
+      actor: { platformUserId: "U012ABCDEF0" },
+      replyContinuationRequired: true,
+      source: { channel: "slack", conversation: { id: "C012ABCDEF0", kind: "channel" } },
+    });
+    expect(resolved.conversation?.id).toBe("U012ABCDEF0");
     await adapter.deliver({
       id: "resume-prompt",
-      kind: "status",
+      kind: "confirmation",
       createdAt: 1,
-      status: "waiting",
-      text: "Resume?",
+      title: "Private request",
+      body: "Resume?",
       audit: {
         actor: { platformUserId: "U012ABCDEF0" },
         channel: {
           channel: "slack",
-          conversation: { id: "D012ABCDEF0", kind: "dm" },
+          conversation: resolved.conversation!,
         },
         occurredAt: 1,
       },
-      actions: [{ id: "resume", label: "Resume", style: "primary" }],
+      actions: [
+        { id: "resume", label: "Resume", style: "primary" },
+        { id: "cancel", label: "Cancel" },
+      ],
     });
     const posted = spies.posted[0] as {
       blocks: Array<{
         elements?: Array<{ action_id?: string; value?: string }>;
       }>;
     };
-    const button = posted.blocks.flatMap((block) => block.elements ?? [])[0]!;
+    const buttons = posted.blocks.flatMap((block) => block.elements ?? []);
+    expect(store.records).toHaveLength(2);
+    expect(store.records.every((record) => record.channel.conversation.id === "D012ABCDEF0")).toBe(true);
 
-    await socket.emitEvent("interactive", {
-      ack: async () => undefined,
-      body: {
-        type: "block_actions",
-        user: { id: "U012ABCDEF0", username: "alice" },
-        team: { id: "T012ABCDEF0" },
-        channel: { id: "D012ABCDEF0", name: "directmessage" },
-        message: { ts: "1712023032.123456" },
-        actions: [button],
-      },
-    });
-
-    expect(delivered).toEqual([
+    for (const button of buttons) {
+      await socket.emitEvent("interactive", {
+        ack: async () => undefined,
+        body: {
+          type: "block_actions",
+          user: { id: "U012ABCDEF0", username: "alice" },
+          team: { id: "T012ABCDEF0" },
+          channel: { id: "D012ABCDEF0", name: "directmessage" },
+          message: { ts: "1712023032.123456" },
+          actions: [button],
+        },
+      });
+    }
+    expect(delivered).toHaveLength(2);
+    expect(delivered.map((event) => event.kind === "callback" ? event.actionId : undefined))
+      .toEqual(["resume", "cancel"]);
+    expect(delivered[0]).toEqual(
       expect.objectContaining({
         kind: "callback",
         actionId: "resume",
@@ -4215,7 +4230,7 @@ describe("SlackAdapter", () => {
           }),
         }),
       }),
-    ]);
+    );
   });
 
   it("routes group DM Block Kit callbacks for an authorized user despite restricted gates", async () => {

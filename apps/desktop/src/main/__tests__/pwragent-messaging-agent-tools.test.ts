@@ -101,6 +101,9 @@ describe("PwrAgent messaging agent tools", () => {
               "start a continuation from the first private reply",
             ),
           }),
+          replyOptions: expect.objectContaining({
+            maxItems: 3,
+          }),
         }),
       }),
     });
