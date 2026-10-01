@@ -39,13 +39,15 @@ describe("FederationSettings", () => {
     render(<FederationCapabilities desktopApi={{ receivingFolder }} federation={settingsSnapshot().federation} saving={false} onWriteConfig={onWriteConfig} />);
     await screen.findByRole("button", { name: "Open Files & Folders" });
     expect(receivingFolder).toHaveBeenCalledExactlyOnceWith({ action: "inspect", directory: "" });
-    for (const [label, action] of [["Check access", "check"], ["Reveal folder", "reveal"], ["Open Files & Folders", "privacy"]] as const) {
+    for (const [label, action] of [["Check access", "check"], ["Open folder", "reveal"], ["Open Files & Folders", "privacy"]] as const) {
       fireEvent.click(screen.getByRole("button", { name: label }));
       await waitFor(() => expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-disabled", "false"));
       expect(receivingFolder).toHaveBeenLastCalledWith({ action, directory: "" });
     }
     expect(onWriteConfig).not.toHaveBeenCalled();
-    expect(screen.getByRole("status")).toHaveTextContent("macOS privacy permission: unknown");
+    expect(screen.getByRole("status")).toHaveTextContent("Not checked");
+    expect(screen.getByText("Saves to /Users/fixture/Downloads")).toBeInTheDocument();
+    expect(screen.getByText("macOS privacy settings can still block this folder.")).toBeInTheDocument();
   });
 
   it("checks an enabled receiver, distinguishes failed access from unknown privacy, and offers macOS settings", async () => {
@@ -54,7 +56,8 @@ describe("FederationSettings", () => {
     render(<FederationCapabilities desktopApi={{ receivingFolder }} federation={{ ...snapshot.federation, allowFilePush: { value: true, source: "config" } }} saving={false} onWriteConfig={vi.fn(async () => true)} />);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Write check failed (EPERM)"));
     expect(receivingFolder).toHaveBeenCalledExactlyOnceWith({ action: "check", directory: "" });
-    expect(screen.getByRole("status")).toHaveTextContent("macOS privacy permission: unknown");
+    expect(screen.getByRole("status")).toHaveTextContent("Not writable");
+    expect(screen.getByText("macOS privacy settings can still block this folder.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Files & Folders" })).toBeEnabled();
   });
 
@@ -89,20 +92,22 @@ describe("FederationSettings", () => {
   it("reports failed folder actions and omits unsupported privacy settings", async () => {
     const receivingFolder = vi.fn(async () => ({ ...folderResponse, privacySettingsSupported: false }));
     render(<FederationCapabilities desktopApi={{ receivingFolder }} federation={settingsSnapshot().federation} saving={false} onWriteConfig={vi.fn(async () => true)} />);
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Receiving folder"));
+    await screen.findByText("Saves to /Users/fixture/Downloads");
     expect(screen.queryByRole("button", { name: "Open Files & Folders" })).not.toBeInTheDocument();
+    expect(screen.queryByText("macOS privacy settings can still block this folder.")).not.toBeInTheDocument();
     receivingFolder.mockRejectedValueOnce(new Error("No file manager available"));
-    fireEvent.click(screen.getByRole("button", { name: "Reveal folder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("No file manager available");
   });
 
   it("does not display a previous folder's write check after editing the path", async () => {
     const receivingFolder = vi.fn(async () => ({ ...folderResponse, access: { status: "writable" as const, message: "Write check passed" } }));
     render(<FederationCapabilities desktopApi={{ receivingFolder }} federation={settingsSnapshot().federation} saving={false} onWriteConfig={vi.fn(async () => true)} />);
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Write check passed"));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("WritableWrite check passed"));
     fireEvent.change(screen.getByRole("textbox", { name: "Incoming files folder" }), { target: { value: "/tmp/different" } });
-    expect(screen.getByRole("status")).toHaveTextContent("Folder access has not been checked");
+    expect(screen.getByRole("status")).toHaveTextContent("Not checked");
     expect(screen.getByRole("status")).not.toHaveTextContent("Write check passed");
+    expect(screen.queryByText(/^Saves to/)).not.toBeInTheDocument();
   });
 
   it("keeps a folder draft while moving focus to actions and saves when leaving the folder controls", async () => {
@@ -121,7 +126,7 @@ describe("FederationSettings", () => {
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledExactlyOnceWith({ federation: { filePushDirectory: "/tmp/edited" } }));
   });
 
-  it.each(["Check access", "Reveal folder"])("retains focus during pending %s and saves a draft when focus leaves", async (label) => {
+  it.each(["Check access", "Open folder"])("retains focus during pending %s and saves a draft when focus leaves", async (label) => {
     let finishAction!: (response: ReceivingFolderResponse) => void;
     const pending = new Promise<ReceivingFolderResponse>((resolve) => { finishAction = resolve; });
     const receivingFolder = vi.fn(async (request: ReceivingFolderRequest) => request.action === "inspect" ? folderResponse : await pending);
@@ -155,14 +160,14 @@ describe("FederationSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Files & Folders" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Open Files & Folders" })).toHaveAttribute("aria-disabled", "false"));
     expect(receivingFolder).toHaveBeenLastCalledWith({ action: "privacy", directory: "" });
-    expect(screen.getByRole("status")).toHaveTextContent("Folder access has not been checked");
+    expect(screen.getByRole("status")).toHaveTextContent("Not checked");
     expect(onWriteConfig).not.toHaveBeenCalled();
     receivingFolder.mockResolvedValueOnce({ ...folderResponse, canceled: true });
     fireEvent.click(screen.getByRole("button", { name: "Browse…" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Browse…" })).toHaveAttribute("aria-disabled", "false"));
     expect(receivingFolder).toHaveBeenLastCalledWith({ action: "browse", directory: "" });
     expect(screen.getByRole("textbox", { name: "Incoming files folder" })).toHaveValue("unfinished-relative-path");
-    expect(screen.getByRole("status")).toHaveTextContent("Folder access has not been checked");
+    expect(screen.getByRole("status")).toHaveTextContent("Not checked");
     expect(onWriteConfig).not.toHaveBeenCalled();
   });
 

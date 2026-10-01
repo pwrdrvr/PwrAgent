@@ -21,13 +21,23 @@ export function receivingFolderError(error: unknown, directory: string, operatio
   return new Error(`Cannot ${operation} in incoming files folder "${directory}" (${code}). ${advice}`, { cause: error });
 }
 
+/** Settings shows this beside the folder, so unlike receivingFolderError it
+ * names no settings path and does not repeat the folder. */
+function checkFailureMessage(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (!code) return error instanceof Error ? error.message : String(error);
+  if (code === "ENOENT") return `This folder does not exist (${code}). Create it or use Browse to choose another folder.`;
+  if (code === "ENOSPC" || code === "EDQUOT") return `This disk is full (${code}). Free disk space or use Browse to choose another folder.`;
+  return `Cannot write to this folder (${code}). Use Browse to choose another folder.`;
+}
+
 /** Test an existing folder using an exclusively created, private temporary file.
  * No mkdir, chmod, settings changes, or permission-database inspection. */
 export async function checkReceivingFolder(directory: string): Promise<NonNullable<ReceivingFolderResponse["access"]>> {
   let probe: string | undefined;
   try {
     if (!(await fs.stat(directory)).isDirectory()) {
-      return { status: "failed", message: "The incoming files path is not a folder. Use Browse to choose a folder." };
+      return { status: "failed", message: "This path is not a folder. Use Browse to choose a folder." };
     }
     const candidate = path.join(directory, `.pwragent-access-check-${randomUUID()}`);
     const file = await fs.open(candidate, "wx", 0o600);
@@ -41,9 +51,9 @@ export async function checkReceivingFolder(directory: string): Promise<NonNullab
     await fs.readFile(probe);
     await fs.unlink(probe);
     probe = undefined;
-    return { status: "writable", message: "Write check passed: PwrAgent created, read, and removed a temporary file. Access can change; this does not verify OS privacy permission or every transfer operation." };
+    return { status: "writable", message: "Wrote and removed a test file." };
   } catch (error) {
-    let message = receivingFolderError(error, directory, "check access").message;
+    let message = checkFailureMessage(error);
     if (probe) {
       try {
         await fs.unlink(probe);

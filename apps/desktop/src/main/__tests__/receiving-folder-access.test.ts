@@ -23,7 +23,7 @@ describe("receiving folder access", () => {
     await fs.writeFile(path.join(directory, "keep"), "existing");
     const result = await checkReceivingFolder(directory);
     expect(result.status).toBe("writable");
-    expect(result.message).toContain("does not verify OS privacy permission");
+    expect(result.message).toBe("Wrote and removed a test file.");
     expect(await fs.readdir(directory)).toEqual(["keep"]);
     expect(await fs.readFile(path.join(directory, "keep"), "utf8")).toBe("existing");
   });

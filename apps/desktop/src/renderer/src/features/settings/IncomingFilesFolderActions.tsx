@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../../shared/federation-receiving-folder";
 
@@ -9,6 +9,8 @@ export function IncomingFilesFolderActions(props: {
   enabled: boolean;
   disabled: boolean;
   onChoose: (directory: string) => Promise<void>;
+  /** The folder input. Browse fills it, so the two share a row. */
+  children: ReactNode;
 }) {
   const api = props.desktopApi?.receivingFolder;
   const [result, setResult] = useState<{ configured: string; response: ReceivingFolderResponse }>();
@@ -59,26 +61,63 @@ export function IncomingFilesFolderActions(props: {
   };
 
   const current = result?.configured === props.directory ? result.response : undefined;
+  const access = current?.access;
   // Native disabling drops browser focus without the blur that saves a draft.
   // Keep pending actions focusable; action() ignores repeat activations.
   const disabled = props.disabled || !api;
+  const actionButton = (kind: ReceivingFolderRequest["action"], label: string, title?: string) => (
+    <button
+      type="button"
+      className="button button--ghost incoming-files-folder__action"
+      disabled={disabled}
+      aria-disabled={busy || disabled}
+      title={title}
+      onClick={() => void action(kind)}
+    >
+      {label}
+    </button>
+  );
   return (
-    <div data-receiving-folder-actions>
-      <div className="incoming-files-folder-actions">
-        <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("browse")}>Browse…</button>
-        <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("reveal")}>Reveal folder</button>
-        <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("check")}>Check access</button>
-        {result?.response.privacySettingsSupported ? (
-          <button type="button" className="button button--secondary" disabled={disabled} aria-disabled={busy || disabled} onClick={() => void action("privacy")}>Open Files & Folders</button>
-        ) : null}
+    <div className="incoming-files-folder" data-receiving-folder-actions>
+      <div className="incoming-files-folder__row">
+        {props.children}
+        <button
+          type="button"
+          className="button button--secondary incoming-files-folder__browse"
+          disabled={disabled}
+          aria-disabled={busy || disabled}
+          onClick={() => void action("browse")}
+        >
+          Browse…
+        </button>
       </div>
-      <div className="settings-field__help" role="status" aria-live="polite">
-        {current ? <div>Receiving folder: {current.directory}</div> : null}
-        <div>{current?.access?.message ?? "Folder access has not been checked. Use Check access to test writing a temporary file."}</div>
-        {result?.response.privacySettingsSupported ? (
-          <div>macOS privacy permission: unknown. Review PwrAgent in System Settings → Privacy &amp; Security → Files &amp; Folders. Browse lets you select the folder directly; macOS may ask for access.</div>
-        ) : null}
+      {/* Only a blank field hides where files land; a typed path already says it. */}
+      {current && !props.directory.trim() ? (
+        <p className="incoming-files-folder__path">Saves to {current.directory}</p>
+      ) : null}
+      <div className="incoming-files-folder__line">
+        <div className="incoming-files-folder__status" role="status" aria-live="polite">
+          <span className="incoming-files-folder__result">
+            <span className={`settings-pathrow__chip${access?.status === "writable" ? " settings-pathrow__chip--ok" : access?.status === "failed" ? " settings-pathrow__chip--err" : ""}`}>
+              {access?.status === "writable" ? "Writable" : access?.status === "failed" ? "Not writable" : "Not checked"}
+            </span>
+            {access?.status === "writable" ? <span className="incoming-files-folder__note">{access.message}</span> : null}
+          </span>
+          {access?.status === "failed" ? <span className="incoming-files-folder__failure">{access.message}</span> : null}
+        </div>
+        <span className="incoming-files-folder__actions">
+          {actionButton("check", "Check access", "Write and remove a test file in this folder")}
+          {actionButton("reveal", "Open folder")}
+        </span>
       </div>
+      {result?.response.privacySettingsSupported ? (
+        <div className="incoming-files-folder__line">
+          <span className="incoming-files-folder__note">macOS privacy settings can still block this folder.</span>
+          <span className="incoming-files-folder__actions">
+            {actionButton("privacy", "Open Files & Folders")}
+          </span>
+        </div>
+      ) : null}
       {error ? <p role="alert" className="settings-row__error">{error}</p> : null}
     </div>
   );

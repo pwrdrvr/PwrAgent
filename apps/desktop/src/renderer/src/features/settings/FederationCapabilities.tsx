@@ -71,17 +71,6 @@ export function FederationCapabilities(props: {
                 });
               }
             }}>
-              <input
-                className="settings-input"
-                aria-label="Incoming files folder"
-                value={directory.values.value}
-                disabled={props.saving || pending}
-                placeholder="Downloads (default)"
-                onChange={(event) => directory.set("value", event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
               <IncomingFilesFolderActions
                 desktopApi={props.desktopApi}
                 directory={directory.values.value}
@@ -92,7 +81,19 @@ export function FederationCapabilities(props: {
                   directory.set("value", chosen);
                   if (await save({ filePushDirectory: chosen })) directory.discard();
                 }}
-              />
+              >
+                <input
+                  className="settings-input"
+                  aria-label="Incoming files folder"
+                  value={directory.values.value}
+                  disabled={props.saving || pending}
+                  placeholder="Downloads (default)"
+                  onChange={(event) => directory.set("value", event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+              </IncomingFilesFolderActions>
             </div>
           }
         />
