@@ -27804,7 +27804,7 @@ command = "pnpm dev"
       backend: acpBackendId,
       reviewBackend: "codex",
       threadId: parentThreadId,
-      target: { type: "baseBranch", branch: "origin/main" },
+      target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -29526,7 +29526,7 @@ command = "pnpm dev"
     const response = await registry.startReview({
       backend: "codex",
       threadId: "thread-parent",
-      target: { type: "baseBranch", branch: "origin/main" },
+      target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
       cwd: "/repo/selected",
     });
@@ -29554,7 +29554,7 @@ command = "pnpm dev"
     ).toBeUndefined();
     expect(codexClient.lastStartTurnParams?.input[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("against base branch 'origin/main'"),
+      text: expect.stringContaining("against base branch 'main'"),
     });
 
     await registry.close();

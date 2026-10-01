@@ -92,6 +92,7 @@ import {
 } from "./overlay-transcript-entries";
 import { resolveReviewProvenance } from "./review-provenance";
 import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
+import { refreshReviewBaseBranch } from "./review-base-branch";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
@@ -18561,6 +18562,11 @@ export class DesktopBackendRegistry {
         cwd,
         executionTarget: codexEnvironmentRuntime?.executionTarget,
         prs: overlay?.prs,
+        target: params.target,
+      });
+      await refreshReviewBaseBranch({
+        cwd,
+        executionTarget: codexEnvironmentRuntime?.executionTarget,
         target: params.target,
       });
       reviewContext = await this.resolveReviewContext({
