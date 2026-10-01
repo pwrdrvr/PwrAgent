@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   isRemoteFederationTarget,
   type NavigationThreadSummary,
@@ -7,10 +7,12 @@ import {
 } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../../shared/native-voice";
 import { MicIcon } from "../../icons";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { formatPrimaryAccel, isPlatformPrimaryAccel } from "../../lib/keyboard-accel";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { AppNoticeToast } from "../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "./native-voice-controller";
-import { isVoiceActive, useNativeVoice, VoiceFeed, VoiceStatus, VoiceTextInput } from "./NativeVoice";
+import { isVoiceActive, useNativeVoice, voiceStateLabel, VoiceFeed, VoiceTextInput } from "./NativeVoice";
 
 export function directorVoiceShortcutLabel(): string {
   return formatPrimaryAccel("Space", { shift: true });
@@ -176,46 +178,50 @@ export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus
  * Director voice, floating over the window while it runs. Stays put across
  * navigation; the context line names the thread "this" refers to.
  */
-export function DirectorVoiceHud({ api, focus }: { api: NativeVoiceApi; focus?: DirectorFocusThread }) {
+/**
+ * Director voice while it runs, as a card in the app's notice stack: the
+ * notice library owns the chrome (dot, copy, close), and this supplies only
+ * the session's state, controls and transcript. Closing ends voice. An error
+ * leaves this card and arrives as an ordinary notice instead
+ * (`useNativeVoiceNotices`).
+ */
+export function DirectorVoiceToast({ api, desktopApi, focus }: {
+  api: NativeVoiceApi;
+  desktopApi?: Pick<DesktopApi, "copyText">;
+  focus?: DirectorFocusThread;
+}) {
   const { controller, view } = useNativeVoice(api);
-  const [collapsed, setCollapsed] = useState(false);
-  if (view.mode !== "director" || view.status === "idle") return null;
+  if (view.mode !== "director" || view.status === "idle" || view.status === "error") return null;
   const listening = view.status === "listening";
+  const looking = focus
+    ? `Looking at ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}.`
+    : "No thread selected.";
+  const transcript = [...view.transcript]
+    .map((row) => `${row.role === "user" ? "You" : "Voice"}: ${row.text}`)
+    .join("\n");
   return (
-    <section className="director-voice" aria-label="Director voice">
-      <div className="director-voice__top">
-        <VoiceStatus controller={controller} view={view} />
-        <span className="director-voice__spacer" />
-        {listening ? (
-          <button className="button button--ghost" type="button" aria-pressed={view.muted} onClick={() => controller.setMuted(!view.muted)}>
-            {view.muted ? "Unmute" : "Mute"}
-          </button>
-        ) : null}
-        <button className="button button--ghost" type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? "Show" : "Hide"}
-        </button>
-        {view.status === "error" ? (
-          <button className="button button--ghost" type="button" onClick={() => controller.dismissError()}>Dismiss</button>
-        ) : (
-          <button className="button button--ghost native-voice__end" type="button" disabled={view.status === "stopping"} onClick={() => void controller.stop()}>
-            End voice
-          </button>
-        )}
-      </div>
-      {view.error ? <p className="native-voice__error director-voice__error" role="alert">{view.error}</p> : null}
-      {collapsed ? null : (
-        <>
-          <p className="director-voice__context">
-            {focus ? (
-              <>Looking at <span className="director-voice__chip">{focus.title || "Untitled thread"}</span>
-                {focus.federation?.instanceLabel ? <> on <span className="director-voice__chip director-voice__chip--machine">{focus.federation.instanceLabel}</span></> : null}
-              </>
-            ) : "No thread selected"}
-          </p>
-          <VoiceFeed view={view} limit={12} />
-          {listening ? <VoiceTextInput controller={controller} /> : null}
-        </>
-      )}
-    </section>
+    <AppNoticeToast
+      desktopApi={desktopApi}
+      notice={{
+        id: "director-voice",
+        title: "Director voice",
+        message: listening && view.muted ? `Microphone muted. ${looking}` : looking,
+        autoDismiss: false,
+        copyText: ["Director voice", looking, transcript].filter(Boolean).join("\n"),
+        dismissLabel: "End director voice",
+        ...(listening && view.muted
+          ? {}
+          : { status: { label: voiceStateLabel(view), state: view.status === "stop-error" ? "error" as const : "progress" as const } }),
+        ...(listening ? {
+          actions: [{ label: view.muted ? "Unmute" : "Mute", onClick: () => controller.setMuted(!view.muted) }],
+        } : {}),
+      }}
+      onDismiss={() => {
+        if (view.status !== "stopping") void controller.stop();
+      }}
+    >
+      <VoiceFeed view={view} limit={12} />
+      {listening ? <VoiceTextInput controller={controller} /> : null}
+    </AppNoticeToast>
   );
 }

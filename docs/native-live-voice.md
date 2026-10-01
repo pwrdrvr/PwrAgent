@@ -61,11 +61,17 @@ keeps the latest snapshot in memory only and accepts it only from local main
 windows. When no window has published, the tool returns `focus_not_published`,
 and the manager asks the operator which thread they mean.
 
-A floating panel in the bottom-left corner shows the session. It has the live
-state, **Mute**, **Hide**, **End voice**, and the thread the window is looking
-at. It also shows the transcript, the receipts, and **Message voice**. Director
-voice continues across navigation. While it runs, the composer **Voice** toggle
-is unavailable and its tooltip explains why.
+While director voice runs, it shows as a card in the app's notice stack,
+drawn by the shared notice toast like every other notice. The card shows the
+live state and the thread the window is looking at, a **Mute** action, the
+transcript and receipts, and **Message voice**. Its close button is labelled
+**End director voice** and ends the session. Copy copies the transcript.
+Director voice continues across navigation. While it runs, the composer
+**Voice** toggle is unavailable and its tooltip explains why.
+
+A voice failure in either mode is an ordinary app notice titled **Live voice**,
+raised through the notice library. The voice controls clear as the notice
+appears. The notice stays until it is closed or the next voice start begins.
 
 Each dynamic tool call that the voice session's thread makes becomes a receipt.
 A receipt names the tool, the target thread and machine when the result names

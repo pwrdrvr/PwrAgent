@@ -202,10 +202,10 @@ import {
 } from "../../shared/github-pr-access";
 import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-info";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
-import { isNativeVoiceApi } from "./features/native-voice/NativeVoice";
+import { isNativeVoiceApi, useNativeVoiceNotices } from "./features/native-voice/NativeVoice";
 import {
   DirectorVoiceButton,
-  DirectorVoiceHud,
+  DirectorVoiceToast,
   operatorFocusFor,
   useOperatorFocusPublisher,
   useDirectorVoiceShortcut,
@@ -1754,6 +1754,11 @@ function DesktopAppShell(props: {
       ? desktopApi
       : undefined;
   useDirectorVoiceShortcut(directorVoiceApi);
+  useNativeVoiceNotices(
+    isNativeVoiceApi(desktopApi) ? desktopApi : undefined,
+    showAppNotice,
+    dismissAppNotice,
+  );
   const operatorFocus = useMemo(
     () => operatorFocusFor({
       view: mainView,
@@ -3740,6 +3745,13 @@ function DesktopAppShell(props: {
           ]}
         >
           <QuitBlockerQueueToast desktopApi={desktopApi} />
+          {directorVoiceApi ? (
+            <DirectorVoiceToast
+              api={directorVoiceApi}
+              desktopApi={desktopApi}
+              focus={navigation.selectedThread}
+            />
+          ) : null}
           <AppUpdateBanner
             desktopApi={desktopApi}
             showNotice={showAppNotice}
@@ -3747,9 +3759,7 @@ function DesktopAppShell(props: {
           />
         </AppNoticeStack>
       </div>
-      {directorVoiceApi ? (
-        <DirectorVoiceHud api={directorVoiceApi} focus={navigation.selectedThread} />
-      ) : null}
+
     </TranscriptLinkProvider>
   );
 }

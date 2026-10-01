@@ -75,8 +75,7 @@
   background: var(--bg-row-active);
   font-size: 12px;
 }
-.native-voice-bar__row,
-.director-voice__top {
+.native-voice-bar__row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -95,8 +94,7 @@
   color: var(--text-primary);
   font-weight: 600;
 }
-.native-voice-bar .button,
-.director-voice .button {
+.native-voice-bar .button {
   flex: 0 0 auto;
   min-height: 24px;
   padding: 0 10px;
@@ -165,52 +163,9 @@
   color: var(--text-primary);
 }
 
-/* Director voice floats over the sidebar's foot, the one corner that is not
-   transcript, composer or thread chrome, and stays there across navigation. */
-.director-voice {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  z-index: 90;
-  width: min(360px, calc(100vw - 24px));
-  padding: 6px 8px 8px 10px;
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  background: var(--bg-panel-elevated);
-  box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow-base) 52%, transparent);
-  font-size: 12px;
-}
-.director-voice__spacer {
-  flex: 1;
-}
-.director-voice__context {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 8px 0 4px;
-  color: var(--text-muted);
-}
-.director-voice__chip {
-  max-width: 220px;
-  overflow: hidden;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.director-voice__chip--machine {
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
-  color: var(--text-secondary);
-  font-family: inherit;
-}
-.director-voice .native-voice-feed {
+/* Director voice runs as a card in the app notice stack. The notice library
+   draws its chrome; only the transcript inside needs a height cap. */
+.app-notice-toast .native-voice-feed {
   max-height: 220px;
 }
 

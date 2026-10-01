@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NativeVoiceApi } from "../../../../shared/native-voice";
+import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { MicIcon } from "../../icons";
 import {
   getWindowNativeVoiceController,
@@ -20,6 +21,40 @@ export function useNativeVoice(api: NativeVoiceApi): { controller: NativeVoiceCo
   const [view, setView] = useState(() => controller.getView());
   useEffect(() => controller.subscribe(setView), [controller]);
   return { controller, view };
+}
+
+export const NATIVE_VOICE_ERROR_NOTICE_ID = "native-voice-error";
+
+/**
+ * A voice failure is an ordinary app notice, raised through the notice
+ * library like any other, not a bespoke card on the voice controls. The
+ * controls clear the moment the failure is handed over; the notice stays
+ * until it is closed or the next start begins.
+ */
+export function useNativeVoiceNotices(
+  api: NativeVoiceApi | undefined,
+  showNotice: (notice: AppNoticeToastNotice) => void,
+  dismissNotice: (id: string) => void,
+): void {
+  useEffect(() => {
+    if (!api) return;
+    const controller = getWindowNativeVoiceController(api);
+    return controller.subscribe((view) => {
+      if (view.status === "error") {
+        showNotice({
+          id: NATIVE_VOICE_ERROR_NOTICE_ID,
+          title: "Live voice",
+          message: view.error ?? "Voice ended.",
+          tone: "error",
+          autoDismiss: false,
+        });
+        // Not inside the controller's own publish loop.
+        queueMicrotask(() => controller.dismissError());
+      } else if (view.status === "checking" || view.status === "connecting") {
+        dismissNotice(NATIVE_VOICE_ERROR_NOTICE_ID);
+      }
+    });
+  }, [api, showNotice, dismissNotice]);
 }
 
 export function isVoiceActive(view: VoiceView): boolean {
@@ -231,7 +266,7 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
       if (current.mode === "thread" && threadId && current.threadId === threadId) void controller.stop();
     };
   }, [controller, threadId]);
-  const visible = view.mode === "thread" && view.status !== "idle"
+  const visible = view.mode === "thread" && view.status !== "idle" && view.status !== "error"
     && (view.threadId === threadId || view.status === "stop-error" || view.status === "stopping");
   if (!visible) return null;
   const last = view.transcript[view.transcript.length - 1];
@@ -253,13 +288,9 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
             Transcript
           </button>
         ) : null}
-        {view.status === "error" ? (
-          <button className="button button--ghost" type="button" onClick={() => controller.dismissError()}>Dismiss</button>
-        ) : (
-          <button className="button button--ghost native-voice__end" type="button" disabled={view.status === "stopping"} onClick={() => void controller.stop()}>
-            End voice
-          </button>
-        )}
+        <button className="button button--ghost native-voice__end" type="button" disabled={view.status === "stopping"} onClick={() => void controller.stop()}>
+          End voice
+        </button>
       </div>
       {view.error ? <p className="native-voice__error" role="alert">{view.error}</p> : null}
       {open ? (

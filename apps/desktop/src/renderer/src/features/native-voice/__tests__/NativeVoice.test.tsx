@@ -1,10 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
-import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget } from "../NativeVoice";
-import { DirectorVoiceHud, toggleDirectorVoice } from "../DirectorVoice";
+import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
+import { DirectorVoiceToast, toggleDirectorVoice } from "../DirectorVoice";
+import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "../native-voice-controller";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
 
@@ -52,6 +53,21 @@ function Composer({ api, threadId }: { api: NativeVoiceApi; threadId?: string })
   return <><NativeVoiceBar api={api} threadId={threadId} /><NativeVoiceToggle api={api} threadId={threadId} /></>;
 }
 
+/** The app's notice stack in miniature: voice raises notices, the library draws them. */
+function Notices({ api }: { api: NativeVoiceApi }) {
+  const [notices, setNotices] = useState<AppNoticeToastNotice[]>([]);
+  const show = useCallback((notice: AppNoticeToastNotice) => {
+    setNotices((current) => [...current.filter((item) => item.id !== notice.id), notice]);
+  }, []);
+  const dismiss = useCallback((id: string) => {
+    setNotices((current) => current.filter((item) => item.id !== id));
+  }, []);
+  useNativeVoiceNotices(api, show, dismiss);
+  return <>{notices.map((notice) => <AppNoticeToast key={notice.id} notice={notice} onDismiss={() => dismiss(notice.id)} />)}</>;
+}
+
+const noticeCard = (id: string) => document.querySelector(`[data-notice-id="${id}"]`);
+
 async function openTranscript() {
   fireEvent.click(await screen.findByRole("button", { name: "Transcript" }));
   return await screen.findByRole("textbox", { name: "Message voice" });
@@ -67,7 +83,7 @@ it("adds nothing beside the coding status until the operator opts in", async () 
     sendNativeVoiceText: vi.fn(async () => {}),
     onNativeVoiceEvent: vi.fn(() => () => {}),
   };
-  render(<><div role="status">Thinking</div><Composer api={api} threadId="sample-thread" /></>);
+  render(<><div role="status">Thinking</div><Composer api={api} threadId="sample-thread" /><Notices api={api} /></>);
   owners.add(getWindowNativeVoiceController(api));
   expect(screen.getAllByRole("status")).toHaveLength(1);
   expect(screen.queryByRole("region", { name: "Thread voice" })).not.toBeInTheDocument();
@@ -76,11 +92,15 @@ it("adds nothing beside the coding status until the operator opts in", async () 
   fireEvent.click(screen.getByRole("button", { name: "Voice" }));
   expect(await screen.findByRole("status", { name: "Voice status" })).toHaveTextContent("Checking voice access");
   resolveCapability({ available: false, reason: "Unsupported sample runtime." });
-  expect(await screen.findByRole("alert")).toHaveTextContent("Unsupported sample runtime.");
+  // The failure is an ordinary notice with the library's own close button;
+  // the voice bar steps aside rather than growing a Dismiss of its own.
+  await waitFor(() => expect(noticeCard("native-voice-error")).toHaveTextContent("Unsupported sample runtime."));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Thread voice" })).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   expect(api.startNativeVoice).not.toHaveBeenCalled();
-  await waitFor(() => expect(getWindowNativeVoiceController(api).hasSession()).toBe(false));
-  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-  expect(screen.queryByRole("region", { name: "Thread voice" })).not.toBeInTheDocument();
+  expect(getWindowNativeVoiceController(api).hasSession()).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+  expect(noticeCard("native-voice-error")).toBeNull();
 });
 
 it("starts thread voice from the composer toggle and shows the microphone as live", async () => {
@@ -157,12 +177,11 @@ it("retains a failed stop across unmount and exposes retry on a non-Codex compos
 it("keeps director voice through navigation and shows what its tools did", async () => {
   const f = voiceFixture();
   const composer = render(<Composer api={f.api} threadId="sample-first-thread" />);
-  render(<DirectorVoiceHud api={f.api} focus={{ id: "sample-first-thread", source: "codex", title: "Sample first thread" }} />);
+  render(<DirectorVoiceToast api={f.api} focus={{ id: "sample-first-thread", source: "codex", title: "Sample first thread" }} />);
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
   expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-voice-manager", mode: "director" });
-  const hud = screen.getByRole("region", { name: "Director voice" });
-  expect(hud).toHaveTextContent("Looking at Sample first thread");
+  expect(noticeCard("director-voice")).toHaveTextContent("Looking at Sample first thread");
 
   // The composer's toggle cannot start a second session, and leaving the
   // thread does not end director voice.
@@ -182,16 +201,19 @@ it("keeps director voice through navigation and shows what its tools did", async
   expect(feed).toHaveTextContent("send_message_to_threadSample second threadqueued");
   expect(feed).toHaveTextContent("stop_threadfailed");
 
-  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
-  await waitFor(() => expect(screen.queryByRole("region", { name: "Director voice" })).not.toBeInTheDocument());
+  // The notice card's own close button ends the session, and says so.
+  fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
+  await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
+  await waitFor(() => expect(noticeCard("director-voice")).toBeNull());
 });
 
 it("reports a Voice manager that cannot be opened instead of starting voice", async () => {
   const f = voiceFixture();
   vi.mocked(f.api.openVoiceManager!).mockResolvedValueOnce({ status: "failed", error: "Sample manager failure." });
-  render(<DirectorVoiceHud api={f.api} />);
+  render(<><DirectorVoiceToast api={f.api} /><Notices api={f.api} /></>);
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
-  expect(screen.getByRole("alert")).toHaveTextContent("Sample manager failure.");
+  await waitFor(() => expect(noticeCard("native-voice-error")).toHaveTextContent("Sample manager failure."));
+  expect(noticeCard("director-voice")).toBeNull();
   expect(f.api.startNativeVoice).not.toHaveBeenCalled();
   expect(f.capture).not.toHaveBeenCalled();
 });
