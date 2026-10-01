@@ -196,7 +196,7 @@ jobs:
           retention-days: 30
 
   linux-package:
-    name: Package Linux DEB (${{ matrix.deb_arch }})
+    name: Package Linux (${{ matrix.builder_arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare
     timeout-minutes: 45
@@ -207,12 +207,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - deb_arch: amd64
-            builder_arch: x64
+          - builder_arch: x64
             grok_platform: linux-x86_64
             runner: ubuntu-24.04
-          - deb_arch: arm64
-            builder_arch: arm64
+          - builder_arch: arm64
             grok_platform: linux-aarch64
             runner: ubuntu-24.04-arm
     steps:
@@ -238,7 +236,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform ${{ matrix.grok_platform }}
 
-      - name: Package Linux DEB
+      - name: Install RPM and Arch packaging tools
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+
+      - name: Package Linux
         env:
           PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
@@ -251,9 +252,12 @@ jobs:
       - name: Upload Linux package artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: linux-deb-${{ matrix.deb_arch }}
+          name: linux-packages-${{ matrix.builder_arch }}
           path: |
             apps/desktop/release-stage/dist/*.deb
+            apps/desktop/release-stage/dist/*.rpm
+            apps/desktop/release-stage/dist/*.pacman
+            apps/desktop/release-stage/dist/*.tar.gz
             apps/desktop/release-stage/dist/latest-linux*.yml
           retention-days: 7
 
@@ -448,17 +452,16 @@ jobs:
       - name: Download Linux package artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: linux-deb-*
+          pattern: linux-packages-*
           path: linux-dist
           merge-multiple: true
 
-      - name: Generate Linux checksums
+      - name: Verify Linux packages and generate checksums
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          cd linux-dist
-          mapfile -t debs < <(find . -maxdepth 1 -type f -name '*.deb' -printf '%f\n' | sort)
-          test "${#debs[@]}" -eq 4
-          sha256sum "${debs[@]}" > SHA256SUMS
+          node apps/desktop/scripts/linux-release-artifacts.mjs linux-dist "${RELEASE_TAG#v}"
 
       # The Windows package stage also writes SHA256SUMS. Keep the stable Linux
       # alias for its documented download URL while giving the Windows manifest
@@ -516,6 +519,9 @@ jobs:
             mac-dist/* \
             windows-dist/* \
             linux-dist/*.deb \
+            linux-dist/*.rpm \
+            linux-dist/*.pacman \
+            linux-dist/*.tar.gz \
             linux-dist/latest-linux*.yml \
             linux-dist/SHA256SUMS
 
@@ -549,6 +555,9 @@ jobs:
             mac-dist/*
             windows-dist/*
             linux-dist/*.deb
+            linux-dist/*.rpm
+            linux-dist/*.pacman
+            linux-dist/*.tar.gz
             linux-dist/latest-linux*.yml
             linux-dist/SHA256SUMS
           retention-days: 30

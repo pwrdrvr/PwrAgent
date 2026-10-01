@@ -13,13 +13,13 @@
 </p>
 
 <p>
-  <a href="https://docs.pwragent.ai/linux/"><img src="docs/assets/buttons/link-linux.png" alt="Debian and Ubuntu installation" width="180"></a>
+  <a href="https://docs.pwragent.ai/linux/"><img src="docs/assets/buttons/link-linux.png" alt="Linux installation" width="180"></a>
   <a href="https://docs.pwragent.ai"><img src="docs/assets/buttons/link-docs.png" alt="Documentation" width="180"></a>
   <a href="https://pwragent.ai"><img src="docs/assets/buttons/link-website.png" alt="pwragent.ai" width="180"></a>
   <a href="https://pwrdrvr.com/about"><img src="docs/assets/buttons/link-about.png" alt="About PwrDrvr" width="180"></a>
 </p>
 
-<sub>macOS 12 or newer · Windows 10 or newer · Debian/Ubuntu · MIT · Developer ID-signed and Apple-notarized
+<sub>macOS 12 or newer · Windows 10 or newer · Linux · MIT · Developer ID-signed and Apple-notarized
 No cloud, no account, no telemetry. The agent and your credentials stay on your machine.</sub>
 
 <br>
@@ -30,8 +30,9 @@ No cloud, no account, no telemetry. The agent and your credentials stay on your 
 
 **Universal** is the right Mac download today — it runs natively on both Apple Silicon (M1+)
 and Intel. A separate, smaller **Apple Silicon** build is built but has not ridden a release
-yet, so that chip points at the releases page until one carries it. Debian and Ubuntu get
-`.deb` packages for x64 and arm64.
+yet, so that chip points at the releases page until one carries it. Linux releases include
+DEB (Debian/Ubuntu), RPM (Fedora), pacman (Arch/Omarchy), and tar.gz
+packages for x64 and arm64. Download them from [GitHub Releases](https://github.com/pwrdrvr/PwrAgent/releases/latest).
 
 An open-source desktop for running coding agents on machines you own. Start threads across
 every repo you have, each in its own git worktree so they never collide, on **Codex, Gemini,
@@ -63,7 +64,7 @@ Screenshots are produced by a Playwright spec that drives the real UI surfaces a
 
 ### Just want to use it
 
-1. **Download** [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg), the Universal build that runs natively on both Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance). On Windows, [PwrAgent.Setup.exe](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe); on Debian or Ubuntu, follow [the Linux install guide](https://docs.pwragent.ai/linux/).
+1. **Download** [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg), the Universal build that runs natively on both Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance). On Windows, [PwrAgent.Setup.exe](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe); on Linux, choose a DEB, RPM, pacman, or tar.gz from [GitHub Releases](https://github.com/pwrdrvr/PwrAgent/releases/latest).
 2. **Install** by opening the DMG and dragging PwrAgent into Applications.
 3. **(Optional) Pair a messenger** from **Settings → Messaging → \<your platform\>**. End-to-end walkthroughs at **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**; the usage guide (bound threads, slash commands, queue/steer, monitor cards, detach) lives at **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.
 

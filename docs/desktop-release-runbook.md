@@ -260,10 +260,12 @@ seven job definitions (the Linux package job fans out across two architectures):
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
    --no-publish`
    with the environment-scoped Apple secrets.
-3. `Package Linux DEB`, running on native Ubuntu x64 and arm64 GitHub-hosted
+3. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
-   and uploads the `.deb` files as short-retention workflow artifacts.
+   and uploads DEB, RPM, pacman, and tar.gz files as short-retention
+   workflow artifacts. The publication job requires both architectures and
+   every format (including its stable alias) before hashing or publishing.
 4. `Prepare Windows signing input`, running on Windows without an environment
    or signing credentials. It builds a self-contained, hoisted Windows release
    stage that includes the electron-builder toolchain, archives that stage and
@@ -422,8 +424,29 @@ Stable Linux download URLs:
 ```text
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.deb
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.deb
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.rpm
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.pacman
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.tar.gz
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/SHA256SUMS
 ```
+
+The RPM, pacman, and tar.gz aliases also have arm64 variants.
+These are direct GitHub downloads; this workflow does not publish an RPM/Arch
+repository, an AUR entry, or a Flathub listing.
+
+The `Linux Packaging` PR workflow rehearses both native architectures without
+publishing. It installs RPMs in Fedora containers and the x64 pacman package in
+an Arch container, checking package dependencies and Electron's shared libraries.
+These checks do not replace a desktop launch on GNOME Wayland or Omarchy/Hyprland.
+
+AppImage is excluded under the repository's third-party license policy: the
+modern [AppImage runtime](https://github.com/AppImage/type2-runtime/blob/main/LICENSE)
+statically includes LGPL libfuse. The tar.gz artifact supplies a portable download
+without that runtime. Flatpak/Flathub needs a separate design for coding-agent
+and terminal processes, project access, profile state, and secrets. In particular,
+[`flatpak-spawn --host`](https://docs.flatpak.org/en/latest/sandbox-permissions.html)
+runs children outside Flatpak's folder restrictions; enabling it would not provide
+the folder sandbox operators expect from Flatseal.
 
 Each stable name is a byte-identical copy of the versioned asset from the same
 release, so `pwragent.ai` can link these URLs directly instead of resolving the
@@ -556,7 +579,7 @@ source .envrc.release
 pnpm --filter @pwragent/desktop package:dryrun  # unsigned, no publish
 pnpm --filter @pwragent/desktop package         # signed + notarized, no publish
 pnpm --filter @pwragent/desktop release         # signed + notarized + publish
-pnpm --filter @pwragent/desktop package:linux   # current-arch .deb, no publish
+pnpm --filter @pwragent/desktop package:linux   # current-arch Linux packages, no publish
 ```
 
 The macOS modes need a macOS 26 host with Xcode 26 or newer selected
@@ -658,7 +681,8 @@ Phase 2 distribution channel migration removes the token requirement entirely.
 See [desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md).
 
 Linux builds intentionally skip `electron-updater`. Operators upgrade by
-installing the newer `.deb` from GitHub Releases; the in-app update status
+installing the newer DEB, RPM, or pacman package, or replacing the
+extracted tar.gz from GitHub Releases; the in-app update status
 reports that Linux packages are updated manually.
 
 ---
