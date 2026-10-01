@@ -1,0 +1,103 @@
+name: Linux Packaging
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/linux-packaging.yml"
+      - ".github/workflows/release.yml"
+      - "apps/desktop/electron-builder.yml"
+      - "apps/desktop/scripts/release.mjs"
+      - "apps/desktop/scripts/linux-release-artifacts*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Linux packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+            grok_platform: linux-x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            grok_platform: linux-aarch64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
+        with:
+          node-version: "^24.18.0"
+          cache-electron: "true"
+
+      - name: Install RPM and Arch packaging tools
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+
+      - name: Stage pinned Grok ACP runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform ${{ matrix.grok_platform }}
+
+      - name: Package Linux without publishing
+        env:
+          PWRAGENT_LINUX_ARCH: ${{ matrix.arch }}
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
+        run: node apps/desktop/scripts/release.mjs --linux --no-publish
+
+      - name: Install RPM on Fedora
+        run: |
+          docker run --rm \
+            -v "$PWD/apps/desktop/release-stage/dist:/packages:ro" \
+            fedora:44 sh -ec '
+              dnf install -y /packages/PwrAgent-linux-${{ matrix.arch }}.rpm
+              rpm -q pwragent
+              test -x /opt/PwrAgent/pwragent
+              ldd /opt/PwrAgent/pwragent > /tmp/ldd.txt
+              if grep -q "not found" /tmp/ldd.txt; then cat /tmp/ldd.txt; exit 1; fi
+            '
+
+      - name: Validate Arch package metadata
+        run: |
+          set -euo pipefail
+          bsdtar -xOf "apps/desktop/release-stage/dist/PwrAgent-linux-${{ matrix.arch }}.pacman" .PKGINFO \
+            | awk '/^#/ || /^$/ {next} !/^[a-z][a-z0-9_]* = / {print; bad=1} END {exit bad}'
+
+      - name: Install pacman package on Arch
+        if: matrix.arch == 'x64'
+        run: |
+          docker run --rm \
+            -v "$PWD/apps/desktop/release-stage/dist:/packages:ro" \
+            archlinux:base sh -ec '
+              pacman -Syu --noconfirm
+              pacman -U --noconfirm /packages/PwrAgent-linux-x64.pacman
+              pacman -Q pwragent
+              test -x /opt/PwrAgent/pwragent
+              ldd /opt/PwrAgent/pwragent > /tmp/ldd.txt
+              if grep -q "not found" /tmp/ldd.txt; then cat /tmp/ldd.txt; exit 1; fi
+            '
+
+      - name: Retain packages for smoke testing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-smoke-${{ matrix.arch }}
+          path: |
+            apps/desktop/release-stage/dist/*.deb
+            apps/desktop/release-stage/dist/*.rpm
+            apps/desktop/release-stage/dist/*.pacman
+            apps/desktop/release-stage/dist/*.tar.gz
+            apps/desktop/release-stage/dist/SHA256SUMS
+          retention-days: 7
