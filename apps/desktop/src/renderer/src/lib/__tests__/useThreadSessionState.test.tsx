@@ -16205,7 +16205,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
   });
 
-  it("keeps a Codex command thinking after its turn completes until the command finishes", async () => {
+  it("shows a surviving Codex command without blocking the next turn", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -16242,7 +16242,7 @@ describe("useThreadSessionState", () => {
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            item: { id: "tool-1", type: "commandExecution", command: "pnpm test", status: "inProgress" },
+            item: { id: "tool-1", type: "commandExecution", command: "pnpm dev", status: "inProgress" },
           },
         },
       });
@@ -16263,11 +16263,24 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.activeTurnId).toBeUndefined();
-    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.threadBusy).toBe(false);
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
-    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.pendingStatusText).toBe("Tools running");
     expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
       .find((detail) => detail.id === "tool-1")?.status).toBe("in_progress");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" } },
+        },
+      });
+    });
+    expect(result.current.activeTurnId).toBe("turn-2");
+    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.pendingStatusText).toBe("Thinking");
 
     act(() => {
       agentEventHandler?.({
@@ -16277,16 +16290,31 @@ describe("useThreadSessionState", () => {
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            item: { id: "tool-1", type: "commandExecution", command: "pnpm test", status: "completed" },
+            item: { id: "tool-1", type: "commandExecution", command: "pnpm dev", status: "completed" },
           },
         },
       });
     });
 
-    expect(result.current.threadBusy).toBe(false);
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.activeTurnId).toBe("turn-2");
+    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.pendingStatusText).toBe("Thinking");
     expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
       .find((detail) => detail.id === "tool-1")?.status).toBe("completed");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: { threadId: "thread-1", turnId: "turn-2", turn: { id: "turn-2", status: "completed", output: [] } },
+        },
+      });
+    });
+    expect(result.current.threadBusy).toBe(false);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
   });
 
   it("clears a tracked command when it finishes after its thread loses focus", async () => {

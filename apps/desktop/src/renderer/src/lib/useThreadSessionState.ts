@@ -7881,12 +7881,15 @@ export function useThreadSessionState(params: {
         ? undefined
         : selectedSession?.pendingStatusText ??
           (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
-            || (threadKey && liveToolItemsByThread[threadKey])
             ? "Thinking"
-            : undefined);
+            : threadKey && liveToolItemsByThread[threadKey]
+              ? "Tools running"
+              : undefined);
+  // A surviving command (for example a dev server) remains visible and
+  // tracked for shutdown, but does not occupy Codex's turn slot. Making it
+  // busy here would queue every new message until that command exits.
   const threadBusy = Boolean(
-    (selectedSession && hasThinkingState(selectedSession))
-    || (threadKey && liveToolItemsByThread[threadKey]),
+    selectedSession && hasThinkingState(selectedSession),
   );
   const transientMessages = useMemo(
     () => [
