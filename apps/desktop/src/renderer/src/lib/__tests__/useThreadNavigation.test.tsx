@@ -173,7 +173,7 @@ describe("useThreadNavigation", () => {
     expect(removeItem).not.toHaveBeenCalled();
   });
 
-  it("finishes a committed workspace handoff before navigation reconciliation completes", async () => {
+  it("gates workspace actions until selected detail reflects a committed handoff", async () => {
     const thread: NavigationThreadSummary = {
       id: "thread-handoff",
       title: "Handoff thread",
@@ -197,6 +197,11 @@ describe("useThreadNavigation", () => {
     let signalRefresh: () => void = () => undefined;
     const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
     const refreshStarted = new Promise<void>((resolve) => { signalRefresh = resolve; });
+    let blockDetail = false;
+    let releaseDetail: () => void = () => undefined;
+    let signalDetail: () => void = () => undefined;
+    const detailGate = new Promise<void>((resolve) => { releaseDetail = resolve; });
+    const detailStarted = new Promise<void>((resolve) => { signalDetail = resolve; });
     const getNavigationQueryPage: NonNullable<DesktopApi["getNavigationQueryPage"]> = async (request) => {
       if (blockRefresh) {
         signalRefresh();
@@ -218,16 +223,34 @@ describe("useThreadNavigation", () => {
       warnings: [],
       completedAt: 2,
     };
-    const handoffThreadWorkspace = vi.fn<NonNullable<DesktopApi["handoffThreadWorkspace"]>>(async () => response);
+    let detailThread = thread;
+    const handoffThreadWorkspace = vi.fn<NonNullable<DesktopApi["handoffThreadWorkspace"]>>(async () => {
+      detailThread = { ...thread, linkedDirectories: [response.linkedDirectory] };
+      blockDetail = true;
+      return response;
+    });
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+      if (blockDetail) {
+        signalDetail();
+        await detailGate;
+      }
+      return {
+        protocol: 2, ref: request.ref, revision: detailThread.linkedDirectories[0]?.id ?? "none",
+        readiness: "ready", identity: "present", thread: detailThread,
+        workspaceDirectories: [],
+      };
+    });
     const desktopApi: DesktopApi = {
       readPopulation: async () => snapshot,
       getNavigationQueryPage,
-      ...actionDetailApi(thread),
+      getNavigationSelectedDetail,
       handoffThreadWorkspace,
       onAgentEvent: () => () => undefined,
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
     await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    act(() => result.current.selectThread(result.current.threads[0]!));
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
 
     blockRefresh = true;
     let handoffSettled = false;
@@ -239,10 +262,19 @@ describe("useThreadNavigation", () => {
     });
     try {
       await refreshStarted;
+      await detailStarted;
       await Promise.resolve();
       expect(handoffSettled).toBe(true);
       expect(handoffThreadWorkspace).toHaveBeenCalledOnce();
+      await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(true));
+      expect(result.current.selectedThreadConfigurationReady).toBe(false);
+      expect(result.current.selectedThread?.linkedDirectories[0]?.path).toBe("/repo");
+      releaseDetail();
+      await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(false));
+      expect(result.current.selectedThreadConfigurationReady).toBe(true);
+      expect(result.current.selectedThread?.linkedDirectories[0]?.worktreePath).toBe("/worktree");
     } finally {
+      releaseDetail();
       releaseRefresh();
       await act(async () => { await handoffPromise; });
     }

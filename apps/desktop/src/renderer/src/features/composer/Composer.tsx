@@ -414,6 +414,7 @@ type ComposerProps = {
   providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
+  workspaceActionsBlocked?: boolean;
   /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
   threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
@@ -9982,7 +9983,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : hasAttachedPullRequest
         ? "Auto-fix PR — handle new CI failures or merge conflicts"
         : "Auto-fix PR — starts when a PR for this workspace is linked";
-  const workspaceOpenPath = getComposerWorkspaceOpenPath({
+  const workspaceOpenPath = props.workspaceActionsBlocked ? undefined : getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
     threadWorkspace,
@@ -10020,6 +10021,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
   const canMoveThreadProject = Boolean(
     props.thread &&
+      !props.workspaceActionsBlocked &&
       threadWorkspace &&
       props.onHandoffThreadWorkspace &&
       props.thread.workspaceHandoff?.available !== false &&
@@ -10064,7 +10066,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   });
 
   const submitHandoff = async (): Promise<void> => {
-    if (!threadWorkspace || !props.onHandoffThreadWorkspace) {
+    if (props.workspaceActionsBlocked || !threadWorkspace || !props.onHandoffThreadWorkspace) {
       return;
     }
 
@@ -10107,6 +10109,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const openWorkspaceApplication = async (
     application: DesktopApplicationDiscoveryCandidate,
   ): Promise<void> => {
+    if (props.workspaceActionsBlocked) return;
     if (!props.desktopApi?.openApplication) {
       setApplicationOpenError("Desktop bridge is missing openApplication().");
       return;

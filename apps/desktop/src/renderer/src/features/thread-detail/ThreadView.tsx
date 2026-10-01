@@ -801,6 +801,7 @@ export type ThreadViewProps = {
   >;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  workspaceActionsBlocked?: boolean;
   launchpadConfigurationReady?: boolean;
   composerDraftStore?: ComposerDraftStore;
   composerImplementation?: DesktopChatReplyComposer;
@@ -4082,6 +4083,7 @@ export function ThreadView(props: ThreadViewProps) {
             directory={props.selectedDirectory}
             directories={props.directories}
             disabled={props.composerDisabled}
+            workspaceActionsBlocked={props.workspaceActionsBlocked}
             unavailableReason={selectedThreadBackend?.unavailableReason}
             contextWindow={props.contextWindow}
             fullAccessRiskWarningDismissed={
