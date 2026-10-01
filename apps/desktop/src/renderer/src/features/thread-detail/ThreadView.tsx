@@ -1,3 +1,4 @@
+import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
@@ -843,6 +844,7 @@ export type ThreadViewProps = {
   pendingStatusText?: string;
   runningTurnUsageText?: string;
   threadBusy?: boolean;
+  backgroundTerminals?: BackgroundTerminalsViewProps;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
   /** Token Miser experiment availability gate. */
@@ -4206,6 +4208,7 @@ export function ThreadView(props: ThreadViewProps) {
           onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
+          backgroundTerminals={props.backgroundTerminals}
           actionRuns={visibleEnvActionRuns}
           actionRunsDock={actionRunsDock}
           actionRunsEnvironmentName={

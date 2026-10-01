@@ -24727,6 +24727,18 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 10px;
 }
 
+.actions-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.actions-panel__body .env-action-runs--sidebar {
+  flex: none;
+  overflow-y: visible;
+}
+
 .env-action-runs--composer {
   display: flex;
   flex-direction: column;
@@ -26881,6 +26893,12 @@ div.composer-error-row__toggle {
     border-color 140ms ease,
     background 140ms ease,
     color 140ms ease;
+}
+
+.context-rail__activity {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 
 .context-rail__tab:hover,

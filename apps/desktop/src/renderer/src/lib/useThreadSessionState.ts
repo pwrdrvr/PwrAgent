@@ -1,3 +1,4 @@
+import { useCodexBackgroundTerminals, type BackgroundTerminalView } from "./useCodexBackgroundTerminals";
 import { activityDetailsMatch } from "./activity-detail-match";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
 import {
@@ -4656,6 +4657,10 @@ export function useThreadSessionState(params: {
   suspended?: boolean;
   thread?: NavigationThreadSummary;
 }): {
+  backgroundTerminals: BackgroundTerminalView[];
+  backgroundTerminalsError?: string;
+  stoppingBackgroundTerminal?: string;
+  stopBackgroundTerminal: (terminal: BackgroundTerminalView) => Promise<void>;
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   addOptimisticUserMessage: (
@@ -7842,6 +7847,8 @@ export function useThreadSessionState(params: {
     ]
   );
 
+  const background = useCodexBackgroundTerminals({ desktopApi, thread, suspended });
+
   const thinkingThreadKeys = useMemo(
     () =>
       Object.fromEntries(
@@ -7849,11 +7856,13 @@ export function useThreadSessionState(params: {
           ...Object.entries(sessions)
             .filter(([, session]) => hasThinkingState(session))
             .map(([sessionThreadKey]) => [sessionThreadKey, true] as const),
+          ...Object.keys(background.byThread)
+            .map((sessionThreadKey) => [sessionThreadKey, true] as const),
           ...Object.keys(liveToolItemsByThread)
             .map((sessionThreadKey) => [sessionThreadKey, true] as const),
         ],
       ),
-    [sessions, liveToolItemsByThread]
+    [sessions, liveToolItemsByThread, background.byThread]
   );
   const approvalRequestThreadKeys = useMemo(
     () =>
@@ -7881,10 +7890,10 @@ export function useThreadSessionState(params: {
         ? undefined
         : selectedSession?.pendingStatusText ??
           (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
+            || (threadKey && liveToolItemsByThread[threadKey])
+            || background.terminals.length > 0
             ? "Thinking"
-            : threadKey && liveToolItemsByThread[threadKey]
-              ? "Tools running"
-              : undefined);
+            : undefined);
   // A surviving command (for example a dev server) remains visible and
   // tracked for shutdown, but does not occupy Codex's turn slot. Making it
   // busy here would queue every new message until that command exits.
@@ -7943,6 +7952,10 @@ export function useThreadSessionState(params: {
     setRenderedTranscriptEntryLimit,
     threadBusy,
     thinkingThreadKeys,
+    backgroundTerminals: background.terminals,
+    backgroundTerminalsError: background.error,
+    stoppingBackgroundTerminal: background.stopping,
+    stopBackgroundTerminal: background.stop,
     setViewport,
     viewport: selectedSession?.viewport,
     expandedTranscriptActivityIds:

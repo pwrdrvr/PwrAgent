@@ -97,6 +97,7 @@ export function EnvActionRunsView(props: {
   onShowAboveComposer?: () => void;
   onStop?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
   placement: "composer" | "sidebar";
+  hideHeader?: boolean;
 }): ReactNode {
   const hasStartedRun = props.runs.some((run) => run.status === "started");
   const [, setElapsedTick] = useState(0);
@@ -119,7 +120,7 @@ export function EnvActionRunsView(props: {
 
   return (
     <>
-      {props.placement === "sidebar" ? (
+      {props.placement === "sidebar" && !props.hideHeader ? (
         <header className="env-actions-panel__header">
           <div className="env-actions-panel__title-group">
             <h3>Actions</h3>
@@ -351,7 +352,7 @@ export function EnvActionRunEntry(props: {
   );
 }
 
-function EnvActionControlButton(props: {
+export function EnvActionControlButton(props: {
   ariaLabel: string;
   children: ReactNode;
   className: string;
@@ -395,7 +396,7 @@ function EnvActionControlButton(props: {
   );
 }
 
-function EnvActionStopIcon(): ReactNode {
+export function EnvActionStopIcon(): ReactNode {
   return (
     <svg
       className="composer__queued-env-action-icon"

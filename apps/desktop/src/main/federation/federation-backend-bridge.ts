@@ -1,3 +1,9 @@
+import type {
+  ListBackgroundTerminalsRequest,
+  ListBackgroundTerminalsResponse,
+  TerminateBackgroundTerminalRequest,
+  TerminateBackgroundTerminalResponse,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -473,6 +479,8 @@ export const FEDERATION_BACKEND_METHODS = {
   submitServerRequest: "backend.submitServerRequest",
   runCodexEnvironmentAction: "backend.runCodexEnvironmentAction",
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
+  listBackgroundTerminals: "backend.listBackgroundTerminals",
+  terminateBackgroundTerminal: "backend.terminateBackgroundTerminal",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   refreshThreadPullRequests: "backend.refreshThreadPullRequests",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
@@ -599,6 +607,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.submitServerRequest]: "pending_request_control",
   [FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.listBackgroundTerminals]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshThreadPullRequests]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
@@ -846,6 +856,8 @@ export type FederationBackendOperations = {
   runCodexEnvironmentAction(
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse>;
+  listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse>;
+  terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse>;
   stopCodexEnvironmentAction(
     request: StopCodexEnvironmentActionRequest,
   ): Promise<StopCodexEnvironmentActionResponse>;
@@ -1619,6 +1631,12 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.runCodexEnvironmentAction(
         envelope.params as RunCodexEnvironmentActionRequest,
       ),
+  );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.listBackgroundTerminals, async (envelope) =>
+    await params.backend.listBackgroundTerminals(envelope.params as ListBackgroundTerminalsRequest),
+  );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal, async (envelope) =>
+    await params.backend.terminateBackgroundTerminal(envelope.params as TerminateBackgroundTerminalRequest),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction,
@@ -2550,6 +2568,14 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction,
       params: request,
     });
+  }
+
+  async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
+    return await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.listBackgroundTerminals, params: request });
+  }
+
+  async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
+    return await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal, params: request });
   }
 
   async stopCodexEnvironmentAction(

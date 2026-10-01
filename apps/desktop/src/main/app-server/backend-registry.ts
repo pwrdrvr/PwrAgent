@@ -1,3 +1,10 @@
+import type {
+  ListBackgroundTerminalsRequest,
+  ListBackgroundTerminalsResponse,
+  TerminateBackgroundTerminalRequest,
+  TerminateBackgroundTerminalResponse,
+  CodexBackgroundTerminal,
+} from "@pwragent/shared";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
@@ -814,6 +821,8 @@ function assistantOutputForTurn(
 }
 
 type BackendClient = {
+  listBackgroundTerminals?(threadId: string): Promise<ListBackgroundTerminalsResponse>;
+  terminateBackgroundTerminal?(threadId: string, processId: string): Promise<boolean>;
   exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
@@ -8587,6 +8596,9 @@ export class DesktopBackendRegistry {
   private readonly backendActiveCodexThreadIds = new Set<string>();
   /** Started Codex tool items can keep running after their parent turn ends. */
   private readonly liveCodexToolItemsByThread = new Map<string, Map<string, string>>();
+  private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
+  private readonly backgroundTerminalReadRevisions = new Map<string, number>();
+  private backgroundTerminalGeneration = 0;
   /**
    * Live lifecycle notifications and thread reads can be newer than Codex's
    * cached thread/list status. Preserve that observation until thread/list
@@ -17174,6 +17186,9 @@ export class DesktopBackendRegistry {
     for (const threadId of this.backendActiveCodexThreadIds) {
       addThread("codex", threadId);
     }
+    for (const threadId of this.codexBackgroundTerminals.keys()) {
+      addThread("codex", threadId);
+    }
     for (const threadId of this.liveCodexToolItemsByThread.keys()) {
       addThread("codex", threadId);
     }
@@ -23010,6 +23025,35 @@ export class DesktopBackendRegistry {
     );
   }
 
+  async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
+    if (request.backend !== "codex") return { supported: false, terminals: [] };
+    const generation = this.backgroundTerminalGeneration;
+    const revision = (this.backgroundTerminalReadRevisions.get(request.threadId) ?? 0) + 1;
+    this.backgroundTerminalReadRevisions.set(request.threadId, revision);
+    const response = await this.withCodexThreadClient(request.threadId, async (client) =>
+      client.listBackgroundTerminals?.(request.threadId) ?? { supported: false, terminals: [] },
+      undefined, false,
+    );
+    if (!this.closed && response.supported && generation === this.backgroundTerminalGeneration
+      && revision === this.backgroundTerminalReadRevisions.get(request.threadId)) {
+      if (response.terminals.length) this.codexBackgroundTerminals.set(request.threadId, response.terminals);
+      else this.codexBackgroundTerminals.delete(request.threadId);
+    }
+    return response;
+  }
+
+  async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
+    if (request.backend !== "codex") throw new Error("Background terminals are only available for Codex.");
+    const terminated = await this.withCodexThreadClient(request.threadId, async (client) => {
+      if (!client.terminateBackgroundTerminal) throw new Error("This Codex runtime cannot stop background terminals.");
+      return await client.terminateBackgroundTerminal(request.threadId, request.processId);
+    });
+    // The next list is authoritative. A Stop response alone does not claim
+    // that the process tree has exited or manufacture item/completed events.
+    await this.listBackgroundTerminals(request);
+    return { terminated };
+  }
+
   async stopCodexEnvironmentAction(
     request: StopCodexEnvironmentActionRequest,
   ): Promise<StopCodexEnvironmentActionResponse> {
@@ -23992,6 +24036,9 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
+    this.backgroundTerminalGeneration += 1;
+    this.codexBackgroundTerminals.clear();
+    this.backgroundTerminalReadRevisions.clear();
     this.invalidateArchiveCleanupReads();
     // A recovery drain waiting for other Codex turns gives up now; the final
     // Codex close below still waits for that drain before it runs.
@@ -30544,6 +30591,7 @@ export class DesktopBackendRegistry {
     if (
       this.reservedCodexStartThreadIds.size > 0
       || this.backendActiveCodexThreadIds.size > 0
+      || this.codexBackgroundTerminals.size > 0
       || this.liveCodexToolItemsByThread.size > 0
       || this.activeCodexTurnModes.size > 0
     ) {
@@ -41160,6 +41208,27 @@ export class DesktopBackendRegistry {
   private trackLiveCodexToolItem(event: AgentEvent): void {
     if (event.backend !== "codex") return;
     const notification = event.notification;
+    const params = readRecord(notification.params);
+    const threadIdForRevision = readOptionalString(params, ["threadId"]);
+    if (threadIdForRevision && ["item/started", "item/completed", "thread/status/changed"].includes(notification.method)) {
+      this.backgroundTerminalReadRevisions.set(threadIdForRevision,
+        (this.backgroundTerminalReadRevisions.get(threadIdForRevision) ?? 0) + 1,
+      );
+      if (notification.method === "thread/status/changed" && readRecord(params?.status)?.type === "notLoaded") {
+        this.codexBackgroundTerminals.delete(threadIdForRevision);
+      }
+    }
+    if (notification.method === "item/completed") {
+      const item = readRecord(readRecord(notification.params)?.item);
+      const itemId = readOptionalString(item, ["id", "itemId", "item_id", "callId", "call_id"]);
+      const threadId = notification.params.threadId;
+      const terminals = this.codexBackgroundTerminals.get(threadId);
+      if (terminals && itemId) {
+        const remaining = terminals.filter((terminal) => terminal.itemId !== itemId);
+        if (remaining.length) this.codexBackgroundTerminals.set(threadId, remaining);
+        else this.codexBackgroundTerminals.delete(threadId);
+      }
+    }
     if (notification.method === "turn/failed" || notification.method === "turn/cancelled") {
       const threadId = notification.params.threadId;
       const turnId = turnIdFromTerminalNotification(notification);
@@ -41203,8 +41272,12 @@ export class DesktopBackendRegistry {
   }
 
   private async handleCodexAppServerUnexpectedExit(): Promise<void> {
-    const threadIds = [...this.liveCodexToolItemsByThread.keys()];
+    this.backgroundTerminalGeneration += 1;
+    const threadIds = [...new Set([
+      ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
+    ])];
     this.liveCodexToolItemsByThread.clear();
+    this.codexBackgroundTerminals.clear();
     try {
       await Promise.all(threadIds.map((threadId) => this.emit({
         backend: "codex",

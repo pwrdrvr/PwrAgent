@@ -2943,6 +2943,12 @@ function DesktopAppShell(props: {
     pendingStatusText: session.pendingStatusText,
     runningTurnUsageText: session.runningTurnUsageText,
     threadBusy: session.threadBusy,
+    backgroundTerminals: {
+      terminals: session.backgroundTerminals,
+      error: session.backgroundTerminalsError,
+      stopping: session.stoppingBackgroundTerminal,
+      onStop: session.stopBackgroundTerminal,
+    },
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,

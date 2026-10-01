@@ -16205,6 +16205,22 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
   });
 
+  it("recovers background command activity after reload without occupying the turn slot", async () => {
+    const desktopApi: DesktopApi = {
+      readThread: async ({ threadId }) => readThreadResponse({ threadId, entries: [], hasPreviousPage: false, threadStatus: "idle" }),
+      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [
+        { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project" },
+      ] })),
+    };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) }));
+    await waitForThreadHydration(result);
+    await waitFor(() => expect(result.current.backgroundTerminals).toHaveLength(1));
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+  });
+
   it("shows a surviving Codex command without blocking the next turn", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -16265,7 +16281,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnId).toBeUndefined();
     expect(result.current.threadBusy).toBe(false);
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
-    expect(result.current.pendingStatusText).toBe("Tools running");
+    expect(result.current.pendingStatusText).toBe("Thinking");
     expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
       .find((detail) => detail.id === "tool-1")?.status).toBe("in_progress");
 

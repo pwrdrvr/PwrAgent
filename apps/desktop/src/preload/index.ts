@@ -1,3 +1,13 @@
+import type {
+  ListBackgroundTerminalsRequest,
+  ListBackgroundTerminalsResponse,
+  TerminateBackgroundTerminalRequest,
+  TerminateBackgroundTerminalResponse,
+} from "@pwragent/shared";
+import {
+  AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL,
+  AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
+} from "../shared/ipc";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
@@ -2120,6 +2130,10 @@ const desktopApi = Object.freeze({
       AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
       request,
     ),
+  listBackgroundTerminals: async (request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> =>
+    await ipcRenderer.invoke(AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL, request),
+  terminateBackgroundTerminal: async (request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> =>
+    await ipcRenderer.invoke(AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL, request),
   stopCodexEnvironmentAction: async (
     request: StopCodexEnvironmentActionRequest,
   ): Promise<StopCodexEnvironmentActionResponse> =>
