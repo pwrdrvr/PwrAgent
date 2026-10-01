@@ -205,7 +205,7 @@ import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { isNativeVoiceApi, useNativeVoiceNotices } from "./features/native-voice/NativeVoice";
 import {
   DirectorVoiceButton,
-  DirectorVoiceToast,
+  DirectorVoicePanel,
   operatorFocusFor,
   useOperatorFocusPublisher,
   useDirectorVoiceShortcut,
@@ -3746,20 +3746,21 @@ function DesktopAppShell(props: {
           ]}
         >
           <QuitBlockerQueueToast desktopApi={desktopApi} />
-          {directorVoiceApi ? (
-            <DirectorVoiceToast
-              api={directorVoiceApi}
-              desktopApi={desktopApi}
-              focus={navigation.selectedThread}
-              launchpad={navigation.selectedLaunchpad}
-            />
-          ) : null}
           <AppUpdateBanner
             desktopApi={desktopApi}
             showNotice={showAppNotice}
             dismissNotice={dismissAppNotice}
           />
         </AppNoticeStack>
+        {directorVoiceApi ? (
+          <DirectorVoicePanel
+            api={directorVoiceApi}
+            desktopApi={desktopApi}
+            focus={navigation.selectedThread}
+            launchpad={navigation.selectedLaunchpad}
+            onOpenThread={(threadId) => showThreadFromLink({ backend: "codex", threadId })}
+          />
+        ) : null}
       </div>
 
     </TranscriptLinkProvider>

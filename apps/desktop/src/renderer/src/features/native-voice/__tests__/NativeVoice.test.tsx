@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceComposerToggle, DirectorVoiceToast, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "../native-voice-controller";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
@@ -67,6 +68,7 @@ function Notices({ api }: { api: NativeVoiceApi }) {
 }
 
 const noticeCard = (id: string) => document.querySelector(`[data-notice-id="${id}"]`);
+const directorPanel = () => screen.queryByRole("region", { name: "Director voice" });
 
 async function openTranscript() {
   fireEvent.click(await screen.findByRole("button", { name: "Transcript" }));
@@ -177,11 +179,11 @@ it("retains a failed stop across unmount and exposes retry on a non-Codex compos
 it("keeps director voice through navigation and shows what its tools did", async () => {
   const f = voiceFixture();
   const composer = render(<Composer api={f.api} threadId="sample-first-thread" />);
-  render(<DirectorVoiceToast api={f.api} focus={{ id: "sample-first-thread", source: "codex", title: "Sample first thread" }} />);
+  render(<DirectorVoicePanel api={f.api} focus={{ id: "sample-first-thread", source: "codex", title: "Sample first thread" }} />);
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
   expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-voice-manager", mode: "director" });
-  expect(noticeCard("director-voice")).toHaveTextContent("Looking at Sample first thread");
+  expect(directorPanel()).toHaveTextContent("Looking at Sample first thread");
 
   // The composer's toggle cannot start a second session, and leaving the
   // thread does not end director voice.
@@ -201,21 +203,116 @@ it("keeps director voice through navigation and shows what its tools did", async
   expect(feed).toHaveTextContent("send_message_to_threadSample second threadqueued");
   expect(feed).toHaveTextContent("stop_threadfailed");
 
-  // The notice card's own close button ends the session, and says so.
+  // The panel's close button ends the session, and says so.
   fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
   await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
-  await waitFor(() => expect(noticeCard("director-voice")).toBeNull());
+  await waitFor(() => expect(directorPanel()).toBeNull());
 });
 
 it("reports a Voice manager that cannot be opened instead of starting voice", async () => {
   const f = voiceFixture();
   vi.mocked(f.api.openVoiceManager!).mockResolvedValueOnce({ status: "failed", error: "Sample manager failure." });
-  render(<><DirectorVoiceToast api={f.api} /><Notices api={f.api} /></>);
+  render(<><DirectorVoicePanel api={f.api} /><Notices api={f.api} /></>);
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(noticeCard("native-voice-error")).toHaveTextContent("Sample manager failure."));
-  expect(noticeCard("director-voice")).toBeNull();
+  expect(directorPanel()).toBeNull();
   expect(f.api.startNativeVoice).not.toHaveBeenCalled();
   expect(f.capture).not.toHaveBeenCalled();
+});
+
+function agentEvents() {
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const submitServerRequest = vi.fn(async () => ({ backend: "codex" as const, threadId: "sample-voice-manager", requestId: "sample-request" }));
+  return {
+    submitServerRequest,
+    desktopApi: {
+      onAgentEvent: (listener: (event: AgentEvent) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      submitServerRequest,
+    } as never,
+    emit: (event: AgentEvent) => { act(() => { for (const listener of listeners) listener(event); }); },
+  };
+}
+
+const trustQuestion = (threadId: string) => ({
+  backend: "codex",
+  notification: {
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId, turnId: "sample-turn", requestId: "sample-request",
+      questions: [{
+        id: "sample-question", header: "Trust directory", question: "Trust /sample/project?",
+        isOther: false, isSecret: false,
+        options: [{ label: "Trust directory", description: "Trust it." }, { label: "Cancel handoff", description: "Do not." }],
+      }],
+    },
+  },
+}) as unknown as AgentEvent;
+
+// Nobody reads the Voice manager thread. A question a tool asks there (here
+// handoff_task's directory trust) used to wait, unseen, until voice ended.
+it("answers the Voice manager's question from the director panel", async () => {
+  const f = voiceFixture();
+  const events = agentEvents();
+  render(<DirectorVoicePanel api={f.api} desktopApi={events.desktopApi} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+
+  // Another thread's question is not the director's.
+  events.emit(trustQuestion("sample-other-thread"));
+  expect(screen.queryByRole("group", { name: "Director voice is waiting on you" })).toBeNull();
+
+  events.emit(trustQuestion("sample-voice-manager"));
+  const request = screen.getByRole("group", { name: "Director voice is waiting on you" });
+  expect(request).toHaveTextContent("Trust /sample/project?");
+  fireEvent.click(screen.getByRole("button", { name: /Trust directory/ }));
+  await waitFor(() => expect(events.submitServerRequest).toHaveBeenCalledWith({
+    backend: "codex", threadId: "sample-voice-manager", turnId: "sample-turn", requestId: "sample-request",
+    response: { answers: { "sample-question": { answers: ["Trust directory"] } } },
+  }));
+  await waitFor(() => expect(screen.queryByRole("group", { name: "Director voice is waiting on you" })).toBeNull());
+});
+
+it("drops a Voice manager question that was answered elsewhere", async () => {
+  const f = voiceFixture();
+  const events = agentEvents();
+  render(<DirectorVoicePanel api={f.api} desktopApi={events.desktopApi} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  events.emit(trustQuestion("sample-voice-manager"));
+  expect(screen.getByRole("group", { name: "Director voice is waiting on you" })).toBeInTheDocument();
+  events.emit({
+    backend: "codex",
+    notification: { method: "serverRequest/resolved", params: { threadId: "sample-voice-manager", requestId: "sample-request" } },
+  } as unknown as AgentEvent);
+  expect(screen.queryByRole("group", { name: "Director voice is waiting on you" })).toBeNull();
+});
+
+it("offers the Voice manager thread for an approval the panel cannot show", async () => {
+  const f = voiceFixture();
+  const events = agentEvents();
+  const onOpenThread = vi.fn();
+  render(<DirectorVoicePanel api={f.api} desktopApi={events.desktopApi} onOpenThread={onOpenThread} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  events.emit({
+    backend: "codex",
+    notification: { method: "item/commandExecution/requestApproval", params: { threadId: "sample-voice-manager", requestId: "sample-approval" } },
+  } as unknown as AgentEvent);
+  fireEvent.click(screen.getByRole("button", { name: "Open Voice manager" }));
+  expect(onOpenThread).toHaveBeenCalledWith("sample-voice-manager");
+});
+
+it("resizes the director panel from its grip and remembers the size", async () => {
+  window.localStorage.removeItem("pwragent:director-voice-panel");
+  const f = voiceFixture();
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const panel = directorPanel()!;
+  const before = Number.parseFloat(panel.style.width);
+  fireEvent.keyDown(screen.getByRole("button", { name: "Resize director voice" }), { key: "ArrowLeft" });
+  expect(Number.parseFloat(panel.style.width)).toBe(before - 16);
+  expect(JSON.parse(window.localStorage.getItem("pwragent:director-voice-panel")!)).toMatchObject({ width: before - 16 });
 });
 
 // Thread voice opens only on a local Codex thread. Everywhere else the mic

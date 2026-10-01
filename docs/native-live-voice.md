@@ -78,11 +78,24 @@ keeps the latest snapshot in memory only and accepts it only from local main
 windows. When no window has published, the tool returns `focus_not_published`,
 and the manager asks the operator which thread they mean.
 
-While director voice runs, it shows as a card in the app's notice stack,
-drawn by the shared notice toast like every other notice. The card shows the
-live state and the thread the window is looking at, a **Mute** action, the
-transcript and receipts, and **Message voice**. Its close button is labelled
-**End director voice** and ends the session. Copy copies the transcript.
+While director voice runs, it shows in a floating panel. Drag the header to
+move the panel. Drag the corner grip, or focus the grip and use the arrow keys,
+to resize it. The window remembers the panel's position and size, and keeps
+the panel on screen and below the title strip. The panel sits over Settings
+and under the notice stack.
+
+The panel shows:
+
+- the live state;
+- the thread or launchpad the window is looking at;
+- **Mute**, copy, and **End director voice**, which ends the session;
+- the transcript with its receipts, and **Message voice**.
+
+The panel also shows any question that the Voice manager's turn is waiting on.
+A tool can ask the operator something on the thread it runs in, and nobody
+reads the Voice manager thread. A questionnaire, such as a directory to trust,
+is answered in the panel. An approval offers **Open Voice manager** instead.
+
 Director voice continues across navigation. While it runs, the composer
 **Voice** toggle is unavailable and its tooltip explains why.
 

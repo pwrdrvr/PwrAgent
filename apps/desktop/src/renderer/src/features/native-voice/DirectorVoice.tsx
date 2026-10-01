@@ -1,19 +1,27 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   isRemoteFederationTarget,
+  type AgentEvent,
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
   type OperatorFocusSnapshot,
   type OperatorFocusView,
 } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../../shared/native-voice";
-import { MicIcon } from "../../icons";
+import { CloseIcon, CopyIcon, MicIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatPrimaryAccel, isPlatformPrimaryAccel } from "../../lib/keyboard-accel";
+import { useFloatingPanelRect, type FloatingPanelLimits } from "../../lib/useFloatingPanelRect";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { AppNoticeToast } from "../notifications/AppNoticeToast";
+import { PendingQuestionnaire } from "../thread-detail/PendingQuestionnaire";
+import {
+  buildQuestionnaireResponse,
+  createQuestionnaireState,
+  type PendingQuestionnaireState,
+} from "../thread-detail/questionnaire";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "./native-voice-controller";
-import { isVoiceActive, useNativeVoice, voiceStateLabel, VoiceFeed, VoiceTextInput } from "./NativeVoice";
+import { isVoiceActive, useNativeVoice, VoiceFeed, VoiceStatus, VoiceTextInput } from "./NativeVoice";
 
 export function directorVoiceShortcutLabel(): string {
   return formatPrimaryAccel("Space", { shift: true });
@@ -237,20 +245,153 @@ export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus
  * navigation; the context line names the thread "this" refers to.
  */
 /**
- * Director voice while it runs, as a card in the app's notice stack: the
- * notice library owns the chrome (dot, copy, close), and this supplies only
- * the session's state, controls and transcript. Closing ends voice. An error
- * leaves this card and arrives as an ordinary notice instead
+ * A question the Voice manager's turn is waiting on. Nobody reads that thread,
+ * so a tool that asks the operator something there (a directory to trust, an
+ * approval) would otherwise wait until the session ends. A questionnaire is
+ * answered in place; anything else offers the thread itself.
+ */
+export type VoiceManagerRequest =
+  | { kind: "questions"; state: PendingQuestionnaireState }
+  | { kind: "other"; requestId: string; method: string };
+
+const OTHER_REQUEST_METHODS = new Set([
+  "turn/requestApproval",
+  "review/requestApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "mcpServer/elicitation/request",
+]);
+
+export function voiceManagerRequestFrom(
+  event: AgentEvent,
+  threadId: string,
+): VoiceManagerRequest | "resolved" | undefined {
+  const notification = event.notification as { method: string; params: Record<string, unknown> };
+  if (event.backend !== "codex" || notification.params.threadId !== threadId) return undefined;
+  const requestId = notification.params.requestId;
+  if (typeof requestId !== "string") return undefined;
+  if (notification.method === "serverRequest/resolved") return "resolved";
+  if (notification.method === "item/tool/requestUserInput" && Array.isArray(notification.params.questions)) {
+    const state = createQuestionnaireState(event.notification as Parameters<typeof createQuestionnaireState>[0]);
+    return state ? { kind: "questions", state } : undefined;
+  }
+  return OTHER_REQUEST_METHODS.has(notification.method)
+    ? { kind: "other", requestId, method: notification.method }
+    : undefined;
+}
+
+function requestIdOf(request: VoiceManagerRequest): string {
+  return request.kind === "questions" ? request.state.requestId : request.requestId;
+}
+
+function useVoiceManagerRequest(
+  desktopApi: Pick<DesktopApi, "onAgentEvent"> | undefined,
+  threadId: string | undefined,
+) {
+  const [request, setRequest] = useState<VoiceManagerRequest>();
+  useEffect(() => {
+    setRequest(undefined);
+    if (!threadId || !desktopApi?.onAgentEvent) return;
+    return desktopApi.onAgentEvent((event) => {
+      const next = voiceManagerRequestFrom(event, threadId);
+      if (next === "resolved") {
+        const resolvedId = (event.notification.params as { requestId: string }).requestId;
+        setRequest((current) => current && requestIdOf(current) === resolvedId ? undefined : current);
+      } else if (next) {
+        setRequest(next);
+      }
+    });
+  }, [desktopApi, threadId]);
+  return [request, setRequest] as const;
+}
+
+function VoiceManagerRequestCard({ desktopApi, onOpenThread, request, setRequest, threadId }: {
+  desktopApi?: Pick<DesktopApi, "submitServerRequest">;
+  onOpenThread?: (threadId: string) => void;
+  request: VoiceManagerRequest;
+  setRequest: (request: VoiceManagerRequest | undefined) => void;
+  threadId: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (request.kind === "other") {
+    return (
+      <div className="director-voice-panel__request" role="group" aria-label="Director voice is waiting on you">
+        <p className="director-voice-panel__request-title">Waiting on you</p>
+        <p className="director-voice-panel__request-text">The Voice manager needs an approval it cannot show here.</p>
+        {onOpenThread ? (
+          <button className="button button--primary" type="button" onClick={() => onOpenThread(threadId)}>
+            Open Voice manager
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className="director-voice-panel__request" role="group" aria-label="Director voice is waiting on you">
+      <PendingQuestionnaire
+        busy={busy}
+        state={request.state}
+        onChange={(state) => setRequest({ kind: "questions", state })}
+        onSubmit={async (state) => {
+          if (!desktopApi?.submitServerRequest) {
+            setError("This window cannot answer the Voice manager.");
+            return;
+          }
+          setBusy(true);
+          setError(undefined);
+          try {
+            await desktopApi.submitServerRequest({
+              backend: "codex",
+              threadId,
+              turnId: state.turnId,
+              requestId: state.requestId,
+              response: buildQuestionnaireResponse(state),
+            });
+            setRequest(undefined);
+          } catch (submitError) {
+            setError(submitError instanceof Error ? submitError.message : String(submitError));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
+      {error ? <p className="director-voice-panel__request-error" role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
+const PANEL_LIMITS: FloatingPanelLimits = { minWidth: 300, minHeight: 240, topReserve: 44 };
+const PANEL_EDGE = 16;
+
+/**
+ * Director voice while it runs: a panel the operator can drag by its header
+ * and resize from its corner, remembered between sessions. It is a working
+ * surface, not a notice. It holds the conversation, the tool receipts, the
+ * typed input, and any question the Voice manager is waiting on. Closing
+ * ends voice. An error leaves the panel and arrives as an ordinary notice
  * (`useNativeVoiceNotices`).
  */
-export function DirectorVoiceToast({ api, desktopApi, focus, launchpad }: {
+export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenThread }: {
   api: NativeVoiceApi;
-  desktopApi?: Pick<DesktopApi, "copyText">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "onAgentEvent" | "submitServerRequest">;
   focus?: DirectorFocusThread;
   launchpad?: Pick<NavigationLaunchpadDraft, "directoryLabel">;
+  onOpenThread?: (threadId: string) => void;
 }) {
   const { controller, view } = useNativeVoice(api);
-  if (view.mode !== "director" || view.status === "idle" || view.status === "error") return null;
+  const open = view.mode === "director" && view.status !== "idle" && view.status !== "error";
+  const [request, setRequest] = useVoiceManagerRequest(desktopApi, open ? view.threadId : undefined);
+  const { rect, moveHandleProps, resizeHandleProps } = useFloatingPanelRect({
+    storageKey: "pwragent:director-voice-panel",
+    limits: PANEL_LIMITS,
+    initial: (viewport) => {
+      const width = 400;
+      const height = Math.min(520, viewport.height - PANEL_LIMITS.topReserve - PANEL_EDGE * 2);
+      return { x: PANEL_EDGE, y: viewport.height - height - PANEL_EDGE, width, height };
+    },
+  });
+  if (!open) return null;
   const listening = view.status === "listening";
   const looking = focus
     ? `Looking at ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}.`
@@ -259,28 +400,70 @@ export function DirectorVoiceToast({ api, desktopApi, focus, launchpad }: {
     .map((row) => `${row.role === "user" ? "You" : "Voice"}: ${row.text}`)
     .join("\n");
   return (
-    <AppNoticeToast
-      desktopApi={desktopApi}
-      notice={{
-        id: "director-voice",
-        title: "Director voice",
-        message: listening && view.muted ? `Microphone muted. ${looking}` : looking,
-        autoDismiss: false,
-        copyText: ["Director voice", looking, transcript].filter(Boolean).join("\n"),
-        dismissLabel: "End director voice",
-        ...(listening && view.muted
-          ? {}
-          : { status: { label: voiceStateLabel(view), state: view.status === "stop-error" ? "error" as const : "progress" as const } }),
-        ...(listening ? {
-          actions: [{ label: view.muted ? "Unmute" : "Mute", onClick: () => controller.setMuted(!view.muted) }],
-        } : {}),
-      }}
-      onDismiss={() => {
-        if (view.status !== "stopping") void controller.stop();
-      }}
+    <section
+      className="director-voice-panel"
+      aria-label="Director voice"
+      style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
     >
-      <VoiceFeed view={view} limit={12} />
+      <header className="director-voice-panel__head" {...moveHandleProps}>
+        <p className="director-voice-panel__title">Director voice</p>
+        <VoiceStatus controller={controller} view={view} />
+        <div className="director-voice-panel__actions">
+          {listening ? (
+            <button
+              className="button button--ghost director-voice-panel__mute"
+              type="button"
+              aria-pressed={view.muted}
+              onClick={() => controller.setMuted(!view.muted)}
+            >
+              {view.muted ? "Unmute" : "Mute"}
+            </button>
+          ) : null}
+          <button
+            className="app-notice-toast__icon-button"
+            type="button"
+            aria-label="Copy transcript"
+            title="Copy transcript"
+            onClick={() => {
+              void copyText(["Director voice", looking, transcript].filter(Boolean).join("\n"), desktopApi);
+            }}
+          >
+            <CopyIcon size={13} aria-hidden="true" />
+          </button>
+          <button
+            className="app-notice-toast__icon-button"
+            type="button"
+            aria-label="End director voice"
+            title="End director voice"
+            onClick={() => {
+              if (view.status !== "stopping") void controller.stop();
+            }}
+          >
+            <CloseIcon size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </header>
+      <p className="director-voice-panel__focus">{looking}</p>
+      {request && view.threadId ? (
+        <VoiceManagerRequestCard
+          desktopApi={desktopApi}
+          onOpenThread={onOpenThread}
+          request={request}
+          setRequest={setRequest}
+          threadId={view.threadId}
+        />
+      ) : null}
+      <div className="director-voice-panel__feed">
+        <VoiceFeed view={view} />
+      </div>
       {listening ? <VoiceTextInput controller={controller} /> : null}
-    </AppNoticeToast>
+      <button
+        className="director-voice-panel__grip"
+        type="button"
+        aria-label="Resize director voice"
+        title="Drag or use the arrow keys to resize"
+        {...resizeHandleProps}
+      />
+    </section>
   );
 }

@@ -167,10 +167,121 @@
   color: var(--text-primary);
 }
 
-/* Director voice runs as a card in the app notice stack. The notice library
-   draws its chrome; only the transcript inside needs a height cap. */
-.app-notice-toast .native-voice-feed {
-  max-height: 220px;
+/* Director voice runs in a floating panel the operator moves by its header
+   and sizes from its corner grip. It sits over Settings (120) and under the
+   notice stack (140), so a notice is never hidden behind it. The surface
+   tokens are the notice card's, so the two read as one family. */
+.director-voice-panel {
+  position: fixed;
+  z-index: 135;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  padding: 8px 12px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  -webkit-app-region: no-drag;
+}
+.director-voice-panel__head {
+  display: flex;
+  flex: none;
+  min-height: 28px;
+  align-items: center;
+  gap: 10px;
+  margin: -8px -12px 0;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.director-voice-panel__head:active {
+  cursor: grabbing;
+}
+.director-voice-panel__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.director-voice-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.director-voice-panel__mute {
+  height: 24px;
+  margin-right: 4px;
+  padding: 0 10px;
+}
+.director-voice-panel__focus {
+  flex: none;
+  margin: 0;
+  color: var(--text-muted);
+}
+.director-voice-panel__request {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-height: 50%;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+.director-voice-panel__request-title {
+  margin: 0;
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+.director-voice-panel__request-text {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.director-voice-panel__request-error {
+  margin: 0;
+  color: var(--danger-text);
+}
+.director-voice-panel__feed {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+.director-voice-panel__feed .native-voice-feed {
+  flex: 1 1 auto;
+  max-height: none;
+}
+.director-voice-panel .native-voice__text {
+  flex: none;
+  margin-top: 0;
+}
+/* A 14px corner target drawn as two diagonal ticks, the platform's resize
+   cue. It is a button so arrow keys can resize without a pointer. */
+.director-voice-panel__grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 0 8px 0;
+  background:
+    linear-gradient(135deg, transparent 0 55%, var(--text-muted) 55% 62%, transparent 62% 75%, var(--text-muted) 75% 82%, transparent 82%);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.director-voice-panel__grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* Hover card for the director mic, on the measurements of
