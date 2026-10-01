@@ -4,6 +4,7 @@ import path from "node:path";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult, ThreadHandoffExport } from "@pwragent/shared";
 import { exportGitHandoff, importGitHandoff } from "../app-server/git-instance-handoff";
 import { runGitCommand } from "../app-server/git-executable";
+import { computeWorktreePath, releaseWorktreePathReservation } from "../app-server/git-directory-service";
 import type { FilePushResult } from "./federation-file-push";
 import { decodeHandoffBytes, decodeThreadHandoff, encodeThreadHandoff, threadHistoryDigest, THREAD_HANDOFF_MAX_BYTES } from "./thread-handoff-package";
 
@@ -22,7 +23,7 @@ export type ImportInstanceThreadRequest = {
 type HandoffBackend = {
   withThreadHandoff<T>(threadId: string, work: () => Promise<T>): Promise<T>;
   exportThreadForHandoff(threadId: string): Promise<ThreadHandoffExport>;
-  forkThread(request: { backend: "codex"; sourceThreadId: string; sourceThreadPath: string; directoryPath: string; directoryKind: "directory"; workMode: "local" }): Promise<{ threadId: string }>;
+  forkThread(request: { backend: "codex"; sourceThreadId: string; sourceThreadPath: string; directoryPath: string; directoryKind: "directory"; directoryLabel?: string; workMode: "local" | "worktree"; importedWorktree?: { repositoryPath: string; worktreePath: string } }): Promise<{ threadId: string }>;
   readThread(request: { backend: "codex"; threadId: string }): Promise<{ replay: ThreadHandoffExport["replay"] }>;
   archiveThread(request: { backend: "codex"; threadId: string; preserveWorktrees?: boolean }): Promise<unknown>;
   renameThread(request: { backend: "codex"; threadId: string; name: string }): Promise<unknown>;
@@ -144,10 +145,16 @@ export class ThreadInstanceHandoffService {
     const staging = await mkdtemp(path.join(this.options.directory, "incoming-"));
     const workspaceParent = path.join(this.options.directory, "workspaces");
     await mkdir(workspaceParent, { recursive: true });
-    const workspace = path.join(workspaceParent, pkg.handoffId);
+    const repository = pkg.git
+      ? (await runGitCommand(request.targetRepositoryPath!, ["rev-parse", "--show-toplevel"])).stdout.trim()
+      : undefined;
+    const workspace = repository
+      ? await computeWorktreePath({ repoRoot: repository, storage: "in-repo" })
+      : path.join(workspaceParent, pkg.handoffId);
     const cwd = pkg.git?.cwdRelative ? path.join(workspace, ...pkg.git.cwdRelative.split("/")) : workspace;
     let rollback: (() => Promise<void>) | undefined;
     let threadId: string | undefined;
+    let forkAttempted = false;
     try {
       const rollout = path.join(staging, "thread.jsonl");
       await writeFile(rollout, decodeHandoffBytes(pkg.rolloutBase64), { mode: 0o600, flag: "wx" });
@@ -160,10 +167,12 @@ export class ThreadInstanceHandoffService {
         rollback = async () => await rm(workspace, { recursive: true, force: true });
       }
       await mkdir(cwd, { recursive: true });
+      forkAttempted = true;
       const result = await this.options.backend.forkThread({
         backend: "codex", sourceThreadId: pkg.sourceThreadId, sourceThreadPath: rollout,
         directoryPath: cwd,
-        directoryKind: "directory", workMode: "local",
+        directoryKind: "directory", workMode: repository ? "worktree" : "local",
+        ...(repository ? { directoryLabel: path.basename(repository), importedWorktree: { repositoryPath: repository, worktreePath: workspace } } : {}),
       });
       threadId = result.threadId;
       const destination = await this.options.backend.readThread({ backend: "codex", threadId });
@@ -175,9 +184,14 @@ export class ThreadInstanceHandoffService {
       if (pkg.git?.sourceBranch) warnings.push(`Workspace is detached at the source commit. Original branch: ${pkg.git.sourceBranch}.`);
       return { handoffId: pkg.handoffId, sourceThreadId: pkg.sourceThreadId, instanceId: this.options.localInstanceId(), backend: "codex", threadId, directoryPath: cwd, sourceArchived: false, warnings };
     } catch (error) {
-      // Keep the workspace if the provider cannot retire a partially imported thread.
+      // A rejected fork can follow successful provider creation or a lost response.
+      // Without an ID we cannot retire that thread, so preserve its checkout.
+      if (forkAttempted && !threadId) {
+        throw new Error(`Destination creation could not be confirmed. Workspace retained at ${workspace}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
       if (threadId) await this.options.backend.archiveThread({ backend: "codex", threadId, preserveWorktrees: true });
       await rollback?.();
+      if (repository) await releaseWorktreePathReservation(workspace);
       throw error;
     } finally {
       await rm(staging, { recursive: true, force: true });

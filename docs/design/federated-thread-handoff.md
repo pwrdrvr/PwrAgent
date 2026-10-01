@@ -84,7 +84,9 @@ file against the bundle's tree. Hashing and index updates are batched, so Git
 process count does not scale with the number of files.
 
 The receiver must have an existing repository with shared root history. It
-imports into a unique detached worktree under its PwrAgent profile. Existing
+imports into a unique detached worktree allocated by the shared path allocator
+under the receiving repository's `.worktrees/` directory. The fork immediately
+records the repository and worktree linkage for ordinary navigation. Existing
 branches, worktrees, working files, and FETCH_HEAD are preserved. A bundle with
 unrelated history is rejected. Shallow histories may need deepening first.
 
@@ -116,6 +118,9 @@ Arbitrary local paths in an import request are rejected.
 
 - Destination history mismatch archives the partial destination and rolls back
   the newly created workspace. If retirement fails, the workspace is retained.
+- If fork creation rejects without a destination ID, the workspace is retained
+  because Codex may have created a thread before acknowledgement or persistence
+  failed. The error reports the retained workspace path for recovery.
 - Loss of acknowledgement retains the source. A validated destination may exist;
   search for it before retrying from the agent tool.
 - Failure to confirm source archival returns the ready destination with a warning.

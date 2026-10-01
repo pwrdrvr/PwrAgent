@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -24,7 +24,7 @@ async function setup() {
     withThreadHandoff: async <T>(_threadId: string, work: () => Promise<T>) => await work(),
     exportThreadForHandoff: vi.fn(async () => source),
     archiveThread: archive,
-    forkThread: vi.fn(async () => ({ threadId: "destination-thread" })),
+    forkThread: vi.fn(async (_request: { directoryPath: string }) => ({ threadId: "destination-thread" })),
     readThread: vi.fn(async () => ({ replay })),
     renameThread: vi.fn(async () => {}),
   };
@@ -84,12 +84,38 @@ it("transfers a Git workspace and keeps the thread's subdirectory cwd", async ()
   await git(repository, "commit", "-m", "fixture");
   const destinationRepo = path.join(root, "destination-repo");
   await git(root, "clone", repository, destinationRepo);
+  const canonicalDestinationRepo = await realpath(destinationRepo);
   await writeFile(path.join(subdirectory, "code.txt"), "unstaged\n");
   backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
   const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", targetRepositoryPath: destinationRepo, operation: "copy" });
-  expect(result.directoryPath).toBe(path.join(root, "receiver", "workspaces", result.handoffId, "packages", "example"));
+  const worktree = path.dirname(path.dirname(result.directoryPath));
+  expect(path.dirname(path.dirname(worktree))).toBe(path.join(canonicalDestinationRepo, ".worktrees"));
+  expect(path.basename(worktree)).toBe("destination-repo");
+  expect(result.directoryPath).toBe(path.join(worktree, "packages", "example"));
   expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("unstaged\n");
-  expect(backend.forkThread).toHaveBeenCalledWith(expect.objectContaining({ directoryPath: result.directoryPath }));
+  expect(backend.forkThread).toHaveBeenCalledWith(expect.objectContaining({
+    directoryPath: result.directoryPath, directoryLabel: "destination-repo", workMode: "worktree",
+    importedWorktree: { repositoryPath: canonicalDestinationRepo, worktreePath: worktree },
+  }));
+});
+
+it("retains the workspace when fork rejection leaves provider creation uncertain", async () => {
+  const { sender, backend, archive } = await setup();
+  backend.forkThread.mockRejectedValueOnce(new Error("overlay persistence failed"));
+  await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "move" }))
+    .rejects.toThrow("Workspace retained");
+  const request = backend.forkThread.mock.calls[0]?.[0];
+  expect(await stat(request!.directoryPath)).toBeDefined();
+  expect(archive).not.toHaveBeenCalled();
+});
+
+it("retains a known destination workspace when retirement fails", async () => {
+  const { sender, backend, archive } = await setup();
+  backend.readThread.mockRejectedValueOnce(new Error("history read failed"));
+  archive.mockRejectedValueOnce(new Error("retirement failed"));
+  await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "move" }))
+    .rejects.toThrow("retirement failed");
+  expect(await stat(backend.forkThread.mock.calls[0]![0].directoryPath)).toBeDefined();
 });
 
 it("fails a missing source workspace instead of silently moving history alone", async () => {

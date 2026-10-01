@@ -520,6 +520,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
   "file_push",
+  "thread_handoff",
   "file_pull",
   "event_subscriptions",
   "turn_input_blobs",

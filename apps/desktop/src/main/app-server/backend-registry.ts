@@ -1045,6 +1045,7 @@ type BackendClient = {
 };
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  importedWorktree?: { repositoryPath: string; worktreePath: string };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
   onCodexEnvironmentSetupProgress?: (
@@ -16428,7 +16429,10 @@ export class DesktopBackendRegistry {
   async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
     const client = this.getClient("codex", "default");
     if (!client.exportThreadForHandoff) throw new Error("This backend does not support protocol thread export.");
-    return await client.exportThreadForHandoff(threadId);
+    const exported = await client.exportThreadForHandoff(threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+    const cwd = await this.resolveThreadEnvironmentCwd("codex", threadId, overlay);
+    return { ...exported, cwd: cwd ?? exported.cwd };
   }
 
   async forkThread(
@@ -16453,18 +16457,27 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.sourceThreadId,
     });
-    const preparedWorkspace = await this.gitDirectoryService.prepareLaunchpadWorkspace({
-      backend,
-      branchName: request.branchName,
-      directoryKind,
-      directoryLabel,
-      directoryPath: request.directoryPath,
-      ...(request.excludedWorktreePaths
-        ? { excludedWorktreePaths: request.excludedWorktreePaths }
-        : {}),
-      worktreeBranchMode: request.worktreeBranchMode,
-      workMode: request.workMode ?? "local",
-    });
+    // Imported worktrees already contain verified index and working-file state.
+    // Their caller owns cleanup after retiring any partially created thread.
+    const preparedWorkspace = request.importedWorktree
+      ? {
+          cwd: request.directoryPath,
+          repositoryPath: request.importedWorktree.repositoryPath,
+          workMode: "worktree" as const,
+          rollback: undefined,
+        }
+      : await this.gitDirectoryService.prepareLaunchpadWorkspace({
+          backend,
+          branchName: request.branchName,
+          directoryKind,
+          directoryLabel,
+          directoryPath: request.directoryPath,
+          ...(request.excludedWorktreePaths
+            ? { excludedWorktreePaths: request.excludedWorktreePaths }
+            : {}),
+          worktreeBranchMode: request.worktreeBranchMode,
+          workMode: request.workMode ?? "local",
+        });
     if (request.workMode === "worktree" && preparedWorkspace.workMode !== "worktree") {
       throw new Error(
         `Requested worktree workspace, but workspace preparation resolved to ${preparedWorkspace.workMode}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
@@ -16479,7 +16492,7 @@ export class DesktopBackendRegistry {
         ? buildWorktreeLinkedDirectory({
             label: directoryLabel,
             repositoryPath: preparedWorkspace.repositoryPath ?? request.directoryPath,
-            worktreePath: cwd,
+            worktreePath: request.importedWorktree?.worktreePath ?? cwd,
           })
         : buildLocalLinkedDirectory(cwd);
     const client = this.getClient(backend, executionMode);
@@ -16595,7 +16608,7 @@ export class DesktopBackendRegistry {
         await this.recordCodexWorktreeOwnerThread({
           backend,
           threadId: result.threadId,
-          worktreePath: cwd,
+          worktreePath: request.importedWorktree?.worktreePath ?? cwd,
         });
       }
 
