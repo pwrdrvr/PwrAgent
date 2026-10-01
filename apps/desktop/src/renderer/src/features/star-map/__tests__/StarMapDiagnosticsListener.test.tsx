@@ -7,6 +7,7 @@ import { StarMapDiagnosticsListener } from "../StarMapDiagnosticsListener";
 const metadata: AppMetadata = {
   applicationName: "PwrAgent",
   applicationVersion: "1.2.3",
+  buildIdentity: { kind: "packaged" },
   copyright: "Copyright © 2026 PwrDrvr LLC.",
   homepage: "https://pwragent.ai",
   documentationUrl: "https://docs.pwragent.ai",
@@ -51,6 +52,8 @@ it("copies the active remote intake target from the Star Map window", async () =
     expect(copyText).toHaveBeenCalledWith(
       expect.stringContaining([
         "Surface: Federation Star Map",
+        "PwrAgent version: 1.2.3",
+        "PwrAgent build: Packaged",
         "Thread creation state: Intake open; no thread created yet",
         "Target instance ID: peer-2018",
         "Target instance label: Harold-MBP-2018",

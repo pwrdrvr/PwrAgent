@@ -3947,6 +3947,7 @@ describe("App", () => {
         readAppMetadata: async () => ({
           applicationName: "PwrAgent",
           applicationVersion: "1.2.3",
+          buildIdentity: { kind: "packaged" as const },
           copyright: "Copyright © 2026 PwrDrvr LLC.",
           homepage: "https://pwragent.ai",
           documentationUrl: "https://docs.pwragent.ai",
@@ -3989,6 +3990,8 @@ describe("App", () => {
         "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
         "Provider/backend: codex",
         "Thread title: Fix handoff project paths and diagnostics",
+        "PwrAgent version: 1.2.3",
+        "PwrAgent build: Packaged",
         "PwrAgent profile: work",
         "Main process PID: 4100",
         "Renderer process PID: 4101",
