@@ -27,7 +27,7 @@ export function NativeVoice({ api, threadId }: { api: NativeVoiceApi; threadId: 
           onClick={() => { if (active) void controller.stop(); else void controller.start(threadId); }}>
           {active ? "Stop voice" : "Start voice"}
         </button>
-        <span className="native-voice__status" role="status">
+        <span className="native-voice__status" role={view.status === "idle" ? undefined : "status"} aria-label={view.status === "idle" ? undefined : "Voice status"}>
           {view.status === "listening" ? "Microphone live · speak to interrupt voice" : view.status === "checking" ? "Checking voice access…" : view.status === "connecting" ? "Connecting voice…" : view.status === "stop-error" ? "Voice stop needs retry" : view.status === "stopping" ? "Stopping voice…" : "Experimental · opt in to talk"}
         </span>
       </div>
