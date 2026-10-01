@@ -2358,7 +2358,7 @@ function insertMentionTokenAtSelection(params: {
       attrs: getSkillMentionAttrs(token),
     },
   ];
-  if (!/^\s/.test(current.value.slice(selection.end))) {
+  if (!/^[^\S\r\n]/.test(current.value.slice(selection.end))) {
     insertedContent.push({ type: "text", text: " " });
   }
 
@@ -2471,8 +2471,9 @@ function applyExternalSkillInsertion(params: {
   const after = params.current.value.slice(trigger.end);
   // Mirrors the applier rule in Composer: a committed chip always gets
   // one following space (even at the end of the draft) so the caret can
-  // land after it and typing never runs flush against the chip.
-  const insertedSpace = !/^\s/.test(after);
+  // land after it and typing never runs flush against the chip. A newline
+  // cannot supply that space: advancing past it enters the following block.
+  const insertedSpace = !/^[^\S\r\n]/.test(after);
   const expectedValue = `${before}${insertedSpace ? " " : ""}${after}`;
   if (params.nextValue !== expectedValue) {
     return false;

@@ -26,7 +26,7 @@ import {
   type ScheduledThreadActionIdRequest,
   type SteerTurnRequest,
 } from "@pwragent/shared";
-import type { JSONContent } from "@tiptap/react";
+import type { Editor, JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
@@ -17615,6 +17615,78 @@ describe("Composer", () => {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
     }
+  });
+
+  it.each([
+    ["end of draft", ""],
+    ["existing space", " remaining text"],
+    ["next paragraph", "\n\nRemaining text"],
+    ["code block", "\n\n```ts\nconst answer = 42;\n```"],
+    ["blockquote", "\n\n> Quoted text"],
+  ])("keeps typing after an @ project reference before %s", async (_label, suffix) => {
+    const directory: NavigationDirectorySummary = {
+      key: "directory:/repo",
+      kind: "directory",
+      label: "Repo",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: directory.key,
+      directoryKind: "directory",
+      directoryLabel: directory.label,
+      directoryPath: directory.path,
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={directory}
+        directories={[directory]}
+        draftStore={createComposerDraftStore()}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={async () => undefined}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />,
+    );
+
+    const input = screen.getByLabelText("New thread") as HTMLInputElement & { editor: Editor };
+    const prefix = "Look in ";
+    fireEvent.change(input, { target: { value: `${prefix}${suffix}` } });
+    const followingBlocks = input.editor.getJSON().content!.slice(1);
+    act(() => {
+      input.setSelectionRange(prefix.length, prefix.length);
+      input.editor.view.dispatch(input.editor.state.tr.insertText("@rep"));
+    });
+    await screen.findByRole("listbox", { name: "Directories" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Tab" });
+
+    await waitFor(() => {
+      expect(input.selectionStart).toBe(prefix.length + 1);
+      expect(input.editor.state.selection.$from.parent.type.name).toBe("paragraph");
+      expect(input.editor.state.selection.$from.parent.textContent).toBe(
+        `${prefix} ${suffix.startsWith(" ") ? suffix.slice(1) : ""}`,
+      );
+    });
+    expect(input.editor.getJSON().content!.slice(1)).toEqual(followingBlocks);
+    act(() => input.editor.view.dispatch(input.editor.state.tr.insertText("continue")));
+    const trailingText = suffix.startsWith(" ") ? suffix.slice(1) : "";
+    expect(input.editor.getJSON().content![0].content).toEqual([
+      { type: "text", text: prefix },
+      expect.objectContaining({ type: "mention", attrs: expect.objectContaining({ kind: "directory", name: "Repo" }) }),
+      { type: "text", text: ` continue${trailingText}` },
+    ]);
+    expect(input.editor.getJSON().content!.slice(1)).toEqual(followingBlocks);
+    expect(input).toHaveValue(`${prefix} continue${suffix.startsWith(" ") ? suffix.slice(1) : suffix}`);
   });
 
   it("replaces a directory trigger after quoted Markdown without losing later edits", async () => {
