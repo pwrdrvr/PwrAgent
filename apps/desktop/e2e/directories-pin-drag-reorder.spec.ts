@@ -82,14 +82,21 @@ test("a dropped pin reorder repaints without the pointer leaving the rows", asyn
     await app.window.mouse.move(third.x + third.width / 2, third.y + third.height / 2);
     await app.window.mouse.down();
     await app.window.mouse.move(third.x + third.width / 2, third.y, { steps: 4 });
-    // The active drag opens a Keep at top slot above the pins, which moves
-    // the first pin down. Measure it after that, so the drop is an ordinary
-    // reorder before it rather than a Keep at top drop.
-    await expect(directoryRow.locator(".directory-row__keep-top-slot")).toBeVisible();
+    // No pin is kept, so the active drag opens the Keep at top slot above the
+    // pins, and its boundary grows to hold it, which moves the first pin
+    // down. Measure it after that. The slot is a box of its own that never
+    // overlaps a row, so the first pin's top half is an ordinary reorder
+    // before it rather than a Keep at top drop.
+    const keepTopSlot = directoryRow
+      .locator(".directory-row__keep-top-slot")
+      .filter({ hasText: "Keep at top" });
+    await expect(keepTopSlot).toBeVisible();
+    const slot = await keepTopSlot.boundingBox();
     const first = await pinnedRows.nth(0).boundingBox();
-    if (!first) {
-      throw new Error("Expected the pinned rows to have layout");
+    if (!slot || !first) {
+      throw new Error("Expected the Keep at top slot and pinned rows to have layout");
     }
+    expect(slot.y + slot.height).toBeLessThanOrEqual(first.y);
     const to = { x: first.x + first.width / 2, y: first.y + first.height / 4 };
     await app.window.mouse.move(to.x, to.y, { steps: 8 });
     await expect(pinnedRows.nth(0)).toHaveClass(/is-drop-target-before/);
