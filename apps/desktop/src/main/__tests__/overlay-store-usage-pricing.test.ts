@@ -1907,6 +1907,66 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("reprices a persisted Grok 4.7 naming helper build alias on the parent thread", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:grok",
+        cachedInputTokens: 1_200,
+        completedAt: Date.UTC(2026, 9, 1),
+        createdAt: Date.UTC(2026, 9, 1),
+        inputTokens: 2_900,
+        // Seed the state written before the catalog recognized the alias.
+        model: "unknown-grok-model",
+        outputTokens: 338,
+        parentThreadId: "thread-1",
+        reasoningOutputTokens: 327,
+        scope: "monitor",
+        source: "monitor",
+        sourceItemId: "system:title-helper:thread-1",
+        threadId: "grok-title-helper",
+        totalTokens: 3_238,
+        uncachedInputTokens: 1_700,
+        usageLineId: "line-grok-4-7-title-helper",
+      }),
+    });
+    stateDb.raw.prepare(
+      "UPDATE thread_usage_lines SET model = 'grok-4.7-build' WHERE usage_line_id = ?",
+    ).run("line-grok-4-7-title-helper");
+    expect(stateDb.raw.prepare(
+      "SELECT price_status, provider, total_cost_micros FROM thread_usage_lines WHERE usage_line_id = ?",
+    ).get("line-grok-4-7-title-helper")).toEqual({
+      price_status: "unpriced",
+      provider: "openai",
+      total_cost_micros: 0,
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:grok",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "grok-4.7-build",
+      parentThreadId: "thread-1",
+      priceStatus: "priced",
+      pricingCatalogId: "xai-api",
+      pricingCatalogVersion: "2026-09-21",
+      pricingRateId: "xai:2026-09-21:grok-4.7:standard",
+      provider: "xai",
+      totalCostMicros: 6_028,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries).toEqual([
+      expect.objectContaining({
+        pricedUsageLineCount: 1,
+        provider: "xai",
+        totalCostMicros: 6_028,
+        unpricedUsageLineCount: 0,
+      }),
+    ]);
+  });
+
   it("reprices persisted Grok 4.6 usage under the xAI provider", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
