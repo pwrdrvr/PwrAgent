@@ -124,8 +124,8 @@ function unregister(layer: Layer): void {
  * or a popup that has to outrank the dialog it opens inside.
  *
  * A popup inside a dialog must use this, or the dialog owns its Escape and
- * one press closes both. `ProjectPicker` in the composer's Move to Project
- * dialog is the case that exists.
+ * one press closes both. The destination list in the composer's Move to
+ * Project dialog (`ProjectDestinationCombobox`) is the case that exists.
  *
  * A dismissal that refuses (a dialog mid-save) still claims the key. Escape
  * must not reach whatever is behind a dialog that stays open.

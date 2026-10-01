@@ -19,6 +19,7 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type { CodexEnvironmentStartupFailure } from "./agent";
+import type { HandoffInstanceThreadToolArgs, HandoffInstanceThreadResult } from "./thread-instance-handoff";
 
 export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
   "list_federation_instances",
@@ -26,6 +27,7 @@ export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
   "create_instance_thread",
   "search_federation_threads",
   "push_instance_file",
+  "handoff_instance_thread",
 ] as const;
 
 export type PwrAgentFederationOperationName =
@@ -268,6 +270,7 @@ export type PwrAgentFederationToolArgs<
   list_federation_instances: ListFederationInstancesToolArgs;
   list_instance_projects: ListInstanceProjectsToolArgs;
   push_instance_file: PushInstanceFileToolArgs;
+  handoff_instance_thread: HandoffInstanceThreadToolArgs;
   create_instance_thread: CreateInstanceThreadToolArgs;
   search_federation_threads: SearchFederationThreadsToolArgs;
 }[TOperation];
@@ -289,6 +292,7 @@ export type PwrAgentFederationResponse =
       data:
         | ListFederationInstancesResult
         | PushInstanceFileResult
+        | (HandoffInstanceThreadResult & { threadLink: string })
         | ListInstanceProjectsResult
         | CreateInstanceThreadResult
         | SearchFederationThreadsResult;

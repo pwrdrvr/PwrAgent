@@ -824,8 +824,8 @@ app behind them.
   the find bar behind it.
 - **A popup inside a dialog registers with
   [`useDismissableLayer`](src/renderer/src/lib/useDismissableLayer.ts),** or
-  the dialog takes its Escape and both close. `ProjectPicker` in Move to
-  Project is the example.
+  the dialog takes its Escape and both close. Move to Project's destination
+  list (`ProjectDestinationCombobox`) is the example.
 - **A claimed Escape is prevented and stopped.** A window listener that closes
   something on Escape must check `defaultPrevented`, as `ThreadFindBar` and
   the composer autocomplete do. The stop is for React handlers in a tree the

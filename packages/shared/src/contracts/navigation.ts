@@ -27,7 +27,7 @@ import type {
   MessagingConversationKind,
   MessagingToolUpdateMode,
 } from "./messaging";
-import type { DesktopGhDiscoverySnapshot } from "./settings";
+import type { DesktopGhDiscoverySnapshot, DesktopProviderModelDefaults } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
 import type { CelestialIconId } from "./celestial";
@@ -901,6 +901,49 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
   return projectNavigationLaunchpadProviderSettings(base as T);
 }
 
+export function changedProviderModelDefaultBackends(
+  previous: Record<string, DesktopProviderModelDefaults>,
+  next: Record<string, DesktopProviderModelDefaults>,
+): AppServerBackendKind[] {
+  return [...new Set([
+    ...Object.keys(previous),
+    ...Object.keys(next),
+  ])].filter((backend) => {
+    const before = previous[backend];
+    const after = next[backend];
+    return before?.model !== after?.model
+      || before?.reasoningEffortsByModel[before.model ?? ""]
+        !== after?.reasoningEffortsByModel[after.model ?? ""];
+  }) as AppServerBackendKind[];
+}
+
+/** Replace only provider model choices; retain the launchpad's unsent content. */
+export function applyNavigationLaunchpadProviderModelDefaults<T extends NavigationLaunchpadDefaults>(
+  value: T,
+  defaults: Record<string, DesktopProviderModelDefaults>,
+  changedBackends: AppServerBackendKind[],
+  includeAll = false,
+): T {
+  const relevantBackends = changedBackends.filter((backend) =>
+    includeAll
+    || value.backend === backend
+    || value.providerSettings?.[backend] !== undefined
+  );
+  if (relevantBackends.length === 0) return value;
+  const seeded = applyNavigationLaunchpadProviderSettingsPatch(value, {});
+  const providerSettings = { ...seeded.providerSettings };
+  for (const backend of relevantBackends) {
+    const preference = defaults[backend];
+    providerSettings[backend] = {
+      ...providerSettings[backend],
+      model: preference?.model,
+      reasoningEffort: preference?.reasoningEffortsByModel[preference.model ?? ""],
+      reasoningEffortsByModel: preference?.reasoningEffortsByModel,
+    };
+  }
+  return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
+}
+
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   directoryKey: string;
   directoryKind: DirectorySummaryKind;
@@ -1367,7 +1410,7 @@ export function buildLegacyEncodedThreadIdentityKey(
 
 /**
  * Directory-key prefix for a sub-thread launchpad
- * (`subthread:<source>:<parent>:<mode>`). Sub-thread launchpads are transient,
+ * (`subthread:<source>:<parent>:<mode>[:<machine>]`). Sub-thread launchpads are transient,
  * thread-scoped composers — never a project directory — so several layers must
  * recognize and exclude them. Centralized here so the key format has one source
  * of truth and the exclusions can't drift apart.
@@ -2215,11 +2258,19 @@ export type SetThreadMonitorJobSuggestionsResponse = {
   monitorJobSuggestionsEnabled?: boolean;
 };
 
+/**
+ * Thread pins have two tiers: pins kept at top, then ordinary pins (see
+ * `isKeptAtTopRank`). A direction move stays inside the pin's tier. An anchor
+ * move adopts the anchor's tier. `keepAtTop` crosses tiers explicitly: `true`
+ * moves the pin to the bottom of the kept tier, `false` to the top of the
+ * ordinary pins.
+ */
 export type NavigationRelativePinMove = {
   key: string;
 } & (
-  | { direction: "up" | "down"; anchorKey?: never; placement?: never }
-  | { anchorKey: string; placement: "before" | "after"; direction?: never }
+  | { direction: "up" | "down"; anchorKey?: never; placement?: never; keepAtTop?: never }
+  | { anchorKey: string; placement: "before" | "after"; direction?: never; keepAtTop?: never }
+  | { keepAtTop: boolean; direction?: never; anchorKey?: never; placement?: never }
 );
 
 export type ReorderThreadPinsRequest = {

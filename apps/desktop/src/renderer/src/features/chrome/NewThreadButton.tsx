@@ -21,7 +21,7 @@ import type { FederationThreadTarget } from "./federation-thread-targets";
  *
  *   1. New chat in <directory>     → `onCreateThread` (context default)
  *   2. New chat without a directory → `onCreateThreadWithoutDirectory`
- *   3. Add a Project Directory…     → track a repo without starting a chat
+ *   3. Add a Project Directory…     → open its new-thread composer
  *   4. New chat on → <instance>     → open that owner's launchpad
  *
  * The flyout renders when any one of those exists — a meaningful directory

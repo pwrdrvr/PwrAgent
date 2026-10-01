@@ -1,5 +1,19 @@
 export const PIN_RANK_STEP = 1024;
 
+/**
+ * Pins the operator keeps at top live in a rank band far below every ordinary
+ * pin. The tier travels inside the rank itself, so every store, projection,
+ * federation hop, and older build that sorts ranks ascending already puts
+ * these pins first. New ordinary ranks (`buildPrependPinRank`) ignore the
+ * band, which is what keeps a freshly pinned thread below them.
+ *
+ * Ordinary prepends step down 1024 from the lowest ordinary rank, so they need
+ * about 5e8 prepends to reach the boundary. Ranks this size stay exact well
+ * past the midpoint splits `relativePinRanks` makes.
+ */
+export const KEEP_AT_TOP_RANK_BOUNDARY = -(2 ** 39);
+const KEEP_AT_TOP_RANK_BASE = -(2 ** 40);
+
 type PinSortableThread = {
   id: string;
   pinnedRank?: string;
@@ -46,26 +60,55 @@ export function compareThreadsByCreatedAtDesc<T extends CreationSortableThread>(
   return right.id.localeCompare(left.id);
 }
 
+export function isKeptAtTopRank(rank?: string): boolean {
+  const parsed = parsePinRank(rank);
+  return Number.isFinite(parsed) && parsed < KEEP_AT_TOP_RANK_BOUNDARY;
+}
+
+export function isKeptAtTopThread(thread: PinSortableThread): boolean {
+  return isKeptAtTopRank(thread.pinnedRank);
+}
+
 export function buildAppendPinRank(existingRanks: Array<string | undefined>): string {
   const maxRank = existingRanks.reduce((max, rank) => {
     const parsed = parsePinRank(rank);
-    return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
+    return Number.isFinite(parsed) && !isKeptAtTopRank(rank)
+      ? Math.max(max, parsed)
+      : max;
   }, 0);
   return String(maxRank + PIN_RANK_STEP);
 }
 
 /**
- * The next rank at the TOP of the pin list: one step before the lowest rank
- * in use. Ranks may go to zero or below — `parsePinRank` accepts any finite
- * number, and `relativePinRanks` already produces them for a drag to the top.
+ * The next rank at the TOP of the ordinary pins: one step before the lowest
+ * ordinary rank in use, and therefore below every pin kept at top. Ranks may
+ * go to zero or below — `parsePinRank` accepts any finite number, and
+ * `relativePinRanks` already produces them for a drag to the top.
  */
 export function buildPrependPinRank(existingRanks: Array<string | undefined>): string {
   const minRank = existingRanks.reduce((min, rank) => {
     const parsed = parsePinRank(rank);
-    return Number.isFinite(parsed) ? Math.min(min, parsed) : min;
+    return Number.isFinite(parsed) && !isKeptAtTopRank(rank)
+      ? Math.min(min, parsed)
+      : min;
   }, Number.POSITIVE_INFINITY);
   return String(
     Number.isFinite(minRank) ? minRank - PIN_RANK_STEP : PIN_RANK_STEP,
+  );
+}
+
+/**
+ * Compacted ranks for one tier, in order. Ordinary pins restart at 1024;
+ * pins kept at top restart at the band's base, so compaction never moves a
+ * pin across the boundary.
+ */
+export function buildTierPinRanks(
+  keys: readonly string[],
+  keptAtTop: boolean,
+): Record<string, string> {
+  const base = keptAtTop ? KEEP_AT_TOP_RANK_BASE : PIN_RANK_STEP;
+  return Object.fromEntries(
+    keys.map((key, index) => [key, String(base + index * PIN_RANK_STEP)]),
   );
 }
 

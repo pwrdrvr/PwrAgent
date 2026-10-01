@@ -1157,6 +1157,21 @@ export class GitDirectoryService {
     };
   }
 
+  /**
+   * Reserves a Codex worktree path for `repoRoot` under the operator's
+   * Worktrees storage setting, the same location a launchpad worktree gets.
+   * The caller creates the worktree and releases the reservation on failure.
+   */
+  async allocateCodexWorktreePath(repoRoot: string): Promise<string> {
+    return await computeWorktreePath({
+      backend: "codex",
+      codexHome: this.codexHome,
+      repoRoot,
+      storage: await this.resolveStorage(),
+      homeDir: this.homeDir,
+    });
+  }
+
   async prepareLaunchpadWorkspace(
     launchpad: Pick<
       NavigationLaunchpadDraft,

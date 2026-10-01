@@ -117,6 +117,11 @@ import {
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -3015,6 +3020,96 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,
+      projectKey: "/old-checkout",
+      linkedDirectories: [{ id: "/old-checkout", label: "repo", path: "/old-checkout", kind: "local" }],
+    };
+    const exported = {
+      cwd: "/old-checkout", rolloutBase64: "b3BhcXVl",
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      exportThreadForHandoff: vi.fn(async () => exported),
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:handoff-source": {
+        backend: "codex", threadId: "handoff-source", executionMode: "default",
+        extraLinkedDirectories: [{ id: "pwragent-handoff:codex:handoff-source", label: "repo", path: "/repo", kind: "worktree", worktreePath: "/new-checkout" }],
+      },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    onTestFinished(() => registry.close());
+    expect(await registry.exportThreadForHandoff(thread.id)).toEqual({ ...exported, cwd: "/new-checkout" });
+  });
+
+  it("registers an imported handoff worktree with its repository before navigation enrichment", async () => {
+    const repositoryPath = "/repo/app";
+    const worktreePath = "/repo/app/.worktrees/handoff/app";
+    const prepareLaunchpadWorkspace = vi.fn();
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const overlayStore = createOverlayStoreMock();
+    const client = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+      gitDirectoryService: { prepareLaunchpadWorkspace, recordCodexWorktreeOwnerThread } as never,
+    });
+    onTestFinished(() => registry.close());
+    const response = await registry.forkThread({ backend: "codex", sourceThreadId: "source",
+      directoryKind: "directory", directoryLabel: "app", directoryPath: `${worktreePath}/packages`, workMode: "worktree",
+      importedWorktree: { repositoryPath, worktreePath },
+    });
+    expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    expect(client.lastForkThreadParams?.cwd).toBe(`${worktreePath}/packages`);
+    expect(response.linkedDirectory).toMatchObject({ kind: "worktree", path: expectedDir(repositoryPath), worktreePath: expectedDir(worktreePath) });
+    expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
+      .toMatchObject({ extraLinkedDirectories: [expect.objectContaining({ path: expectedDir(repositoryPath), worktreePath: expectedDir(worktreePath) })] });
+    expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({ threadId: response.threadId, worktreePath });
+  });
+
+  it("reserves a handoff source against turn admission and releases on failure", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "handoff-source", input: [{ type: "text" as const, text: "Continue" }] };
+    await expect(registry.withThreadHandoff(params.threadId, async () => {
+      await expect(registry.submitTurn(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitTurnIfIdle(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow("being handed off");
+      await expect(registry.startTurn(params)).rejects.toThrow("being handed off");
+      await expect(registry.withThreadHandoff(params.threadId, async () => {})).rejects.toThrow("being handed off");
+      throw new Error("transfer failed");
+    })).rejects.toThrow("transfer failed");
+    await expect(registry.withThreadHandoff(params.threadId, async () => "released")).resolves.toBe("released");
+  });
+
+  it("rejects handoff while a turn start is awaiting its provider", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const started = createDeferred<{ backend: "codex"; threadId: string; turnId: string }>();
+    const internal = registry as unknown as { startTurnWithoutHandoff: () => Promise<{ backend: "codex"; threadId: string; turnId: string }> };
+    vi.spyOn(internal, "startTurnWithoutHandoff").mockImplementation(async () => await started.promise);
+    const pending = registry.startTurn({ backend: "codex", threadId: "handoff-source", input: [{ type: "text", text: "Continue" }] });
+    await expect(registry.withThreadHandoff("handoff-source", async () => {})).rejects.toThrow("Wait for source turns");
+    started.resolve({ backend: "codex", threadId: "handoff-source", turnId: "turn" });
+    await pending;
+    await expect(registry.withThreadHandoff("handoff-source", async () => "released")).resolves.toBe("released");
+  });
+
+  it("archives a handoff source without cleaning its worktree", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,
+      linkedDirectories: [{ id: "worktree", kind: "worktree", label: "repo", path: "/repo", worktreePath: "/.codex/worktrees/handoff/repo" }],
+    };
+    const client = new MockBackendClient({ threads: [thread] });
+    const archive = vi.fn();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), worktreeArchiveService: { archive } as never });
+    onTestFinished(() => registry.close());
+    const result = await registry.archiveThread({ backend: "codex", threadId: thread.id, preserveWorktrees: true });
+    expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
+    expect(archive).not.toHaveBeenCalled();
+    expect(result.cleanup).toEqual([]);
+  });
+
   it("routes an activity detail read directly to one provider turn without reading ledgers or base history", async () => {
     const entry = { type: "activity" as const, id: "activity-command", summary: "Ran build", details: [] };
     const readThreadActivity = vi.fn(async () => entry);
@@ -12899,6 +12994,59 @@ describe("DesktopBackendRegistry", () => {
 
       expect(promptDuringSetup).toBe("");
       expect(await readPrompt(overlayStore)).toBe("");
+      await registry.close();
+    });
+
+    it("keeps a registered project when its submitted draft is cleared", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-registered-project-submit-");
+      const db = StateDb.open(temp.dbPath);
+      const persisted = new SqliteOverlayStore(db);
+      onTestFinished(() => {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      });
+      const registered = { ...submitted, registeredAt: 1500, model: "project-model" };
+      const unrelated = {
+        ...registered,
+        directoryKey: "directory:/repo/libuv",
+        directoryLabel: "libuv",
+        directoryPath: "/repo/libuv",
+        prompt: "",
+      };
+      let registeredDuringSetup: number | undefined;
+      const { overlayStore, registry } = createRegistry(async (store) => {
+        registeredDuringSetup = (await store.getDirectoryLaunchpad({ directoryKey }))?.registeredAt;
+        return { cwd: "/repo/project", workMode: "local" };
+      });
+      vi.spyOn(overlayStore, "getDirectoryLaunchpad").mockImplementation((request) => persisted.getDirectoryLaunchpad(request));
+      vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((launchpad) => persisted.upsertDirectoryLaunchpad(launchpad));
+      vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((request) => persisted.resetDirectoryLaunchpad(request));
+      await overlayStore.upsertDirectoryLaunchpad(registered);
+      await overlayStore.upsertDirectoryLaunchpad(unrelated);
+
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.materializeDirectoryLaunchpad({
+          directoryKey,
+          launchpad: registered,
+          input: [{ type: "text", text: registered.prompt }],
+          releaseLaunchpadOnSubmit: true,
+        });
+      });
+      expectSqliteWriteBudget({ scenario: "registered-project-launchpad-submit", writes,
+        note: "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes" });
+
+      expect(registeredDuringSetup).toBe(registered.registeredAt);
+      await expect(overlayStore.getDirectoryLaunchpad({ directoryKey })).resolves.toMatchObject({
+        registeredAt: registered.registeredAt,
+        model: registered.model,
+        prompt: "",
+      });
+      await expect(overlayStore.getDirectoryLaunchpad({ directoryKey: unrelated.directoryKey }))
+        .resolves.toEqual(unrelated);
+      expect(persisted.readNavigationQueryIndex({ backend: "all", threads: [] }).directories.map((directory) => directory.key))
+        .toEqual(expect.arrayContaining([directoryKey, unrelated.directoryKey]));
       await registry.close();
     });
 
@@ -27656,7 +27804,7 @@ command = "pnpm dev"
       backend: acpBackendId,
       reviewBackend: "codex",
       threadId: parentThreadId,
-      target: { type: "baseBranch", branch: "origin/main" },
+      target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -29378,7 +29526,7 @@ command = "pnpm dev"
     const response = await registry.startReview({
       backend: "codex",
       threadId: "thread-parent",
-      target: { type: "baseBranch", branch: "origin/main" },
+      target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
       cwd: "/repo/selected",
     });
@@ -29406,7 +29554,7 @@ command = "pnpm dev"
     ).toBeUndefined();
     expect(codexClient.lastStartTurnParams?.input[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("against base branch 'origin/main'"),
+      text: expect.stringContaining("against base branch 'main'"),
     });
 
     await registry.close();

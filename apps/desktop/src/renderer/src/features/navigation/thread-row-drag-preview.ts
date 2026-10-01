@@ -8,6 +8,12 @@ type Point = {
 export type ThreadRowPointerDragPreview = {
   move: (point: Point) => void;
   remove: () => void;
+  /**
+   * Say on the held card what a drop will do. The card sits over the target
+   * it is hovering, so a label on the target itself is hidden exactly when
+   * it matters.
+   */
+  setDropLabel: (label: string | undefined) => void;
 };
 
 function buildThreadRowDragPreview(
@@ -73,8 +79,24 @@ export function createThreadRowPointerDragPreview(
   };
   move(point);
 
+  let dropLabel: HTMLSpanElement | undefined;
+  const setDropLabel = (label: string | undefined): void => {
+    if (!label) {
+      dropLabel?.remove();
+      dropLabel = undefined;
+      return;
+    }
+    if (!dropLabel) {
+      dropLabel = document.createElement("span");
+      dropLabel.className = "thread-row__drop-label";
+      preview.element.appendChild(dropLabel);
+    }
+    dropLabel.textContent = label;
+  };
+
   return {
     move,
     remove: () => preview.element.remove(),
+    setDropLabel,
   };
 }

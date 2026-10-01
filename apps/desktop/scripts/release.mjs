@@ -10,7 +10,7 @@ import { verifyBundledGit } from "./verify-bundled-git.mjs";
  *     materialize a flat node_modules tree under a stage dir, then point
  *     electron-builder at the stage. This script encapsulates that.
  *   - Three modes:
- *       --dryrun      : build + package unsigned, no publish (fast iteration)
+ *       --dryrun      : build + package ad-hoc signed on macOS, no publish
  *       --no-publish  : build + package signed/notarized, no publish (local
  *                       end-to-end verification — Phase E5 in the release
  *                       packaging plan)
@@ -57,6 +57,7 @@ import {
   WINDOWS_UPDATE_CHANNEL_FILE,
 } from "./update-channel-files.mjs";
 import { handoffPreloadedCodesignIdentity } from "./release-signing-environment.mjs";
+import { packageMacDryrun } from "./macos-dryrun-signing.mjs";
 // The checksum manifest is written here and parsed by the signing job when it
 // cuts the stable aliases; one module owns both halves of that format.
 import { writeWindowsChecksums } from "./windows-release-artifacts.mjs";
@@ -986,7 +987,18 @@ if (win) {
   builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" : "");
 }
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");
-runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
+if (dryrun && !win && !linux) {
+  step("package app, ad-hoc sign, then create macOS dry-run artifacts");
+  await packageMacDryrun({
+    cli: electronBuilderCli(),
+    args: cleanedArgs,
+    app: join(stageDir, "dist", `mac-${macArch}`, "PwrAgent.app"),
+    entitlements: join(stageDir, "build", "entitlements.mac.plist"),
+    cwd: stageDir,
+  }, { runChecked });
+} else {
+  runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
+}
 if (codesignKeychainCleanup !== null) {
   codesignKeychainCleanup();
   codesignKeychainCleanup = null;
@@ -1071,6 +1083,8 @@ if (linux) {
 }
 
 const builtApp = join(dist, `mac-${macArch}`, "PwrAgent.app");
+step("verify packaged app signature");
+runChecked("codesign", ["--verify", "--deep", "--strict", "--verbose=2", builtApp]);
 const dockTilePlugin = join(
   builtApp,
   "Contents",

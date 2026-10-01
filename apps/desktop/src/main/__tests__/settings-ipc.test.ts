@@ -12,6 +12,7 @@ import type {
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -454,6 +455,102 @@ describe("settings ipc", () => {
     expect(handlers.has(SETTINGS_READ_BOOTSTRAP_CHANNEL)).toBe(false);
   });
 
+  it("downloads and selects the PwrAgent Codex build through Settings, then restores local discovery when disabled", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const configPath = path.join(tempRoot, "config.toml");
+    const ensureManaged = vi.fn(async () => ({
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-windows-x86_64.zip",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    }));
+    const discover = vi.fn(async () => ({
+      candidates: [{
+        command: "/local/codex",
+        executable: true,
+        selected: true,
+        source: "path" as const,
+        version: "0.157.1",
+      }],
+      selectedCommand: "/local/codex",
+      selectedSource: "path" as const,
+    }));
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover,
+        invalidate: vi.fn(),
+        resolve: vi.fn(),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+
+    await expect(handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, {
+      patch: { models: { codex: { managedBuilds: true } } },
+    })).resolves.toMatchObject({
+      snapshot: { models: { codex: { managedBuilds: { value: true } } } },
+    });
+    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith({ checkMode: "force" });
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+      command: "/managed/codex",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain("managed_builds = true");
+    expect(service.resolveTokenMiserEnabled()).toBe(false);
+    expect(discover).not.toHaveBeenCalled();
+
+    await expect(handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, {
+      patch: { models: { codex: { managedBuilds: false } } },
+    })).resolves.toMatchObject({
+      snapshot: { models: { codex: { managedBuilds: { value: false } } } },
+    });
+    expect(discover).toHaveBeenCalledOnce();
+    expect(ensureManaged).toHaveBeenCalledOnce();
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+      command: "/local/codex",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain("managed_builds = false");
+  });
+
+  it("leaves the PwrAgent Codex build disabled when its Settings install fails", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const configPath = path.join(tempRoot, "config.toml");
+    const ensureManaged = vi.fn(async () => {
+      throw new Error("managed Codex download failed");
+    });
+    const service = new DesktopSettingsService({
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+
+    await expect(handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, {
+      patch: { models: { codex: { managedBuilds: true } } },
+    })).rejects.toThrow("managed Codex download failed");
+    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith({ checkMode: "force" });
+    expect(service.resolveManagedCodexEnabled()).toBe(false);
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
   it("includes live lease state in the targeted messaging projection", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
@@ -528,6 +625,39 @@ describe("settings ipc", () => {
       status: "ok",
       testedAt: 1234,
     });
+  });
+
+  it("awaits launchpad updates when a profile model default is saved", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-model-default-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const before = { codex: { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } } };
+    const after = { codex: { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } } };
+    await service.writeConfigPatchTargeted({ models: { providerDefaults: before } });
+    const db = openInMemoryStateDb();
+    stateDbs.push(db);
+    const store = new SqliteOverlayStore(db);
+    await store.setLaunchpadDefaults({ backend: "codex", model: "gpt-6-sol", reasoningEffort: "high" });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo",
+      backend: "codex", executionMode: "default", workMode: "local", prompt: "draft",
+      model: "gpt-6-sol", reasoningEffort: "high", createdAt: 1, updatedAt: 1,
+    });
+    const onConfigPatchWritten = vi.fn(async (_patch, previous) => {
+      store.applyProviderModelDefaults(previous, service.resolveProviderModelDefaults());
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service, { onConfigPatchWritten });
+    const patch = { models: { providerDefaults: after } };
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, { patch });
+    expect(onConfigPatchWritten).toHaveBeenCalledWith(patch, before);
+    expect(await store.getLaunchpadDefaults()).toMatchObject({ model: "gpt-6.1-sol", reasoningEffort: "low" });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/repo" })).toMatchObject({ model: "gpt-6.1-sol", reasoningEffort: "low", prompt: "draft" });
+    expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
   });
 
   it("does not rebuild backend clients after targeted model settings changes", async () => {

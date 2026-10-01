@@ -1528,6 +1528,11 @@ describe("App", () => {
         "PwrAgent",
       ),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      const sidebar = screen.getByRole("complementary", { name: "Threads" });
+      expect(within(sidebar).getByRole("button", { name: "PwrAgent" })).toHaveClass("is-selected");
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
   });
 
   it("surfaces Codex config warnings and can trust the indicated project", async () => {

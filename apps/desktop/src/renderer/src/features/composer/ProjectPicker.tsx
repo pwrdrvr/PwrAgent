@@ -74,9 +74,8 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listboxId = useId();
   const errorId = useId();
-  // A layer, not a document listener: in the composer's Move to Project
-  // dialog, the dialog would otherwise take the Escape meant for this popover
-  // and close with it.
+  // A layer, not a document listener: inside a dialog, the dialog would
+  // otherwise take the Escape meant for this popover and close with it.
   useDismissableLayer({
     open,
     onDismiss: () => setOpen(false),

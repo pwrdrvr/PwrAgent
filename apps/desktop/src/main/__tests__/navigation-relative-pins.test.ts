@@ -117,6 +117,52 @@ it("compacts exhausted adjacent ranks without ties and rejects missing moving pi
   expect(() => relativePinRanks(pins, { key: "missing", direction: "up" })).toThrow("pin no longer exists");
 });
 
+it("keeps pins at top in their own tier across every move kind", () => {
+  const kept = (index: number): string => String(-(2 ** 40) + index * 1024);
+  const pins = [
+    { key: "release", rank: kept(0) },
+    { key: "stats", rank: kept(1) },
+    { key: "new", rank: "0" },
+    { key: "old", rank: "1024" },
+  ];
+  const order = (ranks: Record<string, string>): string[] => pins
+    .map((pin) => ({ ...pin, rank: ranks[pin.key] ?? pin.rank }))
+    .sort((left, right) => Number(left.rank) - Number(right.rank))
+    .map((pin) => pin.key);
+
+  // Explicit tier crossings: keep appends to the kept tier, release prepends
+  // to the ordinary pins.
+  expect(order(relativePinRanks(pins, { key: "old", keepAtTop: true }))).toEqual(["release", "stats", "old", "new"]);
+  expect(order(relativePinRanks(pins, { key: "release", keepAtTop: false }))).toEqual(["stats", "release", "new", "old"]);
+  expect(relativePinRanks(pins, { key: "stats", keepAtTop: true })).toEqual({});
+  expect(relativePinRanks(pins, { key: "new", keepAtTop: false })).toEqual({});
+
+  // Direction moves never cross the seam.
+  expect(relativePinRanks(pins, { key: "new", direction: "up" })).toEqual({});
+  expect(relativePinRanks(pins, { key: "stats", direction: "down" })).toEqual({});
+  expect(order(relativePinRanks(pins, { key: "stats", direction: "up" }))).toEqual(["stats", "release", "new", "old"]);
+
+  // An anchor move adopts the anchor's tier, so the same boundary resolves
+  // two ways and never produces a rank between the bands.
+  const afterKept = relativePinRanks(pins, { key: "old", anchorKey: "stats", placement: "after" });
+  expect(order(afterKept)).toEqual(["release", "stats", "old", "new"]);
+  expect(Number(afterKept.old)).toBeLessThan(-(2 ** 39));
+  const beforeOrdinary = relativePinRanks(pins, { key: "stats", anchorKey: "new", placement: "before" });
+  expect(order(beforeOrdinary)).toEqual(["release", "stats", "new", "old"]);
+  expect(Number(beforeOrdinary.stats)).toBeGreaterThan(-(2 ** 39));
+
+  // Compaction stays inside the destination tier. Below 2^40 in magnitude
+  // the spacing between doubles is 2^-13, so these two ranks have no midpoint.
+  const tight = [
+    { key: "a", rank: kept(1) },
+    { key: "b", rank: String(Number(kept(1)) + 2 ** -13) },
+    { key: "c", rank: "1024" },
+  ];
+  expect(relativePinRanks(tight, { key: "c", anchorKey: "b", placement: "before" })).toEqual({
+    a: kept(0), b: kept(2), c: kept(1),
+  });
+});
+
 it("appends owner pin intent beyond unseen local and viewer pins with one commit", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const db = openInMemoryStateDb();

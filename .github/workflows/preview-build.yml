@@ -22,7 +22,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         with:
-          node-version: 24.18.0
+          node-version: "^24.18.0"
           cache-electron: "true"
 
       - name: Compute preview version
@@ -52,7 +52,7 @@ jobs:
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
 
-      - name: Build preview package (unsigned)
+      - name: Build preview package (ad-hoc signed)
         env:
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
         run: pnpm --filter @pwragent/desktop package:dryrun

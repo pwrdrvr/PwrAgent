@@ -13,6 +13,7 @@ import type {
   AppServerThreadSummary,
   AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
+  DesktopProviderModelDefaults,
   DirectoryOverlayState,
   FederatedThreadRef,
   LinkedDirectorySummary,
@@ -88,6 +89,8 @@ import {
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadProviderModelDefaults,
+  changedProviderModelDefaultBackends,
   estimateTokenUsageCost,
   isAcpBackendId,
   isRemoteFederationTarget,
@@ -2437,11 +2440,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // index, then use the owning Agent thread's last indexed title.
     const automationRuns = untitledThreadIds.length ? this.stateDb.raw.prepare(`
       SELECT r.backend, r.thread_id AS owner_thread_id,
-             json_extract(r.payload, '$.backendThreadId') AS execution_thread_id,
+             CASE WHEN json_valid(r.payload)
+               THEN json_extract(r.payload, '$.backendThreadId') END AS execution_thread_id,
              a.name AS automation_name
         FROM automation_runs r
         JOIN automations a ON a.automation_id = r.automation_id
-       WHERE json_extract(r.payload, '$.backendThreadId')
+       WHERE CASE WHEN json_valid(r.payload)
+         THEN json_extract(r.payload, '$.backendThreadId') END
          IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify(untitledThreadIds)) as Array<{
       backend: AppServerBackendKind;
@@ -7207,6 +7212,39 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
     this.writeLaunchpadDefaults(next);
     return next;
+  }
+
+  /** A profile model change replaces saved and learned model choices together. */
+  applyProviderModelDefaults(
+    previous: Record<string, DesktopProviderModelDefaults>,
+    next: Record<string, DesktopProviderModelDefaults>,
+  ): number {
+    const changedBackends = changedProviderModelDefaultBackends(previous, next);
+    if (changedBackends.length === 0) return 0;
+
+    // One commit regardless of the number of directories or changed providers.
+    return this.stateDb.raw.transaction(() => {
+      this.writeLaunchpadDefaults(applyNavigationLaunchpadProviderModelDefaults(
+        this.readLaunchpadDefaults(), next, changedBackends, true,
+      ));
+      const update = this.stateDb.raw.prepare(
+        "UPDATE directory_launchpads SET payload = ?, updated_at = ?, settings_touched_at = ? WHERE directory_path = ?",
+      );
+      const now = Date.now();
+      let count = 0;
+      for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
+        if (!changedBackends.some((backend) =>
+          launchpad.backend === backend
+          || launchpad.providerSettings?.[backend] !== undefined
+        )) continue;
+        const updated = applyNavigationLaunchpadProviderModelDefaults(launchpad, next, changedBackends);
+        updated.updatedAt = now;
+        updated.settingsTouchedAt = now;
+        update.run(JSON.stringify(updated), now, now, updated.directoryKey);
+        count += 1;
+      }
+      return count;
+    })();
   }
 
   /** The remembered Star Map manager thread, if one was ever created. */

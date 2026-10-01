@@ -92,6 +92,7 @@ import {
 } from "./overlay-transcript-entries";
 import { resolveReviewProvenance } from "./review-provenance";
 import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
+import { refreshReviewBaseBranch } from "./review-base-branch";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
@@ -813,6 +814,7 @@ function assistantOutputForTurn(
 }
 
 type BackendClient = {
+  exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
@@ -1046,6 +1048,7 @@ type BackendClient = {
 };
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  importedWorktree?: { repositoryPath: string; worktreePath: string };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
   onCodexEnvironmentSetupProgress?: (
@@ -6270,6 +6273,22 @@ async function resetLaunchpadAfterMaterialize(params: {
     launchpad,
     overlayStore,
   } = params;
+  // Registration belongs to the project, not the submitted message. Replace
+  // a registered draft in one write so it remains in the owner directory index
+  // throughout workspace setup and after the thread is archived or removed.
+  if (launchpad.registeredAt !== undefined) {
+    const persisted = await overlayStore.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey });
+    await overlayStore.upsertDirectoryLaunchpad({
+      ...(persisted ?? launchpad),
+      registeredAt: launchpad.registeredAt,
+      prompt: "",
+      imageAttachments: [],
+      fileAttachments: [],
+      editorDocument: undefined,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
   await overlayStore.resetDirectoryLaunchpad({
     directoryKey: launchpad.directoryKey,
   });
@@ -8557,6 +8576,8 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
+  private readonly threadHandoffReservations = new Set<string>();
+  private readonly handoffTurnStarts = new Map<string, number>();
   /**
    * Codex runtime activity recovered from `thread/list` / `thread/read`.
    * The long-lived Codex registry keeps this truth across a desktop
@@ -13550,7 +13571,7 @@ export class DesktopBackendRegistry {
   }
 
   async archiveThread(
-    request: ArchiveThreadRequest,
+    request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
     if (request.expectedParent !== undefined) {
@@ -13633,7 +13654,7 @@ export class DesktopBackendRegistry {
         error: ungroupError,
       });
     }
-    const cleanup = cleanupMetadata
+    const cleanup = request.preserveWorktrees ? [] : cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend,
           activeThreads: cleanupMetadata.activeThreads,
@@ -13964,6 +13985,7 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    this.assertThreadNotHandingOff(request.backend, request.threadId);
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
@@ -16415,6 +16437,41 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void {
+    if (this.threadHandoffReservations.has(buildThreadIdentityKey(backend, threadId))) {
+      throw new Error("This thread is being handed off. Wait for the transfer to finish.");
+    }
+  }
+
+  async withThreadHandoff<T>(threadId: string, work: () => Promise<T>): Promise<T> {
+    const key = buildThreadIdentityKey("codex", threadId);
+    this.assertThreadNotHandingOff("codex", threadId);
+    if (this.handoffTurnStarts.has(key)
+      || !this.threadTurnQueue.canStartImmediately({ backend: "codex", threadId })
+      || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length) {
+      throw new Error("Wait for source turns and queued prompts to finish before handoff.");
+    }
+    this.threadHandoffReservations.add(key);
+    try {
+      return await work();
+    } finally {
+      this.threadHandoffReservations.delete(key);
+    }
+  }
+
+  async allocateHandoffWorktreePath(repositoryPath: string): Promise<string> {
+    return await this.gitDirectoryService.allocateCodexWorktreePath(repositoryPath);
+  }
+
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+    const client = this.getClient("codex", "default");
+    if (!client.exportThreadForHandoff) throw new Error("This backend does not support protocol thread export.");
+    const exported = await client.exportThreadForHandoff(threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+    const cwd = await this.resolveThreadEnvironmentCwd("codex", threadId, overlay);
+    return { ...exported, cwd: cwd ?? exported.cwd };
+  }
+
   async forkThread(
     request: BackendRegistryForkThreadRequest,
   ): Promise<ForkThreadResponse> {
@@ -16437,18 +16494,27 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.sourceThreadId,
     });
-    const preparedWorkspace = await this.gitDirectoryService.prepareLaunchpadWorkspace({
-      backend,
-      branchName: request.branchName,
-      directoryKind,
-      directoryLabel,
-      directoryPath: request.directoryPath,
-      ...(request.excludedWorktreePaths
-        ? { excludedWorktreePaths: request.excludedWorktreePaths }
-        : {}),
-      worktreeBranchMode: request.worktreeBranchMode,
-      workMode: request.workMode ?? "local",
-    });
+    // Imported worktrees already contain verified index and working-file state.
+    // Their caller owns cleanup after retiring any partially created thread.
+    const preparedWorkspace = request.importedWorktree
+      ? {
+          cwd: request.directoryPath,
+          repositoryPath: request.importedWorktree.repositoryPath,
+          workMode: "worktree" as const,
+          rollback: undefined,
+        }
+      : await this.gitDirectoryService.prepareLaunchpadWorkspace({
+          backend,
+          branchName: request.branchName,
+          directoryKind,
+          directoryLabel,
+          directoryPath: request.directoryPath,
+          ...(request.excludedWorktreePaths
+            ? { excludedWorktreePaths: request.excludedWorktreePaths }
+            : {}),
+          worktreeBranchMode: request.worktreeBranchMode,
+          workMode: request.workMode ?? "local",
+        });
     if (request.workMode === "worktree" && preparedWorkspace.workMode !== "worktree") {
       throw new Error(
         `Requested worktree workspace, but workspace preparation resolved to ${preparedWorkspace.workMode}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
@@ -16463,7 +16529,7 @@ export class DesktopBackendRegistry {
         ? buildWorktreeLinkedDirectory({
             label: directoryLabel,
             repositoryPath: preparedWorkspace.repositoryPath ?? request.directoryPath,
-            worktreePath: cwd,
+            worktreePath: request.importedWorktree?.worktreePath ?? cwd,
           })
         : buildLocalLinkedDirectory(cwd);
     const client = this.getClient(backend, executionMode);
@@ -16579,7 +16645,7 @@ export class DesktopBackendRegistry {
         await this.recordCodexWorktreeOwnerThread({
           backend,
           threadId: result.threadId,
-          worktreePath: cwd,
+          worktreePath: request.importedWorktree?.worktreePath ?? cwd,
         });
       }
 
@@ -16734,6 +16800,7 @@ export class DesktopBackendRegistry {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, ...entry } = params;
     return await this.threadTurnQueue.submit({
       ...entry,
@@ -16759,6 +16826,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
     const {
       holdReason,
       origin = "manual",
@@ -16779,6 +16847,7 @@ export class DesktopBackendRegistry {
     origin?: ThreadTurnQueueOrigin;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", ...entry } = params;
     if (
       this.threadHasActiveTurn(params.threadId, params.backend)
@@ -17405,6 +17474,34 @@ export class DesktopBackendRegistry {
   }
 
   private async startTurnNow(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
+    invalidIdRecoveryAttempted?: boolean;
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
+    try {
+      return await this.startTurnWithoutHandoff(params);
+    } finally {
+      const count = (this.handoffTurnStarts.get(key) ?? 1) - 1;
+      if (count) this.handoffTurnStarts.set(key, count);
+      else this.handoffTurnStarts.delete(key);
+    }
+  }
+
+  private async startTurnWithoutHandoff(params: {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -18465,6 +18562,11 @@ export class DesktopBackendRegistry {
         cwd,
         executionTarget: codexEnvironmentRuntime?.executionTarget,
         prs: overlay?.prs,
+        target: params.target,
+      });
+      await refreshReviewBaseBranch({
+        cwd,
+        executionTarget: codexEnvironmentRuntime?.executionTarget,
         target: params.target,
       });
       reviewContext = await this.resolveReviewContext({

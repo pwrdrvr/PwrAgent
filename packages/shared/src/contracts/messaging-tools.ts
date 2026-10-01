@@ -159,6 +159,8 @@ export type RenameCurrentMessagingConversationToolArgs = {
 export type SendPrivateResponseToolArgs = {
   awaitReply?: boolean;
   replyInstructions?: string;
+  /** Optional button replies for an awaited private response. Cancel is added by PwrAgent. */
+  replyOptions?: Array<{ label: string; text: string }>;
   text: string;
 };
 

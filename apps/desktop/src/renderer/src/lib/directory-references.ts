@@ -258,6 +258,16 @@ export function listReferencedDirectories(
   );
   const seenPaths = new Set<string>();
   const referenced: NavigationDirectorySummary[] = [];
+  const containsPath = (path: string): boolean => {
+    const tilde = tildifyPath(path, homeDir);
+    return draftContainsPath(draft, path)
+      || (tilde !== path && draftContainsPath(draft, tilde))
+      || draftContainsPath(referencePaths, tilde);
+  };
+  // Already-linked paths still participate in resolution, even when their
+  // directory row is outside the loaded page. Excluding them before choosing
+  // the deepest match would leave a tracked ancestor (including `~`) behind.
+  const matchedExcludedPaths = [...excluded].filter(containsPath);
 
   for (const directory of directories) {
     if (!isReferenceable(directory)) {
@@ -265,15 +275,10 @@ export function listReferencedDirectories(
     }
     const path = trimPath(directory.path!);
     const key = normalizeDirectoryReferencePath(path);
-    if (!path || seenPaths.has(key) || excluded.has(key)) {
+    if (!path || seenPaths.has(key)) {
       continue;
     }
-    const tilde = tildifyPath(path, homeDir);
-    if (
-      draftContainsPath(draft, path)
-      || (tilde !== path && draftContainsPath(draft, tilde))
-      || draftContainsPath(referencePaths, tilde)
-    ) {
+    if (containsPath(path)) {
       seenPaths.add(key);
       referenced.push(directory);
     }
@@ -284,12 +289,16 @@ export function listReferencedDirectories(
   // resolves to the repo the path actually points into.
   return referenced.filter((directory) => {
     const path = normalizeDirectoryReferencePath(directory.path!);
+    const separator = isWindowsFilesystemPath(path) ? "\\" : "/";
+    if (excluded.has(path) || matchedExcludedPaths.some((otherPath) =>
+      otherPath.startsWith(`${path}${separator}`))) {
+      return false;
+    }
     return !referenced.some((other) => {
       if (other === directory) {
         return false;
       }
       const otherPath = normalizeDirectoryReferencePath(other.path!);
-      const separator = isWindowsFilesystemPath(path) ? "\\" : "/";
       return otherPath.startsWith(`${path}${separator}`);
     });
   });

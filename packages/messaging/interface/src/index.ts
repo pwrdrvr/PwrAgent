@@ -1834,6 +1834,9 @@ export type MessagingPrivateReplyContinuation = {
   createdAt: number;
   expiresAt: number;
   instructions: string;
+  requestId?: string;
+  requestSurface?: MessagingSurfaceRef;
+  replyOptions?: Array<{ label: string; text: string }>;
   source: MessagingPrivateReplySource;
 };
 

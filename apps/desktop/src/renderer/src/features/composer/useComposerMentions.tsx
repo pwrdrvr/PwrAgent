@@ -529,7 +529,7 @@ export function useComposerMentions(params: {
     const selectionEnd = Math.min(input.selectionEnd ?? caret, draft.length);
     const before = draft.slice(0, trigger.start);
     const after = draft.slice(Math.max(trigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;

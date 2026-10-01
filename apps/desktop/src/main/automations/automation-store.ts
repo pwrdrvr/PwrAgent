@@ -1315,7 +1315,8 @@ export class AutomationStore {
     this.stateDb.raw.transaction(() => {
       const expired = this.stateDb.raw.prepare(`
         SELECT r.backend, r.thread_id AS owner_thread_id,
-               json_extract(r.payload, '$.backendThreadId') AS execution_thread_id,
+               CASE WHEN json_valid(r.payload)
+                 THEN json_extract(r.payload, '$.backendThreadId') END AS execution_thread_id,
                a.name AS automation_name
           FROM automation_runs r
           JOIN automations a ON a.automation_id = r.automation_id
@@ -1339,6 +1340,11 @@ export class AutomationStore {
       const historicalTitle = this.stateDb.raw.prepare(
         "SELECT title FROM thread_usage_titles WHERE identity_key = ?",
       );
+      const hasUsage = this.stateDb.raw.prepare(`
+        SELECT 1 FROM thread_usage_lines
+         WHERE backend = ? AND thread_id = ? AND status != 'superseded'
+         LIMIT 1
+      `);
       const retainTitle = this.stateDb.raw.prepare(`
         INSERT INTO thread_usage_titles (identity_key, title)
         VALUES (?, ?)
@@ -1346,6 +1352,9 @@ export class AutomationStore {
       `);
       for (const run of expired) {
         if (!run.execution_thread_id) continue;
+        // Only visible ledger rows need a durable title. This lookup uses
+        // idx_thread_usage_lines_read_thread, avoiding a ledger scan per run.
+        if (!hasUsage.get(run.backend, run.execution_thread_id)) continue;
         const ownerKey = buildLegacyEncodedThreadIdentityKey(
           run.backend, run.owner_thread_id,
         );

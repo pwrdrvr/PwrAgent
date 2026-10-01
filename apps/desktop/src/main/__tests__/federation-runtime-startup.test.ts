@@ -126,6 +126,18 @@ beforeEach(() => {
 });
 
 describe("DesktopFederationRuntime startup lease fence", () => {
+  it("advertises thread handoff in the gateway peer directory", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as {
+      buildPeerDirectory(recipient: string): FederationPeerSummary[];
+      visiblePeers(): FederationPeerSummary[];
+      celestialIconFor(instanceId: string): undefined;
+    };
+    vi.spyOn(runtime, "visiblePeers").mockReturnValue([]);
+    vi.spyOn(runtime, "celestialIconFor").mockReturnValue(undefined);
+    const local = runtime.buildPeerDirectory("viewer")[0];
+    expect(local?.capabilities).toContain("thread_handoff");
+  });
+
   it("reports only live local transports and the dialed URL, not advertised or relayed endpoints", async () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as {

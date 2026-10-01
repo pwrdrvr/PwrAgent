@@ -1076,7 +1076,9 @@ test.describe("federation remote window", () => {
       // Pin/unpin propagates to the OWNING instance's store, not the
       // viewer's: the canned gateway backend records the routed write.
       await rightClickThreadRow(remote, "Remote gateway thread one");
-      await remote.getByRole("menuitem", { name: "Pin Thread" }).click();
+      await remote.getByRole("menuitemcheckbox", { name: "Pinned" }).click();
+      // Pinned is a checkable item: the menu stays open after a toggle.
+      await remote.keyboard.press("Escape");
       await expect
         .poll(() => gateway!.pinnedRankByThreadId.get("remote-thread-1") ?? null, {
           timeout: 15_000,
@@ -1091,7 +1093,9 @@ test.describe("federation remote window", () => {
       // button: the in-title unpin pin can sit at the button's center
       // and Playwright's hit-target check then refuses the click.
       await rightClickThreadRow(remote, "Remote gateway thread one");
-      await remote.getByRole("menuitem", { name: "Unpin Thread" }).click();
+      await remote.getByRole("menuitemcheckbox", { name: "Pinned" }).click();
+      // Pinned is a checkable item: the menu stays open after a toggle.
+      await remote.keyboard.press("Escape");
       await expect
         .poll(() => gateway!.pinnedRankByThreadId.get("remote-thread-1") ?? null, {
           timeout: 15_000,

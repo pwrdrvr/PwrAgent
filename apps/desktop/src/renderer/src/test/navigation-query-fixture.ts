@@ -13,6 +13,7 @@ import {
 
 type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability"> & {
   threadKeys?: string[];
+  repositoryKey?: string;
 };
 const key = threadSummaryIdentityKey;
 const parentKey = (thread: NavigationThreadSummary) => thread.parentThreadId
@@ -110,6 +111,7 @@ export function navigationQueryFixture(
       const memberKeys = new Set(members.map(key));
       const roots = members.filter((thread) => !resolveParentKey(thread) || !memberKeys.has(resolveParentKey(thread)!));
       return { key: directory.key, kind: directory.kind, label: directory.label, path: directory.path,
+        ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         pinnedRank: directory.pinnedRank, directoryThreadsCollapsed: directory.directoryThreadsCollapsed, localAvailability: directory.localAvailability,
         gitStatus: directory.gitStatus, latestUpdatedAt: directory.latestUpdatedAt, counts: counts(members),
         pinnedRootCount: roots.filter((thread) => thread.pinnedRank).length,

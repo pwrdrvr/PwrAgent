@@ -1,6 +1,9 @@
 import {
+  getSubthreadProjectIdentity,
+  getThreadNamedBranch,
   getThreadPrimaryDirectory,
   type SubthreadMachine,
+  type SubthreadWorktreeBase,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
@@ -11,9 +14,10 @@ import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
+  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
   RefObject,
@@ -33,6 +37,7 @@ import {
   buildThreadUrl,
   comparePinnedDirectories,
   comparePinnedThreads,
+  isKeptAtTopThread,
   isPinnedDirectory,
   isPinnedThread,
   isRemoteFederationTarget,
@@ -50,6 +55,7 @@ import { copyText } from "../../lib/copy-text";
 import {
   BranchIcon,
   CalendarPlusIcon,
+  CheckIcon,
   DraftIcon,
   FolderIcon,
   HistoryIcon,
@@ -57,15 +63,20 @@ import {
   type IconProps,
 } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
-import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
+import {
+  FEDERATION_PROJECT_STATE_LABEL,
+  type FederationThreadTarget,
+} from "../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
 import {
   SubthreadMachineCascade,
   type SubthreadMachineChoice,
 } from "./SubthreadMachineCascade";
 import {
+  useFederationProjectChecks,
   useFederationProjectStates,
   type CheckFederationTargetProject,
+  type FederationProjectCheckResult,
   type FederationProjectDirectory,
 } from "../chrome/useFederationProjectStates";
 import { NewThreadButton } from "../chrome/NewThreadButton";
@@ -247,6 +258,11 @@ type SidebarProps = {
     instanceId: string,
     directory?: FederationProjectDirectory,
   ) => Promise<void>;
+  /**
+   * Open the Send to Another Machine dialog for a thread this window owns.
+   * Absent when no peer could receive one, which hides the menu item.
+   */
+  onSendThreadToMachine?: (thread: NavigationThreadSummary) => void;
   /** Whether a peer has a directory row's project, for its machine menu. */
   checkFederationTargetProject?: CheckFederationTargetProject;
   newThreadFederationTargets?: readonly FederationThreadTarget[];
@@ -257,6 +273,16 @@ type SidebarProps = {
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
   readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
+  /**
+   * Where a sub-thread's new worktree would start on a machine other than
+   * the parent's (undefined is this machine): undefined when that machine
+   * has no such project. Without it the machine list offers workspaces only.
+   */
+  readSubthreadWorktreeBase?: (
+    instanceId: string | undefined,
+    project: FederationProjectDirectory,
+    parentBranch: string | undefined,
+  ) => Promise<SubthreadWorktreeBase | undefined>;
   onCreateSubthread?: (
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
@@ -378,6 +404,11 @@ type SidebarProps = {
 // One empty list, so a render with nothing starting hands the lists the same
 // array and their effects keyed on it stay put.
 const NO_STARTING_THREADS: PendingLaunchpadCreation[] = [];
+/**
+ * Stands for this machine among the peers the sub-thread worktree list asks,
+ * when the parent runs elsewhere. `isFederationInstanceId` admits no colon.
+ */
+const SUBTHREAD_THIS_MACHINE = ":this-machine";
 
 const BROWSE_MODES = [
   "attention",
@@ -481,7 +512,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
+  const [projectReveal, setProjectReveal] = useState<{ key: string; focus?: boolean }>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -921,6 +952,13 @@ export function Sidebar(props: SidebarProps) {
       return;
     }
 
+    if (browseMode === "directories" && selectedItemKey.startsWith("launchpad:")) {
+      handledRevealRequestRef.current = request;
+      releaseHoverStableSnapshot();
+      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length), focus: false });
+      return;
+    }
+
     const selectedThread = navigationThreadByKey.get(selectedItemKey);
     if (!selectedThread) {
       return;
@@ -957,6 +995,7 @@ export function Sidebar(props: SidebarProps) {
     browseMode,
     navigationThreadByKey,
     revealSelectedThreadRequest,
+    releaseHoverStableSnapshot,
     selectedItemKey,
     setSubthreadsCollapsed,
   ]);
@@ -1352,9 +1391,26 @@ export function Sidebar(props: SidebarProps) {
     void props.onSetThreadParent?.(thread, undefined);
   };
 
+  // Pinned and Keep at Top are checkable items: a toggle leaves the menu
+  // open so both can be set before dismissing it.
   const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
-    setContextMenu(undefined);
     void hoverReleasedListHandlers.setThreadPin?.(thread, !thread.pinnedRank);
+  };
+
+  const toggleKeepAtTopFromContextMenu = (thread: NavigationThreadSummary): void => {
+    const keepAtTop = !isKeptAtTopThread(thread);
+    void (async () => {
+      // Keep at Top on an unpinned row pins it first; the owner then moves
+      // the new pin into the kept tier.
+      if (!thread.pinnedRank) {
+        if (!hoverReleasedListHandlers.setThreadPin) return;
+        await hoverReleasedListHandlers.setThreadPin(thread, true);
+      }
+      await hoverReleasedListHandlers.reorderThreadPins?.([], {
+        key: threadSummaryIdentityKey(thread),
+        keepAtTop,
+      });
+    })();
   };
 
   const markUnreadFromContextMenu = (thread: NavigationThreadSummary): void => {
@@ -1456,6 +1512,7 @@ export function Sidebar(props: SidebarProps) {
    * Pinned-thread identity keys in stable global order. Pin order is global
    * across backends (mirrors directory pinning), so a single sorted array is
    * enough to compute Move Up / Move Down adjacency for the context menu.
+   * Moves stay inside a pin's tier, so adjacency reads `keptAtTopThreadKeys`.
    */
   const pinnedThreadKeysInOrder = useMemo(
     () =>
@@ -1465,6 +1522,21 @@ export function Sidebar(props: SidebarProps) {
         .map((thread) => threadSummaryIdentityKey(thread)),
     [props.threads],
   );
+  const keptAtTopThreadKeys = useMemo(
+    () =>
+      new Set(
+        props.threads
+          .filter(isKeptAtTopThread)
+          .map((thread) => threadSummaryIdentityKey(thread)),
+      ),
+    [props.threads],
+  );
+  const pinTierKeysInOrder = (threadKey: string): string[] => {
+    const keptAtTop = keptAtTopThreadKeys.has(threadKey);
+    return pinnedThreadKeysInOrder.filter(
+      (key) => keptAtTopThreadKeys.has(key) === keptAtTop,
+    );
+  };
 
   /**
    * Pinned-directory keys in stable user-curated order. Directory
@@ -1491,8 +1563,8 @@ export function Sidebar(props: SidebarProps) {
     thread: NavigationThreadSummary,
     direction: "up" | "down",
   ): void => {
-    const ordered = pinnedThreadKeysInOrder;
     const threadKey = threadSummaryIdentityKey(thread);
+    const ordered = pinTierKeysInOrder(threadKey);
     const currentIndex = ordered.indexOf(threadKey);
     if (currentIndex === -1) return;
     const targetIndex =
@@ -1672,6 +1744,17 @@ export function Sidebar(props: SidebarProps) {
       contextMenu.thread.inbox.inInbox &&
       props.onMarkThreadsSeen,
   );
+  // A transfer needs an idle Codex thread this window owns: a peer's row
+  // belongs to its owner, and a native sub-agent belongs to its parent.
+  const contextMenuCanSendToMachine = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      props.onSendThreadToMachine &&
+      contextMenu.thread.source === "codex" &&
+      !contextMenu.thread.federation &&
+      !contextMenu.thread.codexNativeSubAgent &&
+      !contextMenu.thread.archivedAt,
+  );
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
@@ -1712,6 +1795,17 @@ export function Sidebar(props: SidebarProps) {
       || contextMenu?.thread.gitBranch,
     );
   const contextMenuThreadKey = contextMenu ? threadSummaryIdentityKey(contextMenu.thread) : undefined;
+  // `contextMenu.thread` is a snapshot from when the menu opened. The pin
+  // checks toggle with the menu still open, so pin state reads the live row.
+  const contextMenuPinThread = contextMenu
+    ? navigationThreadByKey.get(contextMenuThreadKey!) ?? contextMenu.thread
+    : undefined;
+  // Return on a checkable item closes the menu instead of toggling it again.
+  const closeContextMenuOnEnter = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    setContextMenu(undefined);
+  };
   // The row whose ⋮ button owns the open menu, for its `aria-expanded`. A PR
   // chip's right-click menu is a different menu, so it leaves ⋮ collapsed.
   const actionsMenuThreadKey = contextMenu?.pullRequest
@@ -1772,6 +1866,131 @@ export function Sidebar(props: SidebarProps) {
     ? federationThreadTargets.find((target) =>
       target.instanceId === contextMenuParentInstanceId)
     : undefined;
+  // A worktree on another machine needs the parent's project there, and the
+  // branch it starts from may not be the parent's, so each machine is asked
+  // once the flyout is first shown rather than on every right-click.
+  const subthreadWorktreeFlyout = Boolean(
+    canCreateContextMenuWorktree && props.readSubthreadWorktreeBase,
+  );
+  const [subthreadFlyoutShownKey, setSubthreadFlyoutShownKey] = useState<string>();
+  useEffect(() => {
+    setSubthreadFlyoutShownKey(undefined);
+  }, [contextMenuThreadKey]);
+  const onSubthreadFlyoutOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && contextMenuThreadKey) {
+        setSubthreadFlyoutShownKey(contextMenuThreadKey);
+      }
+    },
+    [contextMenuThreadKey],
+  );
+  const contextMenuParentBranch = contextMenuThread
+    ? getThreadNamedBranch(contextMenuThread)
+    : undefined;
+  const subthreadProject = contextMenuThread
+    ? getSubthreadProjectIdentity(contextMenuThread, props.directories)
+    : undefined;
+  // Read through a ref: the provider changes identity whenever this
+  // window's directories do, and a new check callback would ask every
+  // machine again, flashing each row back to "Checking…" while it is open.
+  const readSubthreadWorktreeBaseRef = useRef(props.readSubthreadWorktreeBase);
+  readSubthreadWorktreeBaseRef.current = props.readSubthreadWorktreeBase;
+  const checkSubthreadWorktreeMachine = useCallback(
+    async (
+      instanceId: string,
+      project: FederationProjectDirectory,
+    ): Promise<FederationProjectCheckResult> => {
+      const readSubthreadWorktreeBase = readSubthreadWorktreeBaseRef.current;
+      if (!readSubthreadWorktreeBase) {
+        return true;
+      }
+      try {
+        const base = await readSubthreadWorktreeBase(
+          instanceId === SUBTHREAD_THIS_MACHINE ? undefined : instanceId,
+          project,
+          contextMenuParentBranch,
+        );
+        if (!base) {
+          return false;
+        }
+        if (base.available) {
+          return { present: true, detail: base.baseBranch };
+        }
+        return base.cause === "no-branch"
+          ? {
+              present: false,
+              detail: "No branch",
+              title: `${project.label} there is on no branch to start a worktree from`,
+            }
+          : {
+              present: false,
+              detail: "No worktrees",
+              ...(base.reason ? { title: base.reason } : {}),
+            };
+      } catch (error) {
+        // Unlike a chat, a worktree cannot start without a branch to show,
+        // so a failed read blocks the row instead of reading as present.
+        return {
+          present: false,
+          detail: "Couldn't check",
+          title: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    [contextMenuParentBranch],
+  );
+  const subthreadWorktreeChecks = useFederationProjectChecks({
+    check: checkSubthreadWorktreeMachine,
+    directory: subthreadProject,
+    open:
+      subthreadWorktreeFlyout
+      && subthreadFlyoutShownKey !== undefined
+      && subthreadFlyoutShownKey === contextMenuThreadKey,
+    targets: contextMenuParentInstanceId
+      ? [
+          ...federationThreadTargets.filter((target) =>
+            target.instanceId !== contextMenuParentInstanceId),
+          { instanceId: SUBTHREAD_THIS_MACHINE, availability: "available" },
+        ]
+      : federationThreadTargets,
+  });
+  const subthreadWorktreeChoice = (
+    key: string,
+    machineLabel: string,
+  ): Pick<SubthreadMachineChoice, "baseBranch" | "blocked" | "blockedTitle" | "pending"> => {
+    if (!subthreadWorktreeFlyout) {
+      return {};
+    }
+    if (!subthreadProject) {
+      // Nothing to look for on another machine, so nothing to start there.
+      return { blocked: FEDERATION_PROJECT_STATE_LABEL.missing };
+    }
+    const check = subthreadWorktreeChecks?.[key];
+    if (!check || check.state === "checking") {
+      // Disabled until it answers, unlike "New chat on": a worktree's row
+      // names the branch it starts from, and there is none to name yet.
+      return {
+        blocked: FEDERATION_PROJECT_STATE_LABEL.checking,
+        blockedTitle: `Looking for ${subthreadProject.label} on ${machineLabel}`,
+        pending: true,
+      };
+    }
+    if (check.state === "missing") {
+      return check.detail
+        ? {
+            blocked: check.detail,
+            ...(check.title ? { blockedTitle: check.title } : {}),
+          }
+        : {
+            blocked: FEDERATION_PROJECT_STATE_LABEL.missing,
+            blockedTitle: `${machineLabel} has no project named ${subthreadProject.label}`,
+          };
+    }
+    return check.detail
+      ? { baseBranch: check.detail }
+      : { blocked: "Couldn't check" };
+  };
+  const localMachineLabel = props.localMachineLabel ?? "This machine";
   const subthreadMachines: SubthreadMachineChoice[] | undefined =
     contextMenuCanCreateSubthread && federationThreadTargets.length > 0
       ? [
@@ -1787,20 +2006,35 @@ export function Sidebar(props: SidebarProps) {
                 // passed this menu's capability gate, so it can host the child.
                 availability: contextMenuParentMachine?.availability ?? "available",
                 parent: true,
+                ...(subthreadWorktreeFlyout && contextMenuParentBranch
+                  ? { baseBranch: contextMenuParentBranch }
+                  : {}),
               }]
             : []),
           {
-            label: props.localMachineLabel ?? "This machine",
+            label: localMachineLabel,
             availability: "available" as const,
             parent: !contextMenuParentInstanceId,
+            ...(contextMenuParentInstanceId
+              ? subthreadWorktreeChoice(SUBTHREAD_THIS_MACHINE, localMachineLabel)
+              : subthreadWorktreeFlyout && contextMenuParentBranch
+                ? { baseBranch: contextMenuParentBranch }
+                : {}),
           },
+          // Reachable machines first and offline or unsupported ones last,
+          // each group in the federation's own order, so the rows that can
+          // take the child sit under the parent's.
           ...federationThreadTargets
             .filter((target) => target.instanceId !== contextMenuParentInstanceId)
+            .sort((a, b) =>
+              Number(a.availability !== "available")
+              - Number(b.availability !== "available"))
             .map((target) => ({
               instanceId: target.instanceId,
               label: target.label,
               availability: target.availability,
               parent: false,
+              ...subthreadWorktreeChoice(target.instanceId, target.label),
             })),
         ]
       : undefined;
@@ -1842,15 +2076,18 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuShowMoveItems = Boolean(
     !contextMenuIsBulk &&
       browseMode === "directories" &&
-      contextMenu?.thread.pinnedRank &&
+      contextMenuPinThread?.pinnedRank &&
       props.onReorderThreadPins,
   );
+  const contextMenuPinTierKeys = contextMenu
+    ? pinTierKeysInOrder(threadSummaryIdentityKey(contextMenu.thread))
+    : [];
   const contextMenuPinnedThreadIndex = contextMenu
-    ? pinnedThreadKeysInOrder.indexOf(
+    ? contextMenuPinTierKeys.indexOf(
         threadSummaryIdentityKey(contextMenu.thread),
       )
     : -1;
-  const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
+  const contextMenuPinnedThreadCount = contextMenuPinTierKeys.length;
   const contextMenuCanMoveUp =
     contextMenuShowMoveItems && (contextMenuPinnedThreadIndex > 0 || !completeThreadPinOrder);
   const contextMenuCanMoveDown =
@@ -1858,6 +2095,13 @@ export function Sidebar(props: SidebarProps) {
     contextMenuPinnedThreadIndex >= 0 &&
     (contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1 || !completeThreadPinOrder);
   const contextMenuHasPinAction = contextMenuCanPin;
+  // Keep at Top only means something where pin order is visible.
+  const contextMenuCanKeepAtTop = Boolean(
+    contextMenuHasPinAction
+      && !contextMenuIsBulk
+      && browseMode === "directories"
+      && props.onReorderThreadPins,
+  );
   const contextMenuHasCreationActions =
     contextMenuCanCreateSubthread || contextMenuCanFork;
   const contextMenuHasManagementActions =
@@ -1866,6 +2110,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanRename ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
+    contextMenuCanSendToMachine ||
     contextMenuCanArchive;
   const contextMenuHasTopActions =
     contextMenuHasPinAction ||
@@ -2381,7 +2626,9 @@ export function Sidebar(props: SidebarProps) {
       {contextMenu ? (
         <div
           ref={contextMenuRef}
-          className="thread-context-menu"
+          className={`thread-context-menu${
+            contextMenuHasPinAction ? " thread-context-menu--check-column" : ""
+          }`}
           role="menu"
           aria-label={
             contextMenuIsBulk
@@ -2516,12 +2763,31 @@ export function Sidebar(props: SidebarProps) {
               {contextMenuHasPinAction ? (
                 <div className="thread-context-menu__section">
                   <button
-                    role="menuitem"
+                    role="menuitemcheckbox"
+                    aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
                     type="button"
-                    onClick={() => togglePinFromContextMenu(contextMenu.thread)}
+                    onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
+                    onKeyDown={closeContextMenuOnEnter}
                   >
-                    {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
+                    <span className="thread-context-menu__check" aria-hidden="true">
+                      <CheckIcon size={12} strokeWidth={3} />
+                    </span>
+                    Pinned
                   </button>
+                  {contextMenuCanKeepAtTop ? (
+                    <button
+                      role="menuitemcheckbox"
+                      aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
+                      type="button"
+                      onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
+                      onKeyDown={closeContextMenuOnEnter}
+                    >
+                      <span className="thread-context-menu__check" aria-hidden="true">
+                        <CheckIcon size={12} strokeWidth={3} />
+                      </span>
+                      Keep at Top
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               {contextMenuHasPinAction &&
@@ -2549,17 +2815,26 @@ export function Sidebar(props: SidebarProps) {
                           label={canCreateContextMenuWorktree
                             ? "Sub-thread in New Worktree"
                             : "Sub-thread in New Workspace"}
+                          groupLabel={subthreadWorktreeFlyout
+                            ? "New worktree on"
+                            : "New workspace on"}
                           rowDisabled={checkingWorktreeAvailability}
                           machines={subthreadMachines}
                           onSelect={() => createSubthreadFromContextMenu(
                             contextMenu.thread,
                             canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
                           )}
-                          onSelectMachine={(instanceId) => createSubthreadFromContextMenu(
+                          onSelectMachine={(machine) => createSubthreadFromContextMenu(
                             contextMenu.thread,
-                            "new-workspace",
-                            { ...(instanceId ? { instanceId } : {}) },
+                            subthreadWorktreeFlyout ? "new-worktree" : "new-workspace",
+                            {
+                              ...(machine.instanceId ? { instanceId: machine.instanceId } : {}),
+                              ...(subthreadWorktreeFlyout && machine.baseBranch
+                                ? { baseBranch: machine.baseBranch }
+                                : {}),
+                            },
                           )}
+                          onOpenChange={onSubthreadFlyoutOpenChange}
                         />
                       ) : (
                         <button
@@ -2694,6 +2969,19 @@ export function Sidebar(props: SidebarProps) {
                       }
                     >
                       Mark Read
+                    </button>
+                  ) : null}
+                  {contextMenuCanSendToMachine ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        const target = contextMenu.thread;
+                        setContextMenu(undefined);
+                        props.onSendThreadToMachine!(target);
+                      }}
+                    >
+                      Send to Another Machine…
                     </button>
                   ) : null}
                   {contextMenuCanArchive && contextMenuHasChildThreads ? (

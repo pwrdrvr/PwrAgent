@@ -39,6 +39,75 @@ function readDefaultValue(key: string): unknown {
 }
 
 describe("SqliteOverlayStore - launchpad defaults", () => {
+  it("replaces directory and learned model choices, including an inactive provider", async () => {
+    const codex = { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } };
+    const next = { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } };
+    await store.setLaunchpadDefaults({ backend: "codex", model: codex.model, reasoningEffort: "high", fastMode: true });
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      backend: "codex",
+      executionMode: "full-access",
+      workMode: "worktree",
+      prompt: "unsent prompt",
+      editorDocument: { type: "doc", content: [] },
+      imageAttachments: [{ id: "image", name: "fixture.png", size: 10, type: "image/png", url: "data:image/png;base64,AA==" }],
+      fileAttachments: [{ id: "file", label: "fixture.txt", path: "/fixture.txt" }],
+      mcpConnectionIds: ["fixture-connection"],
+      model: codex.model,
+      reasoningEffort: "high",
+      fastMode: true,
+      codexEnvironmentId: "environment",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    await store.upsertDirectoryLaunchpad(launchpad);
+    await store.upsertDirectoryLaunchpad(applyNavigationLaunchpadProviderSettingsPatch(
+      { ...launchpad, directoryKey: "directory:/inactive" },
+      { backend: "acp:kimi", model: "kimi-k3", reasoningEffort: "high" },
+    ));
+    await store.upsertDirectoryLaunchpad({ ...launchpad, directoryKey: "directory:/other", backend: "acp:grok", model: "grok-4" });
+    await store.setThreadModelSettings({ backend: "codex", threadId: "existing", model: codex.model, reasoningEffort: "high" });
+
+    expect(store.applyProviderModelDefaults({ codex }, { codex: next })).toBe(2);
+    expect(await store.getLaunchpadDefaults()).toMatchObject({ model: next.model, reasoningEffort: "low", fastMode: true });
+    const updated = await store.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey });
+    expect(updated).toMatchObject({ ...launchpad, model: next.model, reasoningEffort: "low", updatedAt: expect.any(Number) });
+    const inactive = await store.getDirectoryLaunchpad({ directoryKey: "directory:/inactive" });
+    expect(inactive).toMatchObject({ backend: "acp:kimi", model: "kimi-k3", reasoningEffort: "high" });
+    const switched = applyNavigationLaunchpadProviderSettingsPatch(inactive!, { backend: "codex" });
+    expect(switched).toMatchObject({ model: next.model, reasoningEffort: "low", fastMode: true, codexEnvironmentId: "environment" });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/other" })).toMatchObject({ model: "grok-4", updatedAt: 1 });
+    expect(await store.getThreadOverlayState({ backend: "codex", threadId: "existing" })).toMatchObject({ model: codex.model, reasoningEffort: "high" });
+  });
+
+  it("replaces remembered reasoning and clears saved choices when the default is reset", async () => {
+    const before = { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "high" } };
+    const after = { ...before, reasoningEffortsByModel: { "gpt-6.1-sol": "low" } };
+    await store.setLaunchpadDefaults({ backend: "codex", executionMode: "full-access", model: before.model, reasoningEffort: "high" });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo",
+      backend: "codex", executionMode: "full-access", workMode: "local", prompt: "draft",
+      model: before.model, reasoningEffort: "high", createdAt: 1, updatedAt: 1,
+    });
+    store.applyProviderModelDefaults({ codex: before }, { codex: after });
+    expect(await store.getLaunchpadDefaults()).toMatchObject({ model: before.model, reasoningEffort: "low" });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/repo" })).toMatchObject({ model: before.model, reasoningEffort: "low" });
+    const advertisedReasoning = { model: before.model, reasoningEffortsByModel: {} };
+    store.applyProviderModelDefaults({ codex: after }, { codex: advertisedReasoning });
+    expect((await store.getLaunchpadDefaults()).reasoningEffort).toBeUndefined();
+    expect((await store.getDirectoryLaunchpad({ directoryKey: "directory:/repo" }))?.reasoningEffort).toBeUndefined();
+    store.applyProviderModelDefaults({ codex: advertisedReasoning }, {});
+    const reopened = new SqliteOverlayStore(stateDb);
+    for (const value of [await reopened.getLaunchpadDefaults(), await reopened.getDirectoryLaunchpad({ directoryKey: "directory:/repo" })]) {
+      expect(value?.model).toBeUndefined();
+      expect(value?.reasoningEffort).toBeUndefined();
+      expect(value?.providerSettings?.codex?.reasoningEffortsByModel).toBeUndefined();
+      expect(value?.executionMode).toBe("full-access");
+    }
+  });
+
   it("persists and clears a thread's selected MCP connections", async () => {
     await store.setThreadMcpConnectionIds({
       backend: "acp:gemini",

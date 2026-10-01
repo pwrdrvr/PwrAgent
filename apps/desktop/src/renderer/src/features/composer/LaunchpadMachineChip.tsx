@@ -3,6 +3,7 @@ import type { CelestialIconId } from "@pwragent/shared";
 import { CelestialIcon, ServerIcon } from "../../icons";
 import type { ProjectIdentity } from "../../lib/federation-project-match";
 import {
+  FEDERATION_PROJECT_STATE_LABEL,
   FEDERATION_TARGET_AVAILABILITY_LABEL,
   type FederationThreadTarget,
 } from "../chrome/federation-thread-targets";
@@ -122,7 +123,7 @@ export function LaunchpadMachineChip(props: {
       ...(control.localHasProject || !control.currentInstanceId
         ? { description: "This machine" }
         : {
-            description: "No project",
+            description: FEDERATION_PROJECT_STATE_LABEL.missing,
             disabled: true,
             tooltip: `This machine has no project named ${projectLabel}`,
           }),
@@ -142,7 +143,7 @@ export function LaunchpadMachineChip(props: {
         return {
           label: target.label,
           value: target.instanceId,
-          description: "No project",
+          description: FEDERATION_PROJECT_STATE_LABEL.missing,
           disabled: true,
           tooltip: `${target.label} has no project named ${projectLabel}`,
         };
@@ -150,7 +151,7 @@ export function LaunchpadMachineChip(props: {
       return {
         label: target.label,
         value: target.instanceId,
-        ...(projectState === "checking" ? { description: "Checking…" } : {}),
+        ...(projectState === "checking" ? { description: FEDERATION_PROJECT_STATE_LABEL.checking } : {}),
       };
     }),
   ];

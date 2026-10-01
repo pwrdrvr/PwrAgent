@@ -611,7 +611,7 @@ export function ModelsSettings(props: {
       <SettingsPanelHead
         eyebrow="Models"
         title="AI providers"
-        help="Choose profile-wide model baselines, inspect discovered models, and configure provider credentials."
+        help="Choose models for new threads, inspect discovered models, and configure provider credentials."
       />
 
       <ProviderModelDefaultsSettings
@@ -764,13 +764,6 @@ function ProviderModelDefaultsSettings(props: {
   ) => Promise<boolean>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
 }) {
-  const [pendingApply, setPendingApply] = useState<{
-    backend: BackendSummary;
-    count: number;
-    directoryKeys: string[];
-    model: string;
-    reasoningEffort?: string;
-  }>();
   const previews = useNavigationSettingsPreview(props.desktopApi);
   const [pendingMigration, setPendingMigration] =
     useState<PendingThreadMigration>();
@@ -795,64 +788,6 @@ function ProviderModelDefaultsSettings(props: {
       delete updated[backend.kind];
     }
     void props.onSave(updated);
-  };
-
-  const previewApply = async (
-    backend: BackendSummary,
-    model: string,
-    reasoningEffort?: string,
-  ): Promise<void> => {
-    if (!props.desktopApi?.getNavigationQueryPage) {
-      setStatus("Launchpad updates are unavailable in this build.");
-      return;
-    }
-    const directoryKeys = await previews.readLaunchpadKeys(backend.kind).catch((error: unknown) => {
-      if (isNavigationPreviewCancelled(error)) return undefined;
-      setStatus(error instanceof Error ? error.message : String(error));
-      return undefined;
-    });
-    if (!directoryKeys) return;
-    if (directoryKeys.length === 0) {
-      setStatus(`No ${backend.label} launchpads need updating.`);
-      return;
-    }
-    setStatus(undefined);
-    setPendingMigration(undefined);
-    setPendingFastAction(undefined);
-    setPendingApply({
-      backend,
-      count: directoryKeys.length,
-      directoryKeys,
-      model,
-      reasoningEffort,
-    });
-  };
-
-  const applyToLaunchpads = async (): Promise<void> => {
-    if (!pendingApply || !props.desktopApi?.updateDirectoryLaunchpad) return;
-    setApplying(true);
-    try {
-      for (const directoryKey of pendingApply.directoryKeys) {
-        await props.desktopApi.updateDirectoryLaunchpad({
-          directoryKey,
-          patch: {
-            model: pendingApply.model,
-            reasoningEffort: pendingApply.reasoningEffort,
-          },
-          stickySettingsChanged: true,
-        });
-      }
-      setStatus(
-        `Updated ${pendingApply.count} ${pendingApply.backend.label} launchpad${
-          pendingApply.count === 1 ? "" : "s"
-        }. Existing threads were not changed.`,
-      );
-      setPendingApply(undefined);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    } finally {
-      setApplying(false);
-    }
   };
 
   const previewThreadMigration = async (
@@ -925,7 +860,6 @@ function ProviderModelDefaultsSettings(props: {
       && currentMigration.sourceModels !== undefined;
     const currentSourceModels = new Set(currentMigration?.sourceModels ?? []);
     setStatus(undefined);
-    setPendingApply(undefined);
     setPendingFastAction(undefined);
     setPendingMigration({
       backend,
@@ -1032,7 +966,6 @@ function ProviderModelDefaultsSettings(props: {
     });
     if (!groups) return;
     setStatus(undefined);
-    setPendingApply(undefined);
     setPendingMigration(undefined);
     setPendingFastAction({
       kind,
@@ -1073,14 +1006,10 @@ function ProviderModelDefaultsSettings(props: {
     <SettingsSection
       eyebrow="Defaults"
       title="New thread defaults"
-      description="These profile-wide baselines fill new launchpads that do not already have a directory or learned provider choice."
+      description="Changing a model or reasoning updates all launchpads for that provider in this profile. Existing threads keep their settings."
     >
       <div className="settings-fields">
         {providers.map((backend) => {
-          const providerPendingApply =
-            pendingApply?.backend.kind === backend.kind
-              ? pendingApply
-              : undefined;
           const providerPendingMigration =
             pendingMigration?.backend.kind === backend.kind
               ? pendingMigration
@@ -1119,17 +1048,10 @@ function ProviderModelDefaultsSettings(props: {
               disabled={
                 props.saving
                 || applying
-                || Boolean(providerPendingApply)
                 || Boolean(providerPendingMigration)
               }
               applying={applying}
               fastMode={fastMode}
-              pendingApply={providerPendingApply}
-              onApply={(model, reasoningEffort) => {
-                void previewApply(backend, model, reasoningEffort);
-              }}
-              onCancelApply={() => setPendingApply(undefined)}
-              onConfirmApply={() => void applyToLaunchpads()}
               onMigrate={(model, reasoningEffort) => {
                 void previewThreadMigration(backend, model, reasoningEffort);
               }}
@@ -1418,12 +1340,6 @@ function ProviderModelDefaultField(props: {
     onConfirm: () => void;
     onTurnOffEverywhere: () => void;
   };
-  pendingApply?: {
-    count: number;
-  };
-  onApply: (model: string, reasoningEffort?: string) => void;
-  onCancelApply: () => void;
-  onConfirmApply: () => void;
   onMigrate: (model: string, reasoningEffort?: string) => void;
   onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
 }) {
@@ -1528,30 +1444,8 @@ function ProviderModelDefaultField(props: {
               </select>
             ) : null}
           </div>
-          {props.pendingApply ? (
-            <InlineActionConfirmation
-              applying={props.applying}
-              confirmLabel="Apply"
-              label={`Apply to ${props.pendingApply.count} launchpad${
-                props.pendingApply.count === 1 ? "" : "s"
-              }?`}
-              sub="Prompts, attachments, work mode, access, Fast/service tier, and Codex Environment will stay unchanged."
-              onCancel={props.onCancelApply}
-              onConfirm={props.onConfirmApply}
-            />
-          ) : selectedModel ? (
+          {selectedModel ? (
             <div className="settings-inline-actions">
-              <button
-                className="button button--secondary"
-                disabled={props.disabled || !selectionAvailable}
-                type="button"
-                onClick={() => props.onApply(
-                  selectedModel,
-                  selectedReasoning || undefined,
-                )}
-              >
-                Apply to launchpads
-              </button>
               <button
                 className="button button--secondary"
                 disabled={props.disabled || !selectionAvailable}

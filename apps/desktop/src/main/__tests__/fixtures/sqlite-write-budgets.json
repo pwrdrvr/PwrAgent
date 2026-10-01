@@ -48,6 +48,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "automation-run-prune-without-usage": {
+    "commits": 2,
+    "note": "Creating a run and pruning an older execution with no visible usage writes no retained title",
+    "observedWalBytes": 70040,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
@@ -587,6 +594,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "profile-model-default-launchpads": {
+    "commits": 1,
+    "note": "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",
+    "observedWalBytes": 74160,
+    "rowsChanged": 110,
+    "statements": 106
+  },
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",
@@ -605,6 +619,13 @@
     "commits": 1,
     "note": "one queued scheduled action durably held after its preceding turn fails; one boundary transition, not a timer",
     "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "registered-project-launchpad-submit": {
+    "commits": 1,
+    "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",
+    "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1
   },

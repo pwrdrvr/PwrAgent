@@ -9399,6 +9399,28 @@ export class CodexAppServerClient {
     return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
   }
 
+  /** Export bytes through Codex; never open or parse its private storage. */
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+    await this.ensureInitialized();
+    const result = await this.connection.request("thread/read", { threadId, includeTurns: false },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.id !== threadId || typeof thread.path !== "string") {
+      throw new Error("Codex did not provide a persisted thread to export.");
+    }
+    if (asRecord(thread.status)?.type === "active") throw new Error("Wait for the source turn to finish before handoff.");
+    const replay = await this.readThread({ threadId });
+    const file = asRecord(await this.connection.request("fs/readFile", { path: thread.path },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+    if (typeof file?.dataBase64 !== "string") throw new Error("Codex does not support exporting thread bytes through fs/readFile.");
+    return {
+      rolloutBase64: file.dataBase64,
+      replay,
+      ...(typeof thread.cwd === "string" ? { cwd: thread.cwd } : {}),
+      ...(typeof thread.name === "string" ? { title: thread.name } : {}),
+    };
+  }
+
   /**
    * Refresh the catalog without starting inference. The registry negotiates
    * dynamicToolsResumeField and reserves the idle thread before calling this.

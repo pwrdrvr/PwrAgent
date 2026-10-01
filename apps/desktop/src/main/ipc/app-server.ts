@@ -6701,7 +6701,9 @@ class DesktopAppServerService {
           threadKeys: remoteRequest.threadKeys?.map(ownerKey),
           move: remoteRequest.move ? (remoteRequest.move.direction
             ? { key: ownerKey(remoteRequest.move.key), direction: remoteRequest.move.direction }
-            : { key: ownerKey(remoteRequest.move.key), anchorKey: ownerKey(remoteRequest.move.anchorKey), placement: remoteRequest.move.placement })
+            : remoteRequest.move.keepAtTop !== undefined
+              ? { key: ownerKey(remoteRequest.move.key), keepAtTop: remoteRequest.move.keepAtTop }
+              : { key: ownerKey(remoteRequest.move.key), anchorKey: ownerKey(remoteRequest.move.anchorKey), placement: remoteRequest.move.placement })
             : undefined,
         });
       return { pinnedRanks: Object.fromEntries(Object.entries(result.pinnedRanks).map(([key, rank]) => [

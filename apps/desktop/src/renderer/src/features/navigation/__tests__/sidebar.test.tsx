@@ -1871,7 +1871,7 @@ describe("Sidebar", () => {
 
     // …the VIEWER-owned pin is offered (rank lives on the pin row, never
     // the owner's list)…
-    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
     expect(onSetThreadPin).toHaveBeenCalledWith(remotePinnedThread, true);
 
     // …and the viewer-side removal dispatches even while disconnected.
@@ -2111,23 +2111,226 @@ describe("Sidebar", () => {
     fireEvent.keyDown(reopened, { key: "ArrowRight" });
     const flyout = screen.getByRole("menu", { name: "New workspace on" });
     const machines = within(flyout).getAllByRole("menuitem");
-    // The parent's machine leads; an offline peer stays listed, disabled.
+    // The parent's machine leads, set off by a separator; an offline peer
+    // stays listed, disabled, below the machines that can take the child.
     expect(machines.map((item) => item.textContent)).toEqual([
       "Harbor MacParent",
-      "Attic MiniOffline",
       "Studio Mac / work",
+      "Attic MiniOffline",
     ]);
+    expect(within(flyout).getAllByRole("separator")).toHaveLength(1);
+    expect(machines[0]!.nextElementSibling).toHaveAttribute("role", "separator");
     expect(machines[0]).toHaveFocus();
-    expect(machines[1]).toHaveAttribute("aria-disabled", "true");
-
-    fireEvent.click(machines[1]!);
-    expect(onCreateSubthread).toHaveBeenCalledTimes(1);
+    expect(machines[2]).toHaveAttribute("aria-disabled", "true");
+    expect(machines.map((item) =>
+      item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
+      .toEqual(["available", "available", "offline"]);
 
     fireEvent.click(machines[2]!);
+    expect(onCreateSubthread).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(machines[1]!);
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
       "new-workspace",
       { instanceId: "studio-work" },
+    );
+  });
+
+  it("cascades a new-worktree machine list that names each machine's base branch", async () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) => {
+      switch (instanceId) {
+        case "studio-work":
+          return { available: true as const, baseBranch: "main" };
+        case "mini":
+          return {
+            available: false as const,
+            cause: "no-worktrees" as const,
+            reason: "The repository has no commits yet",
+          };
+        case "cart":
+          return { available: false as const, cause: "no-branch" as const };
+        case "rack":
+          throw new Error("Rack Server did not answer");
+        default:
+          return undefined;
+      }
+    });
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        selectedItemKey="codex:thread-local"
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+          { availability: "available", instanceId: "lab", label: "Lab Box" },
+          { availability: "available", instanceId: "mini", label: "Mac Mini" },
+          { availability: "available", instanceId: "cart", label: "Cart Box" },
+          { availability: "available", instanceId: "rack", label: "Rack Server" },
+        ]}
+        readSubthreadWorktreeBase={readSubthreadWorktreeBase}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const openFlyout = () => {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+      const row = screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" });
+      fireEvent.mouseEnter(row.parentElement!);
+      return screen.getByRole("menu", { name: "New worktree on" });
+    };
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    // A right-click alone reads no peer's directories.
+    expect(readSubthreadWorktreeBase).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    let flyout = openFlyout();
+    const checking = within(flyout).getAllByRole("menuitem");
+    expect(checking.map((item) => item.textContent)).toEqual([
+      "Harbor Macfrom codex/thread-centric-uiParent",
+      "Studio Mac / workChecking…",
+      "Lab BoxChecking…",
+      "Mac MiniChecking…",
+      "Cart BoxChecking…",
+      "Rack ServerChecking…",
+      "Attic MiniOffline",
+    ]);
+    // Disabled until the machine answers, with its reachable dot.
+    expect(checking[1]).toHaveAttribute("aria-disabled", "true");
+    expect(checking[1]).toHaveAttribute("title", "Looking for PwrAgent on Studio Mac / work");
+    expect(checking[1]!.querySelector(".new-thread-menu__target-dot"))
+      .toHaveAttribute("data-availability", "available");
+    await act(async () => {});
+    const machines = within(flyout).getAllByRole("menuitem");
+    // The peer's checkout is not on the parent's branch, and the row says so.
+    expect(machines.map((item) => item.textContent)).toEqual([
+      "Harbor Macfrom codex/thread-centric-uiParent",
+      "Studio Mac / workfrom main",
+      "Lab BoxNo project",
+      "Mac MiniNo worktrees",
+      "Cart BoxNo branch",
+      "Rack ServerCouldn't check",
+      "Attic MiniOffline",
+    ]);
+    expect(machines.map((item) => item.getAttribute("aria-disabled"))).toEqual([
+      null, null, "true", "true", "true", "true", "true",
+    ]);
+    expect(machines.map((item) => item.getAttribute("title"))).toEqual([
+      "codex/thread-centric-ui",
+      "main",
+      "Lab Box has no project named PwrAgent",
+      "The repository has no commits yet",
+      "PwrAgent there is on no branch to start a worktree from",
+      "Rack Server did not answer",
+      "Not connected",
+    ].map((title, index) => index < 2 ? `from ${title}` : title));
+    expect(machines.map((item) =>
+      item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
+      .toEqual(["available", "available", "no-project", "no-project", "no-project", "no-project", "offline"]);
+    // Offline machines are not asked; the parent's own machine needs no answer.
+    expect(readSubthreadWorktreeBase.mock.calls.map(([instanceId]) => instanceId).sort())
+      .toEqual(["cart", "lab", "mini", "rack", "studio-work"]);
+    expect(readSubthreadWorktreeBase).toHaveBeenCalledWith(
+      "studio-work",
+      { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+      "codex/thread-centric-ui",
+    );
+
+    for (const machine of machines.slice(2)) {
+      fireEvent.click(machine);
+    }
+    expect(onCreateSubthread).not.toHaveBeenCalled();
+
+    fireEvent.click(machines[1]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      localThread,
+      "new-worktree",
+      { instanceId: "studio-work", baseBranch: "main" },
+    );
+
+    flyout = openFlyout();
+    await act(async () => {});
+    fireEvent.click(within(flyout).getAllByRole("menuitem")[0]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      localThread,
+      "new-worktree",
+      { baseBranch: "codex/thread-centric-ui" },
+    );
+  });
+
+  it("asks this machine for the project when the parent runs on a peer", async () => {
+    const remoteParent: NavigationThreadSummary = {
+      ...localThread,
+      id: "thread-remote-parent",
+      title: "Remote parent",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "mini" },
+          threadId: "thread-remote-parent",
+        },
+        instanceLabel: "Mac Mini",
+        peerStatus: "connected",
+        capabilities: ["environment_actions", "launchpad_metadata", "thread_navigation", "turn_control"],
+      },
+    };
+    const onCreateSubthread = vi.fn(async () => undefined);
+    const readSubthreadWorktreeBase = vi.fn(async () => ({ available: true as const, baseBranch: "release" }));
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[remoteParent]}
+        loading={false}
+        threads={[remoteParent]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "mini", label: "Mac Mini" },
+        ]}
+        readSubthreadWorktreeBase={readSubthreadWorktreeBase}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Remote parent" }));
+    fireEvent.mouseEnter(
+      screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }).parentElement!,
+    );
+    const flyout = screen.getByRole("menu", { name: "New worktree on" });
+    await act(async () => {});
+    const machines = within(flyout).getAllByRole("menuitem");
+    expect(machines.map((item) => item.textContent)).toEqual([
+      "Mac Minifrom codex/thread-centric-uiParent",
+      "Harbor Macfrom release",
+    ]);
+    // Undefined is this machine; the parent's peer is not asked about itself.
+    expect(readSubthreadWorktreeBase.mock.calls).toEqual([[
+      undefined,
+      { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+      "codex/thread-centric-ui",
+    ]]);
+
+    fireEvent.click(machines[1]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      remoteParent,
+      "new-worktree",
+      { baseBranch: "release" },
     );
   });
 
@@ -2168,6 +2371,139 @@ describe("Sidebar", () => {
       "new-workspace",
       { instanceId: "studio-work" },
     );
+  });
+
+  it("reaches the machine list by keyboard while the owner's worktree check runs", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        ]}
+        readThreadWorktreeAvailability={() => new Promise<boolean>(() => undefined)}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    const row = screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    // Only the row's click waits on the check, so the arrows still stop on it.
+    for (let step = 0; step < 20 && document.activeElement !== row; step += 1) {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowDown" });
+    }
+    expect(row).toHaveFocus();
+
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    const flyout = screen.getByRole("menu", { name: "New workspace on" });
+    expect(within(flyout).getAllByRole("menuitem")[0]).toHaveFocus();
+  });
+
+  it("asks each machine once per opening, however often the provider changes", async () => {
+    const read = vi.fn(async () => ({ available: true as const, baseBranch: "main" }));
+    const sidebar = (provider: typeof read) => (
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+        ]}
+        readSubthreadWorktreeBase={provider}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    const { rerender } = render(sidebar(read));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    fireEvent.mouseEnter(
+      screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }).parentElement!,
+    );
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // The navigation hook hands over a new provider on every directory
+    // refresh; an open flyout must not ask again or fall back to "Checking…".
+    rerender(sidebar(vi.fn((...args: Parameters<typeof read>) => read(...args))));
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    const flyout = screen.getByRole("menu", { name: "New worktree on" });
+    expect(within(flyout).getAllByRole("menuitem")[1]).toHaveTextContent("Studio Mac / workfrom main");
+  });
+
+  it("walks every flyout row by keyboard and keeps Home and End inside it", async () => {
+    const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) =>
+      instanceId === "studio-work"
+        ? { available: true as const, baseBranch: "main" }
+        : undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+          { availability: "available", instanceId: "lab", label: "Lab Box" },
+        ]}
+        readSubthreadWorktreeBase={readSubthreadWorktreeBase}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    const row = screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" });
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    await act(async () => {});
+    const flyout = screen.getByRole("menu", { name: "New worktree on" });
+    const [harbor, studio, lab, attic] = within(flyout).getAllByRole("menuitem");
+    expect(harbor).toHaveFocus();
+
+    const press = (key: string) =>
+      fireEvent.keyDown(document.activeElement ?? document.body, { key });
+    press("ArrowDown");
+    expect(studio).toHaveFocus();
+    // Disabled machines are stops too, so their reason can be heard.
+    press("ArrowDown");
+    expect(lab).toHaveFocus();
+    expect(lab).toHaveAttribute("aria-disabled", "true");
+    // The outer menu counts every item in it; the flyout keeps Home and End.
+    press("End");
+    expect(attic).toHaveFocus();
+    press("Home");
+    expect(harbor).toHaveFocus();
+    press("ArrowUp");
+    expect(attic).toHaveFocus();
+
+    press("ArrowLeft");
+    expect(screen.queryByRole("menu", { name: "New worktree on" })).toBeNull();
+    expect(row).toHaveFocus();
   });
 
   it.each([false, true])("waits for owner Git capability before enabling creation (%s)", async (available) => {
@@ -4777,7 +5113,7 @@ describe("Sidebar", () => {
       child.classList.contains("thread-context-menu__section"),
     );
     expect(sections).toHaveLength(4);
-    expect(sections[0]).toHaveTextContent("Unpin Thread");
+    expect(sections[0]).toHaveTextContent("Pinned");
     expect(sections[1]).toHaveTextContent("Sub-thread in Same Worktree");
     expect(sections[1]).toHaveTextContent("Fork into New Worktree");
     expect(sections[2]).toHaveTextContent("Move Up");
@@ -4935,7 +5271,7 @@ describe("Sidebar", () => {
       .closest(".thread-row-shell")
       ?.querySelector(".thread-row__overflow-button") as HTMLButtonElement;
     fireEvent.click(overflowButton);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
 
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
   });
@@ -5017,6 +5353,87 @@ describe("Sidebar", () => {
     ], { key: `codex:${pinnedTop.id}`, direction: "down" });
   });
 
+  it("keeps a pin at top from the context menu and moves only within its tier", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const kept = {
+      ...sharedThread,
+      id: "thread-kept",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const ordinary = {
+      ...sharedThread,
+      id: "thread-ordinary",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{ threadKeys: ["codex:thread-kept", "codex:thread-ordinary"] },
+          },
+        ]}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept"
+        threads={[kept, ordinary]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    const keptRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const ordinaryRow = screen
+      .getByRole("button", { name: /Fresh pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(keptRow.querySelector(".thread-row__heading-pin--kept")).not.toBeNull();
+    expect(ordinaryRow.querySelector(".thread-row__heading-pin--kept")).toBeNull();
+
+    // The kept row is last in its own tier, so Move Down cannot push it
+    // below the seam even though an ordinary pin follows it.
+    fireEvent.click(
+      keptRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: /Move Down/i }),
+    ).toBeDisabled();
+    const keepChecked = await screen.findByRole("menuitemcheckbox", { name: "Keep at Top" });
+    expect(keepChecked).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Pinned" }))
+      .toHaveAttribute("aria-checked", "true");
+    await clickElement(keepChecked);
+    expect(onReorderThreadPins).toHaveBeenLastCalledWith([], {
+      key: "codex:thread-kept",
+      keepAtTop: false,
+    });
+    // The label never changes and the menu stays open after a toggle.
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    pressEscape();
+
+    fireEvent.click(
+      ordinaryRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+    const keepUnchecked = await screen.findByRole("menuitemcheckbox", { name: "Keep at Top" });
+    expect(keepUnchecked).toHaveAttribute("aria-checked", "false");
+    await clickElement(keepUnchecked);
+    expect(onReorderThreadPins).toHaveBeenLastCalledWith([], {
+      key: "codex:thread-ordinary",
+      keepAtTop: true,
+    });
+  });
+
   it("omits Move Up / Move Down from an unpinned thread's context menu", async () => {
     render(
       <Sidebar
@@ -5044,7 +5461,7 @@ describe("Sidebar", () => {
       row.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
     );
 
-    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    await screen.findByRole("menuitemcheckbox", { name: "Pinned" });
     expect(
       screen.queryByRole("menuitem", { name: /Move Up/i }),
     ).not.toBeInTheDocument();
@@ -5501,6 +5918,277 @@ describe("Sidebar", () => {
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
+  it("keeps a dragged pin at top when it drops on the seam after the kept pins", async () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const kept = {
+      ...sharedThread,
+      id: "thread-kept",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const ordinary = {
+      ...sharedThread,
+      id: "thread-ordinary",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{ threadKeys: ["codex:thread-kept", "codex:thread-ordinary"] },
+          },
+        ]}
+        inboxThreads={[kept, ordinary]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept"
+        threads={[kept, ordinary]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The seam mounts between the tiers, hidden until a drag starts.
+    const seam = container.querySelector(
+      ".directory-row__keep-top-slot",
+    ) as HTMLElement;
+    expect(seam).toHaveClass("directory-row__keep-top-slot--seam");
+    expect(seam).toHaveAttribute("aria-hidden", "true");
+    const keptRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const ordinaryRow = screen
+      .getByRole("button", { name: /Fresh pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(keptRow.compareDocumentPosition(seam)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(seam.compareDocumentPosition(ordinaryRow)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(keptRow, "getBoundingClientRect").mockReturnValue(rect(50, 50));
+    vi.spyOn(seam, "getBoundingClientRect").mockReturnValue(rect(84, 32));
+    vi.spyOn(ordinaryRow, "getBoundingClientRect").mockReturnValue(rect(200, 50));
+
+    startThreadPinPointerDrag(ordinaryRow, { x: 50, y: 225 });
+    moveThreadPinPointer({ x: 50, y: 100 });
+    expect(
+      screen.getByRole("separator", {
+        name: "Keep thread at top of pinned threads for PwrAgent",
+      }),
+    ).toBe(seam);
+    await waitFor(() => {
+      expect(seam).toHaveClass("is-drop-target-before");
+    });
+    // The held card covers the seam, so it carries the outcome itself.
+    expect(
+      document.body.querySelector(".thread-row--drag-image .thread-row__drop-label"),
+    ).toHaveTextContent("Keep at top");
+
+    releaseThreadPinPointer({ x: 50, y: 100 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+        key: "codex:thread-ordinary",
+        keepAtTop: true,
+      });
+    });
+    expect(onSetThreadPin).not.toHaveBeenCalled();
+  });
+
+  it("stops keeping a pin dropped after the pins when every pin is kept", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const keptFirst = {
+      ...sharedThread,
+      id: "thread-kept-first",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const keptSecond = {
+      ...sharedThread,
+      id: "thread-kept-second",
+      title: "Triage lead",
+      pinnedRank: String(-(2 ** 40) + 1024),
+    };
+    const unpinned = {
+      ...sharedThread,
+      id: "thread-unpinned",
+      title: "Loose thread",
+      pinnedRank: undefined,
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{
+              threadKeys: [
+                "codex:thread-kept-first",
+                "codex:thread-kept-second",
+                "codex:thread-unpinned",
+              ],
+            },
+          },
+        ]}
+        inboxThreads={[keptFirst, keptSecond, unpinned]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept-first"
+        threads={[keptFirst, keptSecond, unpinned]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const sourceRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const appendTarget = container.querySelector(
+      ".directory-row__pin-drop-slot",
+    ) as HTMLElement;
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(sourceRow, "getBoundingClientRect").mockReturnValue(rect(50, 50));
+    vi.spyOn(appendTarget, "getBoundingClientRect").mockReturnValue(rect(150, 32));
+
+    startThreadPinPointerDrag(sourceRow, { x: 50, y: 75 });
+    moveThreadPinPointer({ x: 50, y: 165 });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+
+    releaseThreadPinPointer({ x: 50, y: 165 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+        key: "codex:thread-kept-first",
+        keepAtTop: false,
+      });
+    });
+  });
+
+  it("opens a ghost Keep at top slot above the pins while the lane is empty", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const first = {
+      ...sharedThread,
+      id: "thread-first",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+    const second = {
+      ...sharedThread,
+      id: "thread-second",
+      title: "Release manager",
+      pinnedRank: "2048",
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{ threadKeys: ["codex:thread-first", "codex:thread-second"] },
+          },
+        ]}
+        inboxThreads={[first, second]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-first"
+        threads={[first, second]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // No pin is kept yet, so the lane's target is a ghost slot above the
+    // pins, leaving the top of the pins as the ordinary drop point.
+    const ghost = container.querySelector(
+      ".directory-row__keep-top-slot",
+    ) as HTMLElement;
+    expect(ghost).toHaveClass("directory-row__keep-top-slot--ghost");
+    expect(ghost).toHaveAttribute("aria-hidden", "true");
+    expect(ghost).not.toHaveClass("is-drag-enabled");
+    const firstRow = screen
+      .getByRole("button", { name: /Fresh pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(ghost.compareDocumentPosition(firstRow)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const sourceRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(ghost, "getBoundingClientRect").mockReturnValue(rect(40, 34));
+    vi.spyOn(firstRow, "getBoundingClientRect").mockReturnValue(rect(90, 50));
+    vi.spyOn(sourceRow, "getBoundingClientRect").mockReturnValue(rect(150, 50));
+
+    startThreadPinPointerDrag(sourceRow, { x: 50, y: 175 });
+    moveThreadPinPointer({ x: 50, y: 55 });
+    expect(ghost).toHaveClass("is-drag-enabled");
+    await waitFor(() => {
+      expect(ghost).toHaveClass("is-drop-target-before");
+    });
+
+    releaseThreadPinPointer({ x: 50, y: 55 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+        key: "codex:thread-second",
+        keepAtTop: true,
+      });
+    });
+    expect(ghost).not.toHaveClass("is-drag-enabled");
+  });
+
   it("uses the source row's live bounds after directory-list scrolling", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
@@ -5946,6 +6634,96 @@ describe("Sidebar", () => {
 
     expect(screen.queryByRole("menuitem", { name: "Mark Unread" }))
       .not.toBeInTheDocument();
+  });
+
+  it("offers Send to Another Machine for a thread this window owns", async () => {
+    const onSendThreadToMachine = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSendThreadToMachine={onSendThreadToMachine}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    const menu = screen.getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+    // Beside Archive: a Move ends in one.
+    expect(items.indexOf("Send to Another Machine…")).toBe(items.indexOf("Archive Thread") - 1);
+    await clickElement(screen.getByRole("menuitem", { name: "Send to Another Machine…" }));
+
+    expect(onSendThreadToMachine).toHaveBeenCalledWith(sharedThread);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("omits Send to Another Machine without a receiver or for a peer's thread", () => {
+    const peerThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-peer",
+      title: "Peer thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-laptop" },
+          threadId: "thread-peer",
+        },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities: ["turn_control"],
+      },
+    };
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Send to Another Machine…" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[peerThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-peer"
+        threads={[peerThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSendThreadToMachine={() => undefined}
+      />
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Peer thread" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Send to Another Machine…" })).toBeNull();
   });
 
   it("flips the thread actions menu above the overflow button near the viewport bottom", () => {
@@ -7557,7 +8335,7 @@ describe("Sidebar directory pinning", () => {
       .closest(".thread-row-shell") as HTMLElement;
     fireEvent.contextMenu(threadRow);
 
-    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    await screen.findByRole("menuitemcheckbox", { name: "Pinned" });
     expect(
       screen.queryByRole("menuitem", { name: "Unpin Directory" }),
     ).not.toBeInTheDocument();
@@ -7938,10 +8716,11 @@ describe("Sidebar menus from the keyboard", () => {
       />,
     );
 
+  // Document order across every item role, as the menu's arrow keys see it.
   const enabledItems = (menu: HTMLElement): HTMLElement[] =>
-    within(menu)
-      .getAllByRole("menuitem")
-      .filter((item) => !item.hasAttribute("disabled"));
+    [...menu.querySelectorAll<HTMLElement>(
+      '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]',
+    )].filter((item) => !item.hasAttribute("disabled"));
 
   /** Focus a ⋮ button and press it, as Enter or Space would. */
   const openThreadActions = (
@@ -8028,22 +8807,29 @@ describe("Sidebar menus from the keyboard", () => {
     expect(document.activeElement).toBe(stops[at - 1]);
   });
 
-  it("returns focus to ⋮ after a thread action", () => {
+  it("keeps the menu open on a pin toggle and returns focus to ⋮ on Return", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderThreadSidebar({ onSetThreadPin });
     const actions = openThreadActions();
-    const pin = screen.getByRole("menuitem", { name: "Pin Thread" });
+    const pin = screen.getByRole("menuitemcheckbox", { name: "Pinned" });
+    expect(pin).toHaveAttribute("aria-checked", "false");
     // Bounded: a menu that ignores the arrows must fail here, not hang.
     for (let i = 0; i < 20 && document.activeElement !== pin; i++) {
       pressKey("ArrowDown");
     }
     expect(pin).toHaveFocus();
 
+    // A checkable item toggles in place, so both checks can be set.
     act(() => pin.click());
     expect(onSetThreadPin).toHaveBeenCalledWith(
       expect.objectContaining({ id: sharedThread.id }),
       true,
     );
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // Return closes rather than toggling the check back.
+    pressKey("Enter");
+    expect(onSetThreadPin).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(actions).toHaveFocus();
   });
@@ -8235,6 +9021,50 @@ describe("Sidebar menus from the keyboard", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(chip).toHaveFocus();
   });
+});
+
+it("reveals an added project's selected folder after its descriptor arrives and keeps composer focus", async () => {
+  const { scrollIntoView, restore } = withMockScrollIntoView();
+  const addedDirectory = {
+    key: "directory:/repos/libuv", kind: "directory" as const,
+    label: "libuv", path: "/repos/libuv",
+  };
+  const props = {
+    backends, directories, inboxThreads: [sharedThread], loading: false,
+    threads: [sharedThread], onBrowseModeChange: () => undefined,
+    onCreateThread: async () => undefined, onOpenLaunchpad: async () => undefined,
+    onSelectThread: () => undefined,
+  };
+  try {
+    const { container, rerender } = render(<>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} browseMode="directories" />
+    </>);
+    const composer = screen.getByRole("textbox", { name: "New thread message" });
+    composer.focus();
+    fireEvent.pointerOver(container.querySelector("[data-hover-stable-row]")!, { pointerType: "mouse" });
+    rerender(<>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} browseMode="directories"
+        selectedItemKey={`launchpad:${addedDirectory.key}`} revealSelectedThreadRequest={1} />
+    </>);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    rerender(<>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} directories={[...directories, addedDirectory]} browseMode="directories"
+        selectedItemKey={`launchpad:${addedDirectory.key}`} revealSelectedThreadRequest={1} />
+    </>);
+    await waitFor(() => {
+      const header = screen.getByRole("button", { name: "libuv" });
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(header).toHaveClass("is-selected");
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(header.closest(".directory-row"));
+    });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(composer).toHaveFocus();
+  } finally {
+    restore();
+  }
 });
 
 it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {

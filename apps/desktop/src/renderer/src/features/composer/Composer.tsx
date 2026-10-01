@@ -6,6 +6,7 @@ import {
   findCheckedOutPullRequest,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   beginLaunchpadComposition,
@@ -202,6 +203,7 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
+import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
 import { ProjectPicker } from "./ProjectPicker";
 import {
   LaunchpadMachineChip,
@@ -422,6 +424,7 @@ type ComposerProps = {
   providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
+  workspaceActionsBlocked?: boolean;
   /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
   threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
@@ -2782,6 +2785,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const [editorScopeKey, setEditorScopeKey] = useState(composerScopeKey);
+  useLaunchpadComposerFocusHandoff(draftStore, composerScopeKey, editorScopeKey, inputRef, inputWrapRef);
   const editorRemountSequenceRef = useRef(0);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const pendingDraftRetargetRef = useRef<
@@ -2890,8 +2894,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const destinationOwner = projectDestinations.state?.request.federationTarget;
   const destinationOwnerKey = destinationOwner?.scope === "remote"
     ? `remote:${destinationOwner.instanceId}` : "local";
-  const projectDirectories = destinationOwnerKey === filesystemAuthorityKey
-    ? projectDestinations.state?.page?.directories ?? [] : [];
+  const projectDestinationsLoaded = destinationOwnerKey === filesystemAuthorityKey
+    && projectDestinations.state?.page !== undefined;
+  // A new search resets the resource to a page-less state, so keep the
+  // owner's last answer on screen until the next one lands. The combobox
+  // narrows it by the typed text meanwhile, instead of the list blanking on
+  // every keystroke while a peer answers.
+  const settledProjectDirectoriesRef = useRef<{
+    authorityKey: string;
+    directories: NavigationDirectorySummary[];
+  } | undefined>(undefined);
+  if (projectDestinationsLoaded) {
+    settledProjectDirectoriesRef.current = {
+      authorityKey: filesystemAuthorityKey,
+      directories: projectDestinations.state?.page?.directories ?? [],
+    };
+  }
+  const projectDirectories = projectDestinationsLoaded
+    ? settledProjectDirectoriesRef.current?.directories ?? []
+    : settledProjectDirectoriesRef.current?.authorityKey === filesystemAuthorityKey
+      ? settledProjectDirectoriesRef.current.directories
+      : [];
+  const projectDestinationInputId = useId();
   useEffect(() => {
     setHandoffDialog(undefined);
     setProjectTargetPath("");
@@ -4701,14 +4725,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ]),
     ].filter((path): path is string => Boolean(path));
     const excluded = new Set(excludePaths.map(normalizeDirectoryReferencePath));
-    const scanned = listReferencedDirectories(text, props.directories ?? [], {
-      excludePaths,
-    });
-    const seenPaths = new Set(
-      scanned
-        .map((directory) => directory.path ? normalizeDirectoryReferencePath(directory.path) : undefined)
-        .filter((path): path is string => Boolean(path)),
-    );
+    const seenPaths = new Set<string>();
     const fromTokens: NavigationDirectorySummary[] = [];
     for (const token of tokens ?? []) {
       // Only directory-kind tokens are attachable directories. File-kind
@@ -4734,7 +4751,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         },
       );
     }
-    return [...scanned, ...fromTokens];
+    // Mention queries and the loaded navigation page can contain different
+    // directories. Resolve against the authoritative chip targets as well so
+    // a tracked ancestor cannot replace a project absent from that page.
+    const scanned = listReferencedDirectories(text, [
+      ...(props.directories ?? []),
+      ...fromTokens,
+    ], { excludePaths });
+    const scannedPaths = new Set(scanned.map((directory) =>
+      normalizeDirectoryReferencePath(directory.path!),
+    ));
+    return [...scanned, ...fromTokens.filter((directory) =>
+      !scannedPaths.has(normalizeDirectoryReferencePath(directory.path!)),
+    )];
   };
   const referencedDirectories = listDraftReferencedDirectories(
     canonicalDraft,
@@ -8260,7 +8289,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // Always leave one space after the chip — including at the end of the
     // draft — and park the caret after it, so typing straight on never
     // glues onto the chip's serialized form.
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;
@@ -8409,7 +8438,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // caret after it.
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;
@@ -8476,7 +8505,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ?? { start: selectionStart, end: selectionEnd };
     const before = draft.slice(0, referenceTrigger.start);
     const after = draft.slice(Math.max(referenceTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSelection = tokenIndex + 1;
@@ -8553,7 +8582,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${" ".repeat(paths.length - 1)}${nextAfter}`;
     const nextSelection = before.length + paths.length;
     const nextSkillTokens = [
@@ -8647,7 +8676,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
     const nextSelection = before.length + directories.length;
     const nextSkillTokens = [
@@ -9991,7 +10020,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : hasAttachedPullRequest
         ? "Auto-fix PR — handle new CI failures or merge conflicts"
         : "Auto-fix PR — starts when a PR for this workspace is linked";
-  const workspaceOpenPath = getComposerWorkspaceOpenPath({
+  const workspaceOpenPath = props.workspaceActionsBlocked ? undefined : getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
     threadWorkspace,
@@ -10029,6 +10058,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
   const canMoveThreadProject = Boolean(
     props.thread &&
+      !props.workspaceActionsBlocked &&
       threadWorkspace &&
       props.onHandoffThreadWorkspace &&
       props.thread.workspaceHandoff?.available !== false &&
@@ -10073,7 +10103,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   });
 
   const submitHandoff = async (): Promise<void> => {
-    if (!threadWorkspace || !props.onHandoffThreadWorkspace) {
+    if (props.workspaceActionsBlocked || !threadWorkspace || !props.onHandoffThreadWorkspace) {
       return;
     }
 
@@ -10116,6 +10146,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const openWorkspaceApplication = async (
     application: DesktopApplicationDiscoveryCandidate,
   ): Promise<void> => {
+    if (props.workspaceActionsBlocked) return;
     if (!props.desktopApi?.openApplication) {
       setApplicationOpenError("Desktop bridge is missing openApplication().");
       return;
@@ -10629,16 +10660,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
               </p>
               {handoffDialog === "to-project" ? (
-                <>
-                  <ProjectPicker
-                    value={projectDirectories.find((directory) => directory.path === projectTargetPath)}
+                <div className="workspace-handoff-dialog__field">
+                  <label htmlFor={projectDestinationInputId}>Destination project</label>
+                  <ProjectDestinationCombobox
+                    id={projectDestinationInputId}
                     directories={projectDirectories}
-                    onQueryChange={setProjectSearch}
-                    pickError={projectDestinations.state?.error}
                     disabled={handoffSubmitting}
-                    nativePickingDisabled={Boolean(filesystemFederationTarget)}
-                    onSelect={(directory) => setProjectTargetPath(directory.path ?? "")}
-                    onPickFromDisk={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
+                    error={projectDestinations.state?.error}
+                    loaded={projectDestinationsLoaded}
+                    remote={filesystemFederationTarget?.scope === "remote"}
+                    value={projectTargetPath}
+                    onChange={setProjectTargetPath}
+                    onPickDirectory={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
                       ? () => {
                           void props.desktopApi!.pickDirectoryFromDisk!().then((result) => {
                             if (!result.canceled) setProjectTargetPath(result.path);
@@ -10647,21 +10680,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                           });
                         }
                       : undefined}
+                    onQueryChange={setProjectSearch}
                   />
-                  <label className="workspace-handoff-dialog__field">
-                    Destination project
-                    <input
-                      aria-label="Destination project"
-                      className="workspace-handoff-dialog__text-input"
-                      disabled={handoffSubmitting}
-                      placeholder="Absolute path to a Git checkout"
-                      spellCheck={false}
-                      type="text"
-                      value={projectTargetPath}
-                      onChange={(event) => setProjectTargetPath(event.target.value)}
-                    />
-                  </label>
-                </>
+                </div>
               ) : (
                 <dl className="workspace-handoff-dialog__summary">
                   <div>

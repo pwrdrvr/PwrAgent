@@ -22,6 +22,7 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
+  DesktopProviderModelDefaults,
   FederationInstanceId,
   FederationRemoteTarget,
   FederationTarget,
@@ -45,6 +46,8 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadProviderModelDefaults,
+  changedProviderModelDefaultBackends,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   classifyDirectory,
@@ -85,8 +88,12 @@ import {
 import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
+  getSubthreadProjectIdentity,
+  getThreadNamedBranch,
   getThreadPrimaryDirectory,
+  pickSubthreadWorktreeBase,
   type SubthreadMachine,
+  type SubthreadWorktreeBase,
   type ThreadWorkspaceMode,
 } from "./subthread-launchpads";
 
@@ -279,12 +286,7 @@ function selectThreadWorkspace(
   const worktree = primary?.kind === "worktree" ? primary : undefined;
   const local = primary?.kind === "local" ? primary : undefined;
   const preferred = worktree ?? local;
-  const namedBranch =
-    thread.observedGitBranch && thread.observedGitBranch !== "HEAD"
-      ? thread.observedGitBranch
-      : thread.gitBranch && thread.gitBranch !== "HEAD"
-        ? thread.gitBranch
-        : undefined;
+  const namedBranch = getThreadNamedBranch(thread);
 
   if (mode === "new-worktree") {
     const repository =
@@ -2755,6 +2757,7 @@ function buildLaunchpadRelativeThreadKey(
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   /**
    * This machine's federation instance id. A sub-thread started on a peer
    * names its local parent by it, and a parent link back to this machine
@@ -2867,11 +2870,25 @@ export function useThreadNavigation(
     localDirectory: ProjectIdentity,
     targetLabel?: string,
   ) => Promise<void>;
+  /**
+   * The branch a sub-thread's new worktree would start from on `instanceId`
+   * (undefined is this machine); undefined when it has no such project.
+   */
+  readSubthreadWorktreeBase: (
+    instanceId: string | undefined,
+    project: ProjectIdentity,
+    parentBranch: string | undefined,
+  ) => Promise<SubthreadWorktreeBase | undefined>;
   /** Whether the peer has the counterpart `openFederatedProjectLaunchpad` opens. */
   federatedTargetHasProject: (
     target: FederationRemoteTarget,
     localDirectory: ProjectIdentity,
   ) => Promise<boolean>;
+  /** The peer's own directory row for a local project, or undefined. */
+  findFederatedCounterpartDirectory: (
+    target: FederationRemoteTarget,
+    localDirectory: ProjectIdentity,
+  ) => Promise<NavigationDirectorySummary | undefined>;
   /** Back/Forward into a peer launchpad recorded by directory key. */
   restoreFederatedLaunchpad: (
     target: FederationRemoteTarget,
@@ -2889,9 +2906,9 @@ export function useThreadNavigation(
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
   pickAndRegisterDirectory: (
     preferredBackend?: AppServerBackendKind,
-  ) => Promise<void>;
-  /** Register a user-curated project, keep the current selection, and reveal the Directories lens. */
-  addProjectDirectory: () => Promise<void>;
+  ) => Promise<string | undefined>;
+  /** Register a project, select its new-thread composer, and reveal the Directories lens. */
+  addProjectDirectory: () => Promise<string | undefined>;
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
   /**
@@ -2937,6 +2954,7 @@ export function useThreadNavigation(
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   selectedThreadConfigurationReady: boolean;
+  selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
   refreshSelectedThreadConfiguration: () => Promise<void>;
   selectedThreadKey?: string;
@@ -3234,6 +3252,33 @@ export function useThreadNavigation(
   // A visible sidebar must load and refresh even when another app has focus.
   // Keep foreground state separate: background updates must not mark rows read.
   const [viewVisible, setViewVisible] = useState(isRendererViewVisible);
+  const previousProviderModelDefaultsRef = useRef(options.providerModelDefaults);
+  useLayoutEffect(() => {
+    const previous = previousProviderModelDefaultsRef.current;
+    const next = options.providerModelDefaults;
+    previousProviderModelDefaultsRef.current = next;
+    // The first Settings snapshot establishes a baseline. It must not reset
+    // a draft's deliberate model selection merely because this window opened.
+    if (!previous || !next || rendererFederationTarget) return;
+    const changedBackends = changedProviderModelDefaultBackends(previous, next);
+    if (changedBackends.length === 0) return;
+    const reconcile = (draft: NavigationLaunchpadDraft): NavigationLaunchpadDraft =>
+      draft.federationTarget?.scope === "remote"
+        ? draft
+        : applyNavigationLaunchpadProviderModelDefaults(draft, next, changedBackends);
+    setLocalLaunchpads((current) => Object.fromEntries(
+      Object.entries(current).map(([key, draft]) => [key, reconcile(draft)]),
+    ));
+    setState((current) => current.rows ? {
+      ...current,
+      rows: {
+        ...current.rows,
+        directoryRows: indexLoadedDirectoryRows(loadedDirectoryRows(current.rows).map((directory) =>
+          directory.launchpad ? { ...directory, launchpad: reconcile(directory.launchpad) } : directory
+        )),
+      },
+    } : current);
+  }, [options.providerModelDefaults, rendererFederationTarget]);
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
@@ -3341,6 +3386,10 @@ export function useThreadNavigation(
       ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
       : undefined,
   });
+  const [pendingWorkspaceHandoff, setPendingWorkspaceHandoff] = useState<{
+    threadKey: string;
+    directory: LinkedDirectorySummary;
+  }>();
   const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewVisible,
     directoryKey: getLaunchpadSelectionDirectoryKey(selectedItemKey), federationTarget: rendererFederationTarget,
   });
@@ -4881,8 +4930,26 @@ export function useThreadNavigation(
     });
   }, [pendingEnvironmentFailures, selectedDetail.state?.detail?.thread, state.rows]);
 
+  const selectedWorkspaceHandoffPending = Boolean(
+    pendingWorkspaceHandoff
+    && selectedThreadKey === pendingWorkspaceHandoff.threadKey
+    && !selectedDetail.state?.detail?.thread?.linkedDirectories.some((directory) =>
+      directory.id === pendingWorkspaceHandoff.directory.id
+      && directory.kind === pendingWorkspaceHandoff.directory.kind
+      && directory.path === pendingWorkspaceHandoff.directory.path
+      && directory.worktreePath === pendingWorkspaceHandoff.directory.worktreePath
+    )
+  );
+  useEffect(() => {
+    if (pendingWorkspaceHandoff
+      && selectedThreadKey === pendingWorkspaceHandoff.threadKey
+      && !selectedWorkspaceHandoffPending) {
+      setPendingWorkspaceHandoff(undefined);
+    }
+  }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
   const selectedThreadConfigurationReady =
-    navigationSelectionAuthorizesComposer(selectedDetail.state);
+    navigationSelectionAuthorizesComposer(selectedDetail.state)
+    && !selectedWorkspaceHandoffPending;
   const selectedThread = useMemo(() => {
     const authoritativeThread = selectedDetail.state?.detail?.thread;
     if (!authoritativeThread) return selectedRow;
@@ -5548,6 +5615,80 @@ export function useThreadNavigation(
       && Boolean(status?.worktreeCreationAvailable || status?.currentBranch || status?.branches?.length);
   }, [desktopApi]);
 
+  /**
+   * The owner's whole directory index. Callers check the bridge first. An
+   * index the owner is still loading throws rather than reading as complete,
+   * so a half-loaded peer never answers "no such project".
+   */
+  const readOwnerDirectoryIndex = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      consumerId: string,
+      isCancelled: () => boolean = () => false,
+    ): Promise<NavigationDirectorySummary[]> => {
+      const page = await readNavigationQueryRange({
+        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
+        read: (request) => desktopApi!.getNavigationQueryPage!(request, consumerId),
+        isCancelled: () => !mountedRef.current || isCancelled(),
+        maxBytes: 8 * 1024 * 1024,
+      }).finally(() => desktopApi?.releaseNavigationQuery?.(consumerId));
+      if (page.coverage.state !== "complete") {
+        throw new Error("The owner is still loading its directories. Retry when it is ready.");
+      }
+      return page.directories ?? [];
+    },
+    [desktopApi],
+  );
+
+  /**
+   * The checkout a sub-thread's new worktree would start from on `instanceId`
+   * (undefined is this machine), and the branch it would start from. The
+   * machine list and the launch both ask here, so the branch the menu shows
+   * is the branch the launch uses. Undefined when that machine has no such
+   * project.
+   */
+  const readSubthreadWorktreeCounterpart = useCallback(
+    async (
+      instanceId: string | undefined,
+      project: ProjectIdentity,
+      parentBranch: string | undefined,
+    ): Promise<
+      | { directory: NavigationDirectorySummary; base: SubthreadWorktreeBase }
+      | undefined
+    > => {
+      let candidates: readonly NavigationDirectorySummary[];
+      if (instanceId === undefined) {
+        // A sub-thread launchpad row is a composer, not a project, even
+        // when it carries the parent's path.
+        candidates = directories.filter((directory) =>
+          !isSubthreadLaunchpadKey(directory.key));
+      } else {
+        if (!desktopApi?.getNavigationQueryPage) {
+          throw new Error("Desktop bridge requires bounded navigation support. Upgrade this instance.");
+        }
+        candidates = await readOwnerDirectoryIndex(
+          { scope: "remote", instanceId },
+          `subthread-worktree:${attentionViewId}:${instanceId}:${project.label}`,
+        );
+      }
+      const directory = findPeerCounterpartDirectory(project, candidates);
+      return directory
+        ? { directory, base: pickSubthreadWorktreeBase(parentBranch, directory.gitStatus) }
+        : undefined;
+    },
+    [attentionViewId, desktopApi, directories, readOwnerDirectoryIndex],
+  );
+
+  const readSubthreadWorktreeBase = useCallback(
+    async (
+      instanceId: string | undefined,
+      project: ProjectIdentity,
+      parentBranch: string | undefined,
+    ): Promise<SubthreadWorktreeBase | undefined> =>
+      (await readSubthreadWorktreeCounterpart(instanceId, project, parentBranch))?.base,
+    [readSubthreadWorktreeCounterpart],
+  );
+
   const createSubthread = useCallback(
     async (
       parent: NavigationThreadSummary,
@@ -5570,16 +5711,6 @@ export function useThreadNavigation(
         return;
       }
 
-      const directory = selectThreadWorkspace(parent, mode);
-      const launchpadDirectoryPath =
-        mode === "new-worktree"
-          ? directory.gitStatusSourcePath ?? directory.directoryPath
-          : directory.directoryPath;
-      // Key the launchpad on the clicked card so each source gets its own
-      // composer (two children of one parent must not collide), and link the
-      // new thread to that same card — the thread it is a child of.
-      const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
-
       const parentOwnerTarget =
         parent.federation?.ref.target ?? rendererFederationTarget;
       const parentOwnerInstanceId =
@@ -5591,20 +5722,87 @@ export function useThreadNavigation(
       // the *grandparent's* instance id, because the parent recorded here used
       // to be the group root rather than the card the operator clicked.)
       //
-      // A new workspace needs nothing from the parent's disk, so it alone may
-      // start on another machine. The child then names the parent's owner,
-      // which is what files it under the parent across machines.
+      // A new workspace needs nothing from the parent's disk, and a new
+      // worktree needs only the parent's project, so those two may start on
+      // another machine. The child then names the parent's owner, which is
+      // what files it under the parent across machines.
       const machineInstanceId = machine
         ? machine.instanceId ?? localFederationInstanceId
         : undefined;
       const crossMachine =
-        mode === "new-workspace"
+        (mode === "new-workspace" || mode === "new-worktree")
         && machine !== undefined
         && machineInstanceId !== parentOwnerInstanceId;
       if (crossMachine && !parentOwnerInstanceId) {
         setCreateThreadError("This machine has no federation identity to link the sub-thread to its parent.");
         return;
       }
+
+      let directory = selectThreadWorkspace(parent, mode);
+      let crossMachineGitStatus: NavigationDirectoryGitStatus | undefined;
+      if (crossMachine && mode === "new-worktree") {
+        // The parent's checkout path means nothing on the other machine:
+        // start from that machine's own checkout of the same project.
+        const project = getSubthreadProjectIdentity(parent, directories);
+        if (!project) {
+          setCreateThreadError("This thread has no project to start a worktree from.");
+          return;
+        }
+        let counterpart: Awaited<ReturnType<typeof readSubthreadWorktreeCounterpart>>;
+        try {
+          counterpart = await readSubthreadWorktreeCounterpart(
+            machine?.instanceId,
+            project,
+            getThreadNamedBranch(parent),
+          );
+        } catch (error) {
+          setCreateThreadError(error instanceof Error ? error.message : String(error));
+          return;
+        }
+        if (!counterpart) {
+          setCreateThreadError(`That machine has no project named ${project.label}.`);
+          return;
+        }
+        if (!counterpart.base.available) {
+          setCreateThreadError(
+            counterpart.base.cause === "no-branch"
+              ? `${counterpart.directory.label} on that machine has no branch to start a worktree from.`
+              : `${counterpart.directory.label} on that machine cannot start a worktree${counterpart.base.reason ? `: ${counterpart.base.reason}` : ""}.`,
+          );
+          return;
+        }
+        // The menu named the base branch. A checkout that moved since then
+        // is reported, never followed.
+        if (machine?.baseBranch && machine.baseBranch !== counterpart.base.baseBranch) {
+          setCreateThreadError(
+            `${counterpart.directory.label} on that machine would now start from ${counterpart.base.baseBranch}, not ${machine.baseBranch}. Choose the machine again to start from ${counterpart.base.baseBranch}.`,
+          );
+          return;
+        }
+        directory = {
+          branchName: counterpart.base.baseBranch,
+          directoryKind: "directory",
+          directoryLabel: counterpart.directory.label,
+          directoryPath: counterpart.directory.path,
+          gitStatusSourcePath: counterpart.directory.path,
+          workMode: "worktree",
+        };
+        crossMachineGitStatus = counterpart.directory.gitStatus;
+      }
+      const launchpadDirectoryPath =
+        mode === "new-worktree"
+          ? directory.gitStatusSourcePath ?? directory.directoryPath
+          : directory.directoryPath;
+      // Key the launchpad on the clicked card so each source gets its own
+      // composer (two children of one parent must not collide), and link the
+      // new thread to that same card — the thread it is a child of. A child
+      // on another machine is keyed on that machine too, so a second machine
+      // opens its own composer rather than replacing the first one's.
+      const directoryKey = buildSubthreadLaunchpadKey(
+        parent,
+        mode,
+        crossMachine ? machineInstanceId : undefined,
+      );
       const federationTarget: FederationTarget | undefined = crossMachine
         ? machine?.instanceId
           ? { scope: "remote", instanceId: machine.instanceId }
@@ -5630,15 +5828,22 @@ export function useThreadNavigation(
           directoryLabel: directory.directoryLabel,
           directoryPath: launchpadDirectoryPath,
           gitStatusSourcePath: directory.gitStatusSourcePath,
-          ...(parent.federation
-            ? {
-                gitStatus: loadedDirectoryRows(stateRef.current.rows).find(
-                  (entry) =>
-                    entry.path === directory.gitStatusSourcePath
-                    || entry.path === directory.directoryPath,
-                )?.gitStatus,
-              }
-            : {}),
+          // A peer's paths can equal this machine's (one home layout on two
+          // Macs), so a child on another machine takes only that machine's
+          // status, never a row found here by path.
+          ...(crossMachine
+            ? crossMachineGitStatus && federationTarget
+              ? { gitStatus: crossMachineGitStatus }
+              : {}
+            : parent.federation
+              ? {
+                  gitStatus: loadedDirectoryRows(stateRef.current.rows).find(
+                    (entry) =>
+                      entry.path === directory.gitStatusSourcePath
+                      || entry.path === directory.directoryPath,
+                  )?.gitStatus,
+                }
+              : {}),
           currentBranch: directory.branchName,
           parentThreadId: parent.id,
           parentThreadBackend: parent.source,
@@ -5709,8 +5914,10 @@ export function useThreadNavigation(
         const ensuredGitStatus =
           response.gitStatus !== undefined
             ? response.gitStatus
-            : pendingGitStatus ?? workspaceDirectories?.find((candidate) =>
-              candidate.path === directory.gitStatusSourcePath || candidate.path === launchpadDirectoryPath)?.gitStatus;
+            : pendingGitStatus ?? (crossMachine
+              ? crossMachineGitStatus
+              : workspaceDirectories?.find((candidate) =>
+                candidate.path === directory.gitStatusSourcePath || candidate.path === launchpadDirectoryPath)?.gitStatus);
         setState((current) => ({
           ...current,
           rows: applyLaunchpadUpdate(current.rows, launchpad, defaults, {
@@ -5729,7 +5936,9 @@ export function useThreadNavigation(
     },
     [
       desktopApi,
+      directories,
       localFederationInstanceId,
+      readSubthreadWorktreeCounterpart,
       rendererFederationTarget,
       takePendingDirectoryGitStatus,
     ],
@@ -5988,31 +6197,6 @@ export function useThreadNavigation(
   );
 
   /**
-   * The owner's whole directory index. Callers check the bridge first. An
-   * index the owner is still loading throws rather than reading as complete,
-   * so a half-loaded peer never answers "no such project".
-   */
-  const readOwnerDirectoryIndex = useCallback(
-    async (
-      target: FederationRemoteTarget,
-      consumerId: string,
-      isCancelled: () => boolean = () => false,
-    ): Promise<NavigationDirectorySummary[]> => {
-      const page = await readNavigationQueryRange({
-        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
-        read: (request) => desktopApi!.getNavigationQueryPage!(request, consumerId),
-        isCancelled: () => !mountedRef.current || isCancelled(),
-        maxBytes: 8 * 1024 * 1024,
-      }).finally(() => desktopApi?.releaseNavigationQuery?.(consumerId));
-      if (page.coverage.state !== "complete") {
-        throw new Error("The owner is still loading its directories. Retry when it is ready.");
-      }
-      return page.directories ?? [];
-    },
-    [desktopApi],
-  );
-
-  /**
    * Read the owner's directory index, pick one row, and open its launchpad.
    * `pick` returns undefined when the owner has no row to offer; the message
    * it names then surfaces as the launchpad error instead of the composer
@@ -6111,6 +6295,23 @@ export function useThreadNavigation(
         `project-target:${attentionViewId}:${target.instanceId}:${localDirectory.label}`,
       );
       return Boolean(findPeerCounterpartDirectory(localDirectory, ownerDirectories));
+    },
+    [attentionViewId, desktopApi, readOwnerDirectoryIndex],
+  );
+
+  const findFederatedCounterpartDirectory = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      localDirectory: ProjectIdentity,
+    ): Promise<NavigationDirectorySummary | undefined> => {
+      if (!desktopApi?.getNavigationQueryPage) {
+        return undefined;
+      }
+      const ownerDirectories = await readOwnerDirectoryIndex(
+        target,
+        `project-counterpart:${attentionViewId}:${target.instanceId}:${localDirectory.label}`,
+      );
+      return findPeerCounterpartDirectory(localDirectory, ownerDirectories);
     },
     [attentionViewId, desktopApi, readOwnerDirectoryIndex],
   );
@@ -6316,8 +6517,13 @@ export function useThreadNavigation(
     ],
   );
 
+  const recordPickDirectoryError = useCallback((message?: string): void => {
+    lastPickDirectoryErrorRef.current = message;
+    setPickDirectoryError(message);
+  }, []);
+
   const pickAndRegisterDirectory = useCallback(
-    async (preferredBackend?: AppServerBackendKind): Promise<void> => {
+    async (preferredBackend?: AppServerBackendKind): Promise<string | undefined> => {
       // Two-step OS-dialog → register-as-launchpad flow (issue #223).
       // We separate the cancel path (silent — the user closed the
       // dialog) from the validation-failure path (loud — we surface
@@ -6325,36 +6531,37 @@ export function useThreadNavigation(
       // path navigates to the new directory's launchpad immediately
       // so the composer focuses the just-added directory without an
       // extra click.
+      recordPickDirectoryError(undefined);
       if (rendererFederationTarget) {
-        return;
+        return undefined;
       }
       if (
         !desktopApi?.pickDirectoryFromDisk ||
         !desktopApi?.registerDirectoryFromDisk
       ) {
-        setPickDirectoryError(
+        recordPickDirectoryError(
           "Desktop bridge is missing the directory picker.",
         );
-        return;
+        return undefined;
       }
 
-      setPickDirectoryError(undefined);
       setPickingDirectory(true);
 
       let pendingPickedDirectoryKey: string | undefined;
       try {
         const pick = await desktopApi.pickDirectoryFromDisk();
         if (pick.canceled) {
-          return;
+          return undefined;
         }
         const result = await desktopApi.registerDirectoryFromDisk({
           path: pick.path,
           preferredBackend,
         });
         if (!result.ok) {
-          setPickDirectoryError(result.message);
-          return;
+          recordPickDirectoryError(result.message);
+          return undefined;
         }
+        removedDirectoryKeysRef.current.delete(result.directoryKey);
         pendingPickedDirectoryKey = result.directoryKey;
         pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
         setLocalLaunchpads((current) => ({
@@ -6388,10 +6595,14 @@ export function useThreadNavigation(
           directoryKeys: [result.directoryKey],
           force: true,
         });
+        return result.directoryKey;
       } catch (error) {
-        setPickDirectoryError(
+        recordPickDirectoryError(
           error instanceof Error ? error.message : String(error),
         );
+        // A metadata refresh can fail after registration has committed. Keep
+        // the successful directory selection/reveal and report that error.
+        return pendingPickedDirectoryKey;
       } finally {
         if (pendingPickedDirectoryKey) {
           pendingPickedLaunchpadRef.current.delete(pendingPickedDirectoryKey);
@@ -6399,13 +6610,8 @@ export function useThreadNavigation(
         setPickingDirectory(false);
       }
     },
-    [desktopApi, refresh, rendererFederationTarget],
+    [desktopApi, recordPickDirectoryError, refresh, rendererFederationTarget],
   );
-
-  const recordPickDirectoryError = useCallback((message?: string): void => {
-    lastPickDirectoryErrorRef.current = message;
-    setPickDirectoryError(message);
-  }, []);
 
   const pickDirectoryForReference = useCallback(async (): Promise<
     { label: string; path: string } | undefined
@@ -6469,20 +6675,19 @@ export function useThreadNavigation(
     }
   }, [desktopApi, recordPickDirectoryError, rendererFederationTarget]);
 
-  const addProjectDirectory = useCallback(async (): Promise<void> => {
-    const picked = await pickDirectoryForReference();
+  const addProjectDirectory = useCallback(async (): Promise<string | undefined> => {
+    const directoryKey = await pickAndRegisterDirectory();
     // Nothing on screen renders `pickDirectoryError` for this entry point,
     // so publish the outcome to the notice stack. A cancel or a success
     // records `undefined`, which takes any prior notice down.
     publishAddDirectoryError(lastPickDirectoryErrorRef.current);
-    if (picked) {
+    if (directoryKey) {
       updateBrowseMode("directories");
-      await refresh();
     }
+    return directoryKey;
   }, [
-    pickDirectoryForReference,
+    pickAndRegisterDirectory,
     publishAddDirectoryError,
-    refresh,
     updateBrowseMode,
   ]);
 
@@ -7741,15 +7946,26 @@ export function useThreadNavigation(
 
       try {
         thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
-        await handoffThreadWorkspaceRequest({
+        const response = await handoffThreadWorkspaceRequest({
           ...request,
           backend: thread.source,
           federationTarget: thread.federation?.ref.target ??
             readRendererFederationTarget(),
           threadId: thread.id,
         });
-        await refresh(threadSummaryIdentityKey(thread));
-        if (selectedItemKeyRef.current === threadSummaryIdentityKey(thread)) await selectedDetail.refresh();
+        const threadKey = threadSummaryIdentityKey(thread);
+        setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
+        // The main process has committed the workspace change before its IPC
+        // response. Keep workspace actions gated until selected detail reflects
+        // that commit, while the dialog can close before Git-backed reads finish.
+        void (async () => {
+          await Promise.all([
+            refresh(threadKey),
+            selectedItemKeyRef.current === threadKey ? selectedDetail.refresh() : Promise.resolve(),
+          ]);
+        })().catch((error) => {
+          setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);
@@ -8682,6 +8898,8 @@ export function useThreadNavigation(
     openFederatedWorkspaceLaunchpad,
     openFederatedProjectLaunchpad,
     federatedTargetHasProject,
+    findFederatedCounterpartDirectory,
+    readSubthreadWorktreeBase,
     restoreFederatedLaunchpad,
     selectedFederatedLaunchpadTarget: activeFederatedLaunchpad?.target,
     planLaunchpadMachineRetarget,
@@ -8704,6 +8922,7 @@ export function useThreadNavigation(
     selectedLaunchpad,
     selectedThread,
     selectedThreadConfigurationReady,
+    selectedWorkspaceHandoffPending,
     selectedThreadConfigurationError: selectedDetail.state?.error
       ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
         ? `This thread is ${selectedDetail.state.detail.identity}.` : undefined),

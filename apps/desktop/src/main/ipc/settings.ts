@@ -19,6 +19,7 @@ import type {
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopMessagingSettingsProjection,
+  DesktopProviderModelDefaults,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
   DesktopSettingsSecretWriteResponse,
@@ -1588,6 +1589,7 @@ export function registerSettingsIpcHandlers(
   options?: {
     onConfigPatchWritten?: (
       patch: DesktopSettingsConfigPatch,
+      previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>,
     ) => void | Promise<void>;
   },
 ): void {
@@ -1741,8 +1743,12 @@ export function registerSettingsIpcHandlers(
       request: WriteDesktopSettingsConfigRequest,
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
+      const previousProviderDefaults = request.patch.models?.providerDefaults !== undefined
+        ? activeService.resolveProviderModelDefaults()
+        : undefined;
       const discoveryPermit = (
         request.patch.models?.codex?.path !== undefined
+        || request.patch.models?.codex?.managedBuilds !== undefined
         || request.patch.experimental?.tokenMiserEnabled !== undefined
       )
         ? issueProviderDiscoveryPermit("settings-user-action")
@@ -1751,7 +1757,11 @@ export function registerSettingsIpcHandlers(
         request.patch,
         discoveryPermit,
       );
-      await options?.onConfigPatchWritten?.(request.patch);
+      if (previousProviderDefaults) {
+        await options?.onConfigPatchWritten?.(request.patch, previousProviderDefaults);
+      } else {
+        await options?.onConfigPatchWritten?.(request.patch);
+      }
       invalidateAcpRefreshCacheAfterWrite(request.patch);
       if (service && messagingPatchTouchesRuntime(request.patch)) {
         await applyLatestMessagingRuntimeConfig(activeService);

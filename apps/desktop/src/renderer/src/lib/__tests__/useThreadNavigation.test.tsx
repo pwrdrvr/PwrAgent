@@ -11,7 +11,9 @@ import {
 import type {
   AgentEvent,
   AppServerThreadTitleSource,
+  DesktopProviderModelDefaults,
   FederationRemoteTarget,
+  HandoffThreadWorkspaceResponse,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -170,6 +172,113 @@ describe("useThreadNavigation", () => {
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  it("gates workspace actions until selected detail reflects a committed handoff", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-handoff",
+      title: "Handoff thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{ id: "repo", kind: "local", label: "Repo", path: "/repo" }],
+      inbox: { inInbox: true, reason: "new-thread" },
+      updatedAt: 1,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-handoff"],
+      threads: [thread],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    let blockRefresh = false;
+    let releaseRefresh: () => void = () => undefined;
+    let signalRefresh: () => void = () => undefined;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>((resolve) => { signalRefresh = resolve; });
+    let blockDetail = false;
+    let releaseDetail: () => void = () => undefined;
+    let signalDetail: () => void = () => undefined;
+    const detailGate = new Promise<void>((resolve) => { releaseDetail = resolve; });
+    const detailStarted = new Promise<void>((resolve) => { signalDetail = resolve; });
+    const getNavigationQueryPage: NonNullable<DesktopApi["getNavigationQueryPage"]> = async (request) => {
+      if (blockRefresh) {
+        signalRefresh();
+        await refreshGate;
+      }
+      return { ...navigationQueryFixture(request, snapshot), coverage: { state: "complete" } };
+    };
+    const response: HandoffThreadWorkspaceResponse = {
+      backend: "codex",
+      threadId: thread.id,
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      workMode: "worktree",
+      repositoryPath: "/repo",
+      targetPath: "/worktree",
+      linkedDirectory: {
+        id: "worktree", kind: "worktree", label: "Worktree", path: "/repo", worktreePath: "/worktree",
+      },
+      warnings: [],
+      completedAt: 2,
+    };
+    let detailThread = thread;
+    const handoffThreadWorkspace = vi.fn<NonNullable<DesktopApi["handoffThreadWorkspace"]>>(async () => {
+      detailThread = { ...thread, linkedDirectories: [response.linkedDirectory] };
+      blockDetail = true;
+      return response;
+    });
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+      if (blockDetail) {
+        signalDetail();
+        await detailGate;
+      }
+      return {
+        protocol: 2, ref: request.ref, revision: detailThread.linkedDirectories[0]?.id ?? "none",
+        readiness: "ready", identity: "present", thread: detailThread,
+        workspaceDirectories: [],
+      };
+    });
+    const desktopApi: DesktopApi = {
+      readPopulation: async () => snapshot,
+      getNavigationQueryPage,
+      getNavigationSelectedDetail,
+      handoffThreadWorkspace,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    act(() => result.current.selectThread(result.current.threads[0]!));
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+
+    blockRefresh = true;
+    let handoffSettled = false;
+    let handoffPromise: Promise<void> | undefined;
+    act(() => {
+      handoffPromise = result.current.handoffThreadWorkspace(thread, {
+        direction: "local-to-worktree",
+      }).then(() => { handoffSettled = true; });
+    });
+    try {
+      await refreshStarted;
+      await detailStarted;
+      await Promise.resolve();
+      expect(handoffSettled).toBe(true);
+      expect(handoffThreadWorkspace).toHaveBeenCalledOnce();
+      await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(true));
+      expect(result.current.selectedThreadConfigurationReady).toBe(false);
+      expect(result.current.selectedThread?.linkedDirectories[0]?.path).toBe("/repo");
+      releaseDetail();
+      await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(false));
+      expect(result.current.selectedThreadConfigurationReady).toBe(true);
+      expect(result.current.selectedThread?.linkedDirectories[0]?.worktreePath).toBe("/worktree");
+    } finally {
+      releaseDetail();
+      releaseRefresh();
+      await act(async () => { await handoffPromise; });
+    }
   });
 
   it.each(["inbox", "directories"] as const)("loads navigation before a visible window gains focus (%s)", async (browseMode) => {
@@ -7338,6 +7447,100 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it.each([
+    { model: "gpt-6.1-sol", reasoningEffort: "low" },
+    { model: "gpt-6-sol", reasoningEffort: "low" },
+    { model: undefined, reasoningEffort: undefined },
+  ])("reconciles open drafts before submitting after defaults change to $model/$reasoningEffort", async (selection) => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "codex", executionMode: "full-access" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      directoryPath: "/fixture", model: "gpt-6-sol", reasoningEffort: "high", workMode: "worktree",
+      prompt: "unsent draft", editorDocument: { type: "doc", content: [] },
+      fileAttachments: [{ id: "file", label: "fixture.txt", path: "/fixture.txt" }],
+      imageAttachments: [{ id: "image", name: "fixture.png", size: 10, type: "image/png", url: "data:image/png;base64,AA==" }],
+      fastMode: true, codexEnvironmentId: "fixture-environment", mcpConnectionIds: ["fixture-connection"],
+      createdAt: 1, updatedAt: 1,
+    };
+    const inactive: NavigationLaunchpadDraft = {
+      ...launchpad, directoryKey: "directory:/inactive", backend: "acp:kimi", model: "kimi-k3",
+      providerSettings: { codex: { model: "gpt-6-sol", reasoningEffort: "high", fastMode: true } },
+    };
+    const remote: NavigationLaunchpadDraft = {
+      ...launchpad, directoryKey: "directory:/remote", federationTarget: { scope: "remote", instanceId: "peer" },
+    };
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "created-thread", executionMode: "full-access" as const, workMode: "worktree" as const,
+    }));
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [launchpad, inactive, remote].map((draft) => ({
+          key: draft.directoryKey, kind: "directory" as const, label: "Fixture", path: draft.directoryPath,
+          threadKeys: [], needsAttentionCount: 0, launchpad: draft,
+        })), launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async (request) => ({
+        launchpad: [launchpad, inactive, remote].find((draft) => draft.directoryKey === request.directoryKey)!, defaults,
+      })),
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+    const before: Record<string, DesktopProviderModelDefaults> = {
+      codex: { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } },
+    };
+    const after: Record<string, DesktopProviderModelDefaults> = selection.model
+      ? { codex: { model: selection.model, reasoningEffortsByModel: { [selection.model]: selection.reasoningEffort! } } }
+      : {};
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: before, threadViewVisible: true },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(3));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories.find((directory) => directory.key === remote.directoryKey)!); });
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories.find((directory) => directory.key === inactive.directoryKey)!); });
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories.find((directory) => directory.key === launchpad.directoryKey)!); });
+    expect(result.current.selectedLaunchpad).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "high" });
+    rerender({ providerModelDefaults: after, threadViewVisible: false });
+    rerender({ providerModelDefaults: after, threadViewVisible: true });
+    await waitFor(() => expect(result.current.selectedLaunchpad).toMatchObject({
+      ...launchpad, ...selection, editorDocument: launchpad.editorDocument,
+    }));
+    const parked = result.current.directories.find((directory) => directory.key === inactive.directoryKey)!.launchpad!;
+    expect(parked).toMatchObject({ model: "kimi-k3", prompt: "unsent draft", fileAttachments: launchpad.fileAttachments });
+    expect(parked.providerSettings?.codex).toMatchObject(selection);
+    expect(result.current.directories.find((directory) => directory.key === remote.directoryKey)?.launchpad).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "high" });
+    await act(async () => { await result.current.materializeDirectoryLaunchpad(launchpad.directoryKey); });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      launchpad: expect.objectContaining({ ...launchpad, ...selection }),
+    }));
+  });
+
+  it("keeps deliberate draft choices on the first Settings snapshot and unrelated refreshes", async () => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "codex", executionMode: "default" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      model: "custom-model", reasoningEffort: "high", workMode: "local", prompt: "draft", createdAt: 1, updatedAt: 1,
+    };
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [{ key: launchpad.directoryKey, kind: "directory", label: "Fixture",
+          threadKeys: [], needsAttentionCount: 0, launchpad }], launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: undefined as Record<string, DesktopProviderModelDefaults> | undefined },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories[0]!); });
+    const providerModelDefaults = { codex: { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } } };
+    rerender({ providerModelDefaults });
+    rerender({ providerModelDefaults: structuredClone(providerModelDefaults) });
+    expect(result.current.selectedLaunchpad).toMatchObject({ model: "custom-model", reasoningEffort: "high", prompt: "draft" });
+  });
+
   it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
     const defaults = {
       backend: "codex" as const,
@@ -8871,16 +9074,180 @@ describe("useThreadNavigation", () => {
       patch: expect.objectContaining({ federationTarget: studio, parentThreadInstanceId: "harbor" }),
     }));
     expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:codex:workspace-parent:new-workspace:studio",
       federationTarget: studio, parentThreadId: parent.id, parentThreadInstanceId: "harbor",
     });
+
+    // A second machine opens its own composer; the first machine's stays.
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", { instanceId: "attic" });
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:codex:workspace-parent:new-workspace:attic",
+      federationTarget: { scope: "remote", instanceId: "attic" }, parentThreadInstanceId: "harbor",
+    });
+    expect(result.current.directories.map((directory) => directory.key)).toEqual(expect.arrayContaining([
+      "subthread:codex:workspace-parent:new-workspace:studio",
+      "subthread:codex:workspace-parent:new-workspace:attic",
+    ]));
 
     // Picking the parent's own machine is the plain new workspace: no link.
     ensureDirectoryLaunchpad.mockClear();
     await act(async () => {
       await result.current.createSubthread(parent, "new-workspace", {});
     });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0]).toMatchObject({
+      directoryKey: "subthread:codex:workspace-parent:new-workspace",
+    });
     expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0].federationTarget).toBeUndefined();
     expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
+  });
+
+  it("starts a new-worktree sub-thread on a peer from the peer's checkout and a branch it has", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "worktree-parent", title: "Tighten retries", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/repo/app/.worktrees/parent", gitBranch: "feature/retries", primaryGitRepository: "example.test/acme/app",
+      linkedDirectories: [{
+        id: "/repo/app", label: "app", path: "/repo/app", worktreePath: "/repo/app/.worktrees/parent", kind: "worktree",
+      }],
+      inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    // The peer's clone has another folder name, and a decoy shares the
+    // parent's name but clones a different origin.
+    const peerCheckout = {
+      key: "/Users/fixture/src/acme-app", kind: "directory" as const, label: "acme-app",
+      path: "/Users/fixture/src/acme-app", repositoryKey: "example.test/acme/app",
+      gitStatus: { currentBranch: "main", defaultBranch: "main" },
+    };
+    const decoy = {
+      key: "/Users/fixture/src/app", kind: "directory" as const, label: "app",
+      path: "/Users/fixture/src/app", repositoryKey: "example.test/other/app",
+      gitStatus: { currentBranch: "feature/retries" },
+    };
+    const peerDirectories = [decoy, peerCheckout];
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 2,
+        directoryKey: request.directoryKey, directoryKind: "directory", directoryLabel: "acme-app",
+        ...request.patch,
+      },
+      defaults,
+    }));
+    const onThreadActionError = vi.fn();
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:worktree-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      getNavigationQueryPage: async (request) => navigationQueryFixture(
+        request,
+        request.federationTarget ? { directories: peerDirectories } : { threads: [parent] },
+      ),
+      releaseNavigationQuery: async () => undefined,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, {
+      localFederationInstanceId: "harbor", onThreadActionError,
+    }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    const project = { kind: "directory" as const, label: "app", path: "/repo/app", repositoryKey: "example.test/acme/app" };
+    // The parent's branch is not on the peer, so the menu offers the peer's.
+    await expect(result.current.readSubthreadWorktreeBase("studio", project, "feature/retries"))
+      .resolves.toEqual({ available: true, baseBranch: "main" });
+
+    // A checkout that moved after the menu read it is reported, not followed.
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { instanceId: "studio", baseBranch: "develop" });
+    });
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(latestThreadActionError(onThreadActionError, "create-thread")).toBe(
+      "acme-app on that machine would now start from main, not develop. Choose the machine again to start from main.",
+    );
+
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { instanceId: "studio", baseBranch: "main" });
+    });
+    const studio = { scope: "remote", instanceId: "studio" };
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: studio,
+      directoryKey: "subthread:codex:worktree-parent:new-worktree:studio",
+      directoryKind: "directory",
+      directoryLabel: "acme-app",
+      directoryPath: "/Users/fixture/src/acme-app",
+      gitStatusSourcePath: "/Users/fixture/src/acme-app",
+      gitStatus: peerCheckout.gitStatus,
+      currentBranch: "main",
+      parentThreadId: parent.id,
+    }));
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({
+        federationTarget: studio, workMode: "worktree", branchName: "main",
+        directoryPath: "/Users/fixture/src/acme-app", parentThreadInstanceId: "harbor",
+      }),
+    }));
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: studio, workMode: "worktree", branchName: "main",
+      parentThreadId: parent.id, parentThreadInstanceId: "harbor",
+    });
+
+    // On the parent's own machine the worktree starts from the parent's
+    // checkout and branch, and the child needs no instance link.
+    ensureDirectoryLaunchpad.mockClear();
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { baseBranch: "feature/retries" });
+    });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0]).toMatchObject({
+      directoryKey: "subthread:codex:worktree-parent:new-worktree",
+      directoryPath: "/repo/app",
+      currentBranch: "feature/retries",
+    });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0].federationTarget).toBeUndefined();
+    expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
+  });
+
+  it("refuses a new-worktree sub-thread on a peer without the parent's project", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "worktree-parent", title: "Tighten retries", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/repo/app", gitBranch: "main", primaryGitRepository: "example.test/acme/app",
+      linkedDirectories: [{ id: "/repo/app", label: "app", path: "/repo/app", kind: "local" }],
+      inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>();
+    const onThreadActionError = vi.fn();
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:worktree-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      // Same folder name, different origin: not the parent's project.
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, request.federationTarget
+        ? { directories: [{ key: "/src/app", kind: "directory", label: "app", path: "/src/app", repositoryKey: "example.test/other/app" }] }
+        : { threads: [parent] }),
+      releaseNavigationQuery: async () => undefined,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, {
+      localFederationInstanceId: "harbor", onThreadActionError,
+    }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await expect(result.current.readSubthreadWorktreeBase(
+      "studio",
+      { kind: "directory", label: "app", path: "/repo/app", repositoryKey: "example.test/acme/app" },
+      "main",
+    )).resolves.toBeUndefined();
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { instanceId: "studio" });
+    });
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(latestThreadActionError(onThreadActionError, "create-thread")).toBe(
+      "That machine has no project named app.",
+    );
   });
 
   it("forks a parent thread through the desktop bridge and selects the optimistic fork", async () => {
@@ -13219,7 +13586,7 @@ describe("useThreadNavigation", () => {
       const { result } = renderHook(() => useThreadNavigation(desktopApi));
       await waitFor(() => expect(result.current.loading).toBe(false));
 
-      let pick!: Promise<void>;
+      let pick!: ReturnType<typeof result.current.pickAndRegisterDirectory>;
       act(() => {
         pick = result.current.pickAndRegisterDirectory();
       });
@@ -13349,7 +13716,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickingDirectory).toBe(false);
     });
 
-    it("addProjectDirectory tracks an empty repo and reveals the Directories lens", async () => {
+    it.each([false, true])("addProjectDirectory selects the registered repo's composer and reveals the Directories lens (metadata failure: %s)", async (metadataFailure) => {
       const launchpad = buildPickedLaunchpad({ registeredAt: 1_500 });
       const readPopulation = vi.fn(async () => buildSnapshot());
       const desktopApi = buildBaseDesktopApi({
@@ -13367,9 +13734,14 @@ describe("useThreadNavigation", () => {
           launchpad,
           defaults: launchpadDefaults,
         })),
+        refreshDirectoryGitStatuses: vi.fn(async () => {
+          if (metadataFailure) throw new Error("Git metadata unavailable");
+          return { scheduledCount: 1 };
+        }),
       });
 
-      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() => useThreadNavigation(desktopApi, { onThreadActionError }));
       await waitFor(() => expect(result.current.loading).toBe(false));
 
       await act(async () => {
@@ -13378,7 +13750,11 @@ describe("useThreadNavigation", () => {
 
       expect(result.current.browseMode).toBe("directories");
       expect(readPopulation).toHaveBeenCalledTimes(2);
-      expect(result.current.selectedItemKey).toBeUndefined();
+      expect(result.current.selectedItemKey).toBe(`launchpad:${launchpad.directoryKey}`);
+      expect(result.current.selectedLaunchpad).toMatchObject(launchpad);
+      expect(result.current.selectedDirectory?.key).toBe(launchpad.directoryKey);
+      expect(latestThreadActionError(onThreadActionError, "add-directory"))
+        .toBe(metadataFailure ? "Git metadata unavailable" : undefined);
       expect(result.current.directories).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -13390,6 +13766,20 @@ describe("useThreadNavigation", () => {
           }),
         ]),
       );
+
+      // Another selected thread and a refreshed index must not remove the
+      // newly registered, threadless directory from the renderer's list.
+      const unrelatedThread: NavigationThreadSummary = {
+        id: "unrelated", source: "codex", title: "Thread in another directory", titleSource: "explicit",
+        linkedDirectories: [{ id: "other", kind: "local", label: "Other", path: "/repos/other" }],
+        inbox: { inInbox: false },
+      };
+      readPopulation.mockResolvedValue({ ...buildSnapshot(), threads: [unrelatedThread] });
+      act(() => result.current.selectThread(unrelatedThread));
+      await act(async () => result.current.refresh());
+      expect(result.current.selectedThread?.id).toBe(unrelatedThread.id);
+      expect(result.current.directories.map((directory) => directory.key))
+        .toContain(launchpad.directoryKey);
     });
 
     it("pickDirectoryForReference surfaces validation failures and resolves undefined", async () => {

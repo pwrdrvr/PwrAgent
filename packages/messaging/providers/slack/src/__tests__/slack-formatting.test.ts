@@ -90,6 +90,29 @@ describe("Slack formatting", () => {
     ]);
   });
 
+  it.each(["&", "<", ">"])("preserves private confirmation content after escaping %s", (character) => {
+    const text = `${character.repeat(1_800)}\nLogin code: ABCD-1234\nChoose a button or reply in this message's thread.`;
+    const intent: MessagingSurfaceIntent = {
+      id: "private-request",
+      kind: "confirmation",
+      createdAt: 1,
+      title: "Agent: SSO helper",
+      body: text,
+      actions: [{ id: "done", label: "I did it" }, { id: "cancel", label: "Cancel" }],
+    };
+    const rendered = buildSlackBlocksForIntent({ intent, text: textForSlackIntent(intent) });
+    const sections = rendered.filter((block) => block.type === "section");
+    expect(sections.length).toBeGreaterThan(1);
+    for (const section of sections) {
+      expect(section.text.text.length).toBeLessThanOrEqual(3_000);
+    }
+    const content = sections.map((section) => section.text.text).join("\n");
+    expect(content).toContain("Login code: ABCD-1234");
+    expect(content).toContain("Choose a button or reply in this message's thread.");
+    expect(content).not.toContain("…");
+    expect(content.split(markdownToSlackMrkdwn(character))).toHaveLength(1_801);
+  });
+
   it("renders bound response identity on final streamed replies", () => {
     const intent: MessagingSurfaceIntent = {
       id: "streamed-reply",
