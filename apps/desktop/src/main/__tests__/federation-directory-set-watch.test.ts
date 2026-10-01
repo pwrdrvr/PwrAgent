@@ -202,6 +202,33 @@ describe("directory-set watch", () => {
     expect(subscriptions).toEqual([]);
   });
 
+  it("releases a peer's watch once the menus stop asking about it", () => {
+    vi.useFakeTimers();
+    try {
+      const { viewer, subscriptions } = federation();
+      const first = viewer.watchRemoteDirectorySet("owner_one")!;
+
+      // Each check keeps the watch for another ten minutes.
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(viewer.watchRemoteDirectorySet("owner_one")).toEqual(first);
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(subscriptions).toHaveLength(1);
+      expect(announcer.setWatched).toHaveBeenLastCalledWith(true);
+
+      vi.advanceTimersByTime(60_000);
+      expect(subscriptions).toHaveLength(2);
+      expect(paramsOf(subscriptions[1]!).eventClasses).not.toContain("directory_set");
+      expect(announcer.setWatched).toHaveBeenLastCalledWith(false);
+
+      // A later watch starts over under a generation no earlier read carries.
+      const next = viewer.watchRemoteDirectorySet("owner_one")!;
+      expect(subscriptions).toHaveLength(3);
+      expect(next.generation).toBeGreaterThan(first.generation);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops the owner's announcer when its last watcher leaves", () => {
     const { owner, viewer } = federation();
     viewer.watchRemoteDirectorySet("owner_one");

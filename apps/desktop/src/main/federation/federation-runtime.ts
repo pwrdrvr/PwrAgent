@@ -533,6 +533,12 @@ const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
   "remote-thread-summary-cache";
 /** This viewer's `directory_set` subscriptions, one per watched peer. */
 const DIRECTORY_SET_EVENT_CONSUMER_ID = "directory-set-watch";
+/**
+ * How long a peer stays watched after a machine menu last asked about it.
+ * The menus ask every peer as they open, so this is how long the owner keeps
+ * announcing (and re-checking every 5 minutes) after the menus go unused.
+ */
+const DIRECTORY_SET_WATCH_IDLE_MS = 10 * 60_000;
 
 type FederationCelestialIconsNotification = {
   method: typeof FEDERATION_CELESTIAL_ICONS_METHOD;
@@ -997,12 +1003,15 @@ export class DesktopFederationRuntime {
   /**
    * Peers whose directory sets this viewer watches. `live` means the owner
    * acknowledged the current subscription; `generation` moves whenever what
-   * the viewer may assume about that peer's directory set changes.
+   * the viewer may assume about that peer's directory set changes. `release`
+   * ends the watch once the menus stop asking about the peer.
    */
   private readonly directorySetWatches = new Map<
     FederationInstanceId,
-    { generation: number; live: boolean }
+    { generation: number; live: boolean; release: ReturnType<typeof setTimeout> }
   >();
+  /** Shared by every watch, so a watch started later never reuses a generation. */
+  private directorySetGeneration = 0;
   private readonly sentNavigationSubscriptions = new Set<FederationInstanceId>();
   private readonly desiredEventStreamIds = new Map<FederationInstanceId, string>();
   private readonly receivedEventStreams = new Map<FederationInstanceId, {
@@ -1074,7 +1083,8 @@ export class DesktopFederationRuntime {
    * under a generation still reflects the owner's directory set while the
    * generation is unchanged: it moves on every announced change, peer status
    * change and re-sent subscription. An owner without
-   * `navigation_directory_set_events` is never watched.
+   * `navigation_directory_set_events` is never watched. Each call keeps the
+   * watch for another `DIRECTORY_SET_WATCH_IDLE_MS`.
    */
   watchRemoteDirectorySet(instanceId: FederationInstanceId): { generation: number } | undefined {
     if (!isFederationInstanceId(instanceId)) {
@@ -1089,30 +1099,42 @@ export class DesktopFederationRuntime {
     ) {
       return undefined;
     }
+    const release = setTimeout(() => {
+      this.directorySetWatches.delete(instanceId);
+      this.sendDirectorySetSubscriptions();
+    }, DIRECTORY_SET_WATCH_IDLE_MS);
+    release.unref?.();
     let watch = this.directorySetWatches.get(instanceId);
-    if (!watch) {
-      watch = { generation: 0, live: false };
+    if (watch) {
+      clearTimeout(watch.release);
+      watch.release = release;
+    } else {
+      watch = { generation: ++this.directorySetGeneration, live: false, release };
       this.directorySetWatches.set(instanceId, watch);
-      this.setEventSubscriptions(
-        DIRECTORY_SET_EVENT_CONSUMER_ID,
-        [...this.directorySetWatches.keys()].map((sourceInstanceId) => ({
-          sourceInstanceId,
-          eventClasses: ["directory_set" as const],
-          // The class is threadless (`eventMatchesThreadSelection`). An empty
-          // selection leaves the merged legacy selection, which an older relay
-          // applies to every class, exactly as the other consumers made it.
-          threadSelection: { kind: "threads" as const, threads: [] },
-        })),
-      );
+      this.sendDirectorySetSubscriptions();
     }
     return watch.live ? { generation: watch.generation } : undefined;
+  }
+
+  private sendDirectorySetSubscriptions(): void {
+    this.setEventSubscriptions(
+      DIRECTORY_SET_EVENT_CONSUMER_ID,
+      [...this.directorySetWatches.keys()].map((sourceInstanceId) => ({
+        sourceInstanceId,
+        eventClasses: ["directory_set" as const],
+        // The class is threadless (`eventMatchesThreadSelection`). An empty
+        // selection leaves the merged legacy selection, which an older relay
+        // applies to every class, exactly as the other consumers made it.
+        threadSelection: { kind: "threads" as const, threads: [] },
+      })),
+    );
   }
 
   /** Nothing read before this point may be trusted until the owner acknowledges again. */
   private unacknowledgeDirectorySetWatch(instanceId: FederationInstanceId): void {
     const watch = this.directorySetWatches.get(instanceId);
     if (watch) {
-      watch.generation += 1;
+      watch.generation = ++this.directorySetGeneration;
       watch.live = false;
     }
   }
@@ -5655,7 +5677,7 @@ export class DesktopFederationRuntime {
       // this viewer's watch; either one outdates every earlier read.
       const watch = this.directorySetWatches.get(sourceInstanceId);
       if (watch) {
-        watch.generation += 1;
+        watch.generation = ++this.directorySetGeneration;
         watch.live = true;
       }
       return true;
