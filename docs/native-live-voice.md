@@ -81,8 +81,9 @@ and the manager asks the operator which thread they mean.
 
 While director voice runs, it shows in a floating panel. Drag the header to
 move the panel. Drag the corner grip, or focus the grip and use the arrow keys,
-to resize it. The window remembers the panel's position and size, and keeps
-the panel on screen and below the title strip. The panel sits over Settings
+to resize it. It opens at the top right, clear of the notice stack in the
+bottom-left corner. The window remembers the panel's position and size, and
+keeps the panel on screen and below the title strip. The panel sits over Settings
 and under the notice stack.
 
 The panel shows:
@@ -97,6 +98,7 @@ The panel also shows any question that the Voice manager's turn is waiting on.
 A tool can ask the operator something on the thread it runs in, and nobody
 reads the Voice manager thread. A questionnaire, such as a directory to trust,
 is answered in the panel. An approval offers **Open Voice manager** instead.
+A question still pending from an earlier session appears when the panel opens.
 
 Director voice continues across navigation. While it runs, the composer
 **Voice** toggle is unavailable and its tooltip explains why.
@@ -115,7 +117,12 @@ model hears no new speech and finishes its answer. A muted session then ends
 itself 30 seconds after it goes quiet (`MUTED_IDLE_END_MS`). It is quiet when
 no line is streaming and no turn is running on its thread. A tool receipt, a
 typed message, or the start of a turn restarts the countdown. Unmuting cancels
-it.
+it. A turn already running when thread voice starts counts as running.
+
+A muted session that stays busy still ends 10 minutes after its last speech,
+receipt or turn change (`MUTED_STALL_END_MS`). That covers a turn that runs
+for hours, a turn blocked on a question, and a reply whose last line never
+reports done.
 
 So "ask, mute, listen" plays the whole answer, including a delegated turn's
 result, and the session does not stay open afterwards. When this happens, an

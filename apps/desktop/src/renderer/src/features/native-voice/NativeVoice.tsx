@@ -4,6 +4,7 @@ import type { NativeVoiceApi } from "../../../../shared/native-voice";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { MicIcon, MicOffIcon } from "../../icons";
 import { formatElapsedMs } from "../../lib/format-duration";
+import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   getWindowNativeVoiceController,
   MUTED_IDLE_END_MS,
@@ -147,7 +148,7 @@ export function VoiceElapsed({ since }: { since?: number }) {
   if (since === undefined) return null;
   const elapsed = formatElapsedMs(now - since);
   return (
-    <span className="native-voice__elapsed" title="Time this voice session has been open">
+    <span className="native-voice__elapsed" role="timer" aria-label={`Voice open for ${elapsed}`}>
       {elapsed}
     </span>
   );
@@ -161,23 +162,34 @@ const MUTED_IDLE_END_SECONDS = Math.round(MUTED_IDLE_END_MS / 1000);
  * itself, so "ask, mute, listen" does not leave voice open.
  */
 export function VoiceMicToggle({ controller, view }: { controller: NativeVoiceController; view: VoiceView }) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   if (view.status !== "listening") return null;
-  const label = view.muted ? "Unmute microphone" : "Mute microphone";
-  const hint = view.muted
+  return (
+    <>
+      <button
+        // The masthead mic's own class: the same button, active while live.
+        className={`sidebar__icon-button${view.muted ? "" : " is-active"}`}
+        type="button"
+        aria-label={view.muted ? "Unmute microphone" : "Mute microphone"}
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
+        {...tooltipHandlers(tooltip, micHint(view.muted))}
+        onClick={(event) => {
+          controller.setMuted(!view.muted);
+          // The open hint describes the state just left; show the new one.
+          tooltip.show(event.currentTarget, micHint(!view.muted));
+        }}
+      >
+        {view.muted ? <MicOffIcon size={16} aria-hidden="true" /> : <MicIcon size={16} aria-hidden="true" />}
+      </button>
+      {tooltip.tooltipNode}
+    </>
+  );
+}
+
+function micHint(muted: boolean): string {
+  return muted
     ? `Muted. Voice ends ${MUTED_IDLE_END_SECONDS} seconds after its reply finishes. Unmute to keep talking.`
     : `Mute. The reply keeps playing, then voice ends ${MUTED_IDLE_END_SECONDS} seconds after it finishes.`;
-  return (
-    <button
-      // The masthead mic's own class: the same button, active while live.
-      className={`sidebar__icon-button${view.muted ? "" : " is-active"}`}
-      type="button"
-      aria-label={label}
-      title={hint}
-      onClick={() => controller.setMuted(!view.muted)}
-    >
-      {view.muted ? <MicOffIcon size={16} aria-hidden="true" /> : <MicIcon size={16} aria-hidden="true" />}
-    </button>
-  );
 }
 
 /** Transcript rows and tool receipts, in the order they happened. */
@@ -269,7 +281,12 @@ export function threadVoiceTarget(
  * The composer's mic toggle. Talks to this thread; ends when the operator
  * leaves it. Unavailable while director voice owns the window's session.
  */
-export function NativeVoiceToggle({ api, threadId }: { api: NativeVoiceApi; threadId?: string }) {
+export function NativeVoiceToggle({ api, threadId, turnRunning }: {
+  api: NativeVoiceApi;
+  threadId?: string;
+  /** The thread's turn is already running, so a muted session waits for it. */
+  turnRunning?: boolean;
+}) {
   const { controller, view } = useNativeVoice(api);
   if (!threadId) return null;
   const mine = view.mode === "thread" && view.threadId === threadId && isVoiceActive(view);
@@ -290,7 +307,7 @@ export function NativeVoiceToggle({ api, threadId }: { api: NativeVoiceApi; thre
       onClick={() => {
         if (elsewhere || view.status === "stopping") return;
         if (mine) void controller.stop();
-        else void controller.start(threadId, "thread");
+        else void controller.start(threadId, "thread", { turnActive: turnRunning === true });
       }}
     >
       <MicIcon size={15} aria-hidden="true" />

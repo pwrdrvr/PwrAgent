@@ -13,14 +13,14 @@ import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatPrimaryAccel, isPlatformPrimaryAccel } from "../../lib/keyboard-accel";
 import { useFloatingPanelRect, type FloatingPanelLimits } from "../../lib/useFloatingPanelRect";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PendingQuestionnaire } from "../thread-detail/PendingQuestionnaire";
 import {
   buildQuestionnaireResponse,
   createQuestionnaireState,
   type PendingQuestionnaireState,
 } from "../thread-detail/questionnaire";
-import { getWindowNativeVoiceController, type NativeVoiceController } from "./native-voice-controller";
+import { getWindowNativeVoiceController, type NativeVoiceController, type VoiceView } from "./native-voice-controller";
 import {
   isVoiceActive,
   useNativeVoice,
@@ -249,10 +249,6 @@ export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus
 }
 
 /**
- * Director voice, floating over the window while it runs. Stays put across
- * navigation; the context line names the thread "this" refers to.
- */
-/**
  * A question the Voice manager's turn is waiting on. Nobody reads that thread,
  * so a tool that asks the operator something there (a directory to trust, an
  * approval) would otherwise wait until the session ends. A questionnaire is
@@ -292,23 +288,41 @@ function requestIdOf(request: VoiceManagerRequest): string {
   return request.kind === "questions" ? request.state.requestId : request.requestId;
 }
 
+/**
+ * The Voice manager's pending question: whatever main still holds when the
+ * panel opens (a question can outlive the voice session that raised it), then
+ * live requests and resolutions. A live event always wins over the read.
+ */
 function useVoiceManagerRequest(
-  desktopApi: Pick<DesktopApi, "onAgentEvent"> | undefined,
-  threadId: string | undefined,
+  desktopApi: Pick<DesktopApi, "onAgentEvent" | "readThread"> | undefined,
+  threadId: string,
 ) {
   const [request, setRequest] = useState<VoiceManagerRequest>();
   useEffect(() => {
-    setRequest(undefined);
-    if (!threadId || !desktopApi?.onAgentEvent) return;
-    return desktopApi.onAgentEvent((event) => {
+    if (!desktopApi?.onAgentEvent) return;
+    let live = false;
+    const off = desktopApi.onAgentEvent((event) => {
       const next = voiceManagerRequestFrom(event, threadId);
       if (next === "resolved") {
+        live = true;
         const resolvedId = (event.notification.params as { requestId: string }).requestId;
         setRequest((current) => current && requestIdOf(current) === resolvedId ? undefined : current);
       } else if (next) {
+        live = true;
         setRequest(next);
       }
     });
+    void desktopApi.readThread?.({ backend: "codex", threadId, includeTurns: false, limit: 1 })
+      .then((response) => {
+        if (live || !response.pendingRequest) return;
+        const pending = voiceManagerRequestFrom(
+          { backend: "codex", notification: response.pendingRequest } as AgentEvent,
+          threadId,
+        );
+        if (pending && pending !== "resolved") setRequest(pending);
+      })
+      .catch(() => undefined);
+    return off;
   }, [desktopApi, threadId]);
   return [request, setRequest] as const;
 }
@@ -372,6 +386,14 @@ function VoiceManagerRequestCard({ desktopApi, onOpenThread, request, setRequest
 const PANEL_LIMITS: FloatingPanelLimits = { minWidth: 300, minHeight: 240, topReserve: 44 };
 const PANEL_EDGE = 16;
 
+type DirectorVoicePanelProps = {
+  api: NativeVoiceApi;
+  desktopApi?: Pick<DesktopApi, "copyText" | "onAgentEvent" | "readThread" | "submitServerRequest">;
+  focus?: DirectorFocusThread;
+  launchpad?: Pick<NavigationLaunchpadDraft, "directoryLabel">;
+  onOpenThread?: (threadId: string) => void;
+};
+
 /**
  * Director voice while it runs: a panel the operator can drag by its header
  * and resize from its corner, remembered between sessions. It is a working
@@ -379,27 +401,32 @@ const PANEL_EDGE = 16;
  * typed input, and any question the Voice manager is waiting on. Closing
  * ends voice. An error leaves the panel and arrives as an ordinary notice
  * (`useNativeVoiceNotices`).
+ *
+ * Mounted for the window's life; its geometry, tooltips and request watch
+ * exist only while a session is open.
  */
-export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenThread }: {
-  api: NativeVoiceApi;
-  desktopApi?: Pick<DesktopApi, "copyText" | "onAgentEvent" | "submitServerRequest">;
-  focus?: DirectorFocusThread;
-  launchpad?: Pick<NavigationLaunchpadDraft, "directoryLabel">;
-  onOpenThread?: (threadId: string) => void;
-}) {
-  const { controller, view } = useNativeVoice(api);
+export function DirectorVoicePanel(props: DirectorVoicePanelProps) {
+  const { controller, view } = useNativeVoice(props.api);
   const open = view.mode === "director" && view.status !== "idle" && view.status !== "error";
-  const [request, setRequest] = useVoiceManagerRequest(desktopApi, open ? view.threadId : undefined);
+  if (!open || !view.threadId) return null;
+  return <OpenDirectorVoicePanel {...props} controller={controller} threadId={view.threadId} view={view} />;
+}
+
+function OpenDirectorVoicePanel({ controller, desktopApi, focus, launchpad, onOpenThread, threadId, view }:
+  DirectorVoicePanelProps & { controller: NativeVoiceController; threadId: string; view: VoiceView }) {
+  const [request, setRequest] = useVoiceManagerRequest(desktopApi, threadId);
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const { rect, moveHandleProps, resizeHandleProps } = useFloatingPanelRect({
     storageKey: "pwragent:director-voice-panel",
     limits: PANEL_LIMITS,
+    // Top right, below the title strip: the notice stack owns the bottom-left
+    // corner and draws over this panel, and the composer owns the bottom.
     initial: (viewport) => {
       const width = 400;
-      const height = Math.min(520, viewport.height - PANEL_LIMITS.topReserve - PANEL_EDGE * 2);
-      return { x: PANEL_EDGE, y: viewport.height - height - PANEL_EDGE, width, height };
+      const height = Math.min(520, viewport.height - PANEL_LIMITS.topReserve - PANEL_EDGE);
+      return { x: viewport.width - width - PANEL_EDGE, y: PANEL_LIMITS.topReserve, width, height };
     },
   });
-  if (!open) return null;
   const listening = view.status === "listening";
   const looking = focus
     ? `Looking at ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}.`
@@ -423,7 +450,7 @@ export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenTh
             className="app-notice-toast__icon-button"
             type="button"
             aria-label="Copy transcript"
-            title="Copy transcript"
+            {...tooltipHandlers(tooltip, "Copy transcript")}
             onClick={() => {
               void copyText(["Director voice", looking, transcript].filter(Boolean).join("\n"), desktopApi);
             }}
@@ -434,8 +461,9 @@ export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenTh
             className="app-notice-toast__icon-button"
             type="button"
             aria-label="End director voice"
-            title="End director voice"
+            {...tooltipHandlers(tooltip, "End director voice")}
             onClick={() => {
+              tooltip.hide();
               if (view.status !== "stopping") void controller.stop();
             }}
           >
@@ -444,13 +472,13 @@ export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenTh
         </div>
       </header>
       <p className="director-voice-panel__focus">{looking}</p>
-      {request && view.threadId ? (
+      {request ? (
         <VoiceManagerRequestCard
           desktopApi={desktopApi}
           onOpenThread={onOpenThread}
           request={request}
           setRequest={setRequest}
-          threadId={view.threadId}
+          threadId={threadId}
         />
       ) : null}
       <div className="director-voice-panel__feed">
@@ -461,9 +489,10 @@ export function DirectorVoicePanel({ api, desktopApi, focus, launchpad, onOpenTh
         className="director-voice-panel__grip"
         type="button"
         aria-label="Resize director voice"
-        title="Drag or use the arrow keys to resize"
+        {...tooltipHandlers(tooltip, "Drag, or use the arrow keys, to resize")}
         {...resizeHandleProps}
       />
+      {tooltip.tooltipNode}
     </section>
   );
 }

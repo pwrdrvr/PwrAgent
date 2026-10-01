@@ -25,7 +25,7 @@ export function publishOperatorFocus(params: {
   if (params.webContents.isDestroyed()) return;
   const id = params.webContents.id;
   if (!entries.has(id)) params.webContents.once("destroyed", () => { entries.delete(id); });
-  entries.set(id, { focus: params.focus, webContents: params.webContents, receivedAt: params.now ?? Date.now() });
+  entries.set(id, { focus: copyOperatorFocus(params.focus), webContents: params.webContents, receivedAt: params.now ?? Date.now() });
 }
 
 export function readOperatorFocus(): { focus: OperatorFocusSnapshot; receivedAt: number } | undefined {
@@ -38,6 +38,29 @@ export function readOperatorFocus(): { focus: OperatorFocusSnapshot; receivedAt:
     if (!latest || entry.receivedAt > latest.receivedAt) latest = entry;
   }
   return latest ? { focus: latest.focus, receivedAt: latest.receivedAt } : undefined;
+}
+
+/**
+ * Only the validated fields, rebuilt: the validator checks the known keys and
+ * ignores any others, and whatever is stored is served to a model verbatim.
+ */
+function copyOperatorFocus(focus: OperatorFocusSnapshot): OperatorFocusSnapshot {
+  const pick = <T extends object>(source: T, keys: readonly (keyof T)[]): T =>
+    Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]])) as T;
+  return {
+    view: focus.view,
+    ...(focus.lens !== undefined ? { lens: focus.lens } : {}),
+    ...(focus.thread
+      ? { thread: pick(focus.thread, ["backend", "threadId", "title", "instanceId", "instanceLabel"]) }
+      : {}),
+    ...(focus.launchpad
+      ? {
+          launchpad: pick(focus.launchpad, [
+            "projectKey", "projectLabel", "instanceId", "backend", "model", "reasoningEffort", "executionMode", "workMode",
+          ]),
+        }
+      : {}),
+  };
 }
 
 /** Test seam: drop every published focus. */

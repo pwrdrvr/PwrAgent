@@ -13212,7 +13212,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               : undefined}
           />
           {nativeVoiceApi && nativeVoiceThreadId ? (
-            <NativeVoiceToggle api={nativeVoiceApi} threadId={nativeVoiceThreadId} />
+            <NativeVoiceToggle
+              api={nativeVoiceApi}
+              threadId={nativeVoiceThreadId}
+              turnRunning={props.thread?.threadStatus === "active"}
+            />
           ) : directorVoiceApi && nativeVoiceDirectorHint ? (
             <DirectorVoiceComposerToggle api={directorVoiceApi} hint={nativeVoiceDirectorHint} />
           ) : null}

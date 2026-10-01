@@ -81,6 +81,13 @@ const browser: VoiceBrowser = {
  * session open for hours.
  */
 export const MUTED_IDLE_END_MS = 30_000;
+/**
+ * The ceiling on a muted session that still looks busy: a turn that runs for
+ * an hour, a turn blocked on a question, or a reply whose last line never
+ * reports done. Counted from the last sign of activity, so a turn that keeps
+ * producing receipts or speech keeps the session.
+ */
+export const MUTED_STALL_END_MS = 10 * 60_000;
 const TURN_STARTED = new Set(["turn/started"]);
 const TURN_ENDED = new Set(["turn/completed", "turn/failed", "turn/cancelled"]);
 
@@ -162,13 +169,13 @@ export class NativeVoiceController {
   private armMutedIdleEnd(resources: Resources): void {
     clearTimeout(resources.idleTimer);
     resources.idleTimer = undefined;
-    if (!this.current(resources) || !this.view.muted || this.view.status !== "listening"
-      || this.openRows.size > 0 || resources.turnActive) return;
+    if (!this.current(resources) || !this.view.muted || this.view.status !== "listening") return;
+    const busy = this.openRows.size > 0 || resources.turnActive;
     resources.idleTimer = setTimeout(() => {
       if (!this.current(resources) || !this.view.muted || this.view.status !== "listening") return;
       this.publish({ endedAfterReply: true });
       void this.stop();
-    }, MUTED_IDLE_END_MS);
+    }, busy ? MUTED_STALL_END_MS : MUTED_IDLE_END_MS);
   }
 
   private watchTurns(resources: Resources, threadId: string): void {
@@ -183,10 +190,16 @@ export class NativeVoiceController {
     });
   }
 
-  async start(threadId: string, mode: NativeVoiceMode = "thread"): Promise<void> {
+  /**
+   * `turnActive` seeds whether the thread's turn is already running: only
+   * turns that start after this are seen as events, and a running one must
+   * not let a muted session end before it reports.
+   */
+  async start(threadId: string, mode: NativeVoiceMode = "thread", options: { turnActive?: boolean } = {}): Promise<void> {
     if (this.resources) return;
     const resources: Resources = {
-      id: this.platform.id(), started: false, accepted: false, activating: false, cancelled: false, turnActive: false,
+      id: this.platform.id(), started: false, accepted: false, activating: false, cancelled: false,
+      turnActive: options.turnActive === true,
     };
     this.resources = resources;
     this.openRows.clear();

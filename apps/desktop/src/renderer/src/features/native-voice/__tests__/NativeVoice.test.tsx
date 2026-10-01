@@ -7,7 +7,7 @@ import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNot
 import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
-import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, type NativeVoiceController } from "../native-voice-controller";
+import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
 
 const owners = new Set<NativeVoiceController>();
@@ -120,7 +120,7 @@ it("starts thread voice from the composer toggle and shows the microphone as liv
   expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-thread", mode: "thread" });
 
   // The session clock runs from the moment voice went live.
-  expect(screen.getByTitle("Time this voice session has been open")).toHaveTextContent(/^\d+s$/);
+  expect(screen.getByRole("timer")).toHaveTextContent(/^\d+s$/);
   fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
   expect(f.track.enabled).toBe(false);
   expect(screen.getByRole("status", { name: "Voice status" })).toHaveTextContent("Muted, ends after the reply");
@@ -161,6 +161,45 @@ it("ends a muted session only after its reply and its turn are done", async () =
   }
   await waitFor(() => expect(f.owner.getView().status).toBe("idle"));
   expect(noticeCard("native-voice-ended")).toHaveTextContent("Voice ended after its reply because the microphone was muted.");
+});
+
+// A turn blocked on a question, or a reply whose last line never reports
+// done, must not hold a muted session open for hours.
+it("ends a muted session that stays busy past the stall ceiling", async () => {
+  const f = voiceFixture();
+  render(<Composer api={f.api} threadId="sample-thread" />);
+  fireEvent.click(screen.getByRole("button", { name: "Voice" }));
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    f.agent({ method: "turn/started", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
+    fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+    act(() => { vi.advanceTimersByTime(MUTED_STALL_END_MS - 1); });
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Turns that began before voice send no turn/started; the composer says so.
+it("treats a thread's already-running turn as busy when voice starts", async () => {
+  const f = voiceFixture();
+  render(<><NativeVoiceBar api={f.api} threadId="sample-thread" /><NativeVoiceToggle api={f.api} threadId="sample-thread" turnRunning /></>);
+  fireEvent.click(screen.getByRole("button", { name: "Voice" }));
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    f.agent({ method: "turn/completed", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("keeps an unmuted or re-unmuted session open while it is quiet", async () => {
@@ -332,6 +371,20 @@ it("answers the Voice manager's question from the director panel", async () => {
   await waitFor(() => expect(screen.queryByRole("group", { name: "Director voice is waiting on you" })).toBeNull());
 });
 
+// A question can outlive the session that raised it: the turn is still
+// blocked when director voice starts again.
+it("shows a Voice manager question that was already pending when voice opened", async () => {
+  const f = voiceFixture();
+  const events = agentEvents();
+  const pending = trustQuestion("sample-voice-manager").notification;
+  const readThread = vi.fn(async () => ({ pendingRequest: pending }));
+  render(<DirectorVoicePanel api={f.api} desktopApi={{ ...(events.desktopApi as object), readThread } as never} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(screen.getByRole("group", { name: "Director voice is waiting on you" }))
+    .toHaveTextContent("Trust /sample/project?"));
+  expect(readThread).toHaveBeenCalledWith({ backend: "codex", threadId: "sample-voice-manager", includeTurns: false, limit: 1 });
+});
+
 it("drops a Voice manager question that was answered elsewhere", async () => {
   const f = voiceFixture();
   const events = agentEvents();
@@ -369,6 +422,9 @@ it("resizes the director panel from its grip and remembers the size", async () =
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
   const panel = directorPanel()!;
+  // Top right, clear of the notice stack in the bottom-left corner.
+  expect(Number.parseFloat(panel.style.left)).toBe(window.innerWidth - 400 - 16);
+  expect(Number.parseFloat(panel.style.top)).toBe(44);
   const before = Number.parseFloat(panel.style.width);
   fireEvent.keyDown(screen.getByRole("button", { name: "Resize director voice" }), { key: "ArrowLeft" });
   expect(Number.parseFloat(panel.style.width)).toBe(before - 16);

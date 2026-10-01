@@ -103,5 +103,12 @@ describe("native voice IPC permission boundary", () => {
     expect(readOperatorFocus()?.focus).toEqual(focus);
     await mocks.handlers.get(OPERATOR_FOCUS_PUBLISH_CHANNEL)!({ sender: window }, launchpad);
     expect(readOperatorFocus()?.focus).toEqual(launchpad);
+
+    // The model reads this as the operator's screen: fields the validator did
+    // not check are dropped, at every level, rather than passed through.
+    await mocks.handlers.get(OPERATOR_FOCUS_PUBLISH_CHANNEL)!({ sender: window }, {
+      ...focus, note: "sample unchecked text", thread: { ...focus.thread, prompt: "sample draft" },
+    });
+    expect(readOperatorFocus()?.focus).toEqual(focus);
   });
 });
