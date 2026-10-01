@@ -10619,6 +10619,12 @@ a.button {
   line-height: 1.45;
 }
 
+.incoming-files-folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .discord-permission-result {
   display: flex;
   flex-direction: column;

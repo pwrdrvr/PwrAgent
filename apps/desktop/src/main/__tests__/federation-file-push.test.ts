@@ -30,6 +30,7 @@ describe("Federation push files", () => {
   });
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     await receiver.dispose();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -59,6 +60,99 @@ describe("Federation push files", () => {
     allowed = false;
     await expect(begin()).rejects.toThrow("does not allow");
     await expect(fs.stat(downloads)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS"])("recovers from denied/unsupported hard links (%s) without replacing files or symlinks", async (code) => {
+    vi.spyOn(fs, "link").mockRejectedValue(Object.assign(new Error("link denied"), { code }));
+    await fs.mkdir(downloads);
+    const existing = path.join(downloads, "report.txt");
+    await fs.writeFile(existing, "existing");
+    await fs.symlink(existing, path.join(downloads, "report (1).txt"));
+    const source = path.join(root, "source.txt");
+    await fs.writeFile(source, "abc");
+    const rpc = { request: ({ method, params }: { method: string; params: unknown }) => call(method, params) } as Pick<FederationRpcEndpoint, "request">;
+    const result = await pushFederationFile(rpc, source, "report.txt");
+    expect(result).toEqual({ path: path.join(downloads, "report (2).txt"), sizeBytes: 3, sha256: digest("abc") });
+    expect(await fs.readFile(result.path, "utf8")).toBe("abc");
+    expect(await fs.readFile(existing, "utf8")).toBe("existing");
+    expect((await fs.lstat(path.join(downloads, "report (1).txt"))).isSymbolicLink()).toBe(true);
+    expect((await fs.readdir(downloads)).filter((name) => name.startsWith(".pwragent"))).toEqual([]);
+  });
+
+  it("preserves a destination created between link failure and exclusive copy", async () => {
+    vi.spyOn(fs, "link").mockImplementationOnce(async (_source, destination) => {
+      await fs.writeFile(destination, "concurrent file");
+      throw Object.assign(new Error("link denied"), { code: "EPERM" });
+    });
+    const request = await begin("report.txt", 0);
+    const result = await call(methods.finish, { ...request, sha256: digest("") }) as { path: string };
+    expect(result.path).toBe(path.join(downloads, "report (1).txt"));
+    expect(await fs.readFile(path.join(downloads, "report.txt"), "utf8")).toBe("concurrent file");
+    expect(await fs.readFile(result.path, "utf8")).toBe("");
+  });
+
+  it("reports both failed finalization operations, cleans staging, and accepts a new transfer", async () => {
+    vi.spyOn(fs, "link").mockRejectedValueOnce(Object.assign(new Error("link denied"), { code: "EPERM" }));
+    vi.spyOn(fs, "copyFile").mockRejectedValueOnce(Object.assign(new Error("copy denied"), { code: "EACCES" }));
+    const request = await begin("report.txt", 0);
+    await expect(call(methods.finish, { ...request, sha256: digest("") })).rejects.toThrow(/finalize.*EACCES.*Settings.*Hard-link.*EPERM/);
+    expect(await fs.readdir(downloads)).toEqual([]);
+    await expect(call(methods.cancel, request)).rejects.toThrow("not found");
+    const retry = await begin("report.txt", 0);
+    await call(methods.finish, { ...retry, sha256: digest("") });
+    expect(await fs.readdir(downloads)).toEqual(["report.txt"]);
+  });
+
+  it("does not copy after unrelated link failures or failed verification", async () => {
+    const copy = vi.spyOn(fs, "copyFile");
+    vi.spyOn(fs, "link").mockRejectedValue(Object.assign(new Error("disk full"), { code: "ENOSPC" }));
+    const request = await begin("report.txt", 0);
+    await expect(call(methods.finish, { ...request, sha256: digest("") })).rejects.toThrow("Free disk space");
+    const bad = await begin("report.txt", 0);
+    await expect(call(methods.finish, { ...bad, sha256: digest("bad") })).rejects.toThrow("checksum");
+    expect(copy).not.toHaveBeenCalled();
+    expect(await fs.readdir(downloads)).toEqual([]);
+  });
+
+  it("reports a possible partial copy when the OS prevents Node's copy cleanup", async () => {
+    vi.spyOn(fs, "link").mockRejectedValue(Object.assign(new Error("link denied"), { code: "EPERM" }));
+    vi.spyOn(fs, "copyFile").mockImplementationOnce(async (_source, destination) => {
+      // Simulate a failed copy whose native cleanup was also denied.
+      await fs.writeFile(destination, "partial", { flag: "wx" });
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    });
+    const request = await begin("report.txt", 0);
+    await expect(call(methods.finish, { ...request, sha256: digest("") })).rejects.toThrow(/ENOSPC.*incomplete copy.*not be overwritten/);
+    expect(await fs.readdir(downloads)).toEqual(["report.txt"]);
+    const retry = await begin("report.txt", 0);
+    const result = await call(methods.finish, { ...retry, sha256: digest("") }) as { path: string };
+    expect(result.path).toBe(path.join(downloads, "report (1).txt"));
+    expect(await fs.readFile(path.join(downloads, "report.txt"), "utf8")).toBe("partial");
+  });
+
+  it("reports staging access failures without attributing them to OS privacy", async () => {
+    vi.spyOn(fs, "mkdir").mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EPERM" }));
+    await expect(begin()).rejects.toThrow(/stage.*EPERM.*check the incoming files folder/);
+    await expect(fs.stat(downloads)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves the original error and identifies staging when cleanup is denied", async () => {
+    const request = await begin("report.txt", 0);
+    vi.spyOn(fs, "link").mockRejectedValueOnce(Object.assign(new Error("disk full"), { code: "ENOSPC" }));
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(Object.assign(new Error("cleanup denied"), { code: "EPERM" }));
+    await expect(call(methods.finish, { ...request, sha256: digest("") })).rejects.toThrow(/ENOSPC.*staging could not be removed.*pwragent-transfer.*EPERM/);
+    // The failed transfer released its slot even when the OS refused cleanup.
+    await expect(call(methods.cancel, request)).rejects.toThrow("not found");
+    const retry = await begin("report.txt", 0);
+    await call(methods.cancel, retry);
+  });
+
+  it("identifies a saved file if only staging cleanup fails", async () => {
+    const request = await begin("report.txt", 0);
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(Object.assign(new Error("cleanup denied"), { code: "EPERM" }));
+    await expect(call(methods.finish, { ...request, sha256: digest("") })).rejects.toThrow(/was saved to.*report.txt.*cleanup failed.*EPERM/);
+    expect(await fs.readFile(path.join(downloads, "report.txt"), "utf8")).toBe("");
+    await expect(call(methods.cancel, request)).rejects.toThrow("not found");
   });
 
   it.each(["../escape", "a/b", "a\\b", "CON.txt", ".hidden", "NUL", "x:", "a\u0000b"])("rejects unsafe filename %s", async (name) => {
