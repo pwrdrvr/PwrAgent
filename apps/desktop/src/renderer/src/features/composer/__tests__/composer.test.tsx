@@ -17862,6 +17862,69 @@ describe("Composer", () => {
     }
   });
 
+  it.each([
+    ["unlinked", false], ["linked", false], ["worktree", false],
+    ["unlinked", true], ["linked", true], ["worktree", true],
+  ] as const)(
+    "keeps a project mention from attaching the home folder (%s, loaded: %s)", async (mode, loaded) => {
+      const bootstrap = window as unknown as { __pwragentHomeDir?: string };
+      const previousHome = bootstrap.__pwragentHomeDir;
+      bootstrap.__pwragentHomeDir = "/Users/example";
+      try {
+        const path = "/Users/example/github/diskhound";
+        const draftStore = createComposerDraftStore();
+        draftStore.set(buildThreadComposerScopeKey("codex", "thread-home-reference"), {
+          ...hydrateComposerDraft("Read [@diskhound](~/github/diskhound)", [], undefined, undefined),
+          imageAttachments: [],
+        });
+        const startTurn = vi.fn(async () => ({
+          backend: "codex" as const, threadId: "thread-home-reference", turnId: "turn-1",
+        }));
+        const onAttachDirectoryReferences = vi.fn();
+        const { container } = render(
+          <Composer
+            backends={[backendSummary("codex")]}
+            desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+            directories={[{
+              key: "directory:/Users/example", kind: "directory", label: "example",
+              path: "/Users/example",
+            }, ...(loaded ? [{
+              key: `directory:${path}`, kind: "directory" as const, label: "diskhound", path,
+            }] : [])]}
+            draftStore={draftStore}
+            onAttachDirectoryReferences={onAttachDirectoryReferences}
+            skills={[]}
+            thread={{
+              id: "thread-home-reference", title: "Project reference", titleSource: "explicit",
+              source: "codex", executionMode: "default", inbox: { inInbox: false },
+              linkedDirectories: mode === "unlinked" ? [] : [{
+                id: path, label: "diskhound", path,
+                kind: mode === "worktree" ? "worktree" : "local",
+                worktreePath: mode === "worktree" ? "/Users/example/.codex/worktrees/fixture/diskhound" : undefined,
+              }],
+            }}
+          />,
+        );
+        const references = container.querySelectorAll(".composer__directory-reference");
+        expect(references).toHaveLength(mode === "unlinked" ? 1 : 0);
+        if (mode === "unlinked") {
+          expect(references[0]).toHaveTextContent("diskhound");
+        }
+        await clickButton("Send");
+        await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+        if (mode === "unlinked") {
+          expect(onAttachDirectoryReferences).toHaveBeenCalledExactlyOnceWith(
+            [path], { backend: "codex", threadId: "thread-home-reference" },
+          );
+        } else {
+          expect(onAttachDirectoryReferences).not.toHaveBeenCalled();
+        }
+      } finally {
+        bootstrap.__pwragentHomeDir = previousHome;
+      }
+    },
+  );
+
   it("links a hand-typed directory reference after sending a reply", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/example";

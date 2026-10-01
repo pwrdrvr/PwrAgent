@@ -4720,14 +4720,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ]),
     ].filter((path): path is string => Boolean(path));
     const excluded = new Set(excludePaths.map(normalizeDirectoryReferencePath));
-    const scanned = listReferencedDirectories(text, props.directories ?? [], {
-      excludePaths,
-    });
-    const seenPaths = new Set(
-      scanned
-        .map((directory) => directory.path ? normalizeDirectoryReferencePath(directory.path) : undefined)
-        .filter((path): path is string => Boolean(path)),
-    );
+    const seenPaths = new Set<string>();
     const fromTokens: NavigationDirectorySummary[] = [];
     for (const token of tokens ?? []) {
       // Only directory-kind tokens are attachable directories. File-kind
@@ -4753,7 +4746,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         },
       );
     }
-    return [...scanned, ...fromTokens];
+    // Mention queries and the loaded navigation page can contain different
+    // directories. Resolve against the authoritative chip targets as well so
+    // a tracked ancestor cannot replace a project absent from that page.
+    const scanned = listReferencedDirectories(text, [
+      ...(props.directories ?? []),
+      ...fromTokens,
+    ], { excludePaths });
+    const scannedPaths = new Set(scanned.map((directory) =>
+      normalizeDirectoryReferencePath(directory.path!),
+    ));
+    return [...scanned, ...fromTokens.filter((directory) =>
+      !scannedPaths.has(normalizeDirectoryReferencePath(directory.path!)),
+    )];
   };
   const referencedDirectories = listDraftReferencedDirectories(
     canonicalDraft,

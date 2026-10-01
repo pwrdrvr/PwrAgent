@@ -61,6 +61,7 @@ describe("Windows directory reference round trips", () => {
       const draft = `Read ${nativePath}\\src\\file.ts`;
       expect(listReferencedDirectories(draft, [parent, child, sibling])).toEqual([child]);
       expect(listReferencedDirectories(draft, [child], { excludePaths: [nativePath] })).toEqual([]);
+      expect(listReferencedDirectories(draft, [parent, child], { excludePaths: [nativePath] })).toEqual([]);
       expect(listReferencedDirectories(
         `100% done: ${buildDirectoryReferenceMarkdown({ label: "app", path: child.path! })}`,
         [parent, child],
@@ -359,6 +360,35 @@ describe("listReferencedDirectories", () => {
         { homeDir: HOME },
       ).map((d) => d.key),
     ).toEqual([CATALOG_PORTAL.key]);
+  });
+
+  it.each([
+    "Read ~/Projects/catalog-portal",
+    "Read [@catalog-portal](~/Projects/catalog-portal)",
+    `Read ${HOME}/Projects/catalog-portal/src/index.ts`,
+  ])("does not attach ancestors of an already-linked reference: %s", (draft) => {
+    const home = makeDirectory({ key: "home", label: "example", path: HOME });
+    const parent = makeDirectory({ key: "projects", path: `${HOME}/Projects` });
+    expect(listReferencedDirectories(draft, [home, parent, CATALOG_PORTAL], {
+      homeDir: HOME,
+      excludePaths: [CATALOG_PORTAL.path!],
+    })).toEqual([]);
+  });
+
+  it("recognizes already-linked paths outside the loaded directory page", () => {
+    const home = makeDirectory({ key: "home", path: HOME });
+    expect(listReferencedDirectories("Read [@catalog-portal](~/Projects/catalog-portal)", [home], {
+      homeDir: HOME,
+      excludePaths: [CATALOG_PORTAL.path!],
+    })).toEqual([]);
+  });
+
+  it("still attaches an ancestor when the draft references that ancestor alone", () => {
+    const home = makeDirectory({ key: "home", path: HOME });
+    expect(listReferencedDirectories("Read ~", [home], {
+      homeDir: HOME,
+      excludePaths: [CATALOG_PORTAL.path!],
+    })).toEqual([home]);
   });
 
   it("accepts punctuation boundaries after the path", () => {
