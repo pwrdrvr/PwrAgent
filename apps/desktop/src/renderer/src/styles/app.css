@@ -7318,6 +7318,7 @@ a.button {
   top: -6px;
   left: calc(100% + 2px);
   min-width: 200px;
+  max-width: 320px;
 }
 
 .thread-context-menu__group-label {
@@ -7330,6 +7331,26 @@ a.button {
 
 .thread-context-menu__machine-name {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A machine row that names the branch a new worktree there starts from. */
+.thread-context-menu .thread-context-menu__machine--detailed {
+  min-height: 46px;
+}
+
+.thread-context-menu__machine-label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* One line, so a long branch widens the flyout up to its cap and then
+   ellipsizes; the row's tooltip carries the whole name. */
+.thread-context-menu__machine-label .thread-context-menu__item-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

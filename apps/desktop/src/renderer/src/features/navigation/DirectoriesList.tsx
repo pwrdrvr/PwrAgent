@@ -846,7 +846,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     props.onSetDirectoryPin && props.onReorderDirectoryPins,
   );
   /**
-   * Sub-thread launchpads (`subthread:<source>:<parent>:<mode>`) are transient,
+   * Sub-thread launchpads (`subthread:<source>:<parent>:<mode>[:<machine>]`) are transient,
    * thread-scoped composers rendered inline under their parent thread — never a
    * project directory. The main-process snapshot already omits them, but the
    * renderer's launchpad merge synthesizes a `kind: "directory"` summary for the

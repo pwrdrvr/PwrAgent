@@ -9074,16 +9074,180 @@ describe("useThreadNavigation", () => {
       patch: expect.objectContaining({ federationTarget: studio, parentThreadInstanceId: "harbor" }),
     }));
     expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:codex:workspace-parent:new-workspace:studio",
       federationTarget: studio, parentThreadId: parent.id, parentThreadInstanceId: "harbor",
     });
+
+    // A second machine opens its own composer; the first machine's stays.
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", { instanceId: "attic" });
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:codex:workspace-parent:new-workspace:attic",
+      federationTarget: { scope: "remote", instanceId: "attic" }, parentThreadInstanceId: "harbor",
+    });
+    expect(result.current.directories.map((directory) => directory.key)).toEqual(expect.arrayContaining([
+      "subthread:codex:workspace-parent:new-workspace:studio",
+      "subthread:codex:workspace-parent:new-workspace:attic",
+    ]));
 
     // Picking the parent's own machine is the plain new workspace: no link.
     ensureDirectoryLaunchpad.mockClear();
     await act(async () => {
       await result.current.createSubthread(parent, "new-workspace", {});
     });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0]).toMatchObject({
+      directoryKey: "subthread:codex:workspace-parent:new-workspace",
+    });
     expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0].federationTarget).toBeUndefined();
     expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
+  });
+
+  it("starts a new-worktree sub-thread on a peer from the peer's checkout and a branch it has", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "worktree-parent", title: "Tighten retries", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/repo/app/.worktrees/parent", gitBranch: "feature/retries", primaryGitRepository: "example.test/acme/app",
+      linkedDirectories: [{
+        id: "/repo/app", label: "app", path: "/repo/app", worktreePath: "/repo/app/.worktrees/parent", kind: "worktree",
+      }],
+      inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    // The peer's clone has another folder name, and a decoy shares the
+    // parent's name but clones a different origin.
+    const peerCheckout = {
+      key: "/Users/fixture/src/acme-app", kind: "directory" as const, label: "acme-app",
+      path: "/Users/fixture/src/acme-app", repositoryKey: "example.test/acme/app",
+      gitStatus: { currentBranch: "main", defaultBranch: "main" },
+    };
+    const decoy = {
+      key: "/Users/fixture/src/app", kind: "directory" as const, label: "app",
+      path: "/Users/fixture/src/app", repositoryKey: "example.test/other/app",
+      gitStatus: { currentBranch: "feature/retries" },
+    };
+    const peerDirectories = [decoy, peerCheckout];
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 2,
+        directoryKey: request.directoryKey, directoryKind: "directory", directoryLabel: "acme-app",
+        ...request.patch,
+      },
+      defaults,
+    }));
+    const onThreadActionError = vi.fn();
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:worktree-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      getNavigationQueryPage: async (request) => navigationQueryFixture(
+        request,
+        request.federationTarget ? { directories: peerDirectories } : { threads: [parent] },
+      ),
+      releaseNavigationQuery: async () => undefined,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, {
+      localFederationInstanceId: "harbor", onThreadActionError,
+    }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    const project = { kind: "directory" as const, label: "app", path: "/repo/app", repositoryKey: "example.test/acme/app" };
+    // The parent's branch is not on the peer, so the menu offers the peer's.
+    await expect(result.current.readSubthreadWorktreeBase("studio", project, "feature/retries"))
+      .resolves.toEqual({ available: true, baseBranch: "main" });
+
+    // A checkout that moved after the menu read it is reported, not followed.
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { instanceId: "studio", baseBranch: "develop" });
+    });
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(latestThreadActionError(onThreadActionError, "create-thread")).toBe(
+      "acme-app on that machine would now start from main, not develop. Choose the machine again to start from main.",
+    );
+
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { instanceId: "studio", baseBranch: "main" });
+    });
+    const studio = { scope: "remote", instanceId: "studio" };
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: studio,
+      directoryKey: "subthread:codex:worktree-parent:new-worktree:studio",
+      directoryKind: "directory",
+      directoryLabel: "acme-app",
+      directoryPath: "/Users/fixture/src/acme-app",
+      gitStatusSourcePath: "/Users/fixture/src/acme-app",
+      gitStatus: peerCheckout.gitStatus,
+      currentBranch: "main",
+      parentThreadId: parent.id,
+    }));
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({
+        federationTarget: studio, workMode: "worktree", branchName: "main",
+        directoryPath: "/Users/fixture/src/acme-app", parentThreadInstanceId: "harbor",
+      }),
+    }));
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: studio, workMode: "worktree", branchName: "main",
+      parentThreadId: parent.id, parentThreadInstanceId: "harbor",
+    });
+
+    // On the parent's own machine the worktree starts from the parent's
+    // checkout and branch, and the child needs no instance link.
+    ensureDirectoryLaunchpad.mockClear();
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { baseBranch: "feature/retries" });
+    });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0]).toMatchObject({
+      directoryKey: "subthread:codex:worktree-parent:new-worktree",
+      directoryPath: "/repo/app",
+      currentBranch: "feature/retries",
+    });
+    expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0].federationTarget).toBeUndefined();
+    expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
+  });
+
+  it("refuses a new-worktree sub-thread on a peer without the parent's project", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "worktree-parent", title: "Tighten retries", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/repo/app", gitBranch: "main", primaryGitRepository: "example.test/acme/app",
+      linkedDirectories: [{ id: "/repo/app", label: "app", path: "/repo/app", kind: "local" }],
+      inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>();
+    const onThreadActionError = vi.fn();
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:worktree-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      // Same folder name, different origin: not the parent's project.
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, request.federationTarget
+        ? { directories: [{ key: "/src/app", kind: "directory", label: "app", path: "/src/app", repositoryKey: "example.test/other/app" }] }
+        : { threads: [parent] }),
+      releaseNavigationQuery: async () => undefined,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, {
+      localFederationInstanceId: "harbor", onThreadActionError,
+    }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await expect(result.current.readSubthreadWorktreeBase(
+      "studio",
+      { kind: "directory", label: "app", path: "/repo/app", repositoryKey: "example.test/acme/app" },
+      "main",
+    )).resolves.toBeUndefined();
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-worktree", { instanceId: "studio" });
+    });
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(latestThreadActionError(onThreadActionError, "create-thread")).toBe(
+      "That machine has no project named app.",
+    );
   });
 
   it("forks a parent thread through the desktop bridge and selects the optimistic fork", async () => {

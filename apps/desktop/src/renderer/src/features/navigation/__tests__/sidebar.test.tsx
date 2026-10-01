@@ -2131,6 +2131,166 @@ describe("Sidebar", () => {
     );
   });
 
+  it("cascades a new-worktree machine list that names each machine's base branch", async () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    const readSubthreadWorktreeBase = vi.fn(async (instanceId: string | undefined) =>
+      instanceId === "studio-work"
+        ? { available: true as const, baseBranch: "main" }
+        : instanceId === "mini"
+          ? { available: false as const, reason: "The repository has no commits yet" }
+          : undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        selectedItemKey="codex:thread-local"
+        threads={[localThread]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
+          { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
+          { availability: "available", instanceId: "lab", label: "Lab Box" },
+          { availability: "available", instanceId: "mini", label: "Mac Mini" },
+        ]}
+        readSubthreadWorktreeBase={readSubthreadWorktreeBase}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const openFlyout = () => {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+      const row = screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" });
+      fireEvent.mouseEnter(row.parentElement!);
+      return screen.getByRole("menu", { name: "New worktree on" });
+    };
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    // A right-click alone reads no peer's directories.
+    expect(readSubthreadWorktreeBase).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    let flyout = openFlyout();
+    expect(within(flyout).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Harbor Macfrom codex/thread-centric-uiParent",
+      "Attic MiniOffline",
+      "Studio Mac / workChecking…",
+      "Lab BoxChecking…",
+      "Mac MiniChecking…",
+    ]);
+    await act(async () => {});
+    const machines = within(flyout).getAllByRole("menuitem");
+    // The peer's checkout is not on the parent's branch, and the row says so.
+    expect(machines.map((item) => item.textContent)).toEqual([
+      "Harbor Macfrom codex/thread-centric-uiParent",
+      "Attic MiniOffline",
+      "Studio Mac / workfrom main",
+      "Lab BoxNo project",
+      "Mac MiniUnavailable",
+    ]);
+    expect(machines[3]).toHaveAttribute("aria-disabled", "true");
+    expect(machines[4]).toHaveAttribute("aria-disabled", "true");
+    expect(machines[4]).toHaveAttribute("title", "The repository has no commits yet");
+    // Offline machines are not asked; the parent's own machine needs no answer.
+    expect(readSubthreadWorktreeBase.mock.calls.map(([instanceId]) => instanceId).sort())
+      .toEqual(["lab", "mini", "studio-work"]);
+    expect(readSubthreadWorktreeBase).toHaveBeenCalledWith(
+      "studio-work",
+      { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+      "codex/thread-centric-ui",
+    );
+
+    fireEvent.click(machines[3]!);
+    fireEvent.click(machines[4]!);
+    expect(onCreateSubthread).not.toHaveBeenCalled();
+
+    fireEvent.click(machines[2]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      localThread,
+      "new-worktree",
+      { instanceId: "studio-work", baseBranch: "main" },
+    );
+
+    flyout = openFlyout();
+    await act(async () => {});
+    fireEvent.click(within(flyout).getAllByRole("menuitem")[0]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      localThread,
+      "new-worktree",
+      { baseBranch: "codex/thread-centric-ui" },
+    );
+  });
+
+  it("asks this machine for the project when the parent runs on a peer", async () => {
+    const remoteParent: NavigationThreadSummary = {
+      ...localThread,
+      id: "thread-remote-parent",
+      title: "Remote parent",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "mini" },
+          threadId: "thread-remote-parent",
+        },
+        instanceLabel: "Mac Mini",
+        peerStatus: "connected",
+        capabilities: ["environment_actions", "launchpad_metadata", "thread_navigation", "turn_control"],
+      },
+    };
+    const onCreateSubthread = vi.fn(async () => undefined);
+    const readSubthreadWorktreeBase = vi.fn(async () => ({ available: true as const, baseBranch: "release" }));
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[remoteParent]}
+        loading={false}
+        threads={[remoteParent]}
+        localMachineLabel="Harbor Mac"
+        newThreadFederationTargets={[
+          { availability: "available", instanceId: "mini", label: "Mac Mini" },
+        ]}
+        readSubthreadWorktreeBase={readSubthreadWorktreeBase}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Remote parent" }));
+    fireEvent.mouseEnter(
+      screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }).parentElement!,
+    );
+    const flyout = screen.getByRole("menu", { name: "New worktree on" });
+    await act(async () => {});
+    const machines = within(flyout).getAllByRole("menuitem");
+    expect(machines.map((item) => item.textContent)).toEqual([
+      "Mac Minifrom codex/thread-centric-uiParent",
+      "Harbor Macfrom release",
+    ]);
+    // Undefined is this machine; the parent's peer is not asked about itself.
+    expect(readSubthreadWorktreeBase.mock.calls).toEqual([[
+      undefined,
+      { kind: "directory", label: "PwrAgent", path: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+      "codex/thread-centric-ui",
+    ]]);
+
+    fireEvent.click(machines[1]!);
+    expect(onCreateSubthread).toHaveBeenLastCalledWith(
+      remoteParent,
+      "new-worktree",
+      { baseBranch: "release" },
+    );
+  });
+
   it("keeps the machine list reachable while the owner's worktree check runs", () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(

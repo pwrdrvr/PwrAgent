@@ -1,6 +1,9 @@
 import {
+  getSubthreadProjectIdentity,
+  getThreadNamedBranch,
   getThreadPrimaryDirectory,
   type SubthreadMachine,
+  type SubthreadWorktreeBase,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
@@ -11,7 +14,7 @@ import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
   MouseEvent as ReactMouseEvent,
@@ -64,8 +67,10 @@ import {
   type SubthreadMachineChoice,
 } from "./SubthreadMachineCascade";
 import {
+  useFederationProjectChecks,
   useFederationProjectStates,
   type CheckFederationTargetProject,
+  type FederationProjectCheckResult,
   type FederationProjectDirectory,
 } from "../chrome/useFederationProjectStates";
 import { NewThreadButton } from "../chrome/NewThreadButton";
@@ -262,6 +267,16 @@ type SidebarProps = {
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
   readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
+  /**
+   * Where a sub-thread's new worktree would start on a machine other than
+   * the parent's (undefined is this machine): undefined when that machine
+   * has no such project. Without it the machine list offers workspaces only.
+   */
+  readSubthreadWorktreeBase?: (
+    instanceId: string | undefined,
+    project: FederationProjectDirectory,
+    parentBranch: string | undefined,
+  ) => Promise<SubthreadWorktreeBase | undefined>;
   onCreateSubthread?: (
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
@@ -383,6 +398,11 @@ type SidebarProps = {
 // One empty list, so a render with nothing starting hands the lists the same
 // array and their effects keyed on it stay put.
 const NO_STARTING_THREADS: PendingLaunchpadCreation[] = [];
+/**
+ * Stands for this machine among the peers the sub-thread worktree list asks,
+ * when the parent runs elsewhere. `isFederationInstanceId` admits no colon.
+ */
+const SUBTHREAD_THIS_MACHINE = ":this-machine";
 
 const BROWSE_MODES = [
   "attention",
@@ -1796,6 +1816,96 @@ export function Sidebar(props: SidebarProps) {
     ? federationThreadTargets.find((target) =>
       target.instanceId === contextMenuParentInstanceId)
     : undefined;
+  // A worktree on another machine needs the parent's project there, and the
+  // branch it starts from may not be the parent's, so each machine is asked
+  // once the flyout is first shown rather than on every right-click.
+  const subthreadWorktreeFlyout = Boolean(
+    canCreateContextMenuWorktree && props.readSubthreadWorktreeBase,
+  );
+  const [subthreadFlyoutShownKey, setSubthreadFlyoutShownKey] = useState<string>();
+  useEffect(() => {
+    setSubthreadFlyoutShownKey(undefined);
+  }, [contextMenuThreadKey]);
+  const onSubthreadFlyoutOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && contextMenuThreadKey) {
+        setSubthreadFlyoutShownKey(contextMenuThreadKey);
+      }
+    },
+    [contextMenuThreadKey],
+  );
+  const contextMenuParentBranch = contextMenuThread
+    ? getThreadNamedBranch(contextMenuThread)
+    : undefined;
+  const subthreadProject = contextMenuThread
+    ? getSubthreadProjectIdentity(contextMenuThread, props.directories)
+    : undefined;
+  const readSubthreadWorktreeBase = props.readSubthreadWorktreeBase;
+  const checkSubthreadWorktreeMachine = useCallback(
+    async (
+      instanceId: string,
+      project: FederationProjectDirectory,
+    ): Promise<FederationProjectCheckResult> => {
+      if (!readSubthreadWorktreeBase) {
+        return true;
+      }
+      try {
+        const base = await readSubthreadWorktreeBase(
+          instanceId === SUBTHREAD_THIS_MACHINE ? undefined : instanceId,
+          project,
+          contextMenuParentBranch,
+        );
+        if (!base) {
+          return false;
+        }
+        return base.available
+          ? { present: true, detail: base.baseBranch }
+          : { present: false, detail: base.reason };
+      } catch (error) {
+        // Unlike a chat, a worktree cannot start without a branch to show,
+        // so a failed read blocks the row instead of reading as present.
+        return {
+          present: false,
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    [contextMenuParentBranch, readSubthreadWorktreeBase],
+  );
+  const subthreadWorktreeChecks = useFederationProjectChecks({
+    check: checkSubthreadWorktreeMachine,
+    directory: subthreadProject,
+    open:
+      subthreadWorktreeFlyout
+      && subthreadFlyoutShownKey !== undefined
+      && subthreadFlyoutShownKey === contextMenuThreadKey,
+    targets: contextMenuParentInstanceId
+      ? [
+          ...federationThreadTargets.filter((target) =>
+            target.instanceId !== contextMenuParentInstanceId),
+          { instanceId: SUBTHREAD_THIS_MACHINE, availability: "available" },
+        ]
+      : federationThreadTargets,
+  });
+  const subthreadWorktreeChoice = (
+    key: string,
+  ): Pick<SubthreadMachineChoice, "baseBranch" | "blocked" | "blockedTitle"> => {
+    if (!subthreadWorktreeFlyout) {
+      return {};
+    }
+    const check = subthreadWorktreeChecks?.[key];
+    if (!check || check.state === "checking") {
+      return { blocked: "Checking…" };
+    }
+    if (check.state === "missing") {
+      return check.detail
+        ? { blocked: "Unavailable", blockedTitle: check.detail }
+        : { blocked: "No project" };
+    }
+    return check.detail
+      ? { baseBranch: check.detail }
+      : { blocked: "Unavailable" };
+  };
   const subthreadMachines: SubthreadMachineChoice[] | undefined =
     contextMenuCanCreateSubthread && federationThreadTargets.length > 0
       ? [
@@ -1811,12 +1921,20 @@ export function Sidebar(props: SidebarProps) {
                 // passed this menu's capability gate, so it can host the child.
                 availability: contextMenuParentMachine?.availability ?? "available",
                 parent: true,
+                ...(subthreadWorktreeFlyout && contextMenuParentBranch
+                  ? { baseBranch: contextMenuParentBranch }
+                  : {}),
               }]
             : []),
           {
             label: props.localMachineLabel ?? "This machine",
             availability: "available" as const,
             parent: !contextMenuParentInstanceId,
+            ...(contextMenuParentInstanceId
+              ? subthreadWorktreeChoice(SUBTHREAD_THIS_MACHINE)
+              : subthreadWorktreeFlyout && contextMenuParentBranch
+                ? { baseBranch: contextMenuParentBranch }
+                : {}),
           },
           ...federationThreadTargets
             .filter((target) => target.instanceId !== contextMenuParentInstanceId)
@@ -1825,6 +1943,7 @@ export function Sidebar(props: SidebarProps) {
               label: target.label,
               availability: target.availability,
               parent: false,
+              ...subthreadWorktreeChoice(target.instanceId),
             })),
         ]
       : undefined;
@@ -2574,17 +2693,26 @@ export function Sidebar(props: SidebarProps) {
                           label={canCreateContextMenuWorktree
                             ? "Sub-thread in New Worktree"
                             : "Sub-thread in New Workspace"}
+                          groupLabel={subthreadWorktreeFlyout
+                            ? "New worktree on"
+                            : "New workspace on"}
                           rowDisabled={checkingWorktreeAvailability}
                           machines={subthreadMachines}
                           onSelect={() => createSubthreadFromContextMenu(
                             contextMenu.thread,
                             canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
                           )}
-                          onSelectMachine={(instanceId) => createSubthreadFromContextMenu(
+                          onSelectMachine={(machine) => createSubthreadFromContextMenu(
                             contextMenu.thread,
-                            "new-workspace",
-                            { ...(instanceId ? { instanceId } : {}) },
+                            subthreadWorktreeFlyout ? "new-worktree" : "new-workspace",
+                            {
+                              ...(machine.instanceId ? { instanceId: machine.instanceId } : {}),
+                              ...(subthreadWorktreeFlyout && machine.baseBranch
+                                ? { baseBranch: machine.baseBranch }
+                                : {}),
+                            },
                           )}
+                          onOpenChange={onSubthreadFlyoutOpenChange}
                         />
                       ) : (
                         <button
