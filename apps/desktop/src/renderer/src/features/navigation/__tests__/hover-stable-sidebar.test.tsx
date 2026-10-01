@@ -736,10 +736,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     // The drop clears its indicator under the resting pointer, so the browser
     // reports the pointer entering a row before the reorder has landed.
     fireEvent.pointerOver(threadRow("Bravo thread"), { pointerType: "mouse" });
-    await act(async () => {
-      resolveReorder();
-    });
-
+    // The owner applies the new ranks before the reorder resolves.
     view.rerender(renderSidebar({
       browseMode: "directories",
       directories: [directory],
@@ -750,8 +747,24 @@ describe("Sidebar hover-stable thread ordering", () => {
       ],
       onReorderThreadPins,
     }));
-
+    await act(async () => {
+      resolveReorder();
+    });
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+
+    // The operator's result is on screen and the pointer has not moved, so
+    // a change from elsewhere must not re-sort the rows under it.
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [directory],
+      selectedItemKey: "codex:alpha",
+      threads: [pinnedAlpha, pinnedBravo],
+      onReorderThreadPins,
+    }));
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
   });
 
   it.each([false, true])("renders lazy pins correctly on first arrival when hover re-enters before the page: %s", (reenter) => {

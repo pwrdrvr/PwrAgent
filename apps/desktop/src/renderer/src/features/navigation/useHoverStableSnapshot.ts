@@ -27,12 +27,11 @@ function closestHoverStableRelease(target: EventTarget | null): Element | null {
  * one render.
  *
  * A command the operator chose is the opposite of background churn: its
- * result must appear under the pointer that chose it. `reveal` releases the
- * freeze and keeps it released until that result has landed. Dropping the
- * freeze only before the command is not enough. The command's own DOM change
- * (a drop indicator clearing, a menu closing, pointer capture ending) fires a
- * `pointerover` under the stationary pointer, which would freeze the value
- * from before the command and hold it until the pointer leaves.
+ * result must appear under the pointer that chose it. `reveal` shows the
+ * latest value until that result has landed, then freezes again on the value
+ * that contains it. It never drops the freeze. A released list stays live
+ * until the next `pointerover`, and a resting pointer may not produce one, so
+ * the first background re-sort after the command would move rows under it.
  */
 export function useHoverStableSnapshot<T>(params: {
   hydrateFrozenValue?: (frozenValue: T, latestValue: T) => T;
@@ -40,8 +39,8 @@ export function useHoverStableSnapshot<T>(params: {
   /**
    * Ids of the reads the latest value is still waiting for. A command can
    * settle before the read it invalidated replaces the list, so a revealed
-   * command keeps the freeze released until each read outstanding when it
-   * settled has landed once. Reads invalidated later are background churn
+   * command keeps showing the latest value until each read outstanding when
+   * it settled has landed once. Reads invalidated later are background churn
    * and do not extend the wait.
    */
   outstandingReads?: readonly string[];
@@ -67,6 +66,11 @@ export function useHoverStableSnapshot<T>(params: {
   const awaitedReadsRef = useRef<"settling" | Set<string>>(undefined);
   const [, renderLatestValue] = useReducer((revision: number) => revision + 1, 0);
 
+  // Read before the wait below can end, so the render in which the awaited
+  // read lands is still revealed and the freeze takes the value that has it.
+  const revealing =
+    pendingRevealsRef.current > 0
+    || awaitedReadsRef.current !== undefined;
   if (awaitedReadsRef.current) {
     const outstanding = new Set(params.outstandingReads);
     const awaited = awaitedReadsRef.current === "settling"
@@ -80,6 +84,9 @@ export function useHoverStableSnapshot<T>(params: {
     hoveringRowRef.current = false;
     frozenValueRef.current = params.value;
   }
+  if (revealing && hoveringRowRef.current) {
+    frozenValueRef.current = params.value;
+  }
 
   const release = useCallback(() => {
     if (!hoveringRowRef.current) return;
@@ -88,22 +95,30 @@ export function useHoverStableSnapshot<T>(params: {
   }, []);
 
   const reveal = useCallback(<Result>(operation: () => Result): Result => {
-    release();
-    const result = operation();
-    if (!isPromiseLike(result)) {
-      return result;
-    }
-    pendingRevealsRef.current += 1;
+    // The command invalidated its reads before it settled, so the render
+    // this schedules sees them outstanding and keeps waiting for them.
     const settle = (): void => {
       pendingRevealsRef.current -= 1;
-      // The command invalidated its reads before it settled, so the render
-      // this schedules sees them outstanding and keeps waiting for them.
       awaitedReadsRef.current = "settling";
       renderLatestValue();
     };
-    result.then(settle, settle);
+    // Counted before the operation runs: a synchronous state update inside
+    // it must already render revealed.
+    pendingRevealsRef.current += 1;
+    let result: Result;
+    try {
+      result = operation();
+    } catch (error) {
+      settle();
+      throw error;
+    }
+    if (isPromiseLike(result)) {
+      result.then(settle, settle);
+    } else {
+      settle();
+    }
     return result;
-  }, [release]);
+  }, []);
 
   const onPointerOver = useCallback<PointerEventHandler<HTMLDivElement>>(
     (event) => {
@@ -111,8 +126,6 @@ export function useHoverStableSnapshot<T>(params: {
         event.pointerType === "touch"
         || !closestHoverStableRow(event.target)
         || hoveringRowRef.current
-        || pendingRevealsRef.current > 0
-        || awaitedReadsRef.current
       ) {
         return;
       }
@@ -160,7 +173,7 @@ export function useHoverStableSnapshot<T>(params: {
     onPointerOver,
     release,
     reveal,
-    value: hoveringRowRef.current
+    value: hoveringRowRef.current && !revealing
       ? params.hydrateFrozenValue?.(frozenValueRef.current, params.value)
         ?? frozenValueRef.current
       : params.value,

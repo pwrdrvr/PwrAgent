@@ -147,8 +147,8 @@ function useStableRowCallback<Args extends unknown[], Result>(
 }
 
 /**
- * Run a list-changing operation with the hover freeze released until its
- * result lands — with a
+ * Run a list-changing operation so its result shows under a resting pointer,
+ * and the hover freeze then holds that result — with a
  * permanently stable identity, because these reach memoized thread rows.
  *
  * The wrapped operation is a prop of this component and so is a new function
@@ -157,7 +157,7 @@ function useStableRowCallback<Args extends unknown[], Result>(
  *
  * Presence is decided here rather than by each call site: a caller that
  * forgot its own `props.onX ? … : undefined` would otherwise ship a handler
- * that releases the freeze and then throws on the user's first click.
+ * that reveals a result and then throws on the user's first click.
  */
 function useRevealListChange<Args extends unknown[], Result>(
   reveal: <Revealed>(operation: () => Revealed) => Revealed,
@@ -714,7 +714,7 @@ export function Sidebar(props: SidebarProps) {
     props.onSetSubthreadsCollapsed,
   );
   // Directories is the only lens whose pin action reorders the list, so it is
-  // the only one that has to drop the freeze first. Elsewhere pins render in
+  // the only one that has to reveal the result. Elsewhere pins render in
   // place and the freeze must survive the write. One stable wrapper spanning
   // both, rather than a lens-dependent identity: a row's `memo` cannot bail
   // out past a handler that changes when the lens does.

@@ -33,7 +33,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("useHoverStableSnapshot reveal", () => {
-  it("keeps a command's result visible when its own DOM change re-enters a row", async () => {
+  it("shows a command's result, then holds it against background churn", async () => {
     const view = renderSnapshot({ value: "before" });
     pointerOverRow(view.result);
     const command = deferred();
@@ -49,8 +49,9 @@ describe("useHoverStableSnapshot reveal", () => {
       command.resolve();
       await command.promise;
     });
-    view.rerender({ value: "settled" });
-    expect(view.result.current.value).toBe("settled");
+    // No pointer event follows the result, and none is needed to freeze it.
+    view.rerender({ value: "background churn" });
+    expect(view.result.current.value).toBe("after");
   });
 
   it("waits for the reads a command left outstanding before freezing again", async () => {
