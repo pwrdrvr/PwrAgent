@@ -1,6 +1,6 @@
 import * as composerMentionSources from "../../composer/useComposerMentionSources";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { cloneElement, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -23,6 +23,8 @@ import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
+import { handoffLaunchpadComposer } from "../../composer/launchpad-composer-handoff";
+import { useComposerDraftStore } from "../../composer/useComposerDraftStore";
 
 vi.mock("../IntegratedTerminal", () => ({
   IntegratedTerminal: (props: {
@@ -3092,6 +3094,104 @@ describe("ThreadView", () => {
     expect(copyText).toHaveBeenCalledWith(
       "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
     );
+  });
+
+  it.each(["composer", "elsewhere", "moved-after-handoff", "visit-later"])("hands off environment setup without losing or stealing focus (%s)", async (focus) => {
+    const { result } = renderHook(useComposerDraftStore);
+    const draftStore = result.current;
+    const launchpad: NavigationLaunchpadDraft = {
+      backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+      directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+      prompt: "First message", workMode: "worktree", createdAt: 1, updatedAt: 1,
+      codexEnvironmentId: "example-env",
+      codexEnvironmentOptions: [{
+        id: "example-env", name: "Example", sourcePath: "/repo/environment.toml",
+        setupScript: "pnpm install", actions: [],
+      }],
+    };
+    const composerScopeKey = "launchpad:starting:1:directory:/repo";
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [{
+        kind: "codex", label: "Codex", available: true,
+        methods: ["thread/start", "turn/start"],
+        capabilities: {
+          listThreads: true, createThread: true, resumeThread: true, renameThread: false,
+          readThread: true, startTurn: true, interruptTurn: true, steerTurn: false,
+          transcriptPagination: true, toolUse: false, approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+      }],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      composerDraftStore: draftStore,
+      transcriptEntries: [],
+      loading: false,
+      loadingMore: false,
+      messageCount: 0,
+      selectedDirectory: {
+        key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+      },
+      selectedLaunchpad: launchpad,
+      pendingLaunchpadCreation: {
+        selectionKey: "starting-launchpad:1", directoryKey: launchpad.directoryKey,
+        directoryLabel: launchpad.directoryLabel, launchpad, composerScopeKey,
+        setupProgressKey: "starting-launchpad:1",
+        title: "First message", input: [{ type: "text", text: "First message" }],
+      },
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+    };
+    const element = (overrides: Partial<typeof props> = {}) => (
+      <>
+        <input aria-label="Other input" />
+        <ThreadView {...props} {...overrides} />
+      </>
+    );
+    const view = render(element());
+    const input = screen.getByRole("textbox", { name: "New thread" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Still typing" } });
+    // Let initial launchpad hydration finish its existing focus request.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => input.focus());
+    act(() => input.setSelectionRange(6, 6));
+    expect(input).toHaveFocus();
+    const otherInput = screen.getByRole("textbox", { name: "Other input" });
+    if (focus === "elsewhere") act(() => otherInput.focus());
+
+    const thread = buildTimestampTargetThread("created-thread", "First message");
+    act(() => handoffLaunchpadComposer(draftStore, composerScopeKey, thread));
+    if (focus === "moved-after-handoff") act(() => otherInput.focus());
+    if (focus === "visit-later") {
+      view.rerender(element({
+        selectedLaunchpad: undefined, pendingLaunchpadCreation: undefined,
+        selectedThread: buildTimestampTargetThread("other-thread", "Other thread"),
+      }));
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      });
+    }
+    view.rerender(element({
+      selectedLaunchpad: undefined, pendingLaunchpadCreation: undefined,
+      selectedThread: thread,
+    }));
+
+    const reply = screen.getByRole("textbox", { name: "Reply" }) as HTMLInputElement;
+    expect(reply).toHaveValue("Still typing");
+    if (focus === "composer") {
+      await waitFor(() => expect(reply).toHaveFocus());
+      expect(reply.selectionStart).toBe(6);
+      expect(window.getSelection()?.anchorNode?.textContent).toBe("Still typing");
+      expect(window.getSelection()?.anchorOffset).toBe(6);
+      fireEvent.change(document.activeElement!, { target: { value: "Still typing after setup" } });
+      expect(reply).toHaveValue("Still typing after setup");
+    } else if (focus === "visit-later") {
+      expect(reply).not.toHaveFocus();
+    } else {
+      expect(otherInput).toHaveFocus();
+    }
   });
 
   it("opens submitted image previews while the launchpad is materializing", () => {

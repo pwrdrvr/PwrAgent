@@ -12,6 +12,21 @@ import {
 type ComposerDestination = { scopeKey: string };
 const handoffTargets = new WeakMap<ComposerDraftStore, Map<string, ComposerDestination>>();
 const attachmentListeners = new WeakMap<ComposerDraftStore, Set<(scopeKey: string) => void>>();
+const composerHandoffListeners = new WeakMap<ComposerDraftStore, Set<(source: string, target: string) => void>>();
+
+/** Capture transient editor state before navigation replaces the launchpad. */
+export function subscribeLaunchpadComposerHandoffs(
+  store: ComposerDraftStore,
+  listener: (source: string, target: string) => void,
+): () => void {
+  let listeners = composerHandoffListeners.get(store);
+  if (!listeners) {
+    listeners = new Set();
+    composerHandoffListeners.set(store, listeners);
+  }
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
 
 export function subscribeLaunchpadAttachmentHandoffs(
   store: ComposerDraftStore,
@@ -102,6 +117,7 @@ export function handoffLaunchpadComposer(
 ): void {
   const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
   const target = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
+  for (const listener of composerHandoffListeners.get(store) ?? []) listener(source, target);
   getLaunchpadComposerDestination(store, source).scopeKey = target;
   const draft = store.get(source);
   if (draft) {

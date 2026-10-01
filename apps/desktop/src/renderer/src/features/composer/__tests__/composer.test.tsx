@@ -666,6 +666,30 @@ describe("Composer", () => {
     expect(screen.getByLabelText("New thread")).toHaveValue("Keep this follow-up");
   });
 
+  it("keeps composer focus when handoff replaces the editor within the same component", async () => {
+    const store = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
+    const view = render(<Composer backends={[backendSummary("codex")]}
+      directory={retargetingPwrSnap} launchpad={launchpad} launchpadMaterializing
+      draftStore={store} skills={[]} />);
+    const input = screen.getByLabelText("New thread") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Still typing" } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => { input.focus(); input.setSelectionRange(6, 6); });
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
+    view.rerender(<Composer backends={[backendSummary("codex")]}
+      thread={thread} draftStore={store} skills={[]} />);
+    const reply = screen.getByLabelText("Reply") as HTMLInputElement;
+    expect(reply).not.toBe(input);
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(reply.selectionStart).toBe(6);
+    expect(reply).toHaveValue("Still typing");
+  });
+
   it("retargets an image that finishes normalizing after launchpad handoff", async () => {
     const normalization = createDeferred<Awaited<ReturnType<typeof normalizeImageFile>>>();
     vi.mocked(normalizeImageFile).mockImplementationOnce(() => normalization.promise);

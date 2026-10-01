@@ -6,6 +6,7 @@ import {
   findCheckedOutPullRequest,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   beginLaunchpadComposition,
@@ -2780,6 +2781,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const [editorScopeKey, setEditorScopeKey] = useState(composerScopeKey);
+  useLaunchpadComposerFocusHandoff(draftStore, composerScopeKey, editorScopeKey, inputRef, inputWrapRef);
   const editorRemountSequenceRef = useRef(0);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const pendingDraftRetargetRef = useRef<
