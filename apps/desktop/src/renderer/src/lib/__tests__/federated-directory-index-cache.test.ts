@@ -107,6 +107,24 @@ describe("FederatedDirectoryIndexCache", () => {
     expect(read).toHaveBeenCalledTimes(3);
   });
 
+  it("does not answer presence from a watched index after its generation moved", async () => {
+    const cache = new FederatedDirectoryIndexCache();
+    const read = vi.fn()
+      .mockResolvedValueOnce(withProject)
+      .mockResolvedValueOnce(withoutProject);
+    let generation = 3;
+    const watch = async () => generation;
+
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(true);
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // The owner announced a change: the project may be gone.
+    generation = 4;
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("does not trust absence from an index read outside a watch", async () => {
     const cache = new FederatedDirectoryIndexCache();
     cache.record(cache.begin("studio"), withoutProject);

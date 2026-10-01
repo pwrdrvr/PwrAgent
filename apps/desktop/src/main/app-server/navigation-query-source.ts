@@ -43,10 +43,10 @@ export async function loadLocalNavigationQueryIndex(params: {
   const registry = params.registry ?? getDesktopBackendRegistry();
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
+  // A refresh reads under its own key: it must not be served a retained or
+  // in-flight index that predates it, nor cost other readers a retry.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    overlayStore.readNavigationSourceVersion?.()]);
-  // A retained index predates the refresh this read was asked for.
-  if (params.refreshProviders) indexReads.invalidate(key);
+    overlayStore.readNavigationSourceVersion?.(), ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   let subscribed = false;
   return indexReads.read(key, async (signal) => {
     // An event during a scan makes its result stale. The read pool shares one

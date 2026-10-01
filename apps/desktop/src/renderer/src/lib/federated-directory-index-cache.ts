@@ -30,15 +30,15 @@ export type FederatedDirectorySetWatch = () => Promise<number | undefined>;
  * Each peer's directory index as this window last read it, kept only to
  * answer "does this machine have the project?" in the machine menus.
  *
- * A cached index proves presence. It proves absence only for an owner that
- * announces its directory-set changes (`navigation_directory_set_events`),
- * and only while the main process's watch generation for that owner is the
- * one the index was read under: the generation moves on every announced
- * change, peer status change and re-sent subscription. Any other owner is
- * re-read to answer "missing", because nothing else can show that a
- * project is still missing. A cached "present" can be stale; the open after a
- * machine is chosen reads the owner again and reports a real miss, the same
- * as a failed check does.
+ * For an owner that announces its directory-set changes
+ * (`navigation_directory_set_events`), a cached index answers only while the
+ * main process's watch generation for that owner is the one the index was
+ * read under: the generation moves on every announced change, peer status
+ * change and re-sent subscription. For any other owner a cached index proves
+ * presence only, and is re-read to answer "missing", because nothing else can
+ * show that a project is still missing. A cached "present" from such an owner
+ * can be stale; the open after a machine is chosen reads the owner again and
+ * reports a real miss, the same as a failed check does.
  *
  * An index is dropped when the peer's connection status or event stream
  * changes, and on any peer event that can change its directory set. Only a
@@ -113,18 +113,16 @@ export class FederatedDirectoryIndexCache {
     read: (indexRead: FederatedDirectoryIndexRead) => Promise<readonly FederatedDirectoryIdentity[]>,
     watch?: FederatedDirectorySetWatch,
   ): Promise<boolean> {
-    const cached = this.entries.get(instanceId);
-    if (cached && findPeerCounterpartDirectory(project, cached.directories)) {
-      return true;
-    }
     const watchGeneration = watch ? await watch().catch(() => undefined) : undefined;
     const current = this.entries.get(instanceId);
-    if (
-      current
-      && watchGeneration !== undefined
-      && current.watchGeneration === watchGeneration
-    ) {
-      return Boolean(findPeerCounterpartDirectory(project, current.directories));
+    if (current && watchGeneration !== undefined) {
+      // A watched owner's index answers both ways under its own generation,
+      // and neither way after one that moved: that may be an announced removal.
+      if (current.watchGeneration === watchGeneration) {
+        return Boolean(findPeerCounterpartDirectory(project, current.directories));
+      }
+    } else if (current && findPeerCounterpartDirectory(project, current.directories)) {
+      return true;
     }
     const epoch = this.epochs.get(instanceId) ?? 0;
     let load = this.loads.get(instanceId);

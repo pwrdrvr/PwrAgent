@@ -50,8 +50,11 @@ export function directorySetMayHaveChanged(event: AgentEvent): boolean {
   if (method === "navigation/directoryGitStatus/updated") {
     return true;
   }
-  return navigationQueryEventRequiresRefresh(method, event.notification.params)
-    && navigationInvalidationMayChangeMembership(method);
+  const params = event.notification.params as { sourceMethod?: unknown } | undefined;
+  return navigationQueryEventRequiresRefresh(method, params)
+    && navigationInvalidationMayChangeMembership(
+      method === "navigation/invalidated" ? params?.sourceMethod : method,
+    );
 }
 
 /**

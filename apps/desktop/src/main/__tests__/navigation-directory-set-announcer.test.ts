@@ -66,6 +66,8 @@ describe("directorySetMayHaveChanged", () => {
     expect(directorySetMayHaveChanged(event("navigation/directory/removed", { directoryKey: "k" }))).toBe(true);
     expect(directorySetMayHaveChanged(event("navigation/providerThreads/refreshed"))).toBe(true);
     expect(directorySetMayHaveChanged(event("navigation/directoryGitStatus/updated", { directoryKey: "k" }))).toBe(true);
+    expect(directorySetMayHaveChanged(event("navigation/invalidated", { sourceMethod: "thread/archived" }))).toBe(true);
+    expect(directorySetMayHaveChanged(event("navigation/invalidated", { sourceMethod: "turn/completed" }))).toBe(false);
     expect(directorySetMayHaveChanged(event("turn/completed", { threadId: "t" }))).toBe(false);
     expect(directorySetMayHaveChanged(event("thread/status/changed", { threadId: "t" }))).toBe(false);
     expect(directorySetMayHaveChanged(event("item/agentMessage/delta", { threadId: "t" }))).toBe(false);

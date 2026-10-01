@@ -248,6 +248,12 @@ describe("project-aware machine menus: directory-index reads", () => {
     });
     step("sidebar selection");
 
+    // The laptop drops the project and announces it: no stale "present".
+    peers.directoriesByPeer.set("laptop", [workspace]);
+    peers.watchGenerations.set("laptop", 3);
+    expect(await openMenu()).toEqual([true, false, false]);
+    step("open after an announced removal");
+
     expect(reads).toEqual({
       "first open": ["laptop", "studio", "tower"],
       "reopen": [],
@@ -256,6 +262,7 @@ describe("project-aware machine menus: directory-index reads", () => {
       "open after the tower acknowledges": ["tower"],
       "open, all known": [],
       "sidebar selection": ["laptop"],
+      "open after an announced removal": ["laptop"],
     });
   });
 
