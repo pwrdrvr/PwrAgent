@@ -3281,6 +3281,7 @@ function DesktopAppShell(props: {
             ? undefined
             : addProjectDirectory}
           readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
+          readSubthreadWorktreeBase={navigation.readSubthreadWorktreeBase}
           onCreateSubthread={async (thread, mode, machine) => {
             setMainView("thread");
             await navigation.createSubthread(thread, mode, machine);

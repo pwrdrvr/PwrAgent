@@ -602,7 +602,7 @@ export function buildDirectorySummaries(params: {
     if (!launchpad || (!params.launchpadPresenceKeys?.has(directoryKey) && !hasPersistableLaunchpadState(launchpad))) {
       continue;
     }
-    // Sub-thread launchpads (`subthread:<source>:<parent>:<mode>`) are
+    // Sub-thread launchpads (`subthread:<source>:<parent>:<mode>[:<machine>]`) are
     // thread-scoped drafts composed inline under their parent thread — they are
     // never a project directory. Synthesizing one into a Directories-lens row
     // duplicated the parent's real directory as a phantom entry that survived

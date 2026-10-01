@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FederationThreadTarget } from "./federation-thread-targets";
 import type { FederationTargetProjectState } from "./FederationTargetMenuSection";
 import type { ProjectIdentity } from "../../lib/federation-project-match";
@@ -9,6 +9,21 @@ export type CheckFederationTargetProject = (
   instanceId: string,
   directory: FederationProjectDirectory,
 ) => Promise<boolean>;
+
+/**
+ * A check may say more than present or missing: a line the menu shows for
+ * the machine, such as the branch a worktree there starts from, and a
+ * longer explanation for its tooltip.
+ */
+export type FederationProjectCheckResult =
+  | boolean
+  | { present: boolean; detail?: string; title?: string };
+
+export type FederationProjectCheck = {
+  state: FederationTargetProjectState;
+  detail?: string;
+  title?: string;
+};
 
 /**
  * Ask each reachable peer, once per menu opening, whether it has the
@@ -25,9 +40,29 @@ export function useFederationProjectStates(params: {
   open: boolean;
   targets: readonly FederationThreadTarget[];
 }): Record<string, FederationTargetProjectState> | undefined {
+  const checks = useFederationProjectChecks(params);
+  return useMemo(
+    () => checks
+      && Object.fromEntries(
+        Object.entries(checks).map(([id, check]) => [id, check.state]),
+      ),
+    [checks],
+  );
+}
+
+/** `useFederationProjectStates`, keeping each check's detail line. */
+export function useFederationProjectChecks(params: {
+  check?: (
+    instanceId: string,
+    directory: FederationProjectDirectory,
+  ) => Promise<FederationProjectCheckResult>;
+  directory?: FederationProjectDirectory;
+  open: boolean;
+  targets: readonly Pick<FederationThreadTarget, "availability" | "instanceId">[];
+}): Record<string, FederationProjectCheck> | undefined {
   const { check, directory, open, targets } = params;
   const [states, setStates] = useState<
-    Record<string, FederationTargetProjectState> | undefined
+    Record<string, FederationProjectCheck> | undefined
   >();
   const scoped = Boolean(open && check && directory && directory.kind !== "workspace");
   const directoryLabel = directory?.label;
@@ -54,11 +89,20 @@ export function useFederationProjectStates(params: {
         : {}),
     };
     let cancelled = false;
-    setStates(Object.fromEntries(ids.map((id) => [id, "checking" as const])));
+    setStates(Object.fromEntries(ids.map((id) => [id, { state: "checking" as const }])));
     for (const id of ids) {
       void check(id, project)
-        .then((present) => (present ? "present" as const : "missing" as const))
-        .catch(() => "present" as const)
+        .then((result): FederationProjectCheck => {
+          if (typeof result === "boolean") {
+            return { state: result ? "present" : "missing" };
+          }
+          return {
+            state: result.present ? "present" : "missing",
+            ...(result.detail !== undefined ? { detail: result.detail } : {}),
+            ...(result.title !== undefined ? { title: result.title } : {}),
+          };
+        })
+        .catch((): FederationProjectCheck => ({ state: "present" }))
         .then((state) => {
           if (cancelled) return;
           setStates((current) => ({ ...current, [id]: state }));

@@ -8,13 +8,22 @@ const ITEM =
  * The items the keyboard can land on, in document order. A native
  * `disabled` button cannot take focus at all, so it is skipped rather than
  * stopped on.
+ *
+ * An `aria-disabled` item that opens a submenu stays: only its own click is
+ * refused, and its submenu is still reachable through it (the sidebar's
+ * "Start sub-thread in a new worktree" row while the worktree check runs).
+ * Items of a nested submenu belong to that submenu's walk, not this one.
  */
 function menuItems(menu: HTMLElement | null): HTMLElement[] {
   if (menu === null) return [];
   return [...menu.querySelectorAll<HTMLElement>(ITEM)].filter(
     (item) =>
-      !item.hasAttribute("disabled")
-      && item.getAttribute("aria-disabled") !== "true",
+      item.parentElement?.closest('[role="menu"]') === menu
+      && !item.hasAttribute("disabled")
+      && (
+        item.getAttribute("aria-disabled") !== "true"
+        || item.hasAttribute("aria-haspopup")
+      ),
   );
 }
 

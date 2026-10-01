@@ -18,7 +18,14 @@ const focusedLabel = (): string | undefined =>
 const button = (label: string): HTMLButtonElement =>
   screen.getByRole("button", { name: label });
 
-type Item = { label: string; disabled?: boolean; closes?: boolean };
+type Item = {
+  label: string;
+  disabled?: boolean;
+  ariaDisabled?: boolean;
+  closes?: boolean;
+  /** Renders the item as a cascade row with this open submenu beside it. */
+  submenu?: string[];
+};
 
 /**
  * A menu button whose menu portals to <body>, as the sidebar's menus render
@@ -63,18 +70,30 @@ function MenuButton(props: {
             tabIndex={props.menuTabIndex}
           >
             {props.items.map((item) => (
-              <button
-                key={item.label}
-                type="button"
-                role="menuitem"
-                disabled={item.disabled}
-                onClick={() => {
-                  props.onSelect?.(item.label);
-                  if (item.closes !== false) setOpen(false);
-                }}
-              >
-                {item.label}
-              </button>
+              <div key={item.label}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={item.disabled}
+                  aria-disabled={item.ariaDisabled || undefined}
+                  aria-haspopup={item.submenu ? "menu" : undefined}
+                  onClick={() => {
+                    props.onSelect?.(item.label);
+                    if (item.closes !== false) setOpen(false);
+                  }}
+                >
+                  {item.label}
+                </button>
+                {item.submenu ? (
+                  <div role="menu" aria-label={item.label}>
+                    {item.submenu.map((label) => (
+                      <button key={label} type="button" role="menuitem">
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ))}
           </div>,
           document.body,
@@ -160,6 +179,30 @@ describe("useMenuNavigation, arrows", () => {
     expect(focusedLabel()).toBe("Archive");
     pressKey("Home");
     expect(focusedLabel()).toBe("Pin");
+  });
+
+  it("stops on a disabled cascade row but not in its submenu", () => {
+    render(
+      <MenuButton
+        items={[
+          { label: "Pin" },
+          { label: "Move to", ariaDisabled: true, submenu: ["Here", "There"] },
+          { label: "Waiting", ariaDisabled: true },
+          { label: "Archive" },
+        ]}
+      />,
+    );
+    openMenu();
+    const visited: Array<string | undefined> = [];
+    for (let i = 0; i < 3; i++) {
+      pressKey("ArrowDown");
+      visited.push(focusedLabel());
+    }
+    // Only the row's own click is refused; its submenu is reached through
+    // it, and walks its own items.
+    expect(visited).toEqual(["Move to", "Archive", "Pin"]);
+    pressKey("End");
+    expect(focusedLabel()).toBe("Archive");
   });
 
   it("claims the arrows it spends and leaves modified ones alone", () => {

@@ -125,6 +125,16 @@ export function buildFederationThreadTargets(
   return buildFederationPeerTargets(health, resolveAvailability, currentWindowInstanceId);
 }
 
+/**
+ * The project-check states every machine list shows: the New Thread flyout,
+ * the composer's machine chip and the sub-thread flyout. One copy, so the
+ * three cannot drift apart.
+ */
+export const FEDERATION_PROJECT_STATE_LABEL = {
+  checking: "Checking…",
+  missing: "No project",
+} as const;
+
 /** The short state a target row shows beside its label when unavailable. */
 export const FEDERATION_TARGET_AVAILABILITY_LABEL: Partial<
   Record<FederationThreadTargetAvailability, string>

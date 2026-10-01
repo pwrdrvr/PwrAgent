@@ -88,8 +88,12 @@ import {
 import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
+  getSubthreadProjectIdentity,
+  getThreadNamedBranch,
   getThreadPrimaryDirectory,
+  pickSubthreadWorktreeBase,
   type SubthreadMachine,
+  type SubthreadWorktreeBase,
   type ThreadWorkspaceMode,
 } from "./subthread-launchpads";
 
@@ -282,12 +286,7 @@ function selectThreadWorkspace(
   const worktree = primary?.kind === "worktree" ? primary : undefined;
   const local = primary?.kind === "local" ? primary : undefined;
   const preferred = worktree ?? local;
-  const namedBranch =
-    thread.observedGitBranch && thread.observedGitBranch !== "HEAD"
-      ? thread.observedGitBranch
-      : thread.gitBranch && thread.gitBranch !== "HEAD"
-        ? thread.gitBranch
-        : undefined;
+  const namedBranch = getThreadNamedBranch(thread);
 
   if (mode === "new-worktree") {
     const repository =
@@ -2871,6 +2870,15 @@ export function useThreadNavigation(
     localDirectory: ProjectIdentity,
     targetLabel?: string,
   ) => Promise<void>;
+  /**
+   * The branch a sub-thread's new worktree would start from on `instanceId`
+   * (undefined is this machine); undefined when it has no such project.
+   */
+  readSubthreadWorktreeBase: (
+    instanceId: string | undefined,
+    project: ProjectIdentity,
+    parentBranch: string | undefined,
+  ) => Promise<SubthreadWorktreeBase | undefined>;
   /** Whether the peer has the counterpart `openFederatedProjectLaunchpad` opens. */
   federatedTargetHasProject: (
     target: FederationRemoteTarget,
@@ -5607,6 +5615,80 @@ export function useThreadNavigation(
       && Boolean(status?.worktreeCreationAvailable || status?.currentBranch || status?.branches?.length);
   }, [desktopApi]);
 
+  /**
+   * The owner's whole directory index. Callers check the bridge first. An
+   * index the owner is still loading throws rather than reading as complete,
+   * so a half-loaded peer never answers "no such project".
+   */
+  const readOwnerDirectoryIndex = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      consumerId: string,
+      isCancelled: () => boolean = () => false,
+    ): Promise<NavigationDirectorySummary[]> => {
+      const page = await readNavigationQueryRange({
+        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
+        read: (request) => desktopApi!.getNavigationQueryPage!(request, consumerId),
+        isCancelled: () => !mountedRef.current || isCancelled(),
+        maxBytes: 8 * 1024 * 1024,
+      }).finally(() => desktopApi?.releaseNavigationQuery?.(consumerId));
+      if (page.coverage.state !== "complete") {
+        throw new Error("The owner is still loading its directories. Retry when it is ready.");
+      }
+      return page.directories ?? [];
+    },
+    [desktopApi],
+  );
+
+  /**
+   * The checkout a sub-thread's new worktree would start from on `instanceId`
+   * (undefined is this machine), and the branch it would start from. The
+   * machine list and the launch both ask here, so the branch the menu shows
+   * is the branch the launch uses. Undefined when that machine has no such
+   * project.
+   */
+  const readSubthreadWorktreeCounterpart = useCallback(
+    async (
+      instanceId: string | undefined,
+      project: ProjectIdentity,
+      parentBranch: string | undefined,
+    ): Promise<
+      | { directory: NavigationDirectorySummary; base: SubthreadWorktreeBase }
+      | undefined
+    > => {
+      let candidates: readonly NavigationDirectorySummary[];
+      if (instanceId === undefined) {
+        // A sub-thread launchpad row is a composer, not a project, even
+        // when it carries the parent's path.
+        candidates = directories.filter((directory) =>
+          !isSubthreadLaunchpadKey(directory.key));
+      } else {
+        if (!desktopApi?.getNavigationQueryPage) {
+          throw new Error("Desktop bridge requires bounded navigation support. Upgrade this instance.");
+        }
+        candidates = await readOwnerDirectoryIndex(
+          { scope: "remote", instanceId },
+          `subthread-worktree:${attentionViewId}:${instanceId}:${project.label}`,
+        );
+      }
+      const directory = findPeerCounterpartDirectory(project, candidates);
+      return directory
+        ? { directory, base: pickSubthreadWorktreeBase(parentBranch, directory.gitStatus) }
+        : undefined;
+    },
+    [attentionViewId, desktopApi, directories, readOwnerDirectoryIndex],
+  );
+
+  const readSubthreadWorktreeBase = useCallback(
+    async (
+      instanceId: string | undefined,
+      project: ProjectIdentity,
+      parentBranch: string | undefined,
+    ): Promise<SubthreadWorktreeBase | undefined> =>
+      (await readSubthreadWorktreeCounterpart(instanceId, project, parentBranch))?.base,
+    [readSubthreadWorktreeCounterpart],
+  );
+
   const createSubthread = useCallback(
     async (
       parent: NavigationThreadSummary,
@@ -5629,16 +5711,6 @@ export function useThreadNavigation(
         return;
       }
 
-      const directory = selectThreadWorkspace(parent, mode);
-      const launchpadDirectoryPath =
-        mode === "new-worktree"
-          ? directory.gitStatusSourcePath ?? directory.directoryPath
-          : directory.directoryPath;
-      // Key the launchpad on the clicked card so each source gets its own
-      // composer (two children of one parent must not collide), and link the
-      // new thread to that same card — the thread it is a child of.
-      const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
-
       const parentOwnerTarget =
         parent.federation?.ref.target ?? rendererFederationTarget;
       const parentOwnerInstanceId =
@@ -5650,20 +5722,87 @@ export function useThreadNavigation(
       // the *grandparent's* instance id, because the parent recorded here used
       // to be the group root rather than the card the operator clicked.)
       //
-      // A new workspace needs nothing from the parent's disk, so it alone may
-      // start on another machine. The child then names the parent's owner,
-      // which is what files it under the parent across machines.
+      // A new workspace needs nothing from the parent's disk, and a new
+      // worktree needs only the parent's project, so those two may start on
+      // another machine. The child then names the parent's owner, which is
+      // what files it under the parent across machines.
       const machineInstanceId = machine
         ? machine.instanceId ?? localFederationInstanceId
         : undefined;
       const crossMachine =
-        mode === "new-workspace"
+        (mode === "new-workspace" || mode === "new-worktree")
         && machine !== undefined
         && machineInstanceId !== parentOwnerInstanceId;
       if (crossMachine && !parentOwnerInstanceId) {
         setCreateThreadError("This machine has no federation identity to link the sub-thread to its parent.");
         return;
       }
+
+      let directory = selectThreadWorkspace(parent, mode);
+      let crossMachineGitStatus: NavigationDirectoryGitStatus | undefined;
+      if (crossMachine && mode === "new-worktree") {
+        // The parent's checkout path means nothing on the other machine:
+        // start from that machine's own checkout of the same project.
+        const project = getSubthreadProjectIdentity(parent, directories);
+        if (!project) {
+          setCreateThreadError("This thread has no project to start a worktree from.");
+          return;
+        }
+        let counterpart: Awaited<ReturnType<typeof readSubthreadWorktreeCounterpart>>;
+        try {
+          counterpart = await readSubthreadWorktreeCounterpart(
+            machine?.instanceId,
+            project,
+            getThreadNamedBranch(parent),
+          );
+        } catch (error) {
+          setCreateThreadError(error instanceof Error ? error.message : String(error));
+          return;
+        }
+        if (!counterpart) {
+          setCreateThreadError(`That machine has no project named ${project.label}.`);
+          return;
+        }
+        if (!counterpart.base.available) {
+          setCreateThreadError(
+            counterpart.base.cause === "no-branch"
+              ? `${counterpart.directory.label} on that machine has no branch to start a worktree from.`
+              : `${counterpart.directory.label} on that machine cannot start a worktree${counterpart.base.reason ? `: ${counterpart.base.reason}` : ""}.`,
+          );
+          return;
+        }
+        // The menu named the base branch. A checkout that moved since then
+        // is reported, never followed.
+        if (machine?.baseBranch && machine.baseBranch !== counterpart.base.baseBranch) {
+          setCreateThreadError(
+            `${counterpart.directory.label} on that machine would now start from ${counterpart.base.baseBranch}, not ${machine.baseBranch}. Choose the machine again to start from ${counterpart.base.baseBranch}.`,
+          );
+          return;
+        }
+        directory = {
+          branchName: counterpart.base.baseBranch,
+          directoryKind: "directory",
+          directoryLabel: counterpart.directory.label,
+          directoryPath: counterpart.directory.path,
+          gitStatusSourcePath: counterpart.directory.path,
+          workMode: "worktree",
+        };
+        crossMachineGitStatus = counterpart.directory.gitStatus;
+      }
+      const launchpadDirectoryPath =
+        mode === "new-worktree"
+          ? directory.gitStatusSourcePath ?? directory.directoryPath
+          : directory.directoryPath;
+      // Key the launchpad on the clicked card so each source gets its own
+      // composer (two children of one parent must not collide), and link the
+      // new thread to that same card — the thread it is a child of. A child
+      // on another machine is keyed on that machine too, so a second machine
+      // opens its own composer rather than replacing the first one's.
+      const directoryKey = buildSubthreadLaunchpadKey(
+        parent,
+        mode,
+        crossMachine ? machineInstanceId : undefined,
+      );
       const federationTarget: FederationTarget | undefined = crossMachine
         ? machine?.instanceId
           ? { scope: "remote", instanceId: machine.instanceId }
@@ -5689,15 +5828,22 @@ export function useThreadNavigation(
           directoryLabel: directory.directoryLabel,
           directoryPath: launchpadDirectoryPath,
           gitStatusSourcePath: directory.gitStatusSourcePath,
-          ...(parent.federation
-            ? {
-                gitStatus: loadedDirectoryRows(stateRef.current.rows).find(
-                  (entry) =>
-                    entry.path === directory.gitStatusSourcePath
-                    || entry.path === directory.directoryPath,
-                )?.gitStatus,
-              }
-            : {}),
+          // A peer's paths can equal this machine's (one home layout on two
+          // Macs), so a child on another machine takes only that machine's
+          // status, never a row found here by path.
+          ...(crossMachine
+            ? crossMachineGitStatus && federationTarget
+              ? { gitStatus: crossMachineGitStatus }
+              : {}
+            : parent.federation
+              ? {
+                  gitStatus: loadedDirectoryRows(stateRef.current.rows).find(
+                    (entry) =>
+                      entry.path === directory.gitStatusSourcePath
+                      || entry.path === directory.directoryPath,
+                  )?.gitStatus,
+                }
+              : {}),
           currentBranch: directory.branchName,
           parentThreadId: parent.id,
           parentThreadBackend: parent.source,
@@ -5768,8 +5914,10 @@ export function useThreadNavigation(
         const ensuredGitStatus =
           response.gitStatus !== undefined
             ? response.gitStatus
-            : pendingGitStatus ?? workspaceDirectories?.find((candidate) =>
-              candidate.path === directory.gitStatusSourcePath || candidate.path === launchpadDirectoryPath)?.gitStatus;
+            : pendingGitStatus ?? (crossMachine
+              ? crossMachineGitStatus
+              : workspaceDirectories?.find((candidate) =>
+                candidate.path === directory.gitStatusSourcePath || candidate.path === launchpadDirectoryPath)?.gitStatus);
         setState((current) => ({
           ...current,
           rows: applyLaunchpadUpdate(current.rows, launchpad, defaults, {
@@ -5788,7 +5936,9 @@ export function useThreadNavigation(
     },
     [
       desktopApi,
+      directories,
       localFederationInstanceId,
+      readSubthreadWorktreeCounterpart,
       rendererFederationTarget,
       takePendingDirectoryGitStatus,
     ],
@@ -6044,31 +6194,6 @@ export function useThreadNavigation(
       }
     },
     [desktopApi, federatedLaunchpad],
-  );
-
-  /**
-   * The owner's whole directory index. Callers check the bridge first. An
-   * index the owner is still loading throws rather than reading as complete,
-   * so a half-loaded peer never answers "no such project".
-   */
-  const readOwnerDirectoryIndex = useCallback(
-    async (
-      target: FederationRemoteTarget,
-      consumerId: string,
-      isCancelled: () => boolean = () => false,
-    ): Promise<NavigationDirectorySummary[]> => {
-      const page = await readNavigationQueryRange({
-        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
-        read: (request) => desktopApi!.getNavigationQueryPage!(request, consumerId),
-        isCancelled: () => !mountedRef.current || isCancelled(),
-        maxBytes: 8 * 1024 * 1024,
-      }).finally(() => desktopApi?.releaseNavigationQuery?.(consumerId));
-      if (page.coverage.state !== "complete") {
-        throw new Error("The owner is still loading its directories. Retry when it is ready.");
-      }
-      return page.directories ?? [];
-    },
-    [desktopApi],
   );
 
   /**
@@ -8774,6 +8899,7 @@ export function useThreadNavigation(
     openFederatedProjectLaunchpad,
     federatedTargetHasProject,
     findFederatedCounterpartDirectory,
+    readSubthreadWorktreeBase,
     restoreFederatedLaunchpad,
     selectedFederatedLaunchpadTarget: activeFederatedLaunchpad?.target,
     planLaunchpadMachineRetarget,
