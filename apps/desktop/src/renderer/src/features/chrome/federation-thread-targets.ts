@@ -35,13 +35,8 @@ export type FederationThreadTargetAvailability =
   | "offline"
   | "unsupported";
 
-export type FederationThreadTarget = {
-  instanceId: string;
-  label: string;
-  availability: FederationThreadTargetAvailability;
-  /** The peer's assigned identity mark, as its thread rows draw it. */
-  celestialIcon?: CelestialIconId;
-};
+export type FederationThreadTarget =
+  FederationPeerTarget<FederationThreadTargetAvailability>;
 
 function resolveAvailability(
   peer: FederationHealthStatus["peers"][number],
@@ -56,28 +51,34 @@ function resolveAvailability(
   return peer.status === "connected" ? "available" : "offline";
 }
 
+/** A peer offered as the destination of a thread action, with its state. */
+export type FederationPeerTarget<Availability extends string> = {
+  instanceId: string;
+  label: string;
+  availability: Availability;
+  /** The peer's assigned identity mark, as its thread rows draw it. */
+  celestialIcon?: CelestialIconId;
+};
+
 /**
- * Federation peers this window can offer as a launch target, in a stable
- * display order.
+ * Federation peers as thread-action targets, in a stable display order, with
+ * each caller's own availability rule.
  *
  * Sorted by label rather than left in health order: these rows live in
- * hover-opened menus, health re-reads on every peer transition, and a list
- * that reorders under the pointer turns a misclick into a thread created on
- * the wrong machine.
- *
- * A remote viewer already creates its context-default thread on the instance
- * the window represents, so that instance is excluded from the separate
- * "New chat on" choices instead of being offered twice.
+ * hover-opened menus and dialogs, health re-reads on every peer transition,
+ * and a list that reorders under the pointer turns a misclick into a thread
+ * sent to the wrong machine.
  *
  * Revoked peers are dropped — they are dead entries, not offline ones. They
  * are still passed to `formatFederationPeerDisplayLabel`, but only because it
  * filters them out itself; what the local instance's presence in that list
  * buys us is a peer sharing THIS machine's label keeping its profile suffix.
  */
-export function buildFederationThreadTargets(
+export function buildFederationPeerTargets<Availability extends string>(
   health: FederationHealthStatus | undefined,
-  currentWindowInstanceId?: string,
-): FederationThreadTarget[] {
+  resolve: (peer: FederationHealthStatus["peers"][number]) => Availability,
+  excludedInstanceId?: string,
+): FederationPeerTarget<Availability>[] {
   if (!health) {
     return [];
   }
@@ -91,12 +92,12 @@ export function buildFederationThreadTargets(
     .filter(
       (peer) =>
         !peer.revokedAt
-        && peer.id !== currentWindowInstanceId,
+        && peer.id !== excludedInstanceId,
     )
     .map((peer) => ({
       instanceId: peer.id,
       label: formatFederationPeerDisplayLabel(peer, visibleInstances),
-      availability: resolveAvailability(peer),
+      availability: resolve(peer),
       ...(peer.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
     }))
     .sort(
@@ -108,6 +109,20 @@ export function buildFederationThreadTargets(
         // sort exists to prevent.
         || left.instanceId.localeCompare(right.instanceId),
     );
+}
+
+/**
+ * Federation peers this window can offer as a launch target.
+ *
+ * A remote viewer already creates its context-default thread on the instance
+ * the window represents, so that instance is excluded from the separate
+ * "New chat on" choices instead of being offered twice.
+ */
+export function buildFederationThreadTargets(
+  health: FederationHealthStatus | undefined,
+  currentWindowInstanceId?: string,
+): FederationThreadTarget[] {
+  return buildFederationPeerTargets(health, resolveAvailability, currentWindowInstanceId);
 }
 
 /** The short state a target row shows beside its label when unavailable. */

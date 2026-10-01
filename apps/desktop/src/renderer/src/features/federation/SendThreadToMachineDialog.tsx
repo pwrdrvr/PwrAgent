@@ -275,12 +275,15 @@ export function SendThreadToMachineDialog(props: {
               </div>
             </div>
             {project && target ? (
-              <label className="workspace-handoff-dialog__field">
-                Repository on {target.label}
+              <div className="workspace-handoff-dialog__field">
+                <label htmlFor="thread-handoff-repository">
+                  Repository on {target.label}
+                </label>
                 <input
-                  aria-describedby="thread-handoff-repository-hint"
+                  aria-describedby={repositoryHint ? "thread-handoff-repository-hint" : undefined}
                   className="workspace-handoff-dialog__text-input thread-handoff-dialog__path"
                   disabled={target.availability !== "available"}
+                  id="thread-handoff-repository"
                   placeholder={`Absolute path to an existing clone on ${target.label}`}
                   spellCheck={false}
                   type="text"
@@ -298,7 +301,7 @@ export function SendThreadToMachineDialog(props: {
                     {repositoryHint}
                   </span>
                 ) : null}
-              </label>
+              </div>
             ) : null}
             {!project ? (
               <p className="workspace-handoff-dialog__note">

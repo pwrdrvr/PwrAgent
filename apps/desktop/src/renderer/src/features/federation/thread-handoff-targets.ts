@@ -1,9 +1,8 @@
+import type { FederationCapability, FederationHealthStatus } from "@pwragent/shared";
 import {
-  formatFederationPeerDisplayLabel,
-  type CelestialIconId,
-  type FederationCapability,
-  type FederationHealthStatus,
-} from "@pwragent/shared";
+  buildFederationPeerTargets,
+  type FederationPeerTarget,
+} from "../chrome/federation-thread-targets";
 
 /**
  * Capabilities a receiver must advertise before main will send it a thread.
@@ -31,12 +30,7 @@ export type ThreadHandoffTargetAvailability =
   | "update-required"
   | "incoming-off";
 
-export type ThreadHandoffTarget = {
-  instanceId: string;
-  label: string;
-  availability: ThreadHandoffTargetAvailability;
-  celestialIcon?: CelestialIconId;
-};
+export type ThreadHandoffTarget = FederationPeerTarget<ThreadHandoffTargetAvailability>;
 
 function resolveAvailability(
   peer: FederationHealthStatus["peers"][number],
@@ -63,28 +57,7 @@ function resolveAvailability(
 export function buildThreadHandoffTargets(
   health: FederationHealthStatus | undefined,
 ): ThreadHandoffTarget[] {
-  if (!health) {
-    return [];
-  }
-  const visibleInstances = [
-    ...health.peers,
-    ...(health.localLabel
-      ? [{ label: health.localLabel, profileName: health.localProfileName }]
-      : []),
-  ];
-  return health.peers
-    .filter((peer) => !peer.revokedAt && peer.id !== health.instanceId)
-    .map((peer) => ({
-      instanceId: peer.id,
-      label: formatFederationPeerDisplayLabel(peer, visibleInstances),
-      availability: resolveAvailability(peer),
-      ...(peer.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
-    }))
-    .sort(
-      (left, right) =>
-        left.label.localeCompare(right.label)
-        || left.instanceId.localeCompare(right.instanceId),
-    );
+  return buildFederationPeerTargets(health, resolveAvailability, health?.instanceId);
 }
 
 /** The short state an unavailable target row shows beside its label. */

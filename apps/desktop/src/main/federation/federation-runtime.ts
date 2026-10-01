@@ -230,7 +230,7 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
-import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
+import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import {
@@ -2982,6 +2982,8 @@ export class DesktopFederationRuntime {
     this.threadHandoffService = new ThreadInstanceHandoffService({
       backend: getDesktopBackendRegistry(),
       directory: path.join(resolveActiveProfileDir(), "state", "thread-handoffs"),
+      // A history-only thread lands where a new Workspaces thread would.
+      createHistoryWorkspace: () => createScratchProjectDirectory(),
       localInstanceId: () => this.ensureLocalInstanceId(),
       push: (instanceId, source) => this.pushFile({ scope: "remote", instanceId }, source),
       remoteImport: (instanceId, request) => this.rpcFor({ scope: "remote", instanceId }).request({

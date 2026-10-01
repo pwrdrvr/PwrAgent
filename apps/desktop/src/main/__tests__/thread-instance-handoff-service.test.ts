@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ThreadHandoffExport, ThreadHandoffPackage } from "@pwragent/shared";
+import { computeWorktreePath } from "../app-server/git-directory-service";
+import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { ThreadInstanceHandoffService } from "../federation/thread-instance-handoff-service";
 import type { ImportInstanceThreadRequest } from "../federation/thread-instance-handoff-service";
 import { decodeThreadHandoff, encodeThreadHandoff, threadHistoryDigest } from "../federation/thread-handoff-package";
@@ -16,7 +18,7 @@ const replay: ThreadHandoffExport["replay"] = {
 };
 const source: ThreadHandoffExport = { rolloutBase64: Buffer.from("opaque fixture history\n").toString("base64"), replay, title: "Windows fixture" };
 
-async function setup() {
+async function setup(options: { createHistoryWorkspace?: () => Promise<string> } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-handoff-"));
   roots.push(root);
   const archive = vi.fn(async () => {});
@@ -27,18 +29,20 @@ async function setup() {
     forkThread: vi.fn(async (_request: { directoryPath: string; importedWorktree?: { repositoryPath: string; worktreePath: string } }) => ({ threadId: "destination-thread" })),
     readThread: vi.fn(async () => ({ replay })),
     renameThread: vi.fn(async () => {}),
+    allocateHandoffWorktreePath: undefined as ((repositoryPath: string) => Promise<string>) | undefined,
   };
   const receipt = vi.fn(() => true);
   const receiver = new ThreadInstanceHandoffService({
     backend, directory: path.join(root, "receiver"), localInstanceId: () => "pwr_receiver",
-    push: vi.fn(), remoteImport: vi.fn(), assertTarget: vi.fn(), receipt,
+    push: vi.fn(), remoteImport: vi.fn(), assertTarget: vi.fn(), receipt, ...options,
   });
   const remoteImport = vi.fn(async (_instanceId: string, request: ImportInstanceThreadRequest) => await receiver.receive("pwr_sender", request));
   const sender = new ThreadInstanceHandoffService({
     backend, directory: path.join(root, "sender"), localInstanceId: () => "pwr_sender",
     assertTarget: vi.fn(), receipt: vi.fn(), remoteImport,
     push: async (_instanceId, file) => {
-      const incoming = path.join(root, path.basename(file));
+      const incoming = path.join(root, "downloads", path.basename(file));
+      await mkdir(path.dirname(incoming), { recursive: true });
       await copyFile(file, incoming);
       const bytes = await readFile(incoming);
       return { path: incoming, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -51,13 +55,27 @@ afterEach(async () => {
 });
 
 it("copies opaque history into a receiver workspace and retains the source", async () => {
-  const { sender, backend, archive } = await setup();
+  const { sender, backend, archive, root } = await setup();
   const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" });
   expect(result).toMatchObject({ sourceThreadId: "source-thread", threadId: "destination-thread", instanceId: "pwr_receiver", sourceArchived: false });
   expect(backend.forkThread).toHaveBeenCalledWith(expect.objectContaining({ sourceThreadId: "source-thread", directoryPath: result.directoryPath, backend: "codex" }));
   expect(backend.renameThread).toHaveBeenCalledWith({ backend: "codex", threadId: "destination-thread", name: "Windows fixture" });
   expect(archive).not.toHaveBeenCalled();
   expect(await stat(result.directoryPath)).toBeDefined();
+  expect(await readdir(path.join(root, "downloads"))).toEqual([]);
+});
+
+it("starts a history-only import in the receiver's Workspaces folder", async () => {
+  let scratch = "";
+  const { sender, root } = await setup({
+    createHistoryWorkspace: async () => {
+      scratch = path.join(root, "projects", "2026-10-01-abc123");
+      await mkdir(scratch, { recursive: true });
+      return scratch;
+    },
+  });
+  const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" });
+  expect(result.directoryPath).toBe(scratch);
 });
 
 it("moves only after validation and preserves the source worktree", async () => {
@@ -68,8 +86,7 @@ it("moves only after validation and preserves the source worktree", async () => 
   expect(backend.readThread.mock.invocationCallOrder[0]).toBeLessThan(archive.mock.invocationCallOrder[0]);
 });
 
-it("transfers a Git workspace and keeps the thread's subdirectory cwd", async () => {
-  const { sender, backend, root } = await setup();
+async function gitFixture(root: string) {
   const repository = path.join(root, "source-repo");
   const subdirectory = path.join(repository, "packages", "example");
   await mkdir(subdirectory, { recursive: true });
@@ -84,8 +101,13 @@ it("transfers a Git workspace and keeps the thread's subdirectory cwd", async ()
   await git(repository, "commit", "-m", "fixture");
   const destinationRepo = path.join(root, "destination-repo");
   await git(root, "clone", repository, destinationRepo);
-  const canonicalDestinationRepo = await realpath(destinationRepo);
   await writeFile(path.join(subdirectory, "code.txt"), "unstaged\n");
+  return { subdirectory, destinationRepo, canonicalDestinationRepo: await realpath(destinationRepo) };
+}
+
+it("transfers a Git workspace and keeps the thread's subdirectory cwd", async () => {
+  const { sender, backend, root } = await setup();
+  const { subdirectory, destinationRepo, canonicalDestinationRepo } = await gitFixture(root);
   backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
   const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", targetRepositoryPath: destinationRepo, operation: "copy" });
   const worktree = path.dirname(path.dirname(result.directoryPath));
@@ -99,6 +121,22 @@ it("transfers a Git workspace and keeps the thread's subdirectory cwd", async ()
   }));
   const importedRepository = backend.forkThread.mock.calls[0]![0].importedWorktree!.repositoryPath;
   expect(path.resolve(importedRepository)).toBe(path.resolve(canonicalDestinationRepo));
+});
+
+it("places a Git import where the receiver's Worktrees setting puts worktrees", async () => {
+  const { sender, backend, root } = await setup();
+  const { subdirectory, destinationRepo } = await gitFixture(root);
+  const home = path.join(root, "home");
+  const allocate = vi.fn(async (repositoryPath: string) =>
+    await computeWorktreePath({ repoRoot: repositoryPath, storage: "user-home", homeDir: home }));
+  backend.allocateHandoffWorktreePath = allocate;
+  backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
+  const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", targetRepositoryPath: destinationRepo, operation: "copy" });
+  expect(allocate).toHaveBeenCalledTimes(1);
+  const worktree = path.dirname(path.dirname(result.directoryPath));
+  expect(path.dirname(path.dirname(worktree))).toBe(userHomeWorktreesRoot(home));
+  expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("unstaged\n");
+  expect(await readdir(destinationRepo)).not.toContain(".worktrees");
 });
 
 it("retains the workspace when fork rejection leaves provider creation uncertain", async () => {
@@ -142,7 +180,6 @@ it("retires a mismatched destination, rolls back its workspace, and keeps the so
   backend.readThread.mockResolvedValue({ replay: { ...replay, messages: [{ id: "changed", role: "user", text: "different" }] } });
   await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "move" })).rejects.toThrow("history did not match");
   expect(archive).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "destination-thread", preserveWorktrees: true });
-  const { readdir } = await import("node:fs/promises");
   expect(await readdir(path.join(root, "receiver", "workspaces"))).toEqual([]);
 });
 
@@ -182,6 +219,18 @@ it("binds imports to the pushing peer and deduplicates repeated acknowledgements
   expect(first).toEqual(second);
   expect(backend.forkThread).toHaveBeenCalledTimes(1);
   await expect(receiver.receive("pwr_sender", { ...request, targetRepositoryPath: root })).rejects.toThrow("reused");
+});
+
+it("keeps accepting imports after many settled ones", async () => {
+  const { receiver, backend, root } = await setup();
+  for (let index = 0; index < 130; index += 1) {
+    const handoffId = randomUUID();
+    const bytes = await encodeThreadHandoff({ version: 1, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) });
+    const filePath = path.join(root, `${handoffId}.gz`);
+    await writeFile(filePath, bytes);
+    await receiver.receive("pwr_sender", { handoffId, file: { path: filePath, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") } });
+  }
+  expect(backend.forkThread).toHaveBeenCalledTimes(130);
 });
 
 it("rejects tampered checksums and unsafe file paths before importing", async () => {

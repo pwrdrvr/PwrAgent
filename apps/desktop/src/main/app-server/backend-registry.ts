@@ -16442,6 +16442,10 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async allocateHandoffWorktreePath(repositoryPath: string): Promise<string> {
+    return await this.gitDirectoryService.allocateCodexWorktreePath(repositoryPath);
+  }
+
   async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
     const client = this.getClient("codex", "default");
     if (!client.exportThreadForHandoff) throw new Error("This backend does not support protocol thread export.");

@@ -86,7 +86,9 @@ process count does not scale with the number of files.
 
 The receiver must have an existing repository with shared root history. It
 imports into a unique detached worktree allocated by the shared path allocator
-under the receiving repository's `.worktrees/` directory. The fork immediately
+in the receiver's configured worktree location (Settings › Worktrees). A
+history-only thread starts in a new Workspaces folder. The receiver deletes the
+pushed package once its checksum is verified. The fork immediately
 records the repository and worktree linkage for ordinary navigation. Existing
 branches, worktrees, working files, and FETCH_HEAD are preserved. A bundle with
 unrelated history is rejected. Shallow histories may need deepening first.

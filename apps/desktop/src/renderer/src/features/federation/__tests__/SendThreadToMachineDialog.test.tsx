@@ -90,10 +90,12 @@ describe("SendThreadToMachineDialog", () => {
   it("prefills the receiver's repository from its project index and names the match", async () => {
     renderDialog();
     act(() => machine("studio-mac").click());
-    const input = screen.getByRole("textbox", { name: /Repository on studio-mac/ });
+    // The hint describes the field; it is not part of the field's name.
+    const input = screen.getByRole("textbox", { name: "Repository on studio-mac" });
     await waitFor(() => expect(input).toHaveValue("/Users/operator/src/PwrAgent"));
-    expect(screen.getByText(/Matched by origin github\.com\/pwrdrvr\/pwragent\./))
-      .toBeInTheDocument();
+    expect(input).toHaveAccessibleDescription(
+      "Matched by origin github.com/pwrdrvr/pwragent. The thread starts in a new detached worktree there.",
+    );
     expect(screen.getByRole("button", { name: "Copy to studio-mac" })).toBeEnabled();
   });
 
