@@ -15023,6 +15023,34 @@ describe("Composer", () => {
     expect(screen.queryByText("No matching projects.")).not.toBeInTheDocument();
   });
 
+  it("draws no destination list, and leaves Escape to the dialog, until the owner answers", async () => {
+    const getNavigationQueryPage = vi.fn(() => new Promise<never>(() => {}));
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage }}
+      onHandoffThreadWorkspace={vi.fn()}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+        federation: {
+          instanceLabel: "Remote instance",
+          ref: { backend: "codex", threadId: "scratch-thread", target: { scope: "remote", instanceId: "remote-instance" } },
+        },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    act(() => destination.focus());
+    await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalled());
+    expect(screen.queryByRole("listbox", { name: "Projects" })).not.toBeInTheDocument();
+    expect(destination).toHaveAttribute("aria-expanded", "false");
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Move to Project" })).not.toBeInTheDocument();
+  });
+
   it("does not offer viewer projects when the destination owner is unavailable", async () => {
     const getNavigationQueryPage = vi.fn(async () => { throw new Error("Peer unavailable"); });
     render(<Composer

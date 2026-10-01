@@ -57,15 +57,6 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
-  // A layer, not a keydown handler on the input: the dialog around this
-  // field owns Escape otherwise, and one press would close both.
-  useDismissableLayer({
-    open,
-    onDismiss: () => setOpen(false),
-    surfaceRef: containerRef,
-    triggerRef: inputRef,
-  });
-
   useEffect(() => {
     if (!open) {
       return;
@@ -85,11 +76,25 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
     () => filterDirectoryReferenceCandidates(props.directories.filter(isDestination), query),
     [props.directories, query],
   );
-  const showList = open && !props.disabled;
   // The browse row is the last item, so the arrow keys reach it too.
   const pickIndex = props.onPickDirectory ? candidates.length : undefined;
   const itemCount = candidates.length + (pickIndex === undefined ? 0 : 1);
   const active = Math.min(activeIndex, itemCount - 1);
+  const empty = props.loaded && candidates.length === 0
+    ? (query.trim() ? "No matching projects." : "No tracked projects yet.")
+    : undefined;
+  // Nothing to draw until the owner answers: no empty box under the field,
+  // and no invisible layer taking the Escape meant for the dialog.
+  const showList = open && !props.disabled && (itemCount > 0 || Boolean(props.error) || Boolean(empty));
+
+  // A layer, not a keydown handler on the input: the dialog around this
+  // field owns Escape otherwise, and one press would close both.
+  useDismissableLayer({
+    open: showList,
+    onDismiss: () => setOpen(false),
+    surfaceRef: containerRef,
+    triggerRef: inputRef,
+  });
 
   const formatPath = (path: string): string =>
     tildifyPath(path, props.remote ? undefined : getHomeDir());
@@ -110,7 +115,7 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      if (!showList) {
+      if (!open) {
         setOpen(true);
         setActiveIndex(0);
         return;
@@ -131,10 +136,6 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
       }
     }
   };
-
-  const empty = props.loaded && candidates.length === 0
-    ? (query.trim() ? "No matching projects." : "No tracked projects yet.")
-    : undefined;
 
   return (
     <div ref={containerRef} className="project-destination">
