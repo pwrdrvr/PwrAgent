@@ -59,7 +59,7 @@ import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
-import { checkForManagedCodexUpdates } from "./features/settings/managed-codex-actions";
+import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
   useDesktopSettings,
@@ -878,9 +878,12 @@ function DesktopAppShell(props: {
   }, [openSettingsSection]);
   const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
     const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
-    if (saved) await props.settings.refresh();
+    if (saved) {
+      await props.settings.refresh();
+      await refreshManagedCodexModelCatalog(desktopApi);
+    }
     return saved;
-  }, [props.settings.writeConfig, props.settings.refresh]);
+  }, [desktopApi, props.settings.writeConfig, props.settings.refresh]);
   const checkCodexManagedBuildUpdates = useCallback(async () => {
     await checkForManagedCodexUpdates(desktopApi);
     await props.settings.refresh();

@@ -47,6 +47,7 @@ export function CodexVersionNotice(props: {
   const [operationAdvisory, setOperationAdvisory] = useState<DesktopCodexVersionAdvisory>();
   const [pendingNext, setPendingNext] = useState<boolean>();
   const [operationError, setOperationError] = useState<string>();
+  const [failedOperation, setFailedOperation] = useState<{ next: boolean; check: boolean }>();
   const inFlight = useRef(false);
   const managedRequired = props.snapshot?.models?.codex?.managedBuildsRequiredBy !== undefined;
   const managedOn = managedRequired || props.snapshot?.models?.codex?.managedBuilds?.value === true;
@@ -61,19 +62,29 @@ export function CodexVersionNotice(props: {
     setOperationAdvisory(displayedAdvisory);
     setPendingNext(next);
     setOperationError(undefined);
+    setFailedOperation(undefined);
     try {
       if (check && onCheckManagedBuildUpdates) {
         await onCheckManagedBuildUpdates();
       } else if (!await onManagedBuildsChange?.(next)) {
+        setFailedOperation({ next, check });
         setOperationError("Could not change the Codex build. Open Codex settings for details, or try again.");
       }
     } catch (error) {
+      setFailedOperation({ next, check });
       setOperationError(error instanceof Error ? error.message : String(error));
     } finally {
       inFlight.current = false;
       setPendingNext(undefined);
     }
   }, [displayedAdvisory, onManagedBuildsChange, onCheckManagedBuildUpdates]);
+  const retryOperation = useCallback(() => {
+    // A retained installer failure may have started in another window. Only
+    // that case falls back to the current preference; our own retries retain
+    // the operation the operator requested, including a disable.
+    const operation = failedOperation ?? { next: true, check: managedOn };
+    void changeBuild(operation.next, operation.check);
+  }, [failedOperation, managedOn, changeBuild]);
 
   useEffect(() => {
     // Keep the originating warning through the ready strip, even if the
@@ -123,7 +134,7 @@ export function CodexVersionNotice(props: {
             <ManagedRuntimeProgressStrip
               progress={progress}
               waitingForIdle={runtime?.state === "pending-switch"}
-              onRetry={() => { void changeBuild(true, managedOn); }}
+              onRetry={retryOperation}
             />
           ) : busy ? (
             <p className="app-notice-toast__status">Checking and installing the Codex build…</p>
@@ -136,7 +147,7 @@ export function CodexVersionNotice(props: {
               <button className="button button--ghost"
                 type="button"
                 disabled={busy}
-                onClick={() => { void changeBuild(true, managedOn); }}
+                onClick={retryOperation}
               >
                 Try again
               </button>
@@ -155,7 +166,7 @@ export function CodexVersionNotice(props: {
     }),
     [advisory, displayedAdvisory, desktopApi, dismissedVersion, onOpenCodexSettings,
       onManagedBuildsChange, onCheckManagedBuildUpdates, pendingNext, managedOn,
-      busy, managedRequired, progress, runtime?.state, operationError, changeBuild],
+      busy, managedRequired, progress, runtime?.state, operationError, changeBuild, retryOperation],
   );
 
   useEffect(() => {

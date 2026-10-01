@@ -247,16 +247,9 @@ export function ModelsSettings(props: {
     setManagedCodexCheckError(undefined);
     setCheckingManagedCodex(true);
     try {
-      const { snapshot } = await checkForManagedCodexUpdates(props.desktopApi);
+      await checkForManagedCodexUpdates(props.desktopApi, managedCodexRuntime?.version);
       await props.onRefresh();
-      const updatedVersion = snapshot.runtime.tokenMiser?.managedCodex?.version;
-      if (
-        !updatedVersion
-        || updatedVersion === managedCodexRuntime?.version
-        || await refreshCatalog("codex")
-      ) {
-        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-      }
+      await refreshCatalog();
     } catch (error) {
       setManagedCodexCheckError(
         error instanceof Error ? error.message : String(error),

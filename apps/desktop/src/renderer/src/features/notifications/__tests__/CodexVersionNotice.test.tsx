@@ -185,13 +185,21 @@ describe("CodexVersionNotice", () => {
   it("uses the shared Settings update action only after the user clicks, with a discovery intent", async () => {
     const value = snapshot(advisory({ installer: "pwragent", upgradeCommand: undefined }));
     value.models.codex.managedBuilds = { value: true, source: "config" };
-    const api = { refreshCodexDiscovery: vi.fn(async () => ({ snapshot: value })) };
+    const api = {
+      refreshCodexDiscovery: vi.fn(async () => ({ snapshot: value })),
+      listBackends: vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] })),
+    };
     const check = async () => { await checkForManagedCodexUpdates(api); };
     render(<Host snapshot={value} onManagedBuildsChange={vi.fn(async () => true)}
       onCheckManagedBuildUpdates={check} onOpenCodexSettings={vi.fn()} />);
     expect(api.refreshCodexDiscovery).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
     await waitFor(() => expect(api.refreshCodexDiscovery).toHaveBeenCalledExactlyOnceWith({
+      discoveryIntent: "settings-user-action",
+    }));
+    await waitFor(() => expect(api.listBackends).toHaveBeenCalledExactlyOnceWith({
+      includeUnavailable: true,
+      refreshModels: "codex",
       discoveryIntent: "settings-user-action",
     }));
   });
@@ -244,6 +252,44 @@ describe("CodexVersionNotice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(change).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(/Could not change the Codex build/u)).not.toBeInTheDocument());
+  });
+
+  it.each(["save rejected", "save threw", "retained install failure"])(
+    "retries disabling after %s without checking for updates",
+    async (failure) => {
+      const value = snapshot(advisory({ installer: "pwragent", upgradeCommand: undefined }));
+      value.models.codex.managedBuilds = { value: true, source: "config" };
+      const change = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+      if (failure === "save threw") change.mockReset().mockRejectedValueOnce(new Error("Invalid config.toml")).mockResolvedValue(true);
+      const check = vi.fn(async () => undefined);
+      render(<Host snapshot={value} onManagedBuildsChange={change} onCheckManagedBuildUpdates={check}
+        onOpenCodexSettings={vi.fn()} desktopApi={failure === "retained install failure" ? {
+          readManagedRuntimeProgress: async () => [{ runtime: "codex", phase: "failed", error: "Archive verification failed", updatedAt: Date.now() }],
+          onManagedRuntimeProgress: () => () => undefined,
+        } : undefined} />);
+      if (failure === "retained install failure") await screen.findByText("Archive verification failed");
+      fireEvent.click(screen.getByRole("switch"));
+      await waitFor(() => expect(change).toHaveBeenCalledExactlyOnceWith(false));
+      await waitFor(() => expect(screen.getByRole("switch")).not.toBeDisabled());
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(change).toHaveBeenCalledTimes(2));
+      expect(change.mock.calls).toEqual([[false], [false]]);
+      expect(check).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retries a failed explicit update check as a check", async () => {
+    const value = snapshot(advisory({ installer: "pwragent", upgradeCommand: undefined }));
+    value.models.codex.managedBuilds = { value: true, source: "config" };
+    const check = vi.fn().mockRejectedValueOnce(new Error("Release check failed")).mockResolvedValue(undefined);
+    const change = vi.fn(async () => true);
+    render(<Host snapshot={value} onManagedBuildsChange={change} onCheckManagedBuildUpdates={check}
+      onOpenCodexSettings={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await screen.findByText("Release check failed");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+    expect(change).not.toHaveBeenCalled();
   });
 
   it("shows an install failure and retries the update for an already enabled build", async () => {
