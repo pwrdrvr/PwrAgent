@@ -571,7 +571,7 @@ for (const theme of AUDIT_THEMES) {
         await test.step("directory autocomplete with sibling actions", async () => {
           await textbox.fill("@");
           const directories = app.window.getByRole("listbox", {
-            name: "Directories",
+            name: "Projects and instances",
           });
           await expect(directories.getByRole("option").first()).toBeVisible();
           await expect(directories.getByRole("button")).toHaveCount(0);

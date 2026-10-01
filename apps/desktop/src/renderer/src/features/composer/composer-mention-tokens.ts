@@ -14,6 +14,7 @@ import {
   resolvePullRequestIdentity,
 } from "@pwragent/shared";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
+import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { formatHashReferenceThreadLabel } from "../../lib/hash-references";
 import { buildSkillMentionMarkdown } from "../../lib/skill-mentions";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
@@ -119,6 +120,14 @@ export function createComposerDirectoryToken(
     id: `${directory.path ?? directory.label}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
   };
+}
+
+export function createComposerAtReferenceToken(
+  reference: { label: string; path?: string; kind?: string },
+  index: number,
+): ComposerSkillToken {
+  const token = createComposerDirectoryToken(reference, index);
+  return reference.kind === "instance" ? { ...token, kind: "instance" } : token;
 }
 
 // Exported for the `@`-popover / picker surfaces that mint file-reference
@@ -249,6 +258,8 @@ export function serializeDraftWithSkillTokens(
         label: token.name,
         path: token.path ?? "",
       });
+    } else if (token.kind === "instance") {
+      output += buildInstanceReferenceMarkdown({ label: token.name, path: token.path ?? "" });
     } else if (token.kind === "thread") {
       const ref = parseThreadUrl(token.path ?? "");
       output += ref

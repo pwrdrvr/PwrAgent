@@ -29,6 +29,8 @@ import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon, CopyIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
+import { parseInstanceReferenceUrl } from "../../lib/instance-references";
+import { InstanceChip } from "../federation/InstanceGlyph";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
 import {
   protectComposerHyphenListItems,
@@ -426,6 +428,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
 
         if (isImplicitBareAutolink({ href, label, source })) {
           return <>{anchorProps.children}</>;
+        }
+
+        const instanceId = parseInstanceReferenceUrl(href);
+        if (instanceId) {
+          return <InstanceChip instanceId={instanceId} label={label} />;
         }
 
         if (isThreadUrl(href)) {

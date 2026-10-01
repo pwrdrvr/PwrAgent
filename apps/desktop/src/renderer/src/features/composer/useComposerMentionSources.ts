@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FederationTarget, NavigationDirectoryRow, NavigationRow } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { listInstanceReferences, type InstanceReference } from "../../lib/instance-references";
+import { useFederationHealth } from "../../lib/useFederationHealth";
 import {
   getComposerMentionNavigationRevision,
   notifyComposerMentionNavigationChanged,
@@ -32,6 +34,7 @@ export function useComposerMentionSources(params: {
 }): {
   directories: readonly NavigationDirectoryRow[];
   ensureLoaded: (query?: string) => void;
+  instances: readonly InstanceReference[];
   release: () => void;
   loading: boolean;
   settledQuery?: string;
@@ -50,6 +53,12 @@ export function useComposerMentionSources(params: {
   const ownerKey = remoteInstanceId === undefined ? "local" : `remote:${remoteInstanceId}`;
   const consumerId = useId();
   const [demand, setDemand] = useState<string>();
+  const { health } = useFederationHealth({
+    desktopApi,
+    enabled: demand !== undefined,
+    suspended: demand === undefined,
+  });
+  const instances = useMemo(() => listInstanceReferences(health), [health]);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [state, setState] = useState<{
     ownerKey: string;
@@ -141,5 +150,5 @@ export function useComposerMentionSources(params: {
   // Effects run after render: never expose the old owner's rows in that gap.
   const visibleState = state.ownerKey === ownerKey ? state
     : { population: EMPTY_POPULATION, loading: demand !== undefined, settledQuery: undefined };
-  return { ...visibleState.population, ensureLoaded, release, loading: visibleState.loading, settledQuery: visibleState.settledQuery };
+  return { ...visibleState.population, instances, ensureLoaded, release, loading: visibleState.loading, settledQuery: visibleState.settledQuery };
 }

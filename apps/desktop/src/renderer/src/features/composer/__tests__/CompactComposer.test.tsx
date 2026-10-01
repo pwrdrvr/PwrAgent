@@ -6,6 +6,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { normalizeImageFile } from "../../../lib/image-normalization";
+import { buildInstanceReferenceUrl } from "../../../lib/instance-references";
 import { CompactComposer } from "../CompactComposer";
 
 vi.mock("../../../lib/image-normalization", () => ({
@@ -765,6 +766,24 @@ describe("CompactComposer markdown", () => {
       expect(onSend).toHaveBeenCalledWith("look in [@app](/dev/app)");
     });
 
+    it.each(["click", "keyboard"])("selects a Federation machine/profile with %s and sends its identity", async (method) => {
+      const { onSend, container } = renderComposer({
+        mentionSources: {
+          instances: [{
+            kind: "instance", key: "instance:windows-dev", instanceId: "windows-dev",
+            label: "DESKTOP-LAB / dev", path: buildInstanceReferenceUrl("windows-dev"), status: "connected",
+          }],
+        },
+      });
+      const input = openPicker("Investigate @DESK");
+      expect(screen.getByRole("listbox").getAttribute("aria-label")).toBe("Projects and instances");
+      if (method === "click") fireEvent.click(screen.getByRole("option"));
+      else fireEvent.keyDown(input, { key: "Enter" });
+      expect(container.querySelector('[data-mention-kind="instance"]')?.textContent).toBe("@DESKTOP-LAB / dev");
+      await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+      expect(onSend).toHaveBeenCalledWith("Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)");
+    });
+
     it.each([
       ["code block", "\n\n```sh\npnpm lint\n```"],
       ["blockquote", "\n\n> Quoted text"],
@@ -787,7 +806,7 @@ describe("CompactComposer markdown", () => {
         input.setSelectionRange("Look in ".length, "Look in ".length);
         input.editor.view.dispatch(input.editor.state.tr.insertText("@ap"));
       });
-      await screen.findByRole("listbox", { name: "Directories" });
+      await screen.findByRole("listbox", { name: "Projects and instances" });
       fireEvent.keyDown(input, { key: "ArrowDown" });
       fireEvent.keyDown(input, { key: "Tab" });
       await waitFor(() => expect(input.selectionStart).toBe("Look in  ".length));

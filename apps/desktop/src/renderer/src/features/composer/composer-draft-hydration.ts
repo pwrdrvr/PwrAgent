@@ -4,13 +4,14 @@ import {
   isSharedSkillName,
   type AppServerSkillSummary,
 } from "@pwragent/shared";
+import { parseInstanceReferenceUrl } from "../../lib/instance-references";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import { parseSkillMentionParts } from "../../lib/skill-mentions";
 import { parsePullRequestUrl, resolveLivePullRequest, type PullRequestLinkContextValue } from "../../lib/pull-request-links";
 import { resolveThreadHref, type ThreadLinkContextValue } from "../../lib/thread-links";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
-import { createComposerDirectoryToken, createComposerPullRequestToken, createComposerSkillToken, createComposerThreadToken } from "./composer-mention-tokens";
+import { createComposerAtReferenceToken, createComposerDirectoryToken, createComposerPullRequestToken, createComposerSkillToken, createComposerThreadToken } from "./composer-mention-tokens";
 
 type MarkdownNode = {
   type: string;
@@ -84,14 +85,21 @@ export function hydrateComposerDraft(
     // Thread and PR labels may legitimately begin with `$` or `@`, so recognize
     // their destinations before passing surrounding Markdown through the skill
     // and directory parser. Unknown links remain literal Markdown.
-    const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/[^)\s]+)\)/gi;
+    const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/(?:thread|instance)\/[^)\s]+|https:\/\/[^)\s]+)\)/gi;
     let cursor = 0;
     for (const match of text.matchAll(referenceLinkPattern)) {
       const matchIndex = match.index ?? 0;
       hydrateSkillAndDirectoryParts(text.slice(cursor, matchIndex));
       const href = match[2] ?? "";
+      const instanceId = parseInstanceReferenceUrl(href);
       const resolvedThread = resolveThreadHref(href, threadLinks);
-      if (resolvedThread) {
+      if (instanceId) {
+        skillTokens.push(createComposerAtReferenceToken({
+          kind: "instance",
+          label: (match[1] ?? instanceId).replace(/^@/, "").replace(/\\([\\\[\]])/g, "$1"),
+          path: href,
+        }, draft.length));
+      } else if (resolvedThread) {
         skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
       } else {
         const pullRequest = parsePullRequestUrl(href);
