@@ -8237,6 +8237,50 @@ describe("Sidebar menus from the keyboard", () => {
   });
 });
 
+it("reveals an added project's selected folder after its descriptor arrives and keeps composer focus", async () => {
+  const { scrollIntoView, restore } = withMockScrollIntoView();
+  const addedDirectory = {
+    key: "directory:/repos/libuv", kind: "directory" as const,
+    label: "libuv", path: "/repos/libuv",
+  };
+  const props = {
+    backends, directories, inboxThreads: [sharedThread], loading: false,
+    threads: [sharedThread], onBrowseModeChange: () => undefined,
+    onCreateThread: async () => undefined, onOpenLaunchpad: async () => undefined,
+    onSelectThread: () => undefined,
+  };
+  try {
+    const { container, rerender } = render(<>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} browseMode="directories" />
+    </>);
+    const composer = screen.getByRole("textbox", { name: "New thread message" });
+    composer.focus();
+    fireEvent.pointerOver(container.querySelector("[data-hover-stable-row]")!, { pointerType: "mouse" });
+    rerender(<>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} browseMode="directories"
+        selectedItemKey={`launchpad:${addedDirectory.key}`} revealSelectedThreadRequest={1} />
+    </>);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    rerender(<>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} directories={[...directories, addedDirectory]} browseMode="directories"
+        selectedItemKey={`launchpad:${addedDirectory.key}`} revealSelectedThreadRequest={1} />
+    </>);
+    await waitFor(() => {
+      const header = screen.getByRole("button", { name: "libuv" });
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(header).toHaveClass("is-selected");
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(header.closest(".directory-row"));
+    });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(composer).toHaveFocus();
+  } finally {
+    restore();
+  }
+});
+
 it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {
   const { scrollIntoView, restore } = withMockScrollIntoView();
   const onOpenLaunchpad = vi.fn(async () => undefined);

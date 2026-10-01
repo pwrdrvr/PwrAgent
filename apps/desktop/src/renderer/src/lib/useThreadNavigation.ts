@@ -2893,9 +2893,9 @@ export function useThreadNavigation(
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
   pickAndRegisterDirectory: (
     preferredBackend?: AppServerBackendKind,
-  ) => Promise<void>;
-  /** Register a user-curated project, keep the current selection, and reveal the Directories lens. */
-  addProjectDirectory: () => Promise<void>;
+  ) => Promise<string | undefined>;
+  /** Register a project, select its new-thread composer, and reveal the Directories lens. */
+  addProjectDirectory: () => Promise<string | undefined>;
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
   /**
@@ -6370,8 +6370,13 @@ export function useThreadNavigation(
     ],
   );
 
+  const recordPickDirectoryError = useCallback((message?: string): void => {
+    lastPickDirectoryErrorRef.current = message;
+    setPickDirectoryError(message);
+  }, []);
+
   const pickAndRegisterDirectory = useCallback(
-    async (preferredBackend?: AppServerBackendKind): Promise<void> => {
+    async (preferredBackend?: AppServerBackendKind): Promise<string | undefined> => {
       // Two-step OS-dialog → register-as-launchpad flow (issue #223).
       // We separate the cancel path (silent — the user closed the
       // dialog) from the validation-failure path (loud — we surface
@@ -6379,36 +6384,37 @@ export function useThreadNavigation(
       // path navigates to the new directory's launchpad immediately
       // so the composer focuses the just-added directory without an
       // extra click.
+      recordPickDirectoryError(undefined);
       if (rendererFederationTarget) {
-        return;
+        return undefined;
       }
       if (
         !desktopApi?.pickDirectoryFromDisk ||
         !desktopApi?.registerDirectoryFromDisk
       ) {
-        setPickDirectoryError(
+        recordPickDirectoryError(
           "Desktop bridge is missing the directory picker.",
         );
-        return;
+        return undefined;
       }
 
-      setPickDirectoryError(undefined);
       setPickingDirectory(true);
 
       let pendingPickedDirectoryKey: string | undefined;
       try {
         const pick = await desktopApi.pickDirectoryFromDisk();
         if (pick.canceled) {
-          return;
+          return undefined;
         }
         const result = await desktopApi.registerDirectoryFromDisk({
           path: pick.path,
           preferredBackend,
         });
         if (!result.ok) {
-          setPickDirectoryError(result.message);
-          return;
+          recordPickDirectoryError(result.message);
+          return undefined;
         }
+        removedDirectoryKeysRef.current.delete(result.directoryKey);
         pendingPickedDirectoryKey = result.directoryKey;
         pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
         setLocalLaunchpads((current) => ({
@@ -6442,10 +6448,14 @@ export function useThreadNavigation(
           directoryKeys: [result.directoryKey],
           force: true,
         });
+        return result.directoryKey;
       } catch (error) {
-        setPickDirectoryError(
+        recordPickDirectoryError(
           error instanceof Error ? error.message : String(error),
         );
+        // A metadata refresh can fail after registration has committed. Keep
+        // the successful directory selection/reveal and report that error.
+        return pendingPickedDirectoryKey;
       } finally {
         if (pendingPickedDirectoryKey) {
           pendingPickedLaunchpadRef.current.delete(pendingPickedDirectoryKey);
@@ -6453,13 +6463,8 @@ export function useThreadNavigation(
         setPickingDirectory(false);
       }
     },
-    [desktopApi, refresh, rendererFederationTarget],
+    [desktopApi, recordPickDirectoryError, refresh, rendererFederationTarget],
   );
-
-  const recordPickDirectoryError = useCallback((message?: string): void => {
-    lastPickDirectoryErrorRef.current = message;
-    setPickDirectoryError(message);
-  }, []);
 
   const pickDirectoryForReference = useCallback(async (): Promise<
     { label: string; path: string } | undefined
@@ -6523,20 +6528,19 @@ export function useThreadNavigation(
     }
   }, [desktopApi, recordPickDirectoryError, rendererFederationTarget]);
 
-  const addProjectDirectory = useCallback(async (): Promise<void> => {
-    const picked = await pickDirectoryForReference();
+  const addProjectDirectory = useCallback(async (): Promise<string | undefined> => {
+    const directoryKey = await pickAndRegisterDirectory();
     // Nothing on screen renders `pickDirectoryError` for this entry point,
     // so publish the outcome to the notice stack. A cancel or a success
     // records `undefined`, which takes any prior notice down.
     publishAddDirectoryError(lastPickDirectoryErrorRef.current);
-    if (picked) {
+    if (directoryKey) {
       updateBrowseMode("directories");
-      await refresh();
     }
+    return directoryKey;
   }, [
-    pickDirectoryForReference,
+    pickAndRegisterDirectory,
     publishAddDirectoryError,
-    refresh,
     updateBrowseMode,
   ]);
 

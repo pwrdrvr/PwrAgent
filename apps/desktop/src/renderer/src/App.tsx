@@ -2465,7 +2465,9 @@ function DesktopAppShell(props: {
     if (sidebarHidden) {
       setSidebarHiddenPersisted(false);
     }
-    await navigation.addProjectDirectory();
+    if (await navigation.addProjectDirectory()) {
+      setRevealSelectedThreadRequest((current) => current + 1);
+    }
   };
   const createThreadOnFederationTarget = async (
     instanceId: string,
