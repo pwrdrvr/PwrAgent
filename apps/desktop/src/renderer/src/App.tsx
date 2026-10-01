@@ -2891,6 +2891,8 @@ function DesktopAppShell(props: {
       settings.snapshot?.models?.providerThreadMigrations,
     clearPendingRequest: session.clearPendingRequest,
     launchpadConfigurationReady: navigation.selectedLaunchpadConfigurationReady,
+    launchpadConfigurationError: navigation.selectedLaunchpadConfigurationError,
+    onReloadLaunchpadConfiguration: navigation.refreshSelectedLaunchpadConfiguration,
     composerDisabled:
       !navigation.selectedThread ||
       !navigation.selectedThreadConfigurationReady ||

@@ -295,6 +295,8 @@ type ComposerProps = {
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
   launchpadError?: string;
+  launchpadConfigurationError?: string;
+  onReloadLaunchpadConfiguration?: () => Promise<void>;
   launchpadMaterializing?: boolean;
   /**
    * Draft scope for a launchpad whose thread is starting. Defaults to the
@@ -10849,6 +10851,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const composerErrorEntries: readonly ComposerErrorEntry[] = [
     { id: "skills", label: "Couldn't load skills", message: props.skillError },
     { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
+    {
+      id: "launchpad-configuration",
+      label: "Couldn't load thread settings",
+      message: props.launchpadConfigurationError,
+      dismissible: false,
+      retry: props.onReloadLaunchpadConfiguration ? {
+        label: "Reload thread settings",
+        onClick: () => { void props.onReloadLaunchpadConfiguration?.(); },
+      } : undefined,
+    },
     {
       id: "action",
       label: "Action failed",
