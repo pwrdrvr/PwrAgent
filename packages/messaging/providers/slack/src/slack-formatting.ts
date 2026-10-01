@@ -179,25 +179,18 @@ export function buildSlackBlocksForIntent(params: {
   text: string;
 }): SlackBlock[] {
   const standardMarkdown = usesSlackStandardMarkdown(params.intent);
-  const body = standardMarkdown
-    ? clampSlackMarkdownText(params.text)
-    : clampSlackSectionText(markdownToSlackMrkdwn(params.text));
-  const blocks: SlackBlock[] = body
-    ? [
-        standardMarkdown
-          ? {
-              type: "markdown",
-              text: body,
-            }
-          : {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: body,
-              },
-            },
-      ]
-    : [];
+  // Confirmations can contain private login details. Split using rendered
+  // length so escaping cannot clip a code while leaving its buttons visible.
+  const bodies = params.intent.kind === "confirmation"
+    ? splitSlackTextForDelivery(params.intent, params.text).map(markdownToSlackMrkdwn)
+    : [standardMarkdown
+        ? clampSlackMarkdownText(params.text)
+        : clampSlackSectionText(markdownToSlackMrkdwn(params.text))];
+  const blocks: SlackBlock[] = bodies.filter(Boolean).map((body) =>
+    standardMarkdown
+      ? { type: "markdown", text: body }
+      : { type: "section", text: { type: "mrkdwn", text: body } }
+  );
 
   if (params.intent.kind === "progress" && params.intent.value !== undefined) {
     blocks.push({

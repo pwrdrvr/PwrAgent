@@ -22,6 +22,7 @@ import type {
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
+  MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
   MessagingDirectoryActor,
@@ -908,7 +909,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     const rawText = textForSlackIntent(intent);
     const text = clampSlackMessage(markdownToSlackMrkdwn(rawText));
     const actions = actionsForSlackIntent(intent);
+    const callbackRecords: MessagingCallbackHandleRecord[] = [];
     const callbackBuilder = this.buildCallbackValueBuilder({
+      records: callbackRecords,
       allowedActorIds: callbackAllowedActorIds(
         intent,
         this.authorizedActorIds[0] ?? "",
@@ -944,6 +947,14 @@ export class SlackAdapter implements SlackProviderAdapter {
       intent,
       text: rawText,
     });
+    if (blocks.length > 50) {
+      return {
+        channel: this.channel,
+        deliveredAt,
+        outcome: "failed",
+        errorMessage: "Slack content exceeds the message block limit.",
+      };
+    }
     const pickerFallbackText =
       (
         intent.kind === "thread_picker"
@@ -990,6 +1001,20 @@ export class SlackAdapter implements SlackProviderAdapter {
           deliveredAt: this.now(),
           errorMessage: "Slack did not return a message timestamp",
         };
+      }
+
+      // Posting to a user ID returns Slack's native DM ID. Persist handles
+      // only after that destination is known, without requiring im:write.
+      for (const record of callbackRecords) {
+        const channelRef: MessagingChannelRef = {
+          ...record.channel,
+          conversation: { ...record.channel.conversation, id: channelId },
+        };
+        await this.callbackHandleStore.upsertCallbackHandle({
+          ...record,
+          id: slackCallbackRecordId(record.handle, { bindingId: record.bindingId, channelRef }),
+          channel: channelRef,
+        });
       }
 
       // Uploads follow the reply destination. A channel reply timestamp is not
@@ -2868,6 +2893,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     bindingId?: string;
     channelRef: MessagingChannelRef;
     intent: MessagingSurfaceIntent;
+    records: MessagingCallbackHandleRecord[];
   }): (action: MessagingSurfaceAction) => string {
     return (action) => {
       const handle = `${this.channel}:${createHash("sha256")
@@ -2876,26 +2902,19 @@ export class SlackAdapter implements SlackProviderAdapter {
         .slice(0, 18)}`;
       const issuedAt = this.now();
       const sig = this.signCallbackValue(handle, params.intent.id, issuedAt);
-      void this.callbackHandleStore
-        .upsertCallbackHandle({
-          id: slackCallbackRecordId(handle, params),
-          actionId: action.id,
-          allowedActorIds: params.allowedActorIds,
-          bindingId: params.bindingId,
-          channel: params.channelRef,
-          createdAt: issuedAt,
-          updatedAt: issuedAt,
-          expiresAt: issuedAt + SLACK_CALLBACK_TTL_MS,
-          handle,
-          pendingIntentId: params.intent.id,
-          ...(action.value !== undefined ? { value: action.value } : {}),
-        })
-        .catch((error) => {
-          this.logger.warn?.("slack callback handle persist failed", {
-            error: error instanceof Error ? error.message : String(error),
-            handle,
-          });
-        });
+      params.records.push({
+        id: slackCallbackRecordId(handle, params),
+        actionId: action.id,
+        allowedActorIds: params.allowedActorIds,
+        bindingId: params.bindingId,
+        channel: params.channelRef,
+        createdAt: issuedAt,
+        updatedAt: issuedAt,
+        expiresAt: issuedAt + SLACK_CALLBACK_TTL_MS,
+        handle,
+        pendingIntentId: params.intent.id,
+        ...(action.value !== undefined ? { value: action.value } : {}),
+      });
       return JSON.stringify({
         v: SLACK_SIGNED_VALUE_VERSION,
         h: handle,

@@ -3851,6 +3851,116 @@ describe("MessagingController", () => {
     harness.controller.dispose();
   });
 
+  async function createDebouncedPrivateButtonRequest(inputDebounceMs = 500) {
+    vi.useFakeTimers();
+    const { harness } = await createSlackPrivateResponseHarness({ inputDebounceMs });
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(1));
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      args: {
+        awaitReply: true,
+        replyInstructions: "Resume in the source thread after approval.",
+        replyOptions: [
+          { label: "Done", text: "I completed the login." },
+          { label: "Wait", text: "I need more time." },
+        ],
+        text: "Approve the SSO request.",
+      },
+    });
+    const request = harness.delivered.find(
+      (intent) => intent.kind === "confirmation" && intent.body.includes("Approve the SSO request."),
+    );
+    if (request?.kind !== "confirmation") throw new Error("Expected private request buttons");
+    const binding = (await harness.store.findActiveBindingsForThread({
+      backend: "codex", threadId: "thread-1",
+    })).find((candidate) => candidate.privateReplyContinuation);
+    if (!binding) throw new Error("Expected private continuation");
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+    harness.delivered.length = 0;
+    const callback = (index: number) => ({
+      ...buildCallbackEvent({
+        actionId: request.actions[index]!.id,
+        channel: { channel: "slack", conversation: { id: "D012HAROLD", kind: "dm" } },
+        sourceSurface: binding.privateReplyContinuation?.requestSurface,
+      }),
+      id: `private-button-${index}`,
+    });
+    return { harness, binding, callback };
+  }
+
+  it("rejects Cancel after a typed private reply has been buffered", async () => {
+    const { harness, binding, callback } = await createDebouncedPrivateButtonRequest();
+    await harness.controller.handleInboundEvent(buildTextEvent("I completed the login.", {
+      channel: binding.channel,
+      routingState: binding.routingState,
+    }));
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    await harness.controller.handleInboundEvent(callback(2));
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "confirmation",
+      body: expect.stringContaining("Cancellation is no longer available"),
+    }));
+    expect(harness.delivered).not.toContainEqual(expect.objectContaining({
+      body: expect.stringContaining("Agent will not resume"),
+    }));
+    expect((await harness.store.getBinding(binding.id))?.revokedAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: expect.arrayContaining([{ type: "text", text: "I completed the login." }]),
+    }));
+    harness.controller.dispose();
+  });
+
+  it.each([
+    { secondAction: "reply", inputDebounceMs: 0 },
+    { secondAction: "reply", inputDebounceMs: 500 },
+    { secondAction: "cancel", inputDebounceMs: 0 },
+    { secondAction: "cancel", inputDebounceMs: 500 },
+  ] as const)("admits one winner when a reply races $secondAction with debounce $inputDebounceMs", async ({ secondAction, inputDebounceMs }) => {
+    const { harness, callback } = await createDebouncedPrivateButtonRequest(inputDebounceMs);
+    // Hold both lookups until both callbacks have passed their initial check.
+    const bindings = await harness.store.findActiveBindings();
+    let lookups = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(harness.store, "findActiveBindings").mockImplementation(async () => {
+      if (++lookups === 2) release();
+      await gate;
+      return bindings;
+    });
+    await Promise.all([
+      harness.controller.handleInboundEvent(callback(0)),
+      harness.controller.handleInboundEvent(callback(secondAction === "cancel" ? 2 : 1)),
+    ]);
+    await vi.advanceTimersByTimeAsync(500);
+    if (secondAction === "cancel") {
+      expect(harness.startTurn).toHaveBeenCalledTimes(1);
+      expect(harness.delivered).toContainEqual(expect.objectContaining({
+        body: "Private request cancelled. The Agent will not resume from this request.",
+      }));
+    } else {
+      await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+      const lastInput: StartTurnRequest["input"] | undefined = harness.startTurn.mock.calls.at(-1)?.[0].input;
+      const replies = lastInput?.filter((item) =>
+        item.type === "text" && ["I completed the login.", "I need more time."].includes(item.text)
+      );
+      expect(replies).toHaveLength(1);
+    }
+    harness.controller.dispose();
+  });
+
   it("keeps a private request from a later debounced message private", async () => {
     vi.useFakeTimers();
     const { channel, harness } = await createSlackPrivateResponseHarness({

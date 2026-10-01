@@ -1056,7 +1056,7 @@ export class MessagingController {
     Set<Promise<void>>
   >();
   private readonly privateReplyCompletionTurnKeys = new Set<string>();
-  private readonly privateReplyButtonClaims = new Set<string>();
+  private readonly privateReplyClaims = new Set<string>();
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly privateResponseFallbackTurnKeys = new Set<string>();
   private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
@@ -4157,11 +4157,22 @@ export class MessagingController {
   private async admitTurnInput(params: {
     binding: MessagingBindingRecord;
     event: MessagingTurnInputEvent;
-  }): Promise<void> {
+  }): Promise<boolean> {
+    const requestId = params.binding.privateReplyContinuation?.requestId;
+    // Claim synchronously before append can yield or buffer the response. Cancel
+    // uses the same claim, including for replies typed in the private thread.
+    if (requestId) {
+      if (this.privateReplyClaims.has(requestId)) return false;
+      rememberBoundedKey(this.privateReplyClaims, requestId);
+    }
     this.markAdmissionStage(params.event, "routed");
     const startedAt = this.now();
     try {
       await this.turnAdmission.append(params);
+      return true;
+    } catch (error) {
+      if (requestId) this.privateReplyClaims.delete(requestId);
+      throw error;
     } finally {
       const finalAdmissionAppendAwaitMs = this.now() - startedAt;
       this.recordHandledToRoutedSubspan(
@@ -8284,7 +8295,7 @@ export class MessagingController {
     this.startingAgentMessagingOriginsByThreadKey.clear();
     this.pendingTurnFailureHandlersByThreadKey.clear();
     this.privateReplyCompletionTurnKeys.clear();
-    this.privateReplyButtonClaims.clear();
+    this.privateReplyClaims.clear();
     this.terminalPrivateResponseTurnKeys.clear();
     this.privateResponseFallbackTurnKeys.clear();
     this.attemptedPrivateResponseFallbackTurnKeys.clear();
@@ -16303,7 +16314,13 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     action: PrivateReplyAction,
   ): Promise<void> {
-    if (this.privateReplyButtonClaims.has(action.requestId)) {
+    if (this.privateReplyClaims.has(action.requestId)) {
+      if (action.kind === "cancel") {
+        await this.deliverPrivateReplyButtonState(
+          event,
+          "This request already has a response or has been closed. Cancellation is no longer available.",
+        );
+      }
       return;
     }
     const binding = (await this.options.store.findActiveBindings()).find((candidate) =>
@@ -16328,11 +16345,19 @@ export class MessagingController {
     }
 
     if (action.kind === "cancel") {
-      rememberBoundedKey(this.privateReplyButtonClaims, action.requestId);
+      // Binding lookup yielded: a typed reply or another button may have won.
+      if (this.privateReplyClaims.has(action.requestId)) {
+        await this.deliverPrivateReplyButtonState(
+          event,
+          "This request already has a response or has been closed. Cancellation is no longer available.",
+        );
+        return;
+      }
+      rememberBoundedKey(this.privateReplyClaims, action.requestId);
       try {
         await this.completePrivateReplyContinuation(binding.id);
       } catch (error) {
-        this.privateReplyButtonClaims.delete(action.requestId);
+        this.privateReplyClaims.delete(action.requestId);
         throw error;
       }
       await this.deliverPrivateReplyButtonState(
@@ -16368,13 +16393,8 @@ export class MessagingController {
       receivedAt: this.now(),
       text: option.text,
     };
-    rememberBoundedKey(this.privateReplyButtonClaims, action.requestId);
-    try {
-      await this.admitTurnInput({ binding, event: responseEvent });
-    } catch (error) {
-      this.privateReplyButtonClaims.delete(action.requestId);
-      throw error;
-    }
+    // Admission rechecks and acquires the claim after asynchronous validation.
+    if (!(await this.admitTurnInput({ binding, event: responseEvent }))) return;
     await this.deliverPrivateReplyButtonState(
       event,
       "Response received. The Agent will continue in the original conversation.",
