@@ -9,6 +9,22 @@
   gap: 8px;
 }
 .native-voice__status { color: var(--text-muted); }
+/* A hot microphone uses the selected-row accent, never hint grey. */
+.native-voice__status--live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+.native-voice__status--live::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .native-voice__error { color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
 .native-voice__transcript { max-height: 160px; overflow-y: auto; color: var(--text-secondary); }
 .native-voice__transcript p { margin: 4px 0; white-space: pre-wrap; }

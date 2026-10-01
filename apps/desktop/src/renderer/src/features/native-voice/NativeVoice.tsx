@@ -28,11 +28,13 @@ export function NativeVoice({ api, threadId }: { api: NativeVoiceApi; threadId?:
       <div className="native-voice__controls">
         <button className="button button--ghost" type="button" disabled={view.status === "stopping"}
           onClick={() => { if (active) void controller.stop(); else if (threadId) void controller.start(threadId); }}>
-          {active ? "Stop voice" : "Start voice"}
+          {active ? "End voice" : "Start voice"}
         </button>
-        <span className="native-voice__status" role={view.status === "idle" ? undefined : "status"} aria-label={view.status === "idle" ? undefined : "Voice status"}>
-          {view.status === "listening" ? "Microphone live · speak to interrupt voice" : view.status === "checking" ? "Checking voice access…" : view.status === "connecting" ? "Connecting voice…" : view.status === "stop-error" ? "Voice stop needs retry" : view.status === "stopping" ? "Stopping voice…" : "Experimental · opt in to talk"}
-        </span>
+        {view.status === "idle" || view.status === "error" ? null : (
+          <span className={view.status === "listening" ? "native-voice__status native-voice__status--live" : "native-voice__status"} role="status" aria-label="Voice status">
+            {view.status === "listening" ? "Microphone live" : view.status === "checking" ? "Checking voice access…" : view.status === "connecting" ? "Connecting voice…" : view.status === "stop-error" ? "Voice is still open. End voice again." : "Ending voice…"}
+          </span>
+        )}
       </div>
       {view.error ? <p className="native-voice__error" role="alert">{view.error}</p> : null}
       {view.transcript.length ? (

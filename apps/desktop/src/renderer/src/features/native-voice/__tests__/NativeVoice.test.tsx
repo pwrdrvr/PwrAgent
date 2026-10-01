@@ -45,7 +45,7 @@ function voiceFixture() {
   return { api, owner, capture, peer, track, listeners };
 }
 
-it("keeps the idle hint separate from coding status and announces opted-in voice state", async () => {
+it("adds no idle status beside coding status and announces opted-in voice state", async () => {
   let resolveCapability!: (value: NativeVoiceCapability) => void;
   const capability = new Promise<NativeVoiceCapability>((resolve) => { resolveCapability = resolve; });
   const api: NativeVoiceApi = {
@@ -58,7 +58,8 @@ it("keeps the idle hint separate from coding status and announces opted-in voice
   render(<><div role="status">Thinking</div><NativeVoice api={api} threadId="sample-thread" /></>);
   owners.add(getWindowNativeVoiceController(api));
   expect(screen.getByRole("status")).toHaveTextContent("Thinking");
-  expect(screen.getByText("Experimental · opt in to talk")).not.toHaveAttribute("role");
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Start voice" }).parentElement).toHaveTextContent(/^Start voice$/);
   expect(api.nativeVoiceCapability).not.toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole("button", { name: "Start voice" }));
@@ -78,6 +79,8 @@ it("sends voice text by click and Enter without submitting or changing the codin
   </form>);
   fireEvent.click(screen.getByRole("button", { name: "Start voice" }));
   await screen.findByRole("textbox", { name: "Message voice" });
+  expect(screen.getByRole("status", { name: "Voice status" })).toHaveTextContent("Microphone live");
+  expect(screen.getByRole("status", { name: "Voice status" })).toHaveClass("native-voice__status--live");
   expect(document.querySelectorAll("form")).toHaveLength(1);
   fireEvent.change(screen.getByRole("textbox", { name: "Message voice" }), { target: { value: "Sample voice message" } });
   fireEvent.click(screen.getByRole("button", { name: "Send to voice" }));
@@ -110,8 +113,8 @@ it("retains a failed stop across unmount and exposes retry on a non-Codex compos
   const next = render(<NativeVoice api={nextApi} />);
   expect(screen.getByRole("alert")).toHaveTextContent("Sample backend stop failed.");
   expect(f.capture).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByRole("button", { name: "Stop voice" }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Stop voice" })).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "End voice" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "End voice" })).not.toBeInTheDocument());
   expect(f.api.stopNativeVoice).toHaveBeenNthCalledWith(1, { sessionId });
   expect(f.api.stopNativeVoice).toHaveBeenNthCalledWith(2, { sessionId });
   expect(f.owner.hasSession()).toBe(false);

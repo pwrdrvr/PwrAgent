@@ -13217,7 +13217,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 void stopTurn();
               }}
             >
-              {interrupting ? "Stopping…" : nativeVoiceAvailable ? "Cancel task" : "Stop"}
+              {interrupting ? "Stopping…" : "Stop"}
             </button>
           ) : null}
           {props.launchpad && props.onCancelLaunchpad ? (

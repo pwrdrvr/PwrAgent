@@ -2,8 +2,10 @@
 
 This opt-in experimental slice connects an existing local Codex coding thread
 through `thread/realtime/start`. Select **Start voice** in its composer, allow
-microphone access after negotiation, and speak. **Stop voice** closes the voice
-session. **Cancel task** remains the existing coding-turn interrupt operation.
+microphone access after negotiation, and speak. **End voice** closes the voice
+session. **Stop** remains the existing coding-turn interrupt operation and keeps
+its name on every thread. The idle composer shows only **Start voice**; while
+voice is live, an accent **Microphone live** indicator replaces the hint text.
 Typing in the normal composer continues to use the ordinary coding flow. The
 small **Message voice** field appends text to the voice conversation.
 
@@ -58,7 +60,7 @@ retry instead of allowing a potentially overlapping session.
 
 The window owns the voice controller; composers subscribe to its state. A thread
 change or composer unmount stops local media immediately. If backend stop fails,
-the window retains the original session token and exposes **Stop voice** retry
+the window retains the original session token and exposes **End voice** retry
 on the replacement composer, including a non-Codex thread, until stop is
 acknowledged. The window also observes page teardown independently of composer
 mounts. The browser owns tracks, remote playback, peer, ICE/connection timers and

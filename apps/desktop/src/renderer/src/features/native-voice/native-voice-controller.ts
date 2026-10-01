@@ -213,7 +213,7 @@ export class NativeVoiceController {
     resources.stop = this.api.stopNativeVoice({ sessionId: resources.id }).then(() => {
       stopped = true;
     }).catch((error: unknown) => {
-      this.publish({ status: "stop-error", error: error instanceof Error ? error.message : "Could not stop voice. Try Stop voice again." });
+      this.publish({ status: "stop-error", error: error instanceof Error ? error.message : "Could not end voice. Try End voice again." });
     }).finally(() => {
       if (stopped) {
         if (this.resources === resources) this.resources = undefined;
