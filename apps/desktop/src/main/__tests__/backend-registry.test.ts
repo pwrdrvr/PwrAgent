@@ -100,7 +100,6 @@ import {
   WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
 } from "../app-server/thread-working-state-refresh-policy";
 import type {
-  CodexAppServerClient,
   CodexPwrdrvrTokenMiserActivation,
   CodexServerCapabilities,
 } from "../codex-app-server/client";
