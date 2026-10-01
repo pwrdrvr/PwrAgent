@@ -77,6 +77,7 @@ function createCodexModel(
     additionalSpeedTiers: [],
     serviceTiers: [],
     defaultServiceTier: null,
+    availableAccessPrograms: null,
     isDefault: false,
     ...modelOverrides,
   };
@@ -11545,7 +11546,7 @@ describe("CodexAppServerClient", () => {
       }),
     );
     expect(requests.map((request) => request.method)).not.toContain(
-      "thread/rollback",
+      "thread/revert",
     );
     const tracking = client as unknown as {
       helperThreadIds: Set<string>;
@@ -12147,7 +12148,7 @@ describe("CodexAppServerClient", () => {
         .map((request) => request.params?.threadId),
     ).toEqual(["thread-title-helper-1", "thread-title-helper-2"]);
     expect(requests.map((request) => request.method)).not.toContain(
-      "thread/rollback",
+      "thread/revert",
     );
 
     expect(requests.filter((request) => request.method === "thread/start")
