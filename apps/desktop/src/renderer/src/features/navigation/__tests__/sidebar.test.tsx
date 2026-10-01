@@ -5679,6 +5679,92 @@ describe("Sidebar", () => {
     expect(onSetThreadPin).not.toHaveBeenCalled();
   });
 
+  it("stops keeping a pin dropped after the pins when every pin is kept", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const keptFirst = {
+      ...sharedThread,
+      id: "thread-kept-first",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const keptSecond = {
+      ...sharedThread,
+      id: "thread-kept-second",
+      title: "Triage lead",
+      pinnedRank: String(-(2 ** 40) + 1024),
+    };
+    const unpinned = {
+      ...sharedThread,
+      id: "thread-unpinned",
+      title: "Loose thread",
+      pinnedRank: undefined,
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{
+              threadKeys: [
+                "codex:thread-kept-first",
+                "codex:thread-kept-second",
+                "codex:thread-unpinned",
+              ],
+            },
+          },
+        ]}
+        inboxThreads={[keptFirst, keptSecond, unpinned]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept-first"
+        threads={[keptFirst, keptSecond, unpinned]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const sourceRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const appendTarget = container.querySelector(
+      ".directory-row__pin-drop-slot",
+    ) as HTMLElement;
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(sourceRow, "getBoundingClientRect").mockReturnValue(rect(50, 50));
+    vi.spyOn(appendTarget, "getBoundingClientRect").mockReturnValue(rect(150, 32));
+
+    startThreadPinPointerDrag(sourceRow, { x: 50, y: 75 });
+    moveThreadPinPointer({ x: 50, y: 165 });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+
+    releaseThreadPinPointer({ x: 50, y: 165 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+        key: "codex:thread-kept-first",
+        keepAtTop: false,
+      });
+    });
+  });
+
   it("opens a ghost Keep at top slot above the pins while the lane is empty", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const first = {

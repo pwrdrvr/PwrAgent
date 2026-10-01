@@ -743,11 +743,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
       session.activated = true;
       beginNativeDragInteraction();
       session.sourceElement.classList.add("is-pointer-dragging");
-      setThreadPinAppendTargetActive(session, true);
+      // Measure the held card before the targets open: the ghost Keep at
+      // top slot takes layout space and pushes the source row down.
       session.preview = createThreadRowPointerDragPreview(
         session.sourceElement,
         startPoint,
       );
+      setThreadPinAppendTargetActive(session, true);
       armClickSuppression();
       session.scrollElement?.addEventListener("scroll", onScroll, {
         passive: true,
@@ -1110,7 +1112,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
 
     if (!targetKey) {
-      if (pinnedThreadKeys.includes(draggedKey)) return;
+      if (pinnedThreadKeys.includes(draggedKey)) {
+        // Every pin here is kept: below them, the drop leaves the kept tier.
+        if (isKeptAtTopThread(draggedThread)) {
+          void props.onReorderThreadPins?.([], { key: draggedKey, keepAtTop: false });
+        }
+        return;
+      }
       void props.onSetThreadPin?.(draggedThread, true);
       return;
     }
