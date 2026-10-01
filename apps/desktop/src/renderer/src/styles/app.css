@@ -4830,6 +4830,24 @@ a.button {
   pointer-events: none;
 }
 
+/* What a drop on the current target does, on the held card's top edge. The
+   card covers the target it hovers, so this is the readable copy of the Keep
+   at top seam's label. */
+.thread-row__drop-label {
+  position: absolute;
+  top: 0;
+  right: 12px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-transform: uppercase;
+  transform: translateY(-50%);
+}
+
 /* Sidebar drag sessions keep hit-testing the live DOM beneath their preview.
    Rows contain buttons, copy targets, PR hover cards, menus, and native-title
    controls; letting those surfaces activate while a card is held creates
@@ -5405,6 +5423,11 @@ a.button {
 .thread-row__heading-pin--static {
   pointer-events: none;
   cursor: default;
+}
+
+/* A pin kept at top: the same glyph, filled. */
+.thread-row__heading-pin--kept path {
+  fill: currentColor;
 }
 
 .thread-row__title,
@@ -6930,6 +6953,78 @@ a.button {
   box-shadow:
     0 0 0 1px var(--row-active-tint-strong),
     0 0 14px var(--accent-shadow);
+}
+
+/* The Keep at top seam between pins kept at top and ordinary pins. It mounts
+   inside the same zero-height `.directory-row__pin-drop-boundary`, so a drag
+   never moves a row. Unlike the append slot it sits between two pinned rows,
+   so its hit band is centered on the seam. Its line and label appear only
+   while a pin drag is live. */
+.directory-row__keep-top-slot {
+  position: absolute;
+  top: -16px;
+  right: 6px;
+  left: 6px;
+  height: 32px;
+  cursor: grabbing;
+  pointer-events: none;
+}
+
+.directory-row__keep-top-slot.is-drag-enabled {
+  pointer-events: auto;
+}
+
+.directory-row__keep-top-slot::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  border-radius: 999px;
+  background: var(--border-subtle);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.directory-row__keep-top-slot::before {
+  content: "Keep at top";
+  position: absolute;
+  z-index: 1;
+  top: 16px;
+  right: 14px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-sidebar);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.directory-row__keep-top-slot.is-drag-enabled::after,
+.directory-row__keep-top-slot.is-drag-enabled::before {
+  opacity: 1;
+}
+
+.directory-row__keep-top-slot.is-drop-target-before::after {
+  height: 3px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+}
+
+/* The held card covers this label while it is the target and carries its own
+   copy (`.thread-row__drop-label`). */
+.directory-row__keep-top-slot.is-drop-target-before::before {
+  opacity: 0;
 }
 
 .directory-row__thread-divider {

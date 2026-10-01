@@ -27,6 +27,7 @@ import type {
 import {
   comparePinnedDirectories,
   comparePinnedThreads,
+  isKeptAtTopThread,
   isPinnedDirectory,
   isPinnedThread,
   isSubthreadLaunchpadKey,
@@ -293,6 +294,7 @@ type ThreadPinDragSession = {
   directory: NavigationDirectorySummary;
   directoryElement: HTMLElement;
   frame: number;
+  keepAtTopTargetElement?: HTMLDivElement;
   lastPoint: { x: number; y: number };
   pointerId: number;
   preview?: ThreadRowPointerDragPreview;
@@ -312,6 +314,10 @@ type ThreadPinPointerDropTarget =
     }
   | {
       element: HTMLDivElement;
+      kind: "keepAtTop";
+    }
+  | {
+      element: HTMLDivElement;
       kind: "row";
       position: "before" | "after";
       threadKey: string;
@@ -321,11 +327,13 @@ function setThreadPinAppendTargetActive(
   session: ThreadPinDragSession,
   active: boolean,
 ): void {
-  session.appendTargetElement?.classList.toggle("is-drag-enabled", active);
-  if (active) {
-    session.appendTargetElement?.removeAttribute("aria-hidden");
-  } else {
-    session.appendTargetElement?.setAttribute("aria-hidden", "true");
+  for (const element of [session.appendTargetElement, session.keepAtTopTargetElement]) {
+    element?.classList.toggle("is-drag-enabled", active);
+    if (active) {
+      element?.removeAttribute("aria-hidden");
+    } else {
+      element?.setAttribute("aria-hidden", "true");
+    }
   }
 }
 
@@ -371,6 +379,15 @@ function resolveThreadPinPointerDropTarget(
     || isPointInsideDragSource(session, session.lastPoint)
   ) {
     return undefined;
+  }
+
+  // The Keep at top seam overlaps the rows on both sides of it, so it is
+  // tested before rows: inside its band the drop always means "keep".
+  if (
+    session.keepAtTopTargetElement
+    && getPointInsideElement(session.keepAtTopTargetElement, session.lastPoint)
+  ) {
+    return { element: session.keepAtTopTargetElement, kind: "keepAtTop" };
   }
 
   if (!session.sourceWasPinned) {
@@ -615,6 +632,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   ): void => {
     session.preview?.move(session.lastPoint);
     session.target = resolveThreadPinPointerDropTarget(session);
+    session.preview?.setDropLabel(
+      session.target?.kind === "keepAtTop" ? "Keep at top" : undefined,
+    );
     if (!session.target) {
       dropIndicator.clear();
       return;
@@ -623,7 +643,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       targetKey:
         session.target.kind === "row"
           ? `${session.directory.key}:${session.target.threadKey}`
-          : `pinned-append:${session.directory.key}`,
+          : session.target.kind === "keepAtTop"
+            ? `pinned-keep-top:${session.directory.key}`
+            : `pinned-append:${session.directory.key}`,
       position:
         session.target.kind === "row" ? session.target.position : "before",
     });
@@ -670,6 +692,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directory,
       directoryElement,
       frame: 0,
+      keepAtTopTargetElement:
+        directoryElement.querySelector<HTMLDivElement>(
+          ".directory-row__keep-top-slot",
+        ) ?? undefined,
       lastPoint: startPoint,
       pointerId: event.pointerId,
       scrollElement:
@@ -770,6 +796,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       lastDirectoryThreadDropAtRef.current = Date.now();
       if (target.kind === "append") {
         dropThreadAfterDirectoryPins(session.directory, session.threadKey);
+        return;
+      }
+      if (target.kind === "keepAtTop") {
+        keepDirectoryThreadAtTop(session.directory, session.threadKey);
         return;
       }
       if (session.sourceWasPinned) {
@@ -1068,7 +1098,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const draggedThread = threadsByKey.get(draggedKey);
     if (!draggedThread) return;
 
-    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory);
+    // An anchor move adopts the anchor's tier, so the anchor must be an
+    // ordinary pin: the append target sits below the pins kept at top.
+    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory)
+      .filter((threadKey) => {
+        const thread = threadsByKey.get(threadKey);
+        return Boolean(thread) && !isKeptAtTopThread(thread!);
+      });
     const targetKey =
       directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
 
@@ -1079,6 +1115,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
     }
 
     moveDirectoryPin(directory, draggedKey, targetKey, "after");
+  };
+
+  const keepDirectoryThreadAtTop = (
+    directory: NavigationDirectorySummary,
+    draggedKey: string,
+  ): void => {
+    const draggedThread = threadsByKey.get(draggedKey);
+    if (!draggedThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)) return;
+    void (async () => {
+      if (!pinnedThreadKeys.includes(draggedKey)) {
+        if (!props.onSetThreadPin) return;
+        await props.onSetThreadPin(draggedThread, true);
+      }
+      await props.onReorderThreadPins?.([], { key: draggedKey, keepAtTop: true });
+    })();
   };
 
   const movePinnedThreadByKeyboard = (
@@ -1598,6 +1649,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       props.onReorderThreadPins
       && directoryUnpinnedThreadCount > 0
     );
+    // Kept pins sort first, so the seam sits before the first ordinary pin.
+    // With no ordinary pin loaded it would share the append target's
+    // boundary; dropping on the last kept row's lower half keeps there.
+    const keepAtTopSeamIndex = props.onReorderThreadPins
+      ? directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread))
+      : -1;
     const renderUnpinnedRow = (
       thread: NavigationThreadSummary,
     ): ReactElement => {
@@ -2033,7 +2090,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <div className="directory-row__details">
                 {visibleThreadCount > 0 || startingRootThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads" role="list" aria-label={`Threads in ${directory.label}`}>
-                    {directoryPinnedThreads.map((thread) => {
+                    {directoryPinnedThreads.map((thread, pinnedIndex) => {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
                             trays.subtree(threadKey).length;
@@ -2044,6 +2101,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
+                              {pinnedIndex === keepAtTopSeamIndex ? (
+                                // Same zero-height, role-carrying boundary as
+                                // the append target below; see its comment.
+                                <div
+                                  className="directory-row__pin-drop-boundary"
+                                  role="listitem"
+                                >
+                                  <div
+                                    aria-label={`Keep thread at top of pinned threads for ${directory.label}`}
+                                    aria-hidden="true"
+                                    className="directory-row__keep-top-slot"
+                                    role="separator"
+                                  />
+                                </div>
+                              ) : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}

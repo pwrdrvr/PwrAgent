@@ -5017,6 +5017,82 @@ describe("Sidebar", () => {
     ], { key: `codex:${pinnedTop.id}`, direction: "down" });
   });
 
+  it("keeps a pin at top from the context menu and moves only within its tier", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const kept = {
+      ...sharedThread,
+      id: "thread-kept",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const ordinary = {
+      ...sharedThread,
+      id: "thread-ordinary",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{ threadKeys: ["codex:thread-kept", "codex:thread-ordinary"] },
+          },
+        ]}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept"
+        threads={[kept, ordinary]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    const keptRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const ordinaryRow = screen
+      .getByRole("button", { name: /Fresh pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(keptRow.querySelector(".thread-row__heading-pin--kept")).not.toBeNull();
+    expect(ordinaryRow.querySelector(".thread-row__heading-pin--kept")).toBeNull();
+
+    // The kept row is last in its own tier, so Move Down cannot push it
+    // below the seam even though an ordinary pin follows it.
+    fireEvent.click(
+      keptRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: /Move Down/i }),
+    ).toBeDisabled();
+    await clickElement(
+      await screen.findByRole("menuitem", { name: "Stop Keeping at Top" }),
+    );
+    expect(onReorderThreadPins).toHaveBeenLastCalledWith([], {
+      key: "codex:thread-kept",
+      keepAtTop: false,
+    });
+
+    fireEvent.click(
+      ordinaryRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+    await clickElement(
+      await screen.findByRole("menuitem", { name: "Keep at Top" }),
+    );
+    expect(onReorderThreadPins).toHaveBeenLastCalledWith([], {
+      key: "codex:thread-ordinary",
+      keepAtTop: true,
+    });
+  });
+
   it("omits Move Up / Move Down from an unpinned thread's context menu", async () => {
     render(
       <Sidebar
@@ -5499,6 +5575,102 @@ describe("Sidebar", () => {
     releaseThreadPinPointer({ x: 50, y: 90 });
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
     expect(onReorderThreadPins).not.toHaveBeenCalled();
+  });
+
+  it("keeps a dragged pin at top when it drops on the seam after the kept pins", async () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const kept = {
+      ...sharedThread,
+      id: "thread-kept",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const ordinary = {
+      ...sharedThread,
+      id: "thread-ordinary",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{ threadKeys: ["codex:thread-kept", "codex:thread-ordinary"] },
+          },
+        ]}
+        inboxThreads={[kept, ordinary]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept"
+        threads={[kept, ordinary]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The seam mounts between the tiers, hidden until a drag starts.
+    const seam = container.querySelector(
+      ".directory-row__keep-top-slot",
+    ) as HTMLElement;
+    expect(seam).toHaveAttribute("aria-hidden", "true");
+    const keptRow = screen
+      .getByRole("button", { name: /Release manager/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    const ordinaryRow = screen
+      .getByRole("button", { name: /Fresh pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(keptRow.compareDocumentPosition(seam)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(seam.compareDocumentPosition(ordinaryRow)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(keptRow, "getBoundingClientRect").mockReturnValue(rect(50, 50));
+    vi.spyOn(seam, "getBoundingClientRect").mockReturnValue(rect(84, 32));
+    vi.spyOn(ordinaryRow, "getBoundingClientRect").mockReturnValue(rect(200, 50));
+
+    startThreadPinPointerDrag(ordinaryRow, { x: 50, y: 225 });
+    moveThreadPinPointer({ x: 50, y: 100 });
+    expect(
+      screen.getByRole("separator", {
+        name: "Keep thread at top of pinned threads for PwrAgent",
+      }),
+    ).toBe(seam);
+    await waitFor(() => {
+      expect(seam).toHaveClass("is-drop-target-before");
+    });
+    // The held card covers the seam, so it carries the outcome itself.
+    expect(
+      document.body.querySelector(".thread-row--drag-image .thread-row__drop-label"),
+    ).toHaveTextContent("Keep at top");
+
+    releaseThreadPinPointer({ x: 50, y: 100 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+        key: "codex:thread-ordinary",
+        keepAtTop: true,
+      });
+    });
+    expect(onSetThreadPin).not.toHaveBeenCalled();
   });
 
   it("uses the source row's live bounds after directory-list scrolling", async () => {

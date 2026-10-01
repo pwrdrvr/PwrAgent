@@ -647,6 +647,15 @@ Render a brand through `BrandLockup`
   - The `⌘⇧↑` and `⌘⇧↓` shortcuts.
   - **Move Up** and **Move Down** in the context menu.
 - Within each directory, show pinned threads first.
+- Pins have two tiers: pins kept at top, then ordinary pins.
+  - The tier lives in the rank: kept pins use a band below
+    `KEEP_AT_TOP_RANK_BOUNDARY` in `packages/shared/src/thread-pins.ts`.
+    Every rank sort, store, and federation hop already orders it first.
+  - A new pin, including an auto-pinned new thread, lands at the top of the
+    ordinary pins and never above a kept pin.
+  - Cross tiers only explicitly: **Keep at Top** in the context menu, or a
+    drop on the Keep at top seam that a pin drag shows. Move Up, Move Down,
+    and the shortcuts stay inside the pin's tier.
 - Sort unpinned directory threads by thread creation time.
 
 ### Unread behavior

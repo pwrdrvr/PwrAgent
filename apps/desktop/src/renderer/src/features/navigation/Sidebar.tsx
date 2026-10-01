@@ -33,6 +33,7 @@ import {
   buildThreadUrl,
   comparePinnedDirectories,
   comparePinnedThreads,
+  isKeptAtTopThread,
   isPinnedDirectory,
   isPinnedThread,
   isRemoteFederationTarget,
@@ -1357,6 +1358,23 @@ export function Sidebar(props: SidebarProps) {
     void hoverReleasedListHandlers.setThreadPin?.(thread, !thread.pinnedRank);
   };
 
+  const toggleKeepAtTopFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    const keepAtTop = !isKeptAtTopThread(thread);
+    void (async () => {
+      // Keep at Top on an unpinned row pins it first; the owner then moves
+      // the new pin into the kept tier.
+      if (!thread.pinnedRank) {
+        if (!hoverReleasedListHandlers.setThreadPin) return;
+        await hoverReleasedListHandlers.setThreadPin(thread, true);
+      }
+      await hoverReleasedListHandlers.reorderThreadPins?.([], {
+        key: threadSummaryIdentityKey(thread),
+        keepAtTop,
+      });
+    })();
+  };
+
   const markUnreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     hoverStableSnapshot.release();
@@ -1456,6 +1474,7 @@ export function Sidebar(props: SidebarProps) {
    * Pinned-thread identity keys in stable global order. Pin order is global
    * across backends (mirrors directory pinning), so a single sorted array is
    * enough to compute Move Up / Move Down adjacency for the context menu.
+   * Moves stay inside a pin's tier, so adjacency reads `keptAtTopThreadKeys`.
    */
   const pinnedThreadKeysInOrder = useMemo(
     () =>
@@ -1465,6 +1484,21 @@ export function Sidebar(props: SidebarProps) {
         .map((thread) => threadSummaryIdentityKey(thread)),
     [props.threads],
   );
+  const keptAtTopThreadKeys = useMemo(
+    () =>
+      new Set(
+        props.threads
+          .filter(isKeptAtTopThread)
+          .map((thread) => threadSummaryIdentityKey(thread)),
+      ),
+    [props.threads],
+  );
+  const pinTierKeysInOrder = (threadKey: string): string[] => {
+    const keptAtTop = keptAtTopThreadKeys.has(threadKey);
+    return pinnedThreadKeysInOrder.filter(
+      (key) => keptAtTopThreadKeys.has(key) === keptAtTop,
+    );
+  };
 
   /**
    * Pinned-directory keys in stable user-curated order. Directory
@@ -1491,8 +1525,8 @@ export function Sidebar(props: SidebarProps) {
     thread: NavigationThreadSummary,
     direction: "up" | "down",
   ): void => {
-    const ordered = pinnedThreadKeysInOrder;
     const threadKey = threadSummaryIdentityKey(thread);
+    const ordered = pinTierKeysInOrder(threadKey);
     const currentIndex = ordered.indexOf(threadKey);
     if (currentIndex === -1) return;
     const targetIndex =
@@ -1845,12 +1879,15 @@ export function Sidebar(props: SidebarProps) {
       contextMenu?.thread.pinnedRank &&
       props.onReorderThreadPins,
   );
+  const contextMenuPinTierKeys = contextMenu
+    ? pinTierKeysInOrder(threadSummaryIdentityKey(contextMenu.thread))
+    : [];
   const contextMenuPinnedThreadIndex = contextMenu
-    ? pinnedThreadKeysInOrder.indexOf(
+    ? contextMenuPinTierKeys.indexOf(
         threadSummaryIdentityKey(contextMenu.thread),
       )
     : -1;
-  const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
+  const contextMenuPinnedThreadCount = contextMenuPinTierKeys.length;
   const contextMenuCanMoveUp =
     contextMenuShowMoveItems && (contextMenuPinnedThreadIndex > 0 || !completeThreadPinOrder);
   const contextMenuCanMoveDown =
@@ -1858,6 +1895,13 @@ export function Sidebar(props: SidebarProps) {
     contextMenuPinnedThreadIndex >= 0 &&
     (contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1 || !completeThreadPinOrder);
   const contextMenuHasPinAction = contextMenuCanPin;
+  // Keep at Top only means something where pin order is visible.
+  const contextMenuCanKeepAtTop = Boolean(
+    contextMenuHasPinAction
+      && !contextMenuIsBulk
+      && browseMode === "directories"
+      && props.onReorderThreadPins,
+  );
   const contextMenuHasCreationActions =
     contextMenuCanCreateSubthread || contextMenuCanFork;
   const contextMenuHasManagementActions =
@@ -2522,6 +2566,17 @@ export function Sidebar(props: SidebarProps) {
                   >
                     {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
                   </button>
+                  {contextMenuCanKeepAtTop ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => toggleKeepAtTopFromContextMenu(contextMenu.thread)}
+                    >
+                      {isKeptAtTopThread(contextMenu.thread)
+                        ? "Stop Keeping at Top"
+                        : "Keep at Top"}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               {contextMenuHasPinAction &&

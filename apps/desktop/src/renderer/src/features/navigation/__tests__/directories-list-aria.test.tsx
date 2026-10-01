@@ -108,8 +108,9 @@ describe("Directories lens thread list ARIA", () => {
     );
     // Pins and the ten unpinned roots have independent owner pages.
     expect(rows).toHaveLength(12);
-    // The sub-thread list, the pin-drop boundary, and the disclosure.
-    expect(nonRows).toHaveLength(3);
+    // The sub-thread list, the Keep at top seam, the pin-drop boundary, and
+    // the disclosure.
+    expect(nonRows).toHaveLength(4);
 
     // A bare <button> child has no explicit role but IS a button to axe, so
     // the role check above cannot see it. Assert both controls sit in a

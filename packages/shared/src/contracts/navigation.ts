@@ -2215,11 +2215,19 @@ export type SetThreadMonitorJobSuggestionsResponse = {
   monitorJobSuggestionsEnabled?: boolean;
 };
 
+/**
+ * Thread pins have two tiers: pins kept at top, then ordinary pins (see
+ * `isKeptAtTopRank`). A direction move stays inside the pin's tier. An anchor
+ * move adopts the anchor's tier. `keepAtTop` crosses tiers explicitly: `true`
+ * moves the pin to the bottom of the kept tier, `false` to the top of the
+ * ordinary pins.
+ */
 export type NavigationRelativePinMove = {
   key: string;
 } & (
-  | { direction: "up" | "down"; anchorKey?: never; placement?: never }
-  | { anchorKey: string; placement: "before" | "after"; direction?: never }
+  | { direction: "up" | "down"; anchorKey?: never; placement?: never; keepAtTop?: never }
+  | { anchorKey: string; placement: "before" | "after"; direction?: never; keepAtTop?: never }
+  | { keepAtTop: boolean; direction?: never; anchorKey?: never; placement?: never }
 );
 
 export type ReorderThreadPinsRequest = {

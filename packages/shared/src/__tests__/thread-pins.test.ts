@@ -3,9 +3,12 @@ import {
   buildAppendPinRank,
   buildPinnedRanks,
   buildPrependPinRank,
+  buildTierPinRanks,
   comparePinnedThreads,
   comparePinRanks,
   compareThreadsByCreatedAtDesc,
+  isKeptAtTopRank,
+  KEEP_AT_TOP_RANK_BOUNDARY,
   moveThreadKey,
 } from "../thread-pins";
 
@@ -22,6 +25,21 @@ describe("thread pins", () => {
     const ranks = ["-1024", "0", "1024"];
     const prepended = buildPrependPinRank(ranks);
     expect([...ranks, prepended].sort(comparePinRanks)[0]).toBe(prepended);
+  });
+
+  it("keeps the kept-at-top band ahead of new ordinary pins", () => {
+    const kept = buildTierPinRanks(["release"], true).release!;
+    expect(isKeptAtTopRank(kept)).toBe(true);
+    expect(isKeptAtTopRank(String(KEEP_AT_TOP_RANK_BOUNDARY))).toBe(false);
+    expect(isKeptAtTopRank("-1024")).toBe(false);
+    expect(isKeptAtTopRank(undefined)).toBe(false);
+    // A new thread pins at the top of the ordinary pins, never above a kept one.
+    const prepended = buildPrependPinRank([kept, "1024", "2048"]);
+    expect(prepended).toBe("0");
+    expect([prepended, "1024", kept].sort(comparePinRanks)).toEqual([kept, prepended, "1024"]);
+    expect(buildPrependPinRank([kept])).toBe("1024");
+    // Appending ignores the band too, so an ordinary pin never lands in it.
+    expect(buildAppendPinRank([kept])).toBe("1024");
   });
 
   it("builds stable spaced ranks for a complete pinned order", () => {

@@ -849,13 +849,13 @@ for (const theme of AUDIT_THEMES) {
           await expect(
             directoryRow.getByRole("button", { name: "Load more threads", exact: true }),
           ).toBeVisible();
-          // Independent owner pages admit ten unpinned roots and two pins. The pin-drop
-          // boundary and section disclosure are listitems; paging controls
-          // sit outside the list.
+          // Independent owner pages admit ten unpinned roots and two pins. The
+          // Keep at top seam, the pin-drop boundary, and the section
+          // disclosure are listitems; paging controls sit outside the list.
           //
           // Direct children: `getByRole` matches DESCENDANTS, so it would also
           // count a sub-thread list's own rows and read as fixture drift.
-          await expect(listItems(threads)).toHaveCount(14);
+          await expect(listItems(threads)).toHaveCount(15);
 
           await settle();
           await runAxe(app.window, "directories lens, expanded directory");
@@ -868,7 +868,7 @@ for (const theme of AUDIT_THEMES) {
           const lastRowKey = await lastRow.getAttribute("data-thread-pin-key");
           const before = await lastRow.boundingBox();
           await more.click();
-          await expect(listItems(threads)).toHaveCount(16);
+          await expect(listItems(threads)).toHaveCount(17);
           await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
           if (!before || !lastRowKey) throw new Error("Missing pagination scroll anchor");
           await expect.poll(async () => {
@@ -890,7 +890,7 @@ for (const theme of AUDIT_THEMES) {
           await menu.hover();
           await expect(unpinned).toHaveCount(12);
           await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
-          await expect(listItems(threads)).toHaveCount(16);
+          await expect(listItems(threads)).toHaveCount(17);
           await app.window.keyboard.press("Escape");
         });
 
