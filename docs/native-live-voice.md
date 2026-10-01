@@ -31,11 +31,20 @@ connection. No credentials, service URLs or direct service request API cross
 IPC. Audio travels on the negotiated peer. Text/status/error events use the
 Codex realtime notification fields. No code reads Codex-owned storage files.
 
-Idle threads are resumed with the existing PwrAgent dynamic tool catalog through
-the registry's tool-refresh admission path. Active coding threads retain their
+Idle threads are prepared with the existing PwrAgent dynamic tool catalog,
+current workspace/environment overrides, and selected model settings through
+the registry's tool-refresh admission path. Resume rejoining a loaded thread
+preserves its previous model and effort, so preparation also acknowledges
+`thread/settings/update` before realtime starts. A bounded runtime probe verified
+the loaded thread changed from its prior model/effort to the requested values.
+Environment override serialization is covered by protocol tests; live shell
+environment execution was not established by the bounded diagnostic probes.
+Active coding threads retain their
 current catalog and selected backend. Automatic Codex handoffs remain enabled.
 Voice leases prevent a managed-runtime update from restarting the backend while
-voice is live; queued typed input is released after catalog preparation. Existing
+voice is live; queued typed input is released after catalog preparation without
+removing a reservation owned by a coding start. Releasing the final voice lease
+wakes any deferred invalid-ID recovery. Existing
 thread/tool execution policies continue to apply. No new orchestration model,
 calendar, email or personal administration capability is introduced.
 
@@ -47,8 +56,13 @@ startup waits for the startup RPC to settle, then stops the accepted session
 before admitting a replacement. Failed stop RPCs retain ownership and offer a
 retry instead of allowing a potentially overlapping session.
 
-The browser owns tracks, remote playback, peer, ICE/connection timers and event
-subscriptions. Microphone capture begins only after the service accepts startup,
+The window owns the voice controller; composers subscribe to its state. A thread
+change or composer unmount stops local media immediately. If backend stop fails,
+the window retains the original session token and exposes **Stop voice** retry
+on the replacement composer, including a non-Codex thread, until stop is
+acknowledged. The window also observes page teardown independently of composer
+mounts. The browser owns tracks, remote playback, peer, ICE/connection timers and
+event subscriptions. Microphone capture begins only after the service accepts startup,
 emits `started`, and the peer connects. Stop, permission denial, late permission
 results, startup failure, connection loss, thread change and window teardown
 clean these resources. Main also watches navigation, renderer crashes, window
@@ -61,6 +75,10 @@ Speaking interrupts the negotiated voice conversation through its native audio
 path. There is no client-side `turn/interrupt` in voice teardown. Closing voice
 also disables transcript-tail task dispatch. Explicit task cancellation remains
 a separate composer action.
+
+Voice text uses a separate input and an explicit button rather than a nested
+form. Enter is consumed by that input, so sending voice text cannot submit an
+unsent coding draft or a configured review.
 
 Voice transcripts are bounded, memory-only UI state. They are cleared for the
 next session and are not added to PwrAgent persistence or federation traffic.

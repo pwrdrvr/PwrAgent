@@ -13041,8 +13041,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ) : null}
 
       </fieldset>
-      {nativeVoiceAvailable && props.thread && nativeVoiceApi ? (
-          <NativeVoice key={props.thread.id} api={nativeVoiceApi} threadId={props.thread.id} />
+      {nativeVoiceApi ? (
+          <NativeVoice api={nativeVoiceApi} threadId={nativeVoiceAvailable && props.thread ? props.thread.id : undefined} />
         ) : null}
       <div className="composer__footer">
         <fieldset

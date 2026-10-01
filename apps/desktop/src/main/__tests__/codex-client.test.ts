@@ -213,6 +213,7 @@ class MockTransport implements JsonRpcTransport {
   static threadResumeError:
     | { code?: number; message: string }
     | undefined = undefined;
+  static threadSettingsUpdateError: string | undefined;
 
   readonly sentMessages: string[] = [];
   mcpServerStatusResponse?: () => void;
@@ -1237,6 +1238,10 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/settings/update") {
+      if (MockTransport.threadSettingsUpdateError) {
+        this.messageHandler(JSON.stringify({ id: payload.id, error: { code: -32000, message: MockTransport.threadSettingsUpdateError } }));
+        return;
+      }
       const result: ThreadSettingsUpdateResponse = {};
       this.messageHandler(
         JSON.stringify({
@@ -1836,6 +1841,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
+    MockTransport.threadSettingsUpdateError = undefined;
   });
 
   it("passes hydrated env into dynamic launch args", async () => {
@@ -13710,6 +13716,43 @@ describe("CodexAppServerClient", () => {
       expect(resume.params).not.toHaveProperty("baseInstructions");
       expect(resume.params).not.toHaveProperty("developerInstructions");
       expect(requests.some((request) => request.method === "turn/start")).toBe(false);
+    } finally { await client.close(); }
+  });
+
+  it("updates loaded voice thread settings and resumes environment overrides without inference", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await client.refreshThreadTools({
+        threadId: "sample-voice-thread", dynamicTools: [], model: "sample-model", reasoningEffort: "high",
+        cwd: "/sample/project", serviceTier: "flex", approvalPolicy: "on-request", sandbox: "workspace-write",
+        codexEnvironmentRuntime: { environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local", cwd: "/sample/project", shellEnvironment: { SAMPLE_TOOLCHAIN: "enabled" } },
+      });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.find((request) => request.method === "thread/resume").params).toMatchObject({
+        threadId: "sample-voice-thread", dynamicTools: [], model: "sample-model", cwd: "/sample/project", serviceTier: "flex",
+        approvalPolicy: "on-request", sandbox: "workspace-write",
+        config: { "shell_environment_policy.set.SAMPLE_TOOLCHAIN": "enabled" },
+      });
+      const settings = requests.find((request) => request.method === "thread/settings/update");
+      expect(settings.params).toMatchObject({
+        threadId: "sample-voice-thread", model: "sample-model", effort: "high", cwd: "/sample/project", serviceTier: "flex",
+        approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite" },
+      });
+      expect(requests.indexOf(settings)).toBeGreaterThan(requests.findIndex((request) => request.method === "thread/resume"));
+      expect(requests.some((request) => request.method === "turn/start")).toBe(false);
+    } finally { await client.close(); }
+  });
+
+  it("rejects voice preparation when live thread settings cannot be applied", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    MockTransport.threadSettingsUpdateError = "Sample settings rejected.";
+    try {
+      await expect(client.refreshThreadTools({ threadId: "sample-voice-thread", dynamicTools: [], model: "sample-model", reasoningEffort: "high" }))
+        .rejects.toThrow("Sample settings rejected.");
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "thread/realtime/start" || request.method === "turn/start")).toBe(false);
     } finally { await client.close(); }
   });
 

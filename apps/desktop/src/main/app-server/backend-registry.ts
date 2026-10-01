@@ -917,10 +917,7 @@ type BackendClient = {
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
-  refreshThreadTools?(params: {
-    threadId: string;
-    dynamicTools: CodexDynamicToolSpec[];
-  }): Promise<void>;
+  refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
@@ -30634,8 +30631,9 @@ export class DesktopBackendRegistry {
   }
 
   async acquireNativeVoiceBackend(threadId: string): Promise<NativeVoiceBackend> {
+    await this.withCodexEnvironmentRuntimeLock("codex", threadId, async () => {});
     return await this.serializeCodexAgentChange(threadId, async () => {
-      return await this.withActiveCodexThreadClient(threadId, async (client) => {
+      return await this.withActiveCodexThreadClient(threadId, async (client, mode) => {
         const capability = await this.nativeVoiceCapability();
         if (!capability.available) throw new Error(capability.reason);
         if (!client.startRealtime || !client.stopRealtime || !client.appendRealtimeText
@@ -30646,12 +30644,29 @@ export class DesktopBackendRegistry {
         // An idle thread must be resumed with the current PwrAgent tools before
         // realtime can delegate to it. This uses the existing admission path.
         const running = this.threadHasActiveTurn(threadId);
-        this.reservedCodexStartThreadIds.add(threadId);
+        const ownsReservation = !this.reservedCodexStartThreadIds.has(threadId);
+        if (ownsReservation) this.reservedCodexStartThreadIds.add(threadId);
         try {
           if (!running) {
             const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
             const dynamicTools = await this.requireCodexAgentRefreshTools(client, overlay);
-            await client.refreshThreadTools!({ threadId, dynamicTools });
+            const cwd = await this.resolveThreadEnvironmentCwd("codex", threadId, overlay);
+            const settings = await this.resolveModelSettings("codex", {
+              model: overlay?.model,
+              reasoningEffort: overlay?.reasoningEffort,
+              serviceTier: overlay?.serviceTier,
+              fastMode: overlay?.fastMode,
+            });
+            const modeSettings = EXECUTION_MODE_SUMMARIES[mode];
+            await client.refreshThreadTools!({
+              threadId, dynamicTools, ...settings,
+              ...(cwd ? { cwd } : {}),
+              codexEnvironmentRuntime: overlay?.codexEnvironmentRuntime,
+              approvalPolicy: modeSettings.approvalPolicy,
+              approvalsReviewer: modeSettings.approvalsReviewer,
+              sandbox: modeSettings.sandbox,
+              defaultModeRequestUserInput: this.resolveCodexDefaultModeRequestUserInputFn(),
+            });
           }
           this.nativeVoiceLeases += 1;
           let released = false;
@@ -30665,11 +30680,13 @@ export class DesktopBackendRegistry {
               if (released) return;
               released = true;
               this.nativeVoiceLeases -= 1;
+              if (this.nativeVoiceLeases === 0) this.maybeDrainCodexInvalidIdRecoveries();
             },
           };
         } finally {
-          this.reservedCodexStartThreadIds.delete(threadId);
-          if (!this.threadHasActiveTurn(threadId)
+          if (ownsReservation) this.reservedCodexStartThreadIds.delete(threadId);
+          this.maybeDrainCodexInvalidIdRecoveries();
+          if (ownsReservation && !this.threadHasActiveTurn(threadId)
             && this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0) {
             void this.threadTurnQueue.releaseThread({ backend: "codex", threadId, status: "voice_catalog_ready" });
           }

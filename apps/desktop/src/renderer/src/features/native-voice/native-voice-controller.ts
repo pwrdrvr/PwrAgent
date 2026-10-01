@@ -29,20 +29,30 @@ const browser: VoiceBrowser = {
   id: () => crypto.randomUUID(),
 };
 
-/** Owns every track, peer, audio element and listener for one composer. */
+/** Owns every track, peer, audio element and listener for one window. */
 export class NativeVoiceController {
   private resources?: Resources;
   private view: VoiceView = { status: "idle", transcript: [] };
   private partialRole?: string;
+  private readonly listeners = new Set<(view: VoiceView) => void>();
   constructor(
     private readonly api: NativeVoiceApi,
-    private readonly update: (view: VoiceView) => void,
+    private readonly update: (view: VoiceView) => void = () => {},
     private readonly platform: VoiceBrowser = browser,
   ) {}
+
+  getView(): VoiceView { return this.view; }
+  hasSession(): boolean { return this.resources !== undefined; }
+  subscribe(listener: (view: VoiceView) => void): () => void {
+    this.listeners.add(listener);
+    listener(this.view);
+    return () => { this.listeners.delete(listener); };
+  }
 
   private publish(change: Partial<VoiceView>): void {
     this.view = { ...this.view, ...change };
     this.update(this.view);
+    for (const listener of this.listeners) listener(this.view);
   }
   private current(resources: Resources): boolean {
     return this.resources === resources && !resources.cancelled;
@@ -219,4 +229,20 @@ export class NativeVoiceController {
     try { await this.api.sendNativeVoiceText({ sessionId: resources.id, text }); }
     catch (error) { this.fail(resources, error); }
   }
+}
+
+// This module is window-local. Keep the session token after a composer unmount
+// until main acknowledges stop, even if the next composer receives a new API
+// wrapper. No microphone or backend session is created by acquiring this owner.
+let windowController: NativeVoiceController | undefined;
+let windowApi: NativeVoiceApi | undefined;
+export function getWindowNativeVoiceController(api: NativeVoiceApi): NativeVoiceController {
+  if (!windowController) {
+    window.addEventListener("pagehide", () => { void windowController?.stop(); });
+  }
+  if (!windowController || (windowApi !== api && !windowController.hasSession())) {
+    windowController = new NativeVoiceController(api);
+    windowApi = api;
+  }
+  return windowController;
 }

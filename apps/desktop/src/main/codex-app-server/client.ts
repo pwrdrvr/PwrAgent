@@ -9463,8 +9463,7 @@ export class CodexAppServerClient {
    * Refresh the catalog without starting inference. The registry negotiates
    * dynamicToolsResumeField and reserves the idle thread before calling this.
    */
-  async refreshThreadTools(params: {
-    threadId: string;
+  async refreshThreadTools(params: Parameters<typeof buildThreadResumePayloads>[0] & {
     dynamicTools: CodexDynamicToolSpec[];
   }): Promise<void> {
     await this.ensureInitialized();
@@ -9478,12 +9477,29 @@ export class CodexAppServerClient {
     if (readThreadStatus(current) === "active") {
       throw new Error("Wait for the current turn to finish or stop it, then change Agent thread status.");
     }
+    const [resumePayload] = buildThreadResumePayloads({
+      ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+    }, this.getProtocolCompatibility());
     await requestWithFallbacks({
       client: connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads(params, this.getProtocolCompatibility()),
+      payloads: [resumePayload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
+    // Rejoining a loaded thread preserves its model/effort. Automatic voice
+    // handoffs have no turn/start settings override, so update the live thread
+    // explicitly and await acknowledgement before admitting realtime.
+    const settings = buildThreadSettingsUpdatePayload(params);
+    if (settings || params.approvalPolicy || params.approvalsReviewer || params.sandbox) {
+      const payload: CodexThreadSettingsUpdateParams = {
+        ...settings, threadId: params.threadId,
+        approvalPolicy: resumePayload.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
+        approvalsReviewer: resumePayload.approvalsReviewer,
+        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+      };
+      await connection.request("thread/settings/update", payload,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    }
   }
 
   async injectThreadItems(params: {
