@@ -426,6 +426,8 @@ import type {
   SetCelestialIconResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
+  WatchFederatedDirectorySetRequest,
+  WatchFederatedDirectorySetResponse,
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
@@ -700,6 +702,7 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
+  FEDERATION_WATCH_DIRECTORY_SET_CHANNEL,
   STAR_MAP_COMMAND_CHANNEL,
   STAR_MAP_COMMAND_RESULT_CHANNEL,
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
@@ -1399,6 +1402,10 @@ const desktopApi = Object.freeze({
     request: SetFederationEventSubscriptionsRequest,
   ): Promise<SetFederationEventSubscriptionsResponse> =>
     await ipcRenderer.invoke(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL, request),
+  watchFederatedDirectorySet: async (
+    request: WatchFederatedDirectorySetRequest,
+  ): Promise<WatchFederatedDirectorySetResponse> =>
+    await ipcRenderer.invoke(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL, request),
   readStarMapArrangement: async (): Promise<ReadStarMapArrangementResponse> =>
     await ipcRenderer.invoke(STAR_MAP_READ_ARRANGEMENT_CHANNEL),
   setStarMapCardPosition: async (

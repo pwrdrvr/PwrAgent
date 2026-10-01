@@ -40,6 +40,8 @@ const PEERS = ["studio", "tower", "laptop"] as const;
 function federatedPeers(initial: Record<string, NavigationDirectorySummary[]>) {
   const directoriesByPeer = new Map(Object.entries(initial));
   const loadingPeers = new Set<string>();
+  /** Main's directory-set watch generation per peer; absent means unwatched. */
+  const watchGenerations = new Map<string, number>();
   const indexReads: string[] = [];
   const listeners = new Set<(event: AgentEvent) => void>();
   const snapshot = (target?: FederationRemoteTarget): NavigationSnapshot => ({
@@ -69,6 +71,10 @@ function federatedPeers(initial: Record<string, NavigationDirectorySummary[]>) {
       request?.federationTarget?.scope === "remote" ? request.federationTarget : undefined,
     ),
     getNavigationQueryPage,
+    watchFederatedDirectorySet: async ({ instanceId }) => {
+      const generation = watchGenerations.get(instanceId);
+      return { watch: generation === undefined ? null : { generation } };
+    },
     onAgentEvent: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -79,6 +85,7 @@ function federatedPeers(initial: Record<string, NavigationDirectorySummary[]>) {
     directoriesByPeer,
     ensureDirectoryLaunchpad,
     loadingPeers,
+    watchGenerations,
     emit: (instanceId: string, method: string, params: Record<string, unknown> = {}) => {
       const event = {
         backend: "codex", federationTarget: remote(instanceId), notification: { method, params },
@@ -186,6 +193,69 @@ describe("project-aware machine menus: directory-index reads", () => {
       "open after a directory removal": ["tower"],
       // The removal left the tower without the project, so it is asked again.
       "open after turn activity": ["tower"],
+    });
+  });
+
+  it("trusts absence from a peer that announces its directory set", async () => {
+    const peers = federatedPeers({
+      studio: [workspace, projectOn("studio")],
+      tower: [workspace],
+      laptop: [workspace],
+    });
+    // The tower and the laptop announce; the studio is an older build.
+    peers.watchGenerations.set("tower", 1);
+    peers.watchGenerations.set("laptop", 1);
+    const { result } = renderHook(() => useThreadNavigation(peers.desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    peers.takeIndexReads();
+    const reads: Record<string, string[]> = {};
+    const step = (name: string) => {
+      reads[name] = peers.takeIndexReads().sort();
+    };
+    const openMenu = async (): Promise<boolean[]> => {
+      let states: boolean[] = [];
+      await act(async () => {
+        states = await Promise.all(PEERS.map((instanceId) =>
+          result.current.federatedTargetHasProject(remote(instanceId), localProject)));
+      });
+      return states;
+    };
+
+    expect(await openMenu()).toEqual([true, false, false]);
+    step("first open");
+    expect(await openMenu()).toEqual([true, false, false]);
+    step("reopen");
+
+    // The laptop adds the project and announces it.
+    peers.directoriesByPeer.set("laptop", [workspace, projectOn("laptop")]);
+    peers.watchGenerations.set("laptop", 2);
+    expect(await openMenu()).toEqual([true, false, true]);
+    step("open after an announced change");
+
+    // The tower's watch lapses (reconnect, re-sent subscription): unknown again.
+    peers.watchGenerations.delete("tower");
+    expect(await openMenu()).toEqual([true, false, true]);
+    step("open while the tower's watch is not acknowledged");
+    peers.watchGenerations.set("tower", 5);
+    expect(await openMenu()).toEqual([true, false, true]);
+    step("open after the tower acknowledges");
+    expect(await openMenu()).toEqual([true, false, true]);
+    step("open, all known");
+
+    // Choosing a machine still reads the owner afresh.
+    await act(async () => {
+      await result.current.openFederatedProjectLaunchpad(remote("laptop"), localProject, "Laptop");
+    });
+    step("sidebar selection");
+
+    expect(reads).toEqual({
+      "first open": ["laptop", "studio", "tower"],
+      "reopen": [],
+      "open after an announced change": ["laptop"],
+      "open while the tower's watch is not acknowledged": ["tower"],
+      "open after the tower acknowledges": ["tower"],
+      "open, all known": [],
+      "sidebar selection": ["laptop"],
     });
   });
 

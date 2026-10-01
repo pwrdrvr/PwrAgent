@@ -19,18 +19,26 @@ export type FederatedDirectoryIndexRead = {
   instanceId: string;
   epoch: number;
   sequence: number;
+  /** The owner's directory-set watch generation when the read began. */
+  watchGeneration?: number;
 };
+
+/** The peer's current watch generation; undefined while nothing watches it. */
+export type FederatedDirectorySetWatch = () => Promise<number | undefined>;
 
 /**
  * Each peer's directory index as this window last read it, kept only to
  * answer "does this machine have the project?" in the machine menus.
  *
- * A cached index proves presence, never absence. Registering a launchpad on
- * the owner publishes no event, and a viewer hears a peer's navigation
- * events only while it holds a subscription to them, so nothing here can
- * show that a project is still missing. A cached "present" can be stale; the
- * open after a machine is chosen reads the owner again and reports a real
- * miss, the same as a failed check does.
+ * A cached index proves presence. It proves absence only for an owner that
+ * announces its directory-set changes (`navigation_directory_set_events`),
+ * and only while the main process's watch generation for that owner is the
+ * one the index was read under: the generation moves on every announced
+ * change, peer status change and re-sent subscription. Any other owner is
+ * re-read to answer "missing", because nothing else can show that a
+ * project is still missing. A cached "present" can be stale; the open after a
+ * machine is chosen reads the owner again and reports a real miss, the same
+ * as a failed check does.
  *
  * An index is dropped when the peer's connection status or event stream
  * changes, and on any peer event that can change its directory set. Only a
@@ -41,19 +49,22 @@ export class FederatedDirectoryIndexCache {
   private readonly entries = new Map<string, {
     directories: FederatedDirectoryIdentity[];
     sequence: number;
+    watchGeneration?: number;
   }>();
   private readonly epochs = new Map<string, number>();
   private readonly loads = new Map<string, {
     epoch: number;
+    watchGeneration?: number;
     promise: Promise<readonly FederatedDirectoryIdentity[]>;
   }>();
   private nextSequence = 0;
 
-  begin(instanceId: string): FederatedDirectoryIndexRead {
+  begin(instanceId: string, watchGeneration?: number): FederatedDirectoryIndexRead {
     return {
       instanceId,
       epoch: this.epochs.get(instanceId) ?? 0,
       sequence: ++this.nextSequence,
+      ...(watchGeneration !== undefined ? { watchGeneration } : {}),
     };
   }
 
@@ -86,27 +97,39 @@ export class FederatedDirectoryIndexCache {
           : {}),
       })),
       sequence: read.sequence,
+      ...(read.watchGeneration !== undefined ? { watchGeneration: read.watchGeneration } : {}),
     });
   }
 
   /**
    * Whether the peer has the project. `read` returns the owner's complete
-   * index. Overlapping checks of one peer share a read, unless the peer
-   * changed after it began.
+   * index; `watch` reports the owner's directory-set watch generation.
+   * Overlapping checks of one peer share a read, unless the peer changed
+   * after it began.
    */
   async hasProject(
     instanceId: string,
     project: ProjectIdentity,
     read: (indexRead: FederatedDirectoryIndexRead) => Promise<readonly FederatedDirectoryIdentity[]>,
+    watch?: FederatedDirectorySetWatch,
   ): Promise<boolean> {
     const cached = this.entries.get(instanceId);
     if (cached && findPeerCounterpartDirectory(project, cached.directories)) {
       return true;
     }
+    const watchGeneration = watch ? await watch().catch(() => undefined) : undefined;
+    const current = this.entries.get(instanceId);
+    if (
+      current
+      && watchGeneration !== undefined
+      && current.watchGeneration === watchGeneration
+    ) {
+      return Boolean(findPeerCounterpartDirectory(project, current.directories));
+    }
     const epoch = this.epochs.get(instanceId) ?? 0;
     let load = this.loads.get(instanceId);
-    if (!load || load.epoch !== epoch) {
-      const indexRead = this.begin(instanceId);
+    if (!load || load.epoch !== epoch || load.watchGeneration !== watchGeneration) {
+      const indexRead = this.begin(instanceId, watchGeneration);
       const promise = read(indexRead).then((directories) => {
         this.record(indexRead, directories);
         return directories;
@@ -115,7 +138,7 @@ export class FederatedDirectoryIndexCache {
           this.loads.delete(instanceId);
         }
       });
-      load = { epoch, promise };
+      load = { epoch, watchGeneration, promise };
       this.loads.set(instanceId, load);
     }
     return Boolean(findPeerCounterpartDirectory(project, await load.promise));

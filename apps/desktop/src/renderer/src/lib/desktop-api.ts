@@ -206,6 +206,8 @@ import type {
   SetCelestialIconResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
+  WatchFederatedDirectorySetRequest,
+  WatchFederatedDirectorySetResponse,
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
@@ -780,6 +782,10 @@ export type DesktopApi = {
   setFederationEventSubscriptions?: (
     request: SetFederationEventSubscriptionsRequest,
   ) => Promise<SetFederationEventSubscriptionsResponse>;
+  /** See `WatchFederatedDirectorySetResponse`. */
+  watchFederatedDirectorySet?: (
+    request: WatchFederatedDirectorySetRequest,
+  ) => Promise<WatchFederatedDirectorySetResponse>;
   readStarMapArrangement?: () => Promise<ReadStarMapArrangementResponse>;
   setStarMapCardPosition?: (
     request: SetStarMapCardPositionRequest,

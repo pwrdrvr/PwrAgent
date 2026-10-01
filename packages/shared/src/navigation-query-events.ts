@@ -1,3 +1,12 @@
+/**
+ * An owner's directory identity set (key, kind, label, path, origin and
+ * availability) changed, or a viewer just subscribed to the `directory_set`
+ * event class (`reason: "subscribed"`), which acknowledges the watch. Only an
+ * owner advertising `navigation_directory_set_events` sends it, and only to
+ * `directory_set` subscribers. It carries no rows.
+ */
+export const NAVIGATION_DIRECTORY_SET_CHANGED_METHOD = "navigation/directorySet/changed";
+
 const ROW_CHANGE_METHODS = new Set([
   "navigation/invalidated", "federation/eventStream/changed",
   "thread/started", "thread/archived", "thread/unarchived", "thread/status/changed",

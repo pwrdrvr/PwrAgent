@@ -1849,6 +1849,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   // Transport negotiation is informational, not a remote action.
   transport_brotli: "",
   shutdown_notice: "receive shutdown notices",
+  navigation_directory_set_events: "announce directory changes",
 };
 
 function formatFederationCapabilities(

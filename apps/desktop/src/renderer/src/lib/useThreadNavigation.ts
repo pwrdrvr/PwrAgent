@@ -6123,6 +6123,7 @@ export function useThreadNavigation(
       // The whole index, not a label filter: the origin match is what lets
       // "PwrAgnt" here find "PwrAgent" there, and a name filter would drop it
       // before the comparison ever ran. One index answers every project.
+      const watchDirectorySet = desktopApi.watchFederatedDirectorySet;
       return federatedDirectoryIndexes.hasProject(
         target.instanceId,
         localDirectory,
@@ -6130,6 +6131,9 @@ export function useThreadNavigation(
           target,
           `project-target:${attentionViewId}:${target.instanceId}:${indexRead.sequence}`,
         ),
+        watchDirectorySet
+          ? async () => (await watchDirectorySet({ instanceId: target.instanceId })).watch?.generation
+          : undefined,
       );
     },
     [attentionViewId, desktopApi, federatedDirectoryIndexes, readOwnerDirectoryIndex],

@@ -88,6 +88,37 @@ describe("FederatedDirectoryIndexCache", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it("answers absence from a watched index only under the generation it was read in", async () => {
+    const cache = new FederatedDirectoryIndexCache();
+    const read = vi.fn().mockResolvedValue(withoutProject);
+    let generation: number | undefined = 3;
+    const watch = vi.fn(async () => generation);
+
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(false);
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    generation = 4;
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    generation = undefined;
+    await expect(cache.hasProject("studio", project, read, watch)).resolves.toBe(false);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not trust absence from an index read outside a watch", async () => {
+    const cache = new FederatedDirectoryIndexCache();
+    cache.record(cache.begin("studio"), withoutProject);
+    const read = vi.fn().mockResolvedValue(withoutProject);
+
+    await expect(cache.hasProject("studio", project, read, async () => 1)).resolves.toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    await expect(cache.hasProject("studio", project, read, () => Promise.reject(new Error("no bridge"))))
+      .resolves.toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps nothing from a failed read", async () => {
     const cache = new FederatedDirectoryIndexCache();
     const read = vi.fn()

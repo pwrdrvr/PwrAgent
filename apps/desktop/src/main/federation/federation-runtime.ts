@@ -10,6 +10,7 @@ import {
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
 import { FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
+import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
 import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -258,7 +259,10 @@ import {
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
-import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import {
+  getNavigationDirectorySetAnnouncer,
+  loadLocalNavigationQueryIndex,
+} from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   FederationReplacementReceiver,
@@ -522,10 +526,13 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // Signed transport negotiation; not a user-authorized remote action.
   "transport_brotli",
   "shutdown_notice",
+  "navigation_directory_set_events",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
   "remote-thread-summary-cache";
+/** This viewer's `directory_set` subscriptions, one per watched peer. */
+const DIRECTORY_SET_EVENT_CONSUMER_ID = "directory-set-watch";
 
 type FederationCelestialIconsNotification = {
   method: typeof FEDERATION_CELESTIAL_ICONS_METHOD;
@@ -660,6 +667,9 @@ export function federationEventClassForMethod(
   }
   if (method === "navigation/invalidated") {
     return "navigation";
+  }
+  if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
+    return "directory_set";
   }
   // Fail closed: newly introduced notification methods do not reach
   // navigation-only or Star Map subscribers until explicitly classified.
@@ -840,6 +850,8 @@ export function eventMatchesThreadSelection(
   selection: FederationThreadSelection,
 ): boolean {
   if (selection.kind === "all") return true;
+  // A directory set belongs to the owner, never to one thread.
+  if (eventClass === "directory_set") return true;
   // Private execution threads do not appear in navigation. Failure notices
   // name their visible owner separately, so subscribers of that owner still
   // need the terminal event while unrelated sparse subscribers do not.
@@ -896,6 +908,8 @@ function eventClassAllowedByCapabilities(
       return capabilities.includes("pending_request_control");
     case "scheduled_actions":
       return capabilities.includes("scheduled_actions");
+    case "directory_set":
+      return capabilities.includes("thread_navigation");
   }
 }
 
@@ -980,6 +994,15 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     IncomingEventSubscription
   >();
+  /**
+   * Peers whose directory sets this viewer watches. `live` means the owner
+   * acknowledged the current subscription; `generation` moves whenever what
+   * the viewer may assume about that peer's directory set changes.
+   */
+  private readonly directorySetWatches = new Map<
+    FederationInstanceId,
+    { generation: number; live: boolean }
+  >();
   private readonly sentNavigationSubscriptions = new Set<FederationInstanceId>();
   private readonly desiredEventStreamIds = new Map<FederationInstanceId, string>();
   private readonly receivedEventStreams = new Map<FederationInstanceId, {
@@ -1043,6 +1066,55 @@ export class DesktopFederationRuntime {
     return () => {
       this.remoteBackendEventListeners.delete(listener);
     };
+  }
+
+  /**
+   * Watch a peer's directory set. Returns the watch generation once the owner
+   * has acknowledged the watch, else undefined. An index read that began
+   * under a generation still reflects the owner's directory set while the
+   * generation is unchanged: it moves on every announced change, peer status
+   * change and re-sent subscription. An owner without
+   * `navigation_directory_set_events` is never watched.
+   */
+  watchRemoteDirectorySet(instanceId: FederationInstanceId): { generation: number } | undefined {
+    if (!isFederationInstanceId(instanceId)) {
+      return undefined;
+    }
+    const target = { scope: "remote", instanceId } as const;
+    const peer = this.connectedPeerTargets().find((candidate) => candidate.target.instanceId === instanceId);
+    if (
+      !peer
+      || !this.remoteTargetSupportsCapability(target, "navigation_directory_set_events")
+      || !this.remoteTargetSupportsCapability(target, "event_subscriptions")
+    ) {
+      return undefined;
+    }
+    let watch = this.directorySetWatches.get(instanceId);
+    if (!watch) {
+      watch = { generation: 0, live: false };
+      this.directorySetWatches.set(instanceId, watch);
+      this.setEventSubscriptions(
+        DIRECTORY_SET_EVENT_CONSUMER_ID,
+        [...this.directorySetWatches.keys()].map((sourceInstanceId) => ({
+          sourceInstanceId,
+          eventClasses: ["directory_set" as const],
+          // The class is threadless (`eventMatchesThreadSelection`). An empty
+          // selection leaves the merged legacy selection, which an older relay
+          // applies to every class, exactly as the other consumers made it.
+          threadSelection: { kind: "threads" as const, threads: [] },
+        })),
+      );
+    }
+    return watch.live ? { generation: watch.generation } : undefined;
+  }
+
+  /** Nothing read before this point may be trusted until the owner acknowledges again. */
+  private unacknowledgeDirectorySetWatch(instanceId: FederationInstanceId): void {
+    const watch = this.directorySetWatches.get(instanceId);
+    if (watch) {
+      watch.generation += 1;
+      watch.live = false;
+    }
   }
 
   setEventSubscriptions(
@@ -1310,7 +1382,12 @@ export class DesktopFederationRuntime {
     this.remotePeerDirectory.clear();
     this.publishedPeerStatuses.clear();
     this.incomingEventSubscriptions.clear();
+    this.syncDirectorySetWatchers();
     this.sentNavigationSubscriptions.clear();
+    // Desired subscriptions outlive a restart and are re-sent; so do watches.
+    for (const instanceId of this.directorySetWatches.keys()) {
+      this.unacknowledgeDirectorySetWatch(instanceId);
+    }
     this.desiredEventStreamIds.clear();
     this.receivedEventStreams.clear();
     this.relayedEventSubscriptions.clear();
@@ -5001,6 +5078,7 @@ export class DesktopFederationRuntime {
   ): void {
     if (sourceInstanceId === this.ensureLocalInstanceId()) return;
     this.sentNavigationSubscriptions.delete(sourceInstanceId);
+    this.unacknowledgeDirectorySetWatch(sourceInstanceId);
     const supportsSelection = this.remotePeerSupportsThreadSelection(sourceInstanceId);
     const eventClassSelections = eventClassSelectionsForWire(subscription, supportsSelection);
     const subscriptionId = randomUUID();
@@ -5189,6 +5267,21 @@ export class DesktopFederationRuntime {
     ) {
       this.sendStarMapArrangementSnapshot(subscriberInstanceId, starMapBootstrap);
     }
+    this.syncDirectorySetWatchers();
+    const subscription = this.incomingEventSubscriptions.get(subscriberInstanceId);
+    if (subscription?.eventClasses.has("directory_set")) {
+      // Every subscription that carries the class, a replay included, is
+      // acknowledged after any stream acknowledgement. The viewer trusts
+      // nothing it read before this arrives: a relay that does not know the
+      // class drops it, and the watch then never goes live.
+      this.sendBackendEventToSubscriber(subscriberInstanceId, subscription, {
+        backend: "codex",
+        notification: {
+          method: NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+          params: { reason: "subscribed" },
+        },
+      });
+    }
     return true;
   }
 
@@ -5242,6 +5335,7 @@ export class DesktopFederationRuntime {
         this.incomingEventSubscriptions.delete(subscriberInstanceId);
       }
     }
+    this.syncDirectorySetWatchers();
     for (const [key, subscription] of this.relayedEventSubscriptions) {
       if (subscription.subscriberInstanceId === peerId) {
         this.sendRelayedEventSubscription(subscription, {
@@ -5323,6 +5417,7 @@ export class DesktopFederationRuntime {
       return;
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    this.unacknowledgeDirectorySetWatch(instanceId);
     // A connection transition changes whether cached remote rows are live.
     // Drop both the snapshot and any remembered refresh failure before the
     // renderer refreshes. Otherwise a fetch that races the disconnect can
@@ -5418,28 +5513,42 @@ export class DesktopFederationRuntime {
         continue;
       }
       federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
-      try {
-        const payload = subscription.stream
-          ? subscription.stream.accounting.encode(federatedEvent, {
-              epoch: subscription.stream.epoch,
-              sequence: ++subscription.stream.sequence,
-            })
-          : unsequencedFederationEventPayload(federatedEvent);
-        this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
-          id: `federation-event:${randomUUID()}`,
-          kind: "notification",
-          method: FEDERATION_BACKEND_EVENT_METHOD,
-          params: payload,
-          protocolVersion: FEDERATION_PROTOCOL_VERSION,
-          sourceInstanceId: ownerInstanceId,
-          targetInstanceId: subscriberInstanceId,
-          createdAt: Date.now(),
-        });
-      } catch {
-        // Connection teardown clears the subscription. A route that vanished
-        // between iteration and send simply misses this live notification.
-      }
+      this.sendBackendEventToSubscriber(subscriberInstanceId, subscription, federatedEvent);
     }
+  }
+
+  private sendBackendEventToSubscriber(
+    subscriberInstanceId: FederationInstanceId,
+    subscription: IncomingEventSubscription,
+    event: AgentEvent,
+  ): void {
+    try {
+      const payload = subscription.stream
+        ? subscription.stream.accounting.encode(event, {
+            epoch: subscription.stream.epoch,
+            sequence: ++subscription.stream.sequence,
+          })
+        : unsequencedFederationEventPayload(event);
+      this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
+        id: `federation-event:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: payload,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: subscriberInstanceId,
+        createdAt: Date.now(),
+      });
+    } catch {
+      // Connection teardown clears the subscription. A route that vanished
+      // between iteration and send simply misses this live notification.
+    }
+  }
+
+  /** Viewers watching this owner's directory set keep its announcer running. */
+  private syncDirectorySetWatchers(): void {
+    getNavigationDirectorySetAnnouncer().setWatched([...this.incomingEventSubscriptions.values()]
+      .some((subscription) => subscription.eventClasses.has("directory_set")));
   }
 
   private publishRemoteBackendEvent(
@@ -5539,6 +5648,16 @@ export class DesktopFederationRuntime {
     // Match retained demand directly; do not rebuild/sort the entire fleet's
     // aggregate selectors for every streamed item.
     if (!this.wantsRemoteEvent(sourceInstanceId, eventClass, event)) {
+      return true;
+    }
+    if (event.notification.method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
+      // Both an acknowledgement and an announced change prove the owner holds
+      // this viewer's watch; either one outdates every earlier read.
+      const watch = this.directorySetWatches.get(sourceInstanceId);
+      if (watch) {
+        watch.generation += 1;
+        watch.live = true;
+      }
       return true;
     }
     // Subscribed pin snapshots stay fresh through owner events, not a TTL.

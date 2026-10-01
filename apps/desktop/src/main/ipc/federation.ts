@@ -29,6 +29,8 @@ import type {
   SetCelestialIconResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
+  WatchFederatedDirectorySetRequest,
+  WatchFederatedDirectorySetResponse,
 } from "@pwragent/shared";
 import {
   isCelestialIconId,
@@ -54,6 +56,7 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
+  FEDERATION_WATCH_DIRECTORY_SET_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
 } from "../../shared/ipc";
@@ -150,7 +153,17 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL);
   ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
+  ipcMain.handle(
+    FEDERATION_WATCH_DIRECTORY_SET_CHANNEL,
+    async (
+      _event,
+      request: WatchFederatedDirectorySetRequest,
+    ): Promise<WatchFederatedDirectorySetResponse> => ({
+      watch: getDesktopFederationRuntime().watchRemoteDirectorySet(request?.instanceId) ?? null,
+    }),
+  );
   ipcMain.handle(
     FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
     async (
@@ -466,6 +479,7 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL);
   ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
   rendererSubscriptionCleanupIds.clear();
 }
