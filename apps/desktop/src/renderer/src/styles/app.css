@@ -4817,7 +4817,12 @@ a.button {
   );
 }
 
+/* The pointer-driven held card reads `--thread-row-drag-tilt` in its inline
+   transform (`createThreadRowPointerDragPreview`); the native drag image
+   sets no transform, so it stays square. Drop targets are hit-tested at the
+   pointer, never against this card's rect. */
 .thread-row.thread-row--drag-image {
+  --thread-row-drag-tilt: -1.2deg;
   position: fixed;
   top: 0;
   left: 0;
@@ -4828,6 +4833,12 @@ a.button {
     0 0 0 1px var(--surface-border-faint),
     0 18px 44px var(--shadow-tint-strong);
   pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-row.thread-row--drag-image {
+    --thread-row-drag-tilt: 0deg;
+  }
 }
 
 /* What a drop on the current target does, on the held card's top edge. The
