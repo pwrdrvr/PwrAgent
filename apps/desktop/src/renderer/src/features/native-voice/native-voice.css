@@ -206,12 +206,55 @@
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
 }
+/* The header holds only items of fixed width, so it fits the 300px minimum
+   in every state. The controls never yield. */
 .director-voice-panel__actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 2px;
   margin-left: auto;
+}
+.director-voice-panel__state {
+  display: flex;
+  flex: none;
+  min-width: 0;
+  min-height: 22px;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-muted);
+}
+.director-voice-panel__state-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-muted);
+}
+.director-voice-panel__state--live {
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+.director-voice-panel__state--live .director-voice-panel__state-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.director-voice-panel__state-label {
+  flex: none;
+  white-space: nowrap;
+}
+.director-voice-panel__state-sep {
+  flex: none;
+  color: var(--border-strong);
+}
+.director-voice-panel__state-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .director-voice-panel__focus {
   flex: none;

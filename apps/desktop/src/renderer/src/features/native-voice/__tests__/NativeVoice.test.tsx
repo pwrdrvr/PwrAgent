@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
@@ -321,6 +321,10 @@ it("keeps the director transcript after a muted session ends, until closed or st
     f.emit({ sessionId, type: "transcript", role: "user", text: "Which PRs are green?", done: true });
     f.emit({ sessionId, type: "transcript", role: "assistant", text: "Two sample PRs are green.", done: true });
     fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+    // The state has its own row, off the header with the controls.
+    const state = within(directorPanel()!).getByRole("status", { name: "Voice status" });
+    expect(state).toHaveTextContent("Muted·ends 30s after the reply");
+    expect(state.closest("header")).toBeNull();
     act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
     await act(async () => { await vi.runOnlyPendingTimersAsync(); });
   } finally {

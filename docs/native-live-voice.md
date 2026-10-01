@@ -96,11 +96,18 @@ and under the notice stack.
 
 The panel shows:
 
-- the live state;
+- a header with the title, the session clock, the microphone toggle, copy, and
+  **End director voice**, which ends the session and closes the panel;
+- the state on its own row: **Microphone live** with the level meter, **Muted ·
+  ends 30s after the reply**, or the connecting, ending, and ended states;
 - the thread or launchpad the window is looking at;
-- the session clock, the microphone toggle, copy, and **End director voice**,
-  which ends the session and closes the panel;
 - the transcript with its receipts, and **Message voice**.
+
+The header holds only items whose width does not change with the state, so it
+fits the panel's 300px minimum width in every state. The state labels differ
+widely in width; on the header row, the muted label wrapped the title and,
+below about 380px, pushed the controls off the panel. Only the muted detail
+yields, by ellipsis.
 
 The panel outlives a session that ends on its own: muted after its reply, closed
 by the service, or failed. It keeps the transcript and stops the clock at the

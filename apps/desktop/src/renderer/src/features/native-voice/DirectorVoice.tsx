@@ -20,14 +20,20 @@ import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
 } from "../thread-detail/questionnaire";
-import { getWindowNativeVoiceController, type NativeVoiceController, type VoiceView } from "./native-voice-controller";
+import {
+  getWindowNativeVoiceController,
+  MUTED_IDLE_END_MS,
+  type NativeVoiceController,
+  type VoiceView,
+} from "./native-voice-controller";
 import {
   isVoiceActive,
   useNativeVoice,
   VoiceElapsed,
   VoiceFeed,
+  VoiceLevelMeter,
   VoiceMicToggle,
-  VoiceStatus,
+  voiceStateLabel,
   VoiceTextInput,
 } from "./NativeVoice";
 
@@ -453,6 +459,43 @@ export function DirectorVoicePanel(props: DirectorVoicePanelProps) {
 
 type ShownDirectorVoice = { view: VoiceView; endedAt?: number };
 
+const MUTED_IDLE_END_SECONDS = Math.round(MUTED_IDLE_END_MS / 1000);
+
+/**
+ * The panel's state, on its own row under the header. The labels differ
+ * widely in width; on the header row the longest one squeezed the title
+ * and, at narrow widths, pushed the controls off the panel. Here only the
+ * muted consequence yields, by ellipsis.
+ */
+function DirectorVoiceState({ controller, ended, view }: {
+  controller: NativeVoiceController;
+  ended: boolean;
+  view: VoiceView;
+}) {
+  const live = !ended && view.status === "listening" && !view.muted;
+  const muted = !ended && view.status === "listening" && view.muted;
+  const label = ended
+    ? view.endedAfterReply ? "Ended after the reply" : "Voice ended"
+    : live ? "Microphone live" : muted ? "Muted" : voiceStateLabel(view);
+  return (
+    <p
+      className={live ? "director-voice-panel__state director-voice-panel__state--live" : "director-voice-panel__state"}
+      role="status"
+      aria-label="Voice status"
+    >
+      <span className="director-voice-panel__state-dot" aria-hidden="true" />
+      <span className="director-voice-panel__state-label">{label}</span>
+      {live ? <VoiceLevelMeter controller={controller} /> : null}
+      {muted ? (
+        <>
+          <span className="director-voice-panel__state-sep" aria-hidden="true">·</span>
+          <span className="director-voice-panel__state-detail">ends {MUTED_IDLE_END_SECONDS}s after the reply</span>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
 function OpenDirectorVoicePanel({
   api, controller, desktopApi, endedAt, focus, launchpad, onClose, onOpenThread, otherVoiceActive, threadId, view,
 }: DirectorVoicePanelProps & {
@@ -493,11 +536,6 @@ function OpenDirectorVoicePanel({
     >
       <header className="director-voice-panel__head" {...moveHandleProps}>
         <p className="director-voice-panel__title">Director voice</p>
-        {ended ? (
-          <span className="native-voice__status" role="status" aria-label="Voice status">
-            {view.endedAfterReply ? "Ended after the reply" : "Voice ended"}
-          </span>
-        ) : <VoiceStatus controller={controller} view={view} />}
         <VoiceElapsed since={view.liveSince} until={endedAt} />
         <div className="director-voice-panel__actions">
           {ended ? (
@@ -541,6 +579,7 @@ function OpenDirectorVoicePanel({
           </button>
         </div>
       </header>
+      <DirectorVoiceState controller={controller} ended={ended} view={view} />
       <p className="director-voice-panel__focus">{looking}</p>
       {request ? (
         <VoiceManagerRequestCard
