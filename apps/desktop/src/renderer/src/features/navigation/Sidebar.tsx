@@ -147,7 +147,8 @@ function useStableRowCallback<Args extends unknown[], Result>(
 }
 
 /**
- * Drop the hover freeze, then run a list-changing operation — with a
+ * Run a list-changing operation so its result shows under a resting pointer,
+ * and the hover freeze then holds that result — with a
  * permanently stable identity, because these reach memoized thread rows.
  *
  * The wrapped operation is a prop of this component and so is a new function
@@ -156,18 +157,18 @@ function useStableRowCallback<Args extends unknown[], Result>(
  *
  * Presence is decided here rather than by each call site: a caller that
  * forgot its own `props.onX ? … : undefined` would otherwise ship a handler
- * that releases the freeze and then throws on the user's first click.
+ * that reveals a result and then throws on the user's first click.
  */
-function useReleaseBeforeListChange<Args extends unknown[], Result>(
-  release: () => void,
+function useRevealListChange<Args extends unknown[], Result>(
+  reveal: <Revealed>(operation: () => Revealed) => Revealed,
   operation: (...args: Args) => Result,
 ): (...args: Args) => Result;
-function useReleaseBeforeListChange<Args extends unknown[], Result>(
-  release: () => void,
+function useRevealListChange<Args extends unknown[], Result>(
+  reveal: <Revealed>(operation: () => Revealed) => Revealed,
   operation: ((...args: Args) => Result) | undefined,
 ): ((...args: Args) => Result) | undefined;
-function useReleaseBeforeListChange<Args extends unknown[], Result>(
-  release: () => void,
+function useRevealListChange<Args extends unknown[], Result>(
+  reveal: <Revealed>(operation: () => Revealed) => Revealed,
   operation: ((...args: Args) => Result) | undefined,
 ): ((...args: Args) => Result) | undefined {
   const released = useEventCallback((...args: Args): Result => {
@@ -176,8 +177,7 @@ function useReleaseBeforeListChange<Args extends unknown[], Result>(
     if (!operation) {
       return undefined as Result;
     }
-    release();
-    return operation(...args);
+    return reveal(() => operation(...args));
   });
   return operation ? released : undefined;
 }
@@ -651,6 +651,13 @@ export function Sidebar(props: SidebarProps) {
         removeMissingThreads: props.browseMode === "attention",
       }),
     scope: props.browseMode,
+    // A pin or reorder settles with its pages invalidated; their re-read,
+    // not the command's reply, carries the new order. A failed read stays
+    // stale, so it counts as landed: waiting on it would leave the list
+    // following background updates under the pointer until it leaves.
+    outstandingReads: [...props.pagedNavigation?.resources.values() ?? []]
+      .filter((resource) => resource.state.stale && !resource.state.error)
+      .map((resource) => resource.id),
     value: {
       directories: props.directories,
       threads: props.threads,
@@ -683,47 +690,46 @@ export function Sidebar(props: SidebarProps) {
    * the operator chose must instead reveal its resulting snapshot immediately.
    */
   const releaseHoverStableSnapshot = hoverStableSnapshot.release;
-  const releasedOpenLaunchpad = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const revealHoverStableSnapshot = hoverStableSnapshot.reveal;
+  const releasedOpenLaunchpad = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onOpenLaunchpad,
   );
-  const releasedReorderDirectoryPins = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const releasedReorderDirectoryPins = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onReorderDirectoryPins,
   );
-  const releasedReorderThreadPins = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const releasedReorderThreadPins = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onReorderThreadPins,
   );
-  const releasedSetDirectoryPin = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const releasedSetDirectoryPin = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onSetDirectoryPin,
   );
-  const releasedSetDirectoryThreadsCollapsed = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const releasedSetDirectoryThreadsCollapsed = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onSetDirectoryThreadsCollapsed,
   );
-  const releasedSetSubthreadsCollapsed = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const releasedSetSubthreadsCollapsed = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onSetSubthreadsCollapsed,
   );
   // Directories is the only lens whose pin action reorders the list, so it is
-  // the only one that has to drop the freeze first. Elsewhere pins render in
+  // the only one that has to reveal the result. Elsewhere pins render in
   // place and the freeze must survive the write. One stable wrapper spanning
   // both, rather than a lens-dependent identity: a row's `memo` cannot bail
   // out past a handler that changes when the lens does.
   const setThreadPin = useStableRowCallback(
     props.onSetThreadPin
-      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
-          if (props.browseMode === "directories") {
-            releaseHoverStableSnapshot();
-          }
-          return props.onSetThreadPin!(thread, pinned);
-        }
+      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> =>
+          props.browseMode === "directories"
+            ? revealHoverStableSnapshot(() => props.onSetThreadPin!(thread, pinned))
+            : props.onSetThreadPin!(thread, pinned)
       : undefined,
   );
-  const releasedUpdateSubthreadOrder = useReleaseBeforeListChange(
-    releaseHoverStableSnapshot,
+  const releasedUpdateSubthreadOrder = useRevealListChange(
+    revealHoverStableSnapshot,
     props.onUpdateSubthreadOrder,
   );
   // The row callbacks this component only forwards. (`onDetachPullRequest`
