@@ -3,8 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, it, vi } from "vitest";
 import type { FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
-import { NativeVoiceBar, NativeVoiceToggle } from "../NativeVoice";
-import { OverseerVoiceHud, toggleOverseerVoice } from "../OverseerVoice";
+import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget } from "../NativeVoice";
+import { DirectorVoiceHud, toggleDirectorVoice } from "../DirectorVoice";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "../native-voice-controller";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
 
@@ -154,18 +154,18 @@ it("retains a failed stop across unmount and exposes retry on a non-Codex compos
   expect(vi.mocked(f.api.startNativeVoice).mock.calls[1][0].sessionId).not.toBe(sessionId);
 });
 
-it("keeps overseer voice through navigation and shows what its tools did", async () => {
+it("keeps director voice through navigation and shows what its tools did", async () => {
   const f = voiceFixture();
   const composer = render(<Composer api={f.api} threadId="sample-first-thread" />);
-  render(<OverseerVoiceHud api={f.api} focus={{ id: "sample-first-thread", source: "codex", title: "Sample first thread" }} />);
-  await act(async () => { await toggleOverseerVoice(f.api, f.owner); });
+  render(<DirectorVoiceHud api={f.api} focus={{ id: "sample-first-thread", source: "codex", title: "Sample first thread" }} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
-  expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-voice-manager", mode: "overseer" });
-  const hud = screen.getByRole("region", { name: "Overseer voice" });
+  expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-voice-manager", mode: "director" });
+  const hud = screen.getByRole("region", { name: "Director voice" });
   expect(hud).toHaveTextContent("Looking at Sample first thread");
 
   // The composer's toggle cannot start a second session, and leaving the
-  // thread does not end overseer voice.
+  // thread does not end director voice.
   expect(screen.getByRole("button", { name: "Voice" })).toHaveAttribute("aria-disabled", "true");
   fireEvent.click(screen.getByRole("button", { name: "Voice" }));
   composer.rerender(<Composer api={f.api} threadId="sample-second-thread" />);
@@ -182,16 +182,38 @@ it("keeps overseer voice through navigation and shows what its tools did", async
   expect(feed).toHaveTextContent("send_message_to_threadSample second threadqueued");
   expect(feed).toHaveTextContent("stop_threadfailed");
 
-  await act(async () => { await toggleOverseerVoice(f.api, f.owner); });
-  await waitFor(() => expect(screen.queryByRole("region", { name: "Overseer voice" })).not.toBeInTheDocument());
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Director voice" })).not.toBeInTheDocument());
 });
 
 it("reports a Voice manager that cannot be opened instead of starting voice", async () => {
   const f = voiceFixture();
   vi.mocked(f.api.openVoiceManager!).mockResolvedValueOnce({ status: "failed", error: "Sample manager failure." });
-  render(<OverseerVoiceHud api={f.api} />);
-  await act(async () => { await toggleOverseerVoice(f.api, f.owner); });
+  render(<DirectorVoiceHud api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   expect(screen.getByRole("alert")).toHaveTextContent("Sample manager failure.");
   expect(f.api.startNativeVoice).not.toHaveBeenCalled();
   expect(f.capture).not.toHaveBeenCalled();
+});
+
+// A peer's thread was the case that hid the mic without a word: live voice
+// runs on this machine's App Server, so the composer has to say so and point
+// at the voice that can reach it.
+it("explains why thread voice cannot open on a peer's or another provider's thread", async () => {
+  const peerThread = { id: "sample-peer", source: "codex", federation: { instanceLabel: "Sample Mac mini" } };
+  expect(threadVoiceTarget({ id: "sample-local", source: "codex" }, false)).toEqual({ threadId: "sample-local" });
+  expect(threadVoiceTarget({ id: "sample-local", source: "codex" }, true)).toEqual({});
+  expect(threadVoiceTarget(undefined, false)).toEqual({});
+  expect(threadVoiceTarget({ id: "sample-acp", source: "acp:grok" }, false).unavailableReason).toContain("Codex threads");
+  const peer = threadVoiceTarget(peerThread, false);
+  expect(peer.threadId).toBeUndefined();
+  expect(peer.unavailableReason).toContain("Sample Mac mini");
+
+  const { api } = voiceFixture();
+  render(<NativeVoiceToggle api={api} unavailableReason={peer.unavailableReason} />);
+  const toggle = screen.getByRole("button", { name: "Voice" });
+  expect(toggle).toHaveAttribute("aria-disabled", "true");
+  expect(toggle).toHaveAttribute("data-tooltip", expect.stringContaining("director voice"));
+  fireEvent.click(toggle);
+  expect(api.startNativeVoice).not.toHaveBeenCalled();
 });

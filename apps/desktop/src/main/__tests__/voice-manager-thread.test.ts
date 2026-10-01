@@ -1,4 +1,4 @@
-// Resolving the Voice manager thread overseer voice talks through. Like the
+// Resolving the Voice manager thread director voice talks through. Like the
 // Star Map manager, the quiet failures are a second manager on every start
 // and a reopened thread that is gone. Voice adds one: the thread must be
 // Codex, because live voice is a Codex App Server capability.
@@ -60,7 +60,12 @@ describe("Voice manager thread", () => {
     expect(f.renameThread).toHaveBeenCalledWith({ backend: "codex", threadId: "sample-made", name: VOICE_MANAGER_THREAD_TITLE });
     expect(f.setVoiceManagerThread).toHaveBeenCalledWith({ backend: "codex", threadId: "sample-made" });
     for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-      expect(await fs.readFile(path.join(workspace, name), "utf8")).toContain("search_threads");
+      const written = await fs.readFile(path.join(workspace, name), "utf8");
+      // The mic's hover card promises these: an attention summary across
+      // machines, and a new thread in a project on a named machine.
+      for (const tool of ["search_threads", "list_attention_threads", "list_instance_projects", "create_instance_thread"]) {
+        expect(written).toContain(tool);
+      }
     }
   });
 

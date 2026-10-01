@@ -12,36 +12,36 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { getWindowNativeVoiceController, type NativeVoiceController } from "./native-voice-controller";
 import { isVoiceActive, useNativeVoice, VoiceFeed, VoiceStatus, VoiceTextInput } from "./NativeVoice";
 
-export function overseerVoiceShortcutLabel(): string {
+export function directorVoiceShortcutLabel(): string {
   return formatPrimaryAccel("Space", { shift: true });
 }
 
 /** ⌘⇧Space on macOS, Ctrl+Shift+Space elsewhere. Live inside text fields: no editing binding uses it. */
-export function isOverseerVoiceShortcut(event: KeyboardEvent): boolean {
+export function isDirectorVoiceShortcut(event: KeyboardEvent): boolean {
   return event.code === "Space" && event.shiftKey && !event.altKey && isPlatformPrimaryAccel(event);
 }
 
 let pendingOpen: Promise<void> | undefined;
 
 /**
- * Start overseer voice on the Voice manager thread, or end it. Ending thread
+ * Start director voice on the Voice manager thread, or end it. Ending thread
  * voice is left to its own controls: the shortcut must not silently end a
  * conversation the operator started somewhere else.
  */
-export function toggleOverseerVoice(api: NativeVoiceApi, controller: NativeVoiceController): Promise<void> {
+export function toggleDirectorVoice(api: NativeVoiceApi, controller: NativeVoiceController): Promise<void> {
   const view = controller.getView();
   if (isVoiceActive(view)) {
-    return view.mode === "overseer" && view.status !== "stopping" ? controller.stop() : Promise.resolve();
+    return view.mode === "director" && view.status !== "stopping" ? controller.stop() : Promise.resolve();
   }
   if (pendingOpen) return pendingOpen;
   pendingOpen = (async () => {
     try {
       const opened = await api.openVoiceManager?.();
       if (!opened || opened.status === "failed") {
-        controller.reportError(opened?.error ?? "Overseer voice is not available in this window.", "overseer");
+        controller.reportError(opened?.error ?? "Director voice is not available in this window.", "director");
         return;
       }
-      await controller.start(opened.threadId, "overseer");
+      await controller.start(opened.threadId, "director");
     } finally {
       pendingOpen = undefined;
     }
@@ -50,18 +50,44 @@ export function toggleOverseerVoice(api: NativeVoiceApi, controller: NativeVoice
 }
 
 /** The masthead mic: the always-visible "voice is on" indicator, in every lens. */
-export function OverseerVoiceButton({ api }: { api: NativeVoiceApi }) {
+/**
+ * The mic's hover card: what director voice reaches and a few things to say,
+ * because a bare mic gives no hint that it can run the whole fleet.
+ */
+function DirectorVoiceCard({ live }: { live: boolean }) {
+  return (
+    <>
+      <span className="director-voice-card__header">
+        <span className="director-voice-card__title">{live ? "End director voice" : "Director voice"}</span>
+        <kbd className="director-voice-card__shortcut">{directorVoiceShortcutLabel()}</kbd>
+      </span>
+      <span className="director-voice-card__lede">
+        Talk to every thread, on this machine and each connected one.
+      </span>
+      <span className="director-voice-card__section">Try saying</span>
+      <ul className="director-voice-card__examples">
+        <li>“Summarize the threads that need my attention.”</li>
+        <li>“Start a thread on my Mac mini in the docs project to fix the broken links.”</li>
+        <li>“Tell this thread to rerun the failing tests.”</li>
+        <li>“What is the release thread on the studio machine doing?”</li>
+      </ul>
+    </>
+  );
+}
+
+export function DirectorVoiceButton({ api }: { api: NativeVoiceApi }) {
   const { controller, view } = useNativeVoice(api);
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const live = view.mode === "overseer" && isVoiceActive(view);
+  const tooltip = useViewportTooltip({ className: "director-voice-card" });
+  const live = view.mode === "director" && isVoiceActive(view);
   const elsewhere = isVoiceActive(view) && !live;
-  const label = elsewhere
-    ? "Voice is on in a thread. End it to start overseer voice."
-    : live ? `End overseer voice  (${overseerVoiceShortcutLabel()})` : `Overseer voice  (${overseerVoiceShortcutLabel()})`;
+  const content = elsewhere
+    ? <span className="director-voice-card__lede">Voice is on in a thread. End it to start director voice.</span>
+    : <DirectorVoiceCard live={live} />;
   return (
     <>
       <button
-        aria-label="Overseer voice"
+        aria-label="Director voice"
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-pressed={live}
         aria-disabled={elsewhere ? true : undefined}
         className={`sidebar__icon-button${live ? " is-active" : ""}`}
@@ -69,10 +95,10 @@ export function OverseerVoiceButton({ api }: { api: NativeVoiceApi }) {
         onBlur={tooltip.hide}
         onClick={() => {
           tooltip.hide();
-          if (!elsewhere) void toggleOverseerVoice(api, controller);
+          if (!elsewhere) void toggleDirectorVoice(api, controller);
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, label)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, label)}
+        onFocus={(event) => tooltip.show(event.currentTarget, content)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, content)}
         onMouseLeave={tooltip.hide}
       >
         <MicIcon size={16} aria-hidden="true" />
@@ -82,26 +108,26 @@ export function OverseerVoiceButton({ api }: { api: NativeVoiceApi }) {
   );
 }
 
-/** Registers the overseer shortcut for this window. */
-export function useOverseerVoiceShortcut(api: NativeVoiceApi | undefined): void {
+/** Registers the director shortcut for this window. */
+export function useDirectorVoiceShortcut(api: NativeVoiceApi | undefined): void {
   useEffect(() => {
     if (!api?.openVoiceManager) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || !isOverseerVoiceShortcut(event)) return;
+      if (event.defaultPrevented || event.repeat || !isDirectorVoiceShortcut(event)) return;
       event.preventDefault();
-      void toggleOverseerVoice(api, getWindowNativeVoiceController(api));
+      void toggleDirectorVoice(api, getWindowNativeVoiceController(api));
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [api]);
 }
 
-export type OverseerFocusThread = Pick<NavigationThreadSummary, "id" | "source" | "title" | "federation">;
+export type DirectorFocusThread = Pick<NavigationThreadSummary, "id" | "source" | "title" | "federation">;
 
 export function operatorFocusFor(params: {
   view: OperatorFocusView;
   lens?: string;
-  thread?: OverseerFocusThread;
+  thread?: DirectorFocusThread;
 }): OperatorFocusSnapshot {
   const thread = params.thread;
   const target = thread?.federation?.ref.target;
@@ -147,19 +173,19 @@ export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus
 }
 
 /**
- * Overseer voice, floating over the window while it runs. Stays put across
+ * Director voice, floating over the window while it runs. Stays put across
  * navigation; the context line names the thread "this" refers to.
  */
-export function OverseerVoiceHud({ api, focus }: { api: NativeVoiceApi; focus?: OverseerFocusThread }) {
+export function DirectorVoiceHud({ api, focus }: { api: NativeVoiceApi; focus?: DirectorFocusThread }) {
   const { controller, view } = useNativeVoice(api);
   const [collapsed, setCollapsed] = useState(false);
-  if (view.mode !== "overseer" || view.status === "idle") return null;
+  if (view.mode !== "director" || view.status === "idle") return null;
   const listening = view.status === "listening";
   return (
-    <section className="overseer-voice" aria-label="Overseer voice">
-      <div className="overseer-voice__top">
+    <section className="director-voice" aria-label="Director voice">
+      <div className="director-voice__top">
         <VoiceStatus controller={controller} view={view} />
-        <span className="overseer-voice__spacer" />
+        <span className="director-voice__spacer" />
         {listening ? (
           <button className="button button--ghost" type="button" aria-pressed={view.muted} onClick={() => controller.setMuted(!view.muted)}>
             {view.muted ? "Unmute" : "Mute"}
@@ -176,13 +202,13 @@ export function OverseerVoiceHud({ api, focus }: { api: NativeVoiceApi; focus?: 
           </button>
         )}
       </div>
-      {view.error ? <p className="native-voice__error overseer-voice__error" role="alert">{view.error}</p> : null}
+      {view.error ? <p className="native-voice__error director-voice__error" role="alert">{view.error}</p> : null}
       {collapsed ? null : (
         <>
-          <p className="overseer-voice__context">
+          <p className="director-voice__context">
             {focus ? (
-              <>Looking at <span className="overseer-voice__chip">{focus.title || "Untitled thread"}</span>
-                {focus.federation?.instanceLabel ? <> on <span className="overseer-voice__chip overseer-voice__chip--machine">{focus.federation.instanceLabel}</span></> : null}
+              <>Looking at <span className="director-voice__chip">{focus.title || "Untitled thread"}</span>
+                {focus.federation?.instanceLabel ? <> on <span className="director-voice__chip director-voice__chip--machine">{focus.federation.instanceLabel}</span></> : null}
               </>
             ) : "No thread selected"}
           </p>

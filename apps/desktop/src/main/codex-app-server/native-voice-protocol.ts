@@ -1,6 +1,7 @@
 import type { ServerNotification } from "@pwrdrvr/codex-app-server-protocol";
 import type { ThreadRealtimeStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { NativeVoiceAction } from "../../shared/native-voice";
+import { codexVersionFromUserAgent } from "./protocol-compatibility";
 
 export type NativeVoiceNotification = Extract<ServerNotification, {
   method: `thread/realtime/${string}`;
@@ -23,8 +24,15 @@ export type NativeVoiceBackend = {
   release: () => void;
 };
 
+/**
+ * Live voice needs Codex 0.159 or newer. The App Server's user agent leads
+ * with the CLIENT's name, then Codex's version (`pwragent-desktop/0.159.0-
+ * pwragent.1 ...`), so read the version the way the protocol gate does rather
+ * than looking for a "codex" token. A build suffix is the same upstream
+ * version and counts as it.
+ */
 export function supportsNativeVoice(userAgent?: string): boolean {
-  const match = userAgent?.match(/(?:^|\s)codex[^/\s]*\/(\d+)\.(\d+)\.(\d+)/i);
+  const match = codexVersionFromUserAgent(userAgent)?.match(/^(\d+)\.(\d+)\./);
   return Boolean(match && (Number(match[1]) > 0 || Number(match[2]) >= 159));
 }
 

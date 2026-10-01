@@ -68,11 +68,11 @@ describe("native voice IPC permission boundary", () => {
     await expect(mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender: { id: 78 } }, { threadId: "fixture", sessionId: "valid-session", sdp: "bad" })).rejects.toThrow("Invalid WebRTC");
   });
 
-  it("gives the overseer prompt only to the Voice manager thread", async () => {
-    const offer = { sessionId: "overseer-session", sdp: "v=0\r\nfixture", mode: "overseer" };
+  it("gives the director prompt only to the Voice manager thread", async () => {
+    const offer = { sessionId: "director-session", sdp: "v=0\r\nfixture", mode: "director" };
     await expect(mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender: { id: 79 } }, { ...offer, threadId: "sample-coding-thread" }))
       .rejects.toThrow("Voice manager thread");
-    await expect(mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender: { id: 79 } }, { ...offer, threadId: "sample-voice-manager", mode: "director" }))
+    await expect(mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender: { id: 79 } }, { ...offer, threadId: "sample-voice-manager", mode: "conductor" }))
       .rejects.toThrow("Invalid voice mode");
     expect(mocks.start).not.toHaveBeenCalledWith(expect.objectContaining({ threadId: "sample-coding-thread" }));
   });

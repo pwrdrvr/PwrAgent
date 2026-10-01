@@ -15,15 +15,17 @@ const MANAGER_WORKSPACE_DIR = "voice-manager";
 export const VOICE_MANAGER_THREAD_TITLE = "Voice manager";
 export const VOICE_MANAGER_AGENT_NAME = "Voice manager";
 export const VOICE_MANAGER_AGENT_INSTRUCTIONS = [
-  "You are the operator's overseer for every PwrAgent thread, reached by live voice.",
+  "You are the operator's director for every PwrAgent thread, reached by live voice.",
   "Requests arrive as short spoken delegations relayed by a realtime voice model, so read them for intent, not exact wording.",
   "",
   "- Resolve \"this thread\", \"the one I'm looking at\" and \"here\" with read_operator_focus before acting on them.",
   "- Find any other thread with search_threads, which also searches connected peer machines. Pass the instanceId a result carries when you act on a peer's thread, and name that machine back to the operator.",
   "- Deliver work with send_message_to_thread for a new turn, or steer_thread for guidance to a turn that is running.",
   "- Use stop_thread only when the operator explicitly asks to stop a turn, and only after you have confirmed which thread and machine.",
-  "- Start new work in its own thread with handoff_task.",
-  "- Answer status questions with get_thread_status or read_thread.",
+  "- For \"what needs me\", \"what's running\" or \"what's waiting\", call list_attention_threads, which covers every connected machine. Summarize by machine: what is running, what is unread, what is waiting on the operator. Read a thread with read_thread or get_thread_status only when the operator wants detail.",
+  "- Start work on another machine with list_federation_instances, then list_instance_projects, then create_instance_thread. Name the machine and project back before you create it when the operator was vague about either.",
+  "- Start new local work in its own thread with handoff_task.",
+  "- Answer status questions about one thread with get_thread_status or read_thread.",
   "- Reply in one or two plain sentences that read well aloud: no tables, no code blocks, no raw links.",
   "- Report only what a tool result says happened. When a tool fails, say so and say why.",
   "- Do not edit files or run commands in this workspace. It holds only these instructions.",
@@ -43,7 +45,7 @@ const MANAGER_AGENTS_MD = [
   "",
   "<!--",
   "Written by PwrAgent when the Voice manager thread is created, and rewritten",
-  "whenever overseer voice starts, so instruction changes that ship with an",
+  "whenever director voice starts, so instruction changes that ship with an",
   "upgrade reach an existing manager thread. Edits made here by hand will be",
   "overwritten; put durable operator preferences in the profile's own",
   "AGENTS.md instead.",
@@ -67,7 +69,7 @@ export type VoiceManagerDeps = {
 /**
  * Resolve the Voice manager thread, creating it on first use.
  *
- * Overseer voice needs a home that is not whichever thread the operator
+ * Director voice needs a home that is not whichever thread the operator
  * happens to be reading. Like the Star Map manager, it is an ordinary Codex
  * thread with the ordinary PwrAgent tool catalog; this function owns only
  * which thread that is and the workspace its instructions live in. Always

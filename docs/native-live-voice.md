@@ -17,27 +17,37 @@ its name on every thread.
 Leaving the thread ends its voice. A failed stop stays visible on the composer
 the window lands on, so **End voice** can be retried there.
 
-## Overseer voice
+Thread voice runs on this machine's Codex App Server. On a peer's thread, or a
+thread on another provider, the toggle stays visible but disabled, and its
+tooltip points to director voice, which can reach both.
 
-Overseer voice runs across threads and machines. The **Overseer voice** mic
+## Director voice
+
+Director voice runs across threads and machines. The **Director voice** mic
 starts it, as does ⌘⇧Space (Ctrl+Shift+Space on Windows and Linux). The mic sits
 first in the window actions: in the sidebar masthead, in the thread header's
 copy of those actions when the sidebar is hidden, and in the title bar on
 Windows and Linux. Federation windows do not show it, and they do not accept
-the shortcut.
+the shortcut. Hovering or focusing the mic opens a card with the shortcut and
+example requests: summarize the threads that need attention, start a thread in
+a project on another machine, tell the thread on screen to do something, or ask
+what a thread on another machine is doing.
 
-Overseer voice talks to the **Voice manager** thread, which is a Codex thread
+Director voice talks to the **Voice manager** thread, which is a Codex thread
 that PwrAgent creates once and remembers. Like the Star Map manager, it is an
 ordinary thread in a PwrAgent-owned workspace (`voice-manager` in the profile).
 PwrAgent rewrites its `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `QWEN.md`
 whenever the thread opens. If the remembered thread was archived, PwrAgent
-makes a new one. Main gives the overseer prompt only to that thread.
+makes a new one. Main gives the director prompt only to that thread.
 
-Overseer voice does its work through the existing PwrAgent dynamic tools. It
-uses `search_threads` with an `instanceId` to find a thread on another machine.
-It uses `send_message_to_thread` and `steer_thread` to direct it, and
-`stop_thread` only after the operator confirms. Status tools answer "what is
-running?" The realtime model delegates to the Voice manager's Codex turn. That
+Director voice does its work through the PwrAgent dynamic tools. It uses
+`list_attention_threads` to summarize what needs the operator on every
+connected machine: running turns, unread threads, and threads waiting on input.
+It uses `search_threads` with an `instanceId` to find a thread on another
+machine. It uses `send_message_to_thread` and `steer_thread` to direct it, and
+`stop_thread` only after the operator confirms. It starts work on another
+machine with `list_federation_instances`, `list_instance_projects`, and
+`create_instance_thread`. The realtime model delegates to the Voice manager's Codex turn. That
 turn calls the tools, so thread and tool policies and federation RBAC apply as
 usual.
 
@@ -53,7 +63,7 @@ and the manager asks the operator which thread they mean.
 
 A floating panel in the bottom-left corner shows the session. It has the live
 state, **Mute**, **Hide**, **End voice**, and the thread the window is looking
-at. It also shows the transcript, the receipts, and **Message voice**. Overseer
+at. It also shows the transcript, the receipts, and **Message voice**. Director
 voice continues across navigation. While it runs, the composer **Voice** toggle
 is unavailable and its tooltip explains why.
 
@@ -65,7 +75,10 @@ chokepoint after each call settles. It reports only what the tool returned.
 ## Protocol and trust boundary
 
 The desktop pins `@pwrdrvr/codex-app-server-protocol` 0.159.2. The capability
-check requires an App Server user agent identifying Codex 0.159 or newer.
+check requires Codex 0.159 or newer. It reads the version the way the protocol
+gate does: the App Server's user agent leads with the client's name and then
+Codex's version (`pwragent-desktop/0.159.0-pwragent.1 ...`), so the check must
+not look for a `codex` token. A build suffix counts as its upstream version.
 Version dispatch is a preliminary gate; actual account, workspace and service
 rollout access are verified by starting the session and receiving its events.
 Unsupported versions and asynchronous service errors appear in the voice
@@ -111,9 +124,9 @@ startup waits for the startup RPC to settle, then stops the accepted session
 before admitting a replacement. Failed stop RPCs retain ownership and offer a
 retry instead of allowing a potentially overlapping session.
 
-The window owns the voice controller. The composer and the overseer panel
+The window owns the voice controller. The composer and the director panel
 subscribe to its state. A thread change or composer unmount stops thread voice's
-local media immediately. Overseer voice is not tied to a composer. If backend stop fails,
+local media immediately. Director voice is not tied to a composer. If backend stop fails,
 the window retains the original session token and exposes **End voice** retry
 on the replacement composer, including a non-Codex thread, until stop is
 acknowledged. The window also observes page teardown independently of composer
@@ -147,9 +160,9 @@ isolation, active-thread catalog inheritance, idle-thread refresh, cross-window
 ownership, duplicate starts, stop during startup, startup/service failure,
 backend loss, permission gating/denial, late capture results, establishment
 expiry, stale events, local audio cleanup and failed-stop retries. They also
-cover the mode prompts, the overseer gate, the Voice manager's identity,
+cover the mode prompts, the director gate, the Voice manager's identity,
 `read_operator_focus`, focus and open-manager sender checks, receipts, mute,
-and overseer voice surviving navigation.
+and director voice surviving navigation.
 
 Run the feature and affected backend suites from the repository root:
 
@@ -182,7 +195,7 @@ production latency. Physical-microphone, signed-package and headed Electron
 validation remain separate from the synthetic protocol/browser checks. The
 current implementation uses the default input/output device and default voice;
 it does not add a voice/device picker, voice in federation windows,
-reconnection, session resumption, or short-lived planner threads. Overseer voice
+reconnection, session resumption, or short-lived planner threads. Director voice
 reaches other machines only through the federated thread tools. A connection loss ends voice and
 requires a new explicit start.
 

@@ -54,7 +54,7 @@ export function AppTitleBar(props: {
   /** Star Map toggle, left of the MSG chip. Absent in federation windows. */
   starMap?: StarMapToggleControls;
   actions?: {
-    /** Overseer voice's mic, first in the actions. It subscribes to voice itself. */
+    /** Director voice's mic, first in the actions. It subscribes to voice itself. */
     voiceControl?: ReactNode;
     addingProjectDirectory?: boolean;
     automationsActive: boolean;

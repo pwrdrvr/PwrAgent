@@ -26,6 +26,7 @@ export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
   "list_instance_projects",
   "create_instance_thread",
   "search_federation_threads",
+  "list_attention_threads",
   "push_instance_file",
   "handoff_instance_thread",
 ] as const;
@@ -264,6 +265,51 @@ export type SearchFederationThreadsResult = {
   failures: FederatedSearchPeerFailure[];
 };
 
+export type ListAttentionThreadsToolArgs = {
+  /** One instance only; omitted reads this instance and every connected peer. */
+  instanceId?: FederationInstanceId;
+  /** Rows per instance, at most 100. Defaults to 25. */
+  limit?: number;
+};
+
+/**
+ * One row of an instance's Attention queue: the threads the operator's own
+ * sidebar shows there, read from the owning instance.
+ */
+export type FederationAttentionThreadSummary = {
+  instanceId: FederationInstanceId;
+  instanceLabel: string;
+  isLocal: boolean;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  title: string;
+  updatedAt?: number;
+  /** A turn or a sub-agent is running. */
+  running: boolean;
+  /** New activity the operator has not read. */
+  unread: boolean;
+  /** Waiting on an approval or another answer from the operator. */
+  needsInput: boolean;
+  threadLink: string;
+};
+
+export type ListAttentionThreadsResult = {
+  threads: FederationAttentionThreadSummary[];
+  /** True when an instance had more rows than the limit. */
+  truncated: boolean;
+  instances: Array<{
+    instanceId: FederationInstanceId;
+    instanceLabel: string;
+    isLocal: boolean;
+    count: number;
+  }>;
+  failures: Array<{
+    instanceId: FederationInstanceId;
+    instanceLabel: string;
+    message: string;
+  }>;
+};
+
 export type PwrAgentFederationToolArgs<
   TOperation extends PwrAgentFederationOperationName,
 > = {
@@ -273,6 +319,7 @@ export type PwrAgentFederationToolArgs<
   handoff_instance_thread: HandoffInstanceThreadToolArgs;
   create_instance_thread: CreateInstanceThreadToolArgs;
   search_federation_threads: SearchFederationThreadsToolArgs;
+  list_attention_threads: ListAttentionThreadsToolArgs;
 }[TOperation];
 
 export type PwrAgentFederationRequest<
@@ -295,7 +342,8 @@ export type PwrAgentFederationResponse =
         | (HandoffInstanceThreadResult & { threadLink: string })
         | ListInstanceProjectsResult
         | CreateInstanceThreadResult
-        | SearchFederationThreadsResult;
+        | SearchFederationThreadsResult
+        | ListAttentionThreadsResult;
     }
   | {
       ok: false;

@@ -7260,7 +7260,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     this.writeManagerThreadMeta(STAR_MAP_MANAGER_THREAD_META_KEY, thread);
   }
 
-  /** The remembered Voice manager thread overseer voice talks through. */
+  /** The remembered Voice manager thread director voice talks through. */
   getVoiceManagerThread():
     | { backend: string; threadId: string }
     | undefined {

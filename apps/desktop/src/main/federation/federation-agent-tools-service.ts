@@ -7,11 +7,14 @@ import type {
   FederationHealthStatus,
   FederationHostInfo,
   FederationInstanceDescriptor,
+  FederationAttentionThreadSummary,
   FederationInstanceId,
   FederationLoadStatus,
   FederatedThreadRef,
   FederationRemoteTarget,
   FederationThreadSearchResultSummary,
+  ListAttentionThreadsResult,
+  ListAttentionThreadsToolArgs,
   ListFederationInstancesResult,
   ListFederationInstancesToolArgs,
   ListInstanceProjectsResult,
@@ -162,6 +165,9 @@ export function createFederationAgentToolsHandler(
       }
       if (request.operation === "list_instance_projects") {
         return await listInstanceProjects(runtime(), request.args, collectHostInfo);
+      }
+      if (request.operation === "list_attention_threads") {
+        return await listAttentionThreads(runtime(), request.args, collectHostInfo);
       }
       if (request.operation === "create_instance_thread") {
         return await createInstanceThread(
@@ -400,6 +406,85 @@ async function listInstanceProjects(
         ...(directory.launchpadBackend ? { backend: directory.launchpadBackend } : {}),
       })),
   };
+  return ok(result);
+}
+
+const DEFAULT_ATTENTION_PAGE_SIZE = 25;
+
+/**
+ * The Attention queue of each instance, read from its owner the way the
+ * sidebar reads it, so "what needs me?" has one answer across machines. A peer
+ * that fails or lacks the navigation protocol is reported, not fatal.
+ */
+async function listAttentionThreads(
+  runtime: DesktopFederationRuntime,
+  args: ListAttentionThreadsToolArgs,
+  collectHostInfo: () => Promise<FederationHostInfo>,
+): Promise<PwrAgentFederationResponse> {
+  let instances: ResolvedInstance[];
+  if (args.instanceId) {
+    const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
+    if (!resolved.ok) {
+      return resolved.response;
+    }
+    instances = [resolved.instance];
+  } else {
+    const health = await runtime.health();
+    const local = await localInstanceDescriptor(health, collectHostInfo);
+    instances = [
+      { instanceId: local.instanceId, label: local.label, isLocal: true },
+      ...runtime.connectedPeerTargets()
+        .filter((peer) => peer.capabilities.includes("thread_navigation"))
+        .map((peer) => ({
+          instanceId: peer.target.instanceId,
+          label: peer.label,
+          isLocal: false,
+          target: peer.target,
+        })),
+    ];
+  }
+  const pageSize = args.limit ?? DEFAULT_ATTENTION_PAGE_SIZE;
+  const pages = await Promise.allSettled(instances.map((instance) => readInstanceNavigation(runtime, instance, {
+    protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "lens", lens: "attention" }, pageSize,
+  })));
+  const result: ListAttentionThreadsResult = { threads: [], truncated: false, instances: [], failures: [] };
+  pages.forEach((page, index) => {
+    const instance = instances[index]!;
+    if (page.status === "rejected") {
+      result.failures.push({
+        instanceId: instance.instanceId,
+        instanceLabel: instance.label,
+        message: page.reason instanceof Error ? page.reason.message : String(page.reason),
+      });
+      return;
+    }
+    const rows = page.value.entries.slice(0, pageSize).map(({ row }): FederationAttentionThreadSummary => ({
+      instanceId: instance.instanceId,
+      instanceLabel: instance.label,
+      isLocal: instance.isLocal,
+      backend: row.source,
+      threadId: row.id,
+      title: row.title,
+      ...(row.updatedAt !== undefined ? { updatedAt: row.updatedAt } : {}),
+      running: row.threadStatus === "active" || row.hasActiveSubAgent === true,
+      unread: row.inbox.inInbox,
+      needsInput: row.needsInput === true,
+      threadLink: buildThreadMarkdownLink({
+        threadId: row.id,
+        backend: row.source,
+        ...(instance.target ? { instanceId: instance.instanceId } : {}),
+        title: row.title,
+      }),
+    }));
+    result.threads.push(...rows);
+    result.truncated ||= !page.value.complete || page.value.entries.length > pageSize;
+    result.instances.push({
+      instanceId: instance.instanceId,
+      instanceLabel: instance.label,
+      isLocal: instance.isLocal,
+      count: rows.length,
+    });
+  });
   return ok(result);
 }
 

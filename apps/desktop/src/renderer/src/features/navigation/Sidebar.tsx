@@ -186,7 +186,7 @@ import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirec
 import { BrandLockup } from "../chrome/BrandLockup";
 
 type SidebarProps = {
-  /** Overseer voice's mic, rendered first in the masthead; it subscribes to voice itself. */
+  /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
   mastheadVoiceControl?: ReactNode;
   directoryDisclosure?: NavigationDirectoryDisclosure;
   /** True while a full-window layer (Settings, Automations) covers it. */

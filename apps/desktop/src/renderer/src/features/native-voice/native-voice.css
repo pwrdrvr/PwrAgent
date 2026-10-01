@@ -76,7 +76,7 @@
   font-size: 12px;
 }
 .native-voice-bar__row,
-.overseer-voice__top {
+.director-voice__top {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -96,7 +96,7 @@
   font-weight: 600;
 }
 .native-voice-bar .button,
-.overseer-voice .button {
+.director-voice .button {
   flex: 0 0 auto;
   min-height: 24px;
   padding: 0 10px;
@@ -165,9 +165,9 @@
   color: var(--text-primary);
 }
 
-/* Overseer voice floats over the sidebar's foot, the one corner that is not
+/* Director voice floats over the sidebar's foot, the one corner that is not
    transcript, composer or thread chrome, and stays there across navigation. */
-.overseer-voice {
+.director-voice {
   position: fixed;
   bottom: 12px;
   left: 12px;
@@ -180,10 +180,10 @@
   box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow-base) 52%, transparent);
   font-size: 12px;
 }
-.overseer-voice__spacer {
+.director-voice__spacer {
   flex: 1;
 }
-.overseer-voice__context {
+.director-voice__context {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -191,7 +191,7 @@
   margin: 8px 0 4px;
   color: var(--text-muted);
 }
-.overseer-voice__chip {
+.director-voice__chip {
   max-width: 220px;
   overflow: hidden;
   padding: 0 8px;
@@ -204,12 +204,68 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.overseer-voice__chip--machine {
+.director-voice__chip--machine {
   border: 1px solid var(--border-subtle);
   background: var(--bg-panel);
   color: var(--text-secondary);
   font-family: inherit;
 }
-.overseer-voice .native-voice-feed {
+.director-voice .native-voice-feed {
   max-height: 220px;
+}
+
+/* Hover card for the director mic, on the measurements of
+   `.context-usage-card` so the app's hover cards read as one family. */
+.director-voice-card {
+  position: fixed;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  text-align: left;
+}
+.director-voice-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.director-voice-card__title {
+  font-weight: 600;
+}
+.director-voice-card__shortcut {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.director-voice-card__lede {
+  color: var(--text-secondary);
+}
+.director-voice-card__section {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.director-voice-card__examples {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-primary);
 }

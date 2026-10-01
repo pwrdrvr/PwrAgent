@@ -6,7 +6,7 @@ import type { TokenMiserStore } from "../token-miser/token-miser-store";
 
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
-- Find, read, inspect, rename, pin, archive/close, restore, or change settings on threads; check their status, activity, usage, model, fast mode, or reasoning effort.
+- Find, read, inspect, rename, pin, archive/close, restore, or change settings on threads; check their status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
@@ -31,6 +31,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   list_federation_instances: "federation machines computers hosts load capacity",
   list_instance_projects: "federation remote machine projects folders",
   create_instance_thread: "federation run work another remote machine computer",
+  list_attention_threads: "attention needs waiting unread running review queue summarize overview",
   get_current_messaging_surface: "telegram discord slack line lark feishu mattermost messaging conversation",
   attach_thread_here: "telegram discord slack line lark feishu mattermost messaging attach topic",
   rename_current_messaging_conversation: "telegram discord slack line lark feishu mattermost rename topic",

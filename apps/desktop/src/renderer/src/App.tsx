@@ -204,12 +204,12 @@ import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { isNativeVoiceApi } from "./features/native-voice/NativeVoice";
 import {
-  OverseerVoiceButton,
-  OverseerVoiceHud,
+  DirectorVoiceButton,
+  DirectorVoiceHud,
   operatorFocusFor,
   useOperatorFocusPublisher,
-  useOverseerVoiceShortcut,
-} from "./features/native-voice/OverseerVoice";
+  useDirectorVoiceShortcut,
+} from "./features/native-voice/DirectorVoice";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 import {
   ThreadSearchPanel,
@@ -1747,13 +1747,13 @@ function DesktopAppShell(props: {
     threads: navigation.threads,
     retainedRemoteThreads: recentRemoteThreads,
   });
-  // Overseer voice and the focus it resolves "this thread" against are local
+  // Director voice and the focus it resolves "this thread" against are local
   // surfaces: a federation window fronts a peer's threads, not this machine.
-  const overseerVoiceApi =
+  const directorVoiceApi =
     !readRendererFederationTarget() && isNativeVoiceApi(desktopApi) && desktopApi.openVoiceManager
       ? desktopApi
       : undefined;
-  useOverseerVoiceShortcut(overseerVoiceApi);
+  useDirectorVoiceShortcut(directorVoiceApi);
   const operatorFocus = useMemo(
     () => operatorFocusFor({
       view: mainView,
@@ -1762,10 +1762,10 @@ function DesktopAppShell(props: {
     }),
     [mainView, navigation.browseMode, navigation.selectedThread],
   );
-  useOperatorFocusPublisher(overseerVoiceApi, operatorFocus);
-  const overseerVoiceControl = useMemo(
-    () => overseerVoiceApi ? <OverseerVoiceButton api={overseerVoiceApi} /> : undefined,
-    [overseerVoiceApi],
+  useOperatorFocusPublisher(directorVoiceApi, operatorFocus);
+  const directorVoiceControl = useMemo(
+    () => directorVoiceApi ? <DirectorVoiceButton api={directorVoiceApi} /> : undefined,
+    [directorVoiceApi],
   );
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
@@ -2721,7 +2721,7 @@ function DesktopAppShell(props: {
     };
   })();
   const mastheadActions = {
-    voiceControl: overseerVoiceControl,
+    voiceControl: directorVoiceControl,
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
     settingsActive: mainView === "settings",
@@ -3261,7 +3261,7 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
-          mastheadVoiceControl={overseerVoiceControl}
+          mastheadVoiceControl={directorVoiceControl}
           inert={layerView !== undefined}
           directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
@@ -3747,8 +3747,8 @@ function DesktopAppShell(props: {
           />
         </AppNoticeStack>
       </div>
-      {overseerVoiceApi ? (
-        <OverseerVoiceHud api={overseerVoiceApi} focus={navigation.selectedThread} />
+      {directorVoiceApi ? (
+        <DirectorVoiceHud api={directorVoiceApi} focus={navigation.selectedThread} />
       ) : null}
     </TranscriptLinkProvider>
   );

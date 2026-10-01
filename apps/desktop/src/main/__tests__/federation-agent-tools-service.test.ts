@@ -4,10 +4,12 @@ import type {
   FederationHealthStatus,
   FederationHostInfo,
   FederationLoadStatus,
+  ListAttentionThreadsResult,
   ListFederationInstancesResult,
   ListInstanceProjectsResult,
   MaterializeDirectoryLaunchpadRequest,
   NavigationSnapshot,
+  NavigationThreadSummary,
   NavigationLaunchpadDefaults,
   NavigationQueryRequest,
   NavigationQueryPage,
@@ -1664,5 +1666,95 @@ describe("push_instance_file", () => {
     const result = await handler({ operation: "push_instance_file", context, args: { instanceId: "pwr_remote", sourcePath: "/local/report.txt", name: "report.txt" } });
     expect(pushFile).toHaveBeenCalledWith({ scope: "remote", instanceId: "pwr_remote" }, "/local/report.txt", "report.txt");
     expect(result).toEqual({ ok: true, data: { instanceId: "pwr_remote", path: "/remote/Downloads/report.txt", sizeBytes: 3, sha256: "abc" } });
+  });
+});
+
+// "What needs my attention?" has to mean what each machine's own sidebar
+// shows, so the tool reads every owner's Attention lens rather than guessing
+// from timestamps, and a peer that cannot answer is reported, not fatal.
+describe("list_attention_threads", () => {
+  const navThread = (id: string, patch: Partial<NavigationThreadSummary> = {}): NavigationThreadSummary => ({
+    id, source: "codex", title: `Sample ${id}`, titleSource: "derived", createdAt: 1, updatedAt: 1,
+    linkedDirectories: [], inbox: { inInbox: false }, ...patch,
+  });
+  const peer = (id: string, label: string) => ({
+    target: { scope: "remote" as const, instanceId: id }, label, capabilities: ["thread_navigation" as const],
+  });
+
+  it("returns each instance's Attention queue with why each thread is there", async () => {
+    const local = buildSnapshot({ threads: [
+      navThread("sample-running", { threadStatus: "active" }),
+      navThread("sample-read-idle"),
+    ] });
+    const studio = buildSnapshot({ threads: [navThread("sample-unread", { inbox: { inInbox: true } })] });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({ readPopulation: async () => local })) as never,
+        remoteBackend: (() => ({ readPopulation: async () => studio })) as never,
+        connectedPeerTargets: () => [peer("pwr_studio", "Studio Mac"), { ...peer("pwr_old", "Old Mac"), capabilities: [] }],
+      }),
+    });
+
+    const response = await handler({ operation: "list_attention_threads", context, args: {} });
+
+    expect(response.ok).toBe(true);
+    const data = (response as { ok: true; data: ListAttentionThreadsResult }).data;
+    expect(data.threads.map((row) => [row.instanceLabel, row.threadId, row.running, row.unread])).toEqual([
+      ["Local Mac", "sample-running", true, false],
+      ["Studio Mac", "sample-unread", false, true],
+    ]);
+    expect(data.threads[1]).toMatchObject({ instanceId: "pwr_studio", isLocal: false });
+    expect(data.threads[1]!.threadLink).toContain("pwr_studio");
+    expect(data.threads[0]!.threadLink).not.toContain("pwr_local");
+    expect(data.instances.map((instance) => instance.instanceId)).toEqual(["pwr_local", "pwr_studio"]);
+    expect(data.failures).toEqual([]);
+  });
+
+  it("reports a peer that fails without losing the others", async () => {
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({ readPopulation: async () => buildSnapshot({
+          threads: [navThread("sample-running", { threadStatus: "active" })],
+        }) })) as never,
+        remoteBackend: (() => ({ readPopulation: async () => { throw new Error("Peer timed out."); } })) as never,
+        connectedPeerTargets: () => [peer("pwr_studio", "Studio Mac")],
+      }),
+    });
+
+    const data = ((await handler({ operation: "list_attention_threads", context, args: {} })) as {
+      ok: true; data: ListAttentionThreadsResult;
+    }).data;
+
+    expect(data.threads.map((row) => row.threadId)).toEqual(["sample-running"]);
+    expect(data.failures).toEqual([{ instanceId: "pwr_studio", instanceLabel: "Studio Mac", message: "Peer timed out." }]);
+  });
+
+  it("reads one instance when asked and refuses an unknown one", async () => {
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [
+          { id: "pwr_studio", label: "Studio Mac", role: "client", status: "connected", capabilities: ["thread_navigation"] },
+        ] }),
+        localBackend: (() => ({ readPopulation: async () => { throw new Error("Local must not be read."); } })) as never,
+        remoteBackend: (() => ({ readPopulation: async () => buildSnapshot({
+          threads: Array.from({ length: 4 }, (_, index) => navThread(`sample-${index}`, { threadStatus: "active" })),
+        }) })) as never,
+        connectedPeerTargets: () => [],
+      }),
+    });
+
+    const one = (await handler({ operation: "list_attention_threads", context, args: { instanceId: "pwr_studio", limit: 3 } })) as {
+      ok: true; data: ListAttentionThreadsResult;
+    };
+    expect(one.data.threads).toHaveLength(3);
+    expect(one.data.truncated).toBe(true);
+    expect(one.data.failures).toEqual([]);
+    expect(await handler({ operation: "list_attention_threads", context, args: { instanceId: "pwr_missing" } }))
+      .toMatchObject({ ok: false, error: { code: "not_found" } });
   });
 });

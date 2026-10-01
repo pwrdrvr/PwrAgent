@@ -33,11 +33,20 @@ function fixture() {
 }
 
 describe("native voice ownership", () => {
-  it("gates older and missing versions while allowing the negotiated managed runtime", () => {
-    expect(supportsNativeVoice("codex/0.153.4")).toBe(false);
-    expect(supportsNativeVoice()).toBe(false);
-    expect(supportsNativeVoice("client/1.0.0 codex/0.153.4")).toBe(false);
-    expect(supportsNativeVoice("codex/0.159.0-pwragent.1")).toBe(true);
+  // Codex names the CLIENT before its own version, so the managed runtime
+  // reports `pwragent-desktop/<codex version>`, never `codex/...`. A gate that
+  // looked for a "codex" token refused the runtime it was verified against.
+  it.each([
+    { userAgent: "pwragent-desktop/0.159.0-pwragent.1 (Mac OS 26.6.2; arm64) unknown", supported: true },
+    { userAgent: "pwragent-desktop/0.160.2 (Linux; x86_64) unknown", supported: true },
+    { userAgent: "pwragent-desktop/1.0.0 (Mac OS 26.6.2; arm64) unknown", supported: true },
+    { userAgent: "codex/0.159.0-pwragent.1", supported: true },
+    { userAgent: "pwragent-desktop/0.158.9-pwragent.4 (Mac OS 26.6.2; arm64) unknown", supported: false },
+    { userAgent: "codex/0.153.4", supported: false },
+    { userAgent: "pwragent-desktop (Mac OS 26.6.2; arm64)", supported: false },
+    { userAgent: undefined, supported: false },
+  ])("gates live voice on the App Server version in $userAgent", ({ userAgent, supported }) => {
+    expect(supportsNativeVoice(userAgent)).toBe(supported);
   });
 
   it("starts WebRTC v3 with automatic coding handoffs and stops without interrupting a turn", async () => {
@@ -119,11 +128,11 @@ describe("native voice ownership", () => {
     await thread.manager.start(1, thread.request, thread.emit);
     expect(thread.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.thread }));
     await thread.manager.stopOwner(1);
-    const overseer = fixture();
-    await overseer.manager.start(1, { ...overseer.request, mode: "overseer" }, overseer.emit);
-    expect(overseer.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.overseer }));
-    expect(NATIVE_VOICE_PROMPTS.overseer).toContain("read_operator_focus");
-    await overseer.manager.stopOwner(1);
+    const director = fixture();
+    await director.manager.start(1, { ...director.request, mode: "director" }, director.emit);
+    expect(director.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.director }));
+    expect(NATIVE_VOICE_PROMPTS.director).toContain("read_operator_focus");
+    await director.manager.stopOwner(1);
   });
 
   it("reports only its own thread's tool calls as receipts, and stops listening when it ends", async () => {

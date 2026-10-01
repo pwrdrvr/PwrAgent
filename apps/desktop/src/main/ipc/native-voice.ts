@@ -49,13 +49,13 @@ export function registerNativeVoiceIpcHandlers(): void {
       || typeof request.sdp !== "string" || request.sdp.length > 100_000 || !request.sdp.startsWith("v=0")) {
       throw new Error("Invalid WebRTC voice offer.");
     }
-    if (request.mode !== undefined && request.mode !== "thread" && request.mode !== "overseer") {
+    if (request.mode !== undefined && request.mode !== "thread" && request.mode !== "director") {
       throw new Error("Invalid voice mode.");
     }
-    // Overseer voice is told it can act on every thread; only the Voice
+    // Director voice is told it can act on every thread; only the Voice
     // manager thread is given that prompt.
-    if (request.mode === "overseer" && !isVoiceManagerThread(request.threadId)) {
-      throw new Error("Overseer voice runs only on the Voice manager thread.");
+    if (request.mode === "director" && !isVoiceManagerThread(request.threadId)) {
+      throw new Error("Director voice runs only on the Voice manager thread.");
     }
     observeOwner(event.sender);
     await sessions.start(event.sender.id, request, (notification) => {
@@ -63,9 +63,9 @@ export function registerNativeVoiceIpcHandlers(): void {
     });
   });
   ipcMain.handle(NATIVE_VOICE_OPEN_MANAGER_CHANNEL, async (event) => {
-    // Local only: overseer voice reaches peers through its tools.
+    // Local only: director voice reaches peers through its tools.
     if (!isLocalMainWindowWebContents(event.sender)) {
-      return { status: "failed", error: "Overseer voice is available from a local main window." };
+      return { status: "failed", error: "Director voice is available from a local main window." };
     }
     return await openVoiceManagerThread();
   });

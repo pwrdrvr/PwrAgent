@@ -142,17 +142,58 @@ export function VoiceTextInput({ controller }: { controller: NativeVoiceControll
 }
 
 /**
- * The composer's mic toggle. Talks to this thread; ends when the operator
- * leaves it. Unavailable while overseer voice owns the window's session.
+ * Whether thread voice can open on a composer's thread. Live voice runs on
+ * this machine's Codex App Server, so a peer's thread and another provider's
+ * get a reason instead; director voice still reaches both. A launchpad has no
+ * thread yet and gets neither.
  */
-export function NativeVoiceToggle({ api, threadId }: { api: NativeVoiceApi; threadId?: string }) {
+export function threadVoiceTarget(
+  thread: { id: string; source: string; federation?: { instanceLabel?: string } } | undefined,
+  launchpad: boolean,
+): { threadId?: string; unavailableReason?: string } {
+  if (!thread || launchpad) return {};
+  if (thread.federation) {
+    return {
+      unavailableReason: `Voice talks to threads on this machine. Use director voice to reach threads on ${thread.federation.instanceLabel ?? "another machine"}.`,
+    };
+  }
+  if (thread.source !== "codex") {
+    return { unavailableReason: "Voice talks to Codex threads. Use director voice to reach this one." };
+  }
+  return { threadId: thread.id };
+}
+
+/**
+ * The composer's mic toggle. Talks to this thread; ends when the operator
+ * leaves it. Unavailable while director voice owns the window's session, and
+ * on a thread voice cannot reach, where it says why instead of vanishing.
+ */
+export function NativeVoiceToggle({ api, threadId, unavailableReason }: {
+  api: NativeVoiceApi;
+  threadId?: string;
+  unavailableReason?: string;
+}) {
   const { controller, view } = useNativeVoice(api);
+  if (unavailableReason) {
+    return (
+      <button
+        type="button"
+        className="composer__toggle tooltip-target"
+        aria-label="Voice"
+        aria-disabled="true"
+        data-tooltip={unavailableReason}
+        onClick={() => undefined}
+      >
+        <MicIcon size={15} aria-hidden="true" />
+      </button>
+    );
+  }
   if (!threadId) return null;
   const mine = view.mode === "thread" && view.threadId === threadId && isVoiceActive(view);
   const elsewhere = isVoiceActive(view) && !mine;
   const tooltip = elsewhere
-    ? view.mode === "overseer"
-      ? "Overseer voice is on. End it to talk to this thread."
+    ? view.mode === "director"
+      ? "Director voice is on. End it to talk to this thread."
       : "Voice is on in another thread."
     : mine ? "End voice" : "Talk to this thread";
   return (

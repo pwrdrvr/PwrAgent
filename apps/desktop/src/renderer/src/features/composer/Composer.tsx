@@ -1,4 +1,4 @@
-import { NativeVoiceBar, NativeVoiceToggle, isNativeVoiceApi } from "../native-voice/NativeVoice";
+import { NativeVoiceBar, NativeVoiceToggle, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -2716,9 +2716,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
   // Thread voice talks to a local Codex thread; every other composer still
   // mounts the bar so a failed stop can be retried wherever the window lands.
-  const nativeVoiceThreadId = props.thread?.source === "codex" && !props.thread.federation && !props.launchpad
-    ? props.thread.id
-    : undefined;
+  const {
+    threadId: nativeVoiceThreadId,
+    unavailableReason: nativeVoiceUnavailableReason,
+  } = threadVoiceTarget(props.thread, Boolean(props.launchpad));
   const threadLinks = useThreadLinks();
   const pullRequestLinks = usePullRequestLinks();
   const rendererFederationTarget = readRendererFederationTarget();
@@ -13204,8 +13205,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ? () => void props.desktopApi?.openUsageActivity?.()
               : undefined}
           />
-          {nativeVoiceApi && nativeVoiceThreadId ? (
-            <NativeVoiceToggle api={nativeVoiceApi} threadId={nativeVoiceThreadId} />
+          {nativeVoiceApi && (nativeVoiceThreadId || nativeVoiceUnavailableReason) ? (
+            <NativeVoiceToggle
+              api={nativeVoiceApi}
+              threadId={nativeVoiceThreadId}
+              unavailableReason={nativeVoiceUnavailableReason}
+            />
           ) : null}
           {preparingSend ? (
             <button

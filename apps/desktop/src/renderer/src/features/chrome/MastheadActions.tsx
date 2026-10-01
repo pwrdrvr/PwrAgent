@@ -12,7 +12,7 @@ import { NewThreadButton } from "./NewThreadButton";
  * styling so every placement reads identically.
  */
 export type MastheadActionsProps = {
-  /** Overseer voice's mic, first in the actions. It subscribes to voice itself. */
+  /** Director voice's mic, first in the actions. It subscribes to voice itself. */
   voiceControl?: ReactNode;
   addingProjectDirectory?: boolean;
   automationsActive?: boolean;
