@@ -1,6 +1,7 @@
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
+import { FederatedDirectoryIndexCache } from "./federated-directory-index-cache";
 import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
 import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navigation-archive-group";
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
@@ -3110,6 +3111,14 @@ export function useThreadNavigation(
   const federatedLaunchpadSessionsRef = useRef(
     new Map<string, FederatedLaunchpadSession>(),
   );
+  // Each peer's directory index as the machine menus last read it.
+  const [federatedDirectoryIndexes] = useState(
+    () => new FederatedDirectoryIndexCache(),
+  );
+  useEffect(
+    () => desktopApi?.onAgentEvent?.((event) => federatedDirectoryIndexes.observe(event)),
+    [desktopApi, federatedDirectoryIndexes],
+  );
   const previousFederatedLaunchpadRef = useRef<FederatedLaunchpadSession | undefined>(undefined);
   useEffect(() => {
     const previous = previousFederatedLaunchpadRef.current;
@@ -6036,11 +6045,13 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
       try {
+        const indexRead = federatedDirectoryIndexes.begin(target.instanceId);
         const ownerDirectories = await readOwnerDirectoryIndex(
           target,
           `workspace-launchpad:${attentionViewId}:${openRevision}`,
           () => federatedLaunchpadOpenRevisionRef.current !== openRevision,
         );
+        federatedDirectoryIndexes.record(indexRead, ownerDirectories);
         if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
           return;
         }
@@ -6060,7 +6071,13 @@ export function useThreadNavigation(
         }
       }
     },
-    [desktopApi, openFederatedDirectoryLaunchpad, attentionViewId, readOwnerDirectoryIndex],
+    [
+      desktopApi,
+      openFederatedDirectoryLaunchpad,
+      attentionViewId,
+      federatedDirectoryIndexes,
+      readOwnerDirectoryIndex,
+    ],
   );
 
   const openFederatedWorkspaceLaunchpad = useCallback(
@@ -6105,14 +6122,17 @@ export function useThreadNavigation(
       }
       // The whole index, not a label filter: the origin match is what lets
       // "PwrAgnt" here find "PwrAgent" there, and a name filter would drop it
-      // before the comparison ever ran.
-      const ownerDirectories = await readOwnerDirectoryIndex(
-        target,
-        `project-target:${attentionViewId}:${target.instanceId}:${localDirectory.label}`,
+      // before the comparison ever ran. One index answers every project.
+      return federatedDirectoryIndexes.hasProject(
+        target.instanceId,
+        localDirectory,
+        (indexRead) => readOwnerDirectoryIndex(
+          target,
+          `project-target:${attentionViewId}:${target.instanceId}:${indexRead.sequence}`,
+        ),
       );
-      return Boolean(findPeerCounterpartDirectory(localDirectory, ownerDirectories));
     },
-    [attentionViewId, desktopApi, readOwnerDirectoryIndex],
+    [attentionViewId, desktopApi, federatedDirectoryIndexes, readOwnerDirectoryIndex],
   );
 
   const restoreFederatedLaunchpad = useCallback(
@@ -6281,11 +6301,13 @@ export function useThreadNavigation(
       const target = { scope: "remote", instanceId } as const;
       const superseded = () => federatedLaunchpadOpenRevisionRef.current !== openRevision;
       try {
+        const indexRead = federatedDirectoryIndexes.begin(instanceId);
         const ownerDirectories = await readOwnerDirectoryIndex(
           target,
           `launchpad-machine:${attentionViewId}:${openRevision}`,
           superseded,
         );
+        federatedDirectoryIndexes.record(indexRead, ownerDirectories);
         if (superseded()) {
           return undefined;
         }
@@ -6310,6 +6332,7 @@ export function useThreadNavigation(
       attentionViewId,
       desktopApi,
       directories,
+      federatedDirectoryIndexes,
       openDirectoryLaunchpad,
       openFederatedDirectoryLaunchpad,
       readOwnerDirectoryIndex,
