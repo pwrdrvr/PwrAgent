@@ -489,8 +489,14 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_automation_updated
   ON automation_runs(automation_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_automation_runs_execution_thread
-  ON automation_runs(json_extract(payload, '$.backendThreadId'), backend);
+-- Replace the original expression index even on already-upgraded databases.
+-- Run readers tolerate corrupt JSON; indexing must preserve that behavior.
+DROP INDEX IF EXISTS idx_automation_runs_execution_thread;
+CREATE INDEX IF NOT EXISTS idx_automation_runs_execution_thread_valid
+  ON automation_runs(
+    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.backendThreadId') END,
+    backend
+  );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_owner_thread
   ON automation_runs(backend, thread_id);
 -- NOTE: idx_automation_runs_source_event is created in the v23 migration

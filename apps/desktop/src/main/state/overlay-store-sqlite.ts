@@ -2437,11 +2437,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // index, then use the owning Agent thread's last indexed title.
     const automationRuns = untitledThreadIds.length ? this.stateDb.raw.prepare(`
       SELECT r.backend, r.thread_id AS owner_thread_id,
-             json_extract(r.payload, '$.backendThreadId') AS execution_thread_id,
+             CASE WHEN json_valid(r.payload)
+               THEN json_extract(r.payload, '$.backendThreadId') END AS execution_thread_id,
              a.name AS automation_name
         FROM automation_runs r
         JOIN automations a ON a.automation_id = r.automation_id
-       WHERE json_extract(r.payload, '$.backendThreadId')
+       WHERE CASE WHEN json_valid(r.payload)
+         THEN json_extract(r.payload, '$.backendThreadId') END
          IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify(untitledThreadIds)) as Array<{
       backend: AppServerBackendKind;
