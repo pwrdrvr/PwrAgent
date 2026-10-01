@@ -2885,8 +2885,26 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     ? `remote:${destinationOwner.instanceId}` : "local";
   const projectDestinationsLoaded = destinationOwnerKey === filesystemAuthorityKey
     && projectDestinations.state?.page !== undefined;
-  const projectDirectories = destinationOwnerKey === filesystemAuthorityKey
-    ? projectDestinations.state?.page?.directories ?? [] : [];
+  // A new search resets the resource to a page-less state, so keep the
+  // owner's last answer on screen until the next one lands. The combobox
+  // narrows it by the typed text meanwhile, instead of the list blanking on
+  // every keystroke while a peer answers.
+  const settledProjectDirectoriesRef = useRef<{
+    authorityKey: string;
+    directories: NavigationDirectorySummary[];
+  } | undefined>(undefined);
+  if (projectDestinationsLoaded) {
+    settledProjectDirectoriesRef.current = {
+      authorityKey: filesystemAuthorityKey,
+      directories: projectDestinations.state?.page?.directories ?? [],
+    };
+  }
+  const projectDirectories = projectDestinationsLoaded
+    ? settledProjectDirectoriesRef.current?.directories ?? []
+    : settledProjectDirectoriesRef.current?.authorityKey === filesystemAuthorityKey
+      ? settledProjectDirectoriesRef.current.directories
+      : [];
+  const projectDestinationInputId = useId();
   useEffect(() => {
     setHandoffDialog(undefined);
     setProjectTargetPath("");
@@ -10616,8 +10634,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </p>
               {handoffDialog === "to-project" ? (
                 <div className="workspace-handoff-dialog__field">
-                  <span aria-hidden="true">Destination project</span>
+                  <label htmlFor={projectDestinationInputId}>Destination project</label>
                   <ProjectDestinationCombobox
+                    id={projectDestinationInputId}
                     directories={projectDirectories}
                     disabled={handoffSubmitting}
                     error={projectDestinations.state?.error}

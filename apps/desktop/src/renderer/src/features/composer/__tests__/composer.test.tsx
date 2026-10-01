@@ -14984,6 +14984,45 @@ describe("Composer", () => {
     }));
   });
 
+  it("keeps the owner's last destinations listed while a narrower search is pending", async () => {
+    let calls = 0;
+    const getNavigationQueryPage = vi.fn((request) => {
+      calls += 1;
+      // The first page answers; every later search stays in flight.
+      return calls === 1
+        ? Promise.resolve(navigationQueryFixture(request, {
+          directories: [
+            { key: "/owner/demo", kind: "directory", label: "Demo", path: "/owner/demo" },
+            { key: "/owner/other", kind: "directory", label: "Other", path: "/owner/other" },
+          ],
+        }))
+        : new Promise<never>(() => {});
+    });
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage }}
+      onHandoffThreadWorkspace={vi.fn()}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    // The visible caption labels the field, so clicking it reaches the input.
+    const destination = screen.getByRole("combobox", { name: "Destination project" });
+    expect(screen.getByText("Destination project", { selector: "label" })).toHaveAttribute("for", destination.id);
+    fireEvent.focus(destination);
+    await screen.findByRole("option", { name: /Other/ });
+    fireEvent.change(destination, { target: { value: "dem" } });
+    await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("option", { name: /Demo/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Other/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("No matching projects.")).not.toBeInTheDocument();
+  });
+
   it("does not offer viewer projects when the destination owner is unavailable", async () => {
     const getNavigationQueryPage = vi.fn(async () => { throw new Error("Peer unavailable"); });
     render(<Composer

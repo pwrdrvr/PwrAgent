@@ -23,6 +23,8 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
  * drops a page answered by any other instance.
  */
 export type ProjectDestinationComboboxProps = {
+  /** The input's id, so the dialog's visible caption can label it. */
+  id?: string;
   value: string;
   onChange: (path: string) => void;
   /** Owner-side search for a bounded directory page. */
@@ -144,6 +146,7 @@ export function ProjectDestinationCombobox(props: ProjectDestinationComboboxProp
         aria-expanded={showList}
         aria-label="Destination project"
         autoComplete="off"
+        id={props.id}
         className="workspace-handoff-dialog__text-input"
         disabled={props.disabled}
         placeholder="Search projects or enter a path"
