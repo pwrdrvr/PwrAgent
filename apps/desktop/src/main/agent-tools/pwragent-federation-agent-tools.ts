@@ -5,6 +5,7 @@ import type {
   ListFederationInstancesToolArgs,
   ListInstanceProjectsToolArgs,
   PushInstanceFileToolArgs,
+  HandoffInstanceThreadToolArgs,
   PwrAgentFederationOperationName,
   PwrAgentFederationRequest,
   PwrAgentFederationResponse,
@@ -95,6 +96,8 @@ function descriptionForOperation(
   operation: PwrAgentFederationOperationName,
 ): string {
   switch (operation) {
+    case "handoff_instance_thread":
+      return "Copy or move an existing idle Codex thread to another enrolled PwrAgent instance, including history, unpublished Git commits, staged, unstaged, and untracked files. Specify sourceThreadId and targetInstanceId; sourceInstanceId selects a remote owner, otherwise the source is local. Get the receiving repository's native absolute path from list_instance_projects and pass targetRepositoryPath for Git threads. Both machines must support thread_handoff; the receiver must allow file push. operation=move archives the source only after destination validation. Queued or running turns, symlinks, submodules, and conflicted indexes are rejected. Source files are retained. Do not retry a slow request; check search_federation_threads after a disconnect. Return threadLink verbatim and report warnings.";
     case "push_instance_file":
       return "Push a local file to another enrolled PwrAgent instance. Use list_federation_instances first: the receiver must advertise receiverPermissions.filePush=true and the file_push capability. sourcePath is an absolute path on this machine. name is an optional plain filename. The receiver chooses the folder (Downloads by default) and never overwrites files. Maximum 512 MiB. Returns the saved remote path, size, and SHA-256. Only send files the user asked to transfer.";
     case "list_federation_instances":
@@ -112,6 +115,18 @@ function inputSchemaForOperation(
   operation: PwrAgentFederationOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "handoff_instance_thread":
+      return {
+        type: "object", additionalProperties: false,
+        required: ["sourceThreadId", "targetInstanceId", "operation"],
+        properties: {
+          sourceThreadId: { type: "string", description: "Existing idle Codex thread ID." },
+          sourceInstanceId: { type: "string", description: "Owning remote instance; omit for a local source." },
+          targetInstanceId: { type: "string", description: "Receiving instance from list_federation_instances." },
+          targetRepositoryPath: { type: "string", description: "Native absolute path of the receiving repository, required for a Git thread." },
+          operation: { type: "string", enum: ["copy", "move"] },
+        },
+      };
     case "push_instance_file":
       return {
         type: "object",
@@ -281,12 +296,24 @@ function normalizeArgsForOperation(
   args: Record<string, unknown>,
 ):
   | PushInstanceFileToolArgs
+  | HandoffInstanceThreadToolArgs
   | ListFederationInstancesToolArgs
   | ListInstanceProjectsToolArgs
   | CreateInstanceThreadToolArgs
   | SearchFederationThreadsToolArgs
   | undefined {
   switch (operation) {
+    case "handoff_instance_thread": {
+      const sourceThreadId = readTrimmedString(args.sourceThreadId);
+      const targetInstanceId = readTrimmedString(args.targetInstanceId);
+      const sourceInstanceId = args.sourceInstanceId === undefined ? undefined : readTrimmedString(args.sourceInstanceId);
+      const targetRepositoryPath = args.targetRepositoryPath === undefined ? undefined : readTrimmedString(args.targetRepositoryPath);
+      return sourceThreadId && targetInstanceId && (args.operation === "copy" || args.operation === "move")
+        && (args.sourceInstanceId === undefined || sourceInstanceId)
+        && (args.targetRepositoryPath === undefined || targetRepositoryPath)
+        ? { sourceThreadId, targetInstanceId, operation: args.operation, ...(sourceInstanceId ? { sourceInstanceId } : {}), ...(targetRepositoryPath ? { targetRepositoryPath } : {}) }
+        : undefined;
+    }
     case "push_instance_file": {
       const instanceId = readTrimmedString(args.instanceId);
       const sourcePath = readTrimmedString(args.sourcePath);
@@ -309,6 +336,8 @@ function invalidArgumentsMessageForOperation(
   operation: PwrAgentFederationOperationName,
 ): string {
   switch (operation) {
+    case "handoff_instance_thread":
+      return "handoff_instance_thread requires sourceThreadId, targetInstanceId, and operation=copy or move, with optional sourceInstanceId and targetRepositoryPath strings.";
     case "push_instance_file":
       return "push_instance_file requires instanceId and sourcePath strings, and an optional non-empty filename.";
     case "list_federation_instances":

@@ -16,6 +16,7 @@ describe("federation tool contracts", () => {
       "create_instance_thread",
       "search_federation_threads",
       "push_instance_file",
+      "handoff_instance_thread",
     ]);
   });
 

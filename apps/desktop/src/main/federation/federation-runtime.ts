@@ -1,5 +1,9 @@
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "./federation-file-pull";
+import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
+import { resolveActiveProfileDir } from "../profile";
+import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest } from "./thread-instance-handoff-service";
+import { runGitCommand } from "../app-server/git-executable";
 import { app } from "electron";
 import {
   FederationFilePushReceiver,
@@ -965,6 +969,8 @@ export class DesktopFederationRuntime {
   ) => void;
   private ptyService?: FederationPtyService;
   private filePushReceiver?: FederationFilePushReceiver;
+  private threadHandoffService?: ThreadInstanceHandoffService;
+  private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
   private readonly remotePtyEventListeners = new Set<
     (event: FederationPtyStreamEvent) => void
   >();
@@ -1294,6 +1300,8 @@ export class DesktopFederationRuntime {
       log.warn("Could not clean up incoming file transfers", error);
     });
     this.filePushReceiver = undefined;
+    this.threadHandoffService = undefined;
+    this.handoffFileReceipts.clear();
     this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
@@ -2199,6 +2207,18 @@ export class DesktopFederationRuntime {
     return await pushFederationFile(this.rpcFor(target), sourcePath, name);
   }
 
+  async handoffInstanceThread(request: HandoffInstanceThreadRequest, sourceInstanceId?: string): Promise<HandoffInstanceThreadResult> {
+    if (!sourceInstanceId || sourceInstanceId === this.localFederationInstanceId()) {
+      if (!this.threadHandoffService) throw new Error("Federation is not running on the source instance.");
+      return await this.threadHandoffService.send(request);
+    }
+    const peer = this.visiblePeers().find((candidate) => candidate.id === sourceInstanceId);
+    if (!peer?.capabilities.includes("thread_handoff")) throw new Error("Update PwrAgent on the source machine to enable thread handoff.");
+    return await this.rpcFor({ scope: "remote", instanceId: sourceInstanceId }).request<HandoffInstanceThreadResult>({
+      method: THREAD_HANDOFF_METHODS.send, params: request, timeoutMs: null,
+    });
+  }
+
   /**
    * Viewer-side control client for a peer's remote PTY sessions. Streamed
    * output/exit/error frames arrive via {@link onRemotePtyEvent}.
@@ -2916,9 +2936,18 @@ export class DesktopFederationRuntime {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
+        [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
+        [THREAD_HANDOFF_METHODS.import]: "thread_handoff",
+        [THREAD_HANDOFF_METHODS.prepare]: "thread_handoff",
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
       },
-      additionalRequiredCapabilities: additionalFederationBackendCapabilities,
+      additionalRequiredCapabilities: (envelope) => envelope.method === THREAD_HANDOFF_METHODS.import
+        ? ["file_push", "turn_control", "environment_actions"]
+        : envelope.method === THREAD_HANDOFF_METHODS.send
+          ? ["turn_control", "environment_actions"]
+          : envelope.method === THREAD_HANDOFF_METHODS.prepare
+            ? ["environment_actions"]
+            : additionalFederationBackendCapabilities(envelope),
     });
     router.registerBlobChunkHandler(async (envelope) => {
       await this.turnInputAttachmentReceiver.receive(
@@ -2943,8 +2972,51 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = new FederationFilePushReceiver({
       allowed: () => this.receiverPermissions().filePush,
       directory: () => getDesktopSettingsService().readFederationConfig().filePushDirectory?.trim() || app.getPath("downloads"),
+      onCompleted: (peerId, result) => {
+        if (this.handoffFileReceipts.size >= 128) this.handoffFileReceipts.delete(this.handoffFileReceipts.keys().next().value!);
+        this.handoffFileReceipts.set(result.path, { peerId, sizeBytes: result.sizeBytes, sha256: result.sha256 });
+      },
     });
     registerFilePushHandlers(router, this.filePushReceiver);
+    this.threadHandoffService = new ThreadInstanceHandoffService({
+      backend: getDesktopBackendRegistry(),
+      directory: path.join(resolveActiveProfileDir(), "state", "thread-handoffs"),
+      localInstanceId: () => this.ensureLocalInstanceId(),
+      push: (instanceId, source) => this.pushFile({ scope: "remote", instanceId }, source),
+      remoteImport: (instanceId, request) => this.rpcFor({ scope: "remote", instanceId }).request({
+        method: THREAD_HANDOFF_METHODS.import, params: request, timeoutMs: null,
+      }),
+      assertTarget: (instanceId) => {
+        const peer = this.visiblePeers().find((candidate) => candidate.id === instanceId);
+        if (!peer || !["thread_handoff", "turn_control", "environment_actions", "file_push"].every((capability) => peer.capabilities.includes(capability as typeof peer.capabilities[number]))) {
+          throw new Error("The receiving instance must support thread handoff, turn control, environment actions, and file push.");
+        }
+        if (peer.receiverPermissions?.filePush !== true) throw new Error("Enable Allow file push on the receiving instance.");
+      },
+      assertMovable: async (threadId) => {
+        const scheduled = await localBackendOperations().listScheduledThreadActions({ backend: "codex", threadId });
+        if (scheduled.actions.length) throw new Error("Cancel the source thread's scheduled actions before Move, or use Copy.");
+      },
+      prepareTarget: async (instanceId, repository) => await this.rpcFor({ scope: "remote", instanceId }).request<string[]>({
+        method: THREAD_HANDOFF_METHODS.prepare, params: { repository }, timeoutMs: 30_000,
+      }),
+      receipt: (sourceInstanceId, file) => {
+        const receipt = this.handoffFileReceipts.get(file.path);
+        return this.receiverPermissions().filePush && receipt?.peerId === sourceInstanceId
+          && receipt.sizeBytes === file.sizeBytes && receipt.sha256 === file.sha256;
+      },
+    });
+    router.registerHandler(THREAD_HANDOFF_METHODS.send, (envelope) =>
+      this.threadHandoffService!.send(envelope.params as HandoffInstanceThreadRequest));
+    router.registerHandler(THREAD_HANDOFF_METHODS.import, (envelope) =>
+      this.threadHandoffService!.receive(envelope.sourceInstanceId, envelope.params as ImportInstanceThreadRequest));
+    router.registerHandler(THREAD_HANDOFF_METHODS.prepare, async (envelope) => {
+      const repository = (envelope.params as { repository?: unknown })?.repository;
+      if (!this.receiverPermissions().filePush || typeof repository !== "string" || !path.isAbsolute(repository)) {
+        throw new Error("Thread handoff requires incoming files to be enabled and an absolute receiver repository path.");
+      }
+      return (await runGitCommand(repository, ["rev-list", "--max-count=256", "HEAD"], { maxBuffer: 64 * 1024 })).stdout.trim().split("\n");
+    });
     const filePullReader = new FederationFilePullReader({
       permissions: () => this.receiverPermissions(),
       resolveThread: (backend, threadId) =>

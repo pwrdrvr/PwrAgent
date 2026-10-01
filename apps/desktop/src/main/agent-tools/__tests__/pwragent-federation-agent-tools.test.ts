@@ -5,6 +5,21 @@ import {
 } from "../pwragent-federation-agent-tools";
 
 describe("pwragent federation agent tools", () => {
+  it("dispatches remote-source handoff and rejects an unknown operation", async () => {
+    const handler = vi.fn(async () => ({ ok: false as const, error: { code: "peer_unavailable" as const, message: "Fixture peer offline" } }));
+    const router = buildPwrAgentFederationToolRouter(handler);
+    const args = { sourceThreadId: " source-thread ", sourceInstanceId: " pwr_windows ", targetInstanceId: " pwr_mac ", targetRepositoryPath: " /projects/repo ", operation: "move" };
+    const call = { threadId: "caller", turnId: "turn", callId: "call", namespace: "pwragent", tool: "handoff_instance_thread", arguments: args };
+    await router.handleDynamicToolCall({ backend: "codex", call });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operation: "handoff_instance_thread", args: {
+      sourceThreadId: "source-thread", sourceInstanceId: "pwr_windows", targetInstanceId: "pwr_mac", targetRepositoryPath: "/projects/repo", operation: "move",
+    } }));
+    handler.mockClear();
+    const response = await router.handleDynamicToolCall({ backend: "codex", call: { ...call, arguments: { ...args, operation: "delete" } } });
+    expect(response).toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("projects the federation tools under the unified pwragent namespace", () => {
     const router = buildPwrAgentFederationToolRouter(undefined);
 

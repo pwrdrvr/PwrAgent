@@ -812,6 +812,7 @@ function assistantOutputForTurn(
 }
 
 type BackendClient = {
+  exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
@@ -8553,6 +8554,8 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
+  private readonly threadHandoffReservations = new Set<string>();
+  private readonly handoffTurnStarts = new Map<string, number>();
   /**
    * Codex runtime activity recovered from `thread/list` / `thread/read`.
    * The long-lived Codex registry keeps this truth across a desktop
@@ -13539,7 +13542,7 @@ export class DesktopBackendRegistry {
   }
 
   async archiveThread(
-    request: ArchiveThreadRequest,
+    request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
     if (request.expectedParent !== undefined) {
@@ -13621,7 +13624,7 @@ export class DesktopBackendRegistry {
         error: ungroupError,
       });
     }
-    const cleanup = cleanupMetadata
+    const cleanup = request.preserveWorktrees ? [] : cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend,
           activeThreads: cleanupMetadata.activeThreads,
@@ -13951,6 +13954,7 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    this.assertThreadNotHandingOff(request.backend, request.threadId);
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
@@ -16399,6 +16403,34 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void {
+    if (this.threadHandoffReservations.has(buildThreadIdentityKey(backend, threadId))) {
+      throw new Error("This thread is being handed off. Wait for the transfer to finish.");
+    }
+  }
+
+  async withThreadHandoff<T>(threadId: string, work: () => Promise<T>): Promise<T> {
+    const key = buildThreadIdentityKey("codex", threadId);
+    this.assertThreadNotHandingOff("codex", threadId);
+    if (this.handoffTurnStarts.has(key)
+      || !this.threadTurnQueue.canStartImmediately({ backend: "codex", threadId })
+      || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length) {
+      throw new Error("Wait for source turns and queued prompts to finish before handoff.");
+    }
+    this.threadHandoffReservations.add(key);
+    try {
+      return await work();
+    } finally {
+      this.threadHandoffReservations.delete(key);
+    }
+  }
+
+  async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
+    const client = this.getClient("codex", "default");
+    if (!client.exportThreadForHandoff) throw new Error("This backend does not support protocol thread export.");
+    return await client.exportThreadForHandoff(threadId);
+  }
+
   async forkThread(
     request: BackendRegistryForkThreadRequest,
   ): Promise<ForkThreadResponse> {
@@ -16718,6 +16750,7 @@ export class DesktopBackendRegistry {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, ...entry } = params;
     return await this.threadTurnQueue.submit({
       ...entry,
@@ -16743,6 +16776,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
     const {
       holdReason,
       origin = "manual",
@@ -16763,6 +16797,7 @@ export class DesktopBackendRegistry {
     origin?: ThreadTurnQueueOrigin;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", ...entry } = params;
     if (
       this.threadHasActiveTurn(params.threadId, params.backend)
@@ -17389,6 +17424,34 @@ export class DesktopBackendRegistry {
   }
 
   private async startTurnNow(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
+    invalidIdRecoveryAttempted?: boolean;
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
+    try {
+      return await this.startTurnWithoutHandoff(params);
+    } finally {
+      const count = (this.handoffTurnStarts.get(key) ?? 1) - 1;
+      if (count) this.handoffTurnStarts.set(key, count);
+      else this.handoffTurnStarts.delete(key);
+    }
+  }
+
+  private async startTurnWithoutHandoff(params: {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
