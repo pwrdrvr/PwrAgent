@@ -1,9 +1,12 @@
 import { useRef, useState } from "react";
 import type { DesktopSettingsConfigPatch, DesktopSettingsSnapshot } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { IncomingFilesFolderActions } from "./IncomingFilesFolderActions";
 import { SettingsField, SettingsSection, ToggleField } from "./SettingsLayout";
 import { useSettingsDraft } from "./useSettingsDraft";
 
 export function FederationCapabilities(props: {
+  desktopApi?: DesktopApi;
   federation: DesktopSettingsSnapshot["federation"];
   saving: boolean;
   onWriteConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
@@ -60,24 +63,38 @@ export function FederationCapabilities(props: {
           label="Incoming files folder"
           sub="Leave blank to use this machine’s Downloads folder. Use an absolute path for a different folder. Saves when you leave this field."
           control={
-            <input
-              className="settings-input"
-              aria-label="Incoming files folder"
-              value={directory.values.value}
-              disabled={props.saving || pending}
-              placeholder="Downloads (default)"
-              onChange={(event) => directory.set("value", event.target.value)}
-              onBlur={() => {
-                if (directory.dirty) {
-                  void save({ filePushDirectory: directory.values.value }).then((saved) => {
-                    if (saved) directory.discard();
-                  });
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-              }}
-            />
+            <div className="settings-field__control" onBlur={(event) => {
+              if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+              if (directory.dirty) {
+                void save({ filePushDirectory: directory.values.value }).then((saved) => {
+                  if (saved) directory.discard();
+                });
+              }
+            }}>
+              <IncomingFilesFolderActions
+                desktopApi={props.desktopApi}
+                directory={directory.values.value}
+                savedDirectory={federation.filePushDirectory.value}
+                enabled={federation.allowFilePush.value}
+                disabled={props.saving || pending}
+                onChoose={async (chosen) => {
+                  directory.set("value", chosen);
+                  if (await save({ filePushDirectory: chosen })) directory.discard();
+                }}
+              >
+                <input
+                  className="settings-input"
+                  aria-label="Incoming files folder"
+                  value={directory.values.value}
+                  disabled={props.saving || pending}
+                  placeholder="Downloads (default)"
+                  onChange={(event) => directory.set("value", event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+              </IncomingFilesFolderActions>
+            </div>
           }
         />
         <ToggleField

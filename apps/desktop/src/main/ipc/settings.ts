@@ -1,4 +1,5 @@
 import { codexAuthState } from "../codex-auth-state";
+import { registerReceivingFolderIpc } from "./receiving-folder";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
@@ -1593,6 +1594,7 @@ export function registerSettingsIpcHandlers(
     ) => void | Promise<void>;
   },
 ): void {
+  registerReceivingFolderIpc();
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.handle(

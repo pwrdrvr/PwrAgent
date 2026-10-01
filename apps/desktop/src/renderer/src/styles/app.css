@@ -4299,7 +4299,8 @@ a.button {
   color: var(--button-text);
 }
 
-.button[disabled] {
+.button[disabled],
+.incoming-files-folder .button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -10546,6 +10547,108 @@ a.button {
   font-size: 11.5px;
   font-weight: 400;
   line-height: 1.45;
+}
+
+/* Settings -> Federation -> Capabilities -> Incoming files folder.
+   Browse fills the input, so it shares the input's row at the input's 32px.
+   Check access, Open folder, and Open Files & Folders are occasional
+   diagnostics: compact ghost buttons at the 24px WCAG 2.2 target floor,
+   right-aligned so they stack into one column under Browse. */
+.incoming-files-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.incoming-files-folder__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.incoming-files-folder__row .settings-input {
+  flex: 1 1 auto;
+}
+
+.incoming-files-folder__browse {
+  flex: 0 0 auto;
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.incoming-files-folder__path {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.incoming-files-folder__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.incoming-files-folder__status {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* 24px tall so the chip and its note center on the action buttons beside them. */
+.incoming-files-folder__result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-height: 24px;
+}
+
+.incoming-files-folder__line > .incoming-files-folder__note {
+  flex: 1 1 220px;
+  align-self: center;
+}
+
+.incoming-files-folder__note {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.incoming-files-folder__failure {
+  color: var(--danger-text);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.incoming-files-folder__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.incoming-files-folder__action {
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.incoming-files-folder__action:hover:not([disabled]):not([aria-disabled="true"]) {
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 .discord-permission-result {

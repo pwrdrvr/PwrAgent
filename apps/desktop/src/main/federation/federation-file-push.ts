@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants, promises as fs } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { FederationCapability } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
+import { receivingFolderError } from "./receiving-folder-access";
 
 export const FILE_PUSH_CHUNK_BYTES = 256 * 1024;
 export const FILE_PUSH_MAX_BYTES = 512 * 1024 * 1024;
@@ -88,9 +89,15 @@ export class FederationFilePushReceiver {
       if (this.transfers.size >= MAX_TRANSFERS) throw new Error("Incoming file transfer limit reached.");
       const configured = this.options.directory();
       if (!path.isAbsolute(configured)) throw new Error("Incoming files folder must be an absolute path.");
-      await fs.mkdir(configured, { recursive: true });
-      const directory = await fs.realpath(configured);
-      const staging = await fs.mkdtemp(path.join(directory, ".pwragent-transfer-"));
+      let directory: string;
+      let staging: string;
+      try {
+        await fs.mkdir(configured, { recursive: true });
+        directory = await fs.realpath(configured);
+        staging = await fs.mkdtemp(path.join(directory, ".pwragent-transfer-"));
+      } catch (error) {
+        throw receivingFolderError(error, configured, "stage a file");
+      }
       try {
         const file = await fs.open(path.join(staging, "data"), "wx", 0o600);
         const id = randomUUID();
@@ -98,8 +105,12 @@ export class FederationFilePushReceiver {
         this.transfers.set(id, { peerId, name, size, received: 0, directory, staging, file, hash: createHash("sha256"), timer });
         return { transferId: id, chunkBytes: FILE_PUSH_CHUNK_BYTES };
       } catch (error) {
-        await fs.rm(staging, { recursive: true, force: true });
-        throw error;
+        try {
+          await fs.rm(staging, { recursive: true, force: true });
+        } catch (cleanupError) {
+          throw new Error(`${receivingFolderError(error, directory, "stage a file").message} Transfer staging could not be removed: "${staging}" (${(cleanupError as NodeJS.ErrnoException).code ?? "unknown error"}).`, { cause: error });
+        }
+        throw receivingFolderError(error, directory, "stage a file");
       }
     }
     const id = typeof args.transferId === "string" ? args.transferId : "";
@@ -141,28 +152,53 @@ export class FederationFilePushReceiver {
       await transfer.file.sync();
       await transfer.file.close();
       if (this.disposed || !this.options.allowed()) throw new Error("Incoming files are disabled.");
-      // link is atomic and refuses to replace any existing path, including a
-      // symlink. Staging lives on the same volume as the destination.
+      // Prefer atomic publication. Some privacy policies/filesystems allow
+      // writes but deny hard links; copy only verified bytes with EXCL there.
+      // The fallback may be visible while copying, but never replaces a path
+      // (including symlinks). Node attempts to remove its new destination on
+      // copy failure; if the OS blocks that too, report the remaining path.
       const extension = path.extname(transfer.name);
       const stem = transfer.name.slice(0, transfer.name.length - extension.length);
       for (let suffix = 0; suffix < 1000; suffix++) {
         const name = suffix ? `${stem} (${suffix})${extension}` : transfer.name;
         const destination = path.join(transfer.directory, name);
         try {
-          await fs.link(path.join(transfer.staging, "data"), destination);
+          const source = path.join(transfer.staging, "data");
+          try {
+            await fs.link(source, destination);
+          } catch (error) {
+            if (!["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+            try {
+              await fs.copyFile(source, destination, constants.COPYFILE_EXCL);
+            } catch (copyError) {
+              if ((copyError as NodeJS.ErrnoException).code === "EEXIST") throw copyError;
+              const diagnostic = receivingFolderError(copyError, transfer.directory, "finalize a file");
+              const remaining = await fs.lstat(destination).then(() => true, () => false);
+              const partial = remaining ? ` A file remains at "${destination}" and may be an incomplete copy. Review it before retrying; it will not be overwritten.` : "";
+              throw new Error(`${diagnostic.message} Hard-link finalization also failed (${(error as NodeJS.ErrnoException).code}).${partial}`, { cause: copyError });
+            }
+          }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-          throw error;
+          throw receivingFolderError(error, transfer.directory, "finalize a file");
         }
-        await this.remove(id);
+        try {
+          await this.remove(id);
+        } catch (error) {
+          throw new Error(`Incoming file was saved to "${destination}", but staging cleanup failed for "${transfer.staging}": ${receivingFolderError(error, transfer.directory, "remove transfer staging").message}`, { cause: error });
+        }
         const result = { path: destination, sizeBytes: transfer.size, sha256 } satisfies FilePushResult;
         this.options.onCompleted?.(peerId, result);
         return result;
       }
       throw new Error("Too many files with this name in the incoming folder.");
     } catch (error) {
-      await this.remove(id);
-      throw error;
+      try {
+        await this.remove(id);
+      } catch (cleanupError) {
+        throw new Error(`${receivingFolderError(error, transfer.directory, "receive a file").message} Transfer staging could not be removed: "${transfer.staging}" (${(cleanupError as NodeJS.ErrnoException).code ?? "unknown error"}).`, { cause: error });
+      }
+      throw receivingFolderError(error, transfer.directory, "receive a file");
     }
   }
 
@@ -222,7 +258,9 @@ export async function pushFederationFile(
     }
     const after = await file.stat();
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("Source file changed during transfer.");
-    return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") } });
+    // Finalization can copy the whole file on volumes that deny hard links.
+    // Wait for the result or peer disconnect rather than timing out mid-copy.
+    return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") }, timeoutMs: null });
   } catch (error) {
     if (transferId) {
       await rpc.request({ method: FILE_PUSH_METHODS.cancel, params: { transferId }, timeoutMs: 5_000 }).catch(() => undefined);

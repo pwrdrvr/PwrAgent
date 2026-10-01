@@ -1,3 +1,5 @@
+import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../shared/federation-receiving-folder";
+import { SETTINGS_RECEIVING_FOLDER_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
@@ -1660,6 +1662,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
   revealPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
+  receivingFolder: async (request: ReceivingFolderRequest): Promise<ReceivingFolderResponse> =>
+    await ipcRenderer.invoke(SETTINGS_RECEIVING_FOLDER_CHANNEL, request),
   readMarkdownFile: async (
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
