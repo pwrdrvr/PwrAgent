@@ -31,5 +31,25 @@
     "pagesPerArchivedScan": 2,
     "archivedPageRpcsAfterLaterRefresh": 4,
     "archivedPageRpcsAfterIndependentFilter": 6
+  },
+  "archive-cleanup-related-refreshes": {
+    "logicalRequests": 3,
+    "activeProviderListings": 3,
+    "archivedProviderListings": 1,
+    "archivedPageRpcs": 3,
+    "pagesPerArchivedListing": 3,
+    "archivedPageRpcsAfterUnchangedRefresh": 3,
+    "archivedPageRpcsAfterMembershipChange": 9,
+    "archivedPageRpcsAfterExplicitRefresh": 6,
+    "activeProviderListingsAfterMembershipChange": 5
+  },
+  "archive-cleanup-provider-mutation-fence": {
+    "archivedProviderListings": 2,
+    "archivedPageRpcs": 2,
+    "pagesPerArchivedListing": 1,
+    "revokedBindings": 0,
+    "deletedPendingIntentThreads": 0,
+    "archivedRpcsFromPreMutationRegistryListing": 1,
+    "pageRpcsForForwardedNotification": 1
   }
 }
