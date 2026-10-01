@@ -20,7 +20,8 @@ import { verifyBundledGit } from "./verify-bundled-git.mjs";
  *                       reinstalling dependencies or rerunning tests. Defaults
  *                       to macOS; combine with --win for Windows NSIS.
  *       --mac-arch=arm64: use an isolated Apple Silicon stage (default: universal)
- *       --linux       : build/package a Linux .deb for the current native
+ *       --linux       : build/package Linux DEB, RPM, pacman and
+ *                       tar.gz artifacts for the current native
  *                       architecture (or PWRAGENT_LINUX_ARCH=x64|arm64)
  *       --win         : build/package a Windows x64 NSIS installer (unsigned
  *                       unless Azure signing env is present; no publish). Run
@@ -35,7 +36,6 @@ import { verifyBundledGit } from "./verify-bundled-git.mjs";
  */
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -61,6 +61,12 @@ import { packageMacDryrun } from "./macos-dryrun-signing.mjs";
 // The checksum manifest is written here and parsed by the signing job when it
 // cuts the stable aliases; one module owns both halves of that format.
 import { writeWindowsChecksums } from "./windows-release-artifacts.mjs";
+import {
+  createLinuxStableAliases,
+  linuxReleaseArtifactNames,
+  LINUX_PACKAGE_EXTENSIONS,
+  writeLinuxChecksums,
+} from "./linux-release-artifacts.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -320,49 +326,6 @@ function findLinuxUnpackedDir(distDir) {
   return candidates[0];
 }
 
-function linuxDebArtifacts(distDir) {
-  const artifacts = readdirSync(distDir)
-    .filter((entry) => entry.endsWith(".deb"))
-    .sort()
-    .map((name) => ({ name, path: join(distDir, name) }));
-  if (artifacts.length === 0) {
-    throw new Error(`No .deb artifacts found under ${distDir}`);
-  }
-  return artifacts;
-}
-
-function createLinuxStableAliases(distDir) {
-  const aliases = [];
-  for (const { name, path } of linuxDebArtifacts(distDir)) {
-    let alias;
-    if (name.includes("-linux-x64.deb") || name.includes("-linux-amd64.deb")) {
-      alias = "PwrAgent-linux-x64.deb";
-    } else if (name.includes("-linux-arm64.deb")) {
-      alias = "PwrAgent-linux-arm64.deb";
-    }
-    if (!alias || name === alias) {
-      continue;
-    }
-    const aliasPath = join(distDir, alias);
-    copyFileSync(path, aliasPath);
-    aliases.push(aliasPath);
-  }
-  return aliases;
-}
-
-function writeLinuxChecksums(distDir) {
-  const artifacts = linuxDebArtifacts(distDir);
-  const lines = artifacts
-    .map(({ name, path }) => {
-      const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
-      return `${digest}  ${name}`;
-    })
-    .join("\n");
-  const checksumPath = join(distDir, "SHA256SUMS");
-  writeFileSync(checksumPath, `${lines}\n`);
-  return checksumPath;
-}
-
 function findWindowsUnpackedDir(distDir) {
   const candidates = readdirSync(distDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^win(?:-.+)?-unpacked$/.test(entry.name))
@@ -379,7 +342,8 @@ function publishLinuxArtifacts(distDir, channelFile) {
   if (!tag) {
     throw new Error("RELEASE_TAG or GITHUB_REF_NAME is required to publish Linux artifacts");
   }
-  const artifacts = linuxDebArtifacts(distDir).map((artifact) => artifact.name);
+  const version = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8")).version;
+  const artifacts = linuxReleaseArtifactNames(version, [currentLinuxBuilderArch()]);
   const checksum = "SHA256SUMS";
   runChecked(
     "gh",
@@ -956,8 +920,8 @@ if (win) {
   }
 } else if (linux) {
   const linuxArch = currentLinuxBuilderArch();
-  step(`electron-builder --linux deb --${linuxArch} (no builder publish)`);
-  builderArgs.push("--linux", "deb", `--${linuxArch}`, "--publish=never");
+  step(`electron-builder --linux ${LINUX_PACKAGE_EXTENSIONS.join(" ")} --${linuxArch} (no builder publish)`);
+  builderArgs.push("--linux", ...LINUX_PACKAGE_EXTENSIONS, `--${linuxArch}`, "--publish=never");
 } else {
   step(`electron-builder --mac --${macArch} (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
   maybeDecodeAppleApiKey();
@@ -1059,13 +1023,15 @@ if (linux) {
   runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
 
   step("write stable Linux download aliases");
-  const aliases = createLinuxStableAliases(dist);
+  const version = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8")).version;
+  const linuxArch = currentLinuxBuilderArch();
+  const aliases = createLinuxStableAliases(dist, version, linuxArch);
   for (const alias of aliases) {
     console.log(`  alias: ${alias}`);
   }
 
   step("write Linux checksums");
-  const checksumPath = writeLinuxChecksums(dist);
+  const checksumPath = writeLinuxChecksums(dist, version, [linuxArch]);
   console.log(`  checksum: ${checksumPath}`);
 
   step("verify Linux update channel file");

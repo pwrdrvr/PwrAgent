@@ -144,6 +144,7 @@ mac:
   extendInfo:
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
     NSLocalNetworkUsageDescription: "PwrAgent connects to Federation gateways and other services you configure on your local network."
+    NSDownloadsFolderUsageDescription: "PwrAgent saves incoming Federation files in your Downloads folder when you enable incoming files."
     NSUserNotificationAlertStyle: alert
     LSMinimumSystemVersion: "12.0"
     LSApplicationCategoryType: public.app-category.developer-tools
@@ -165,6 +166,12 @@ linux:
   target:
     - target: deb
       arch: [x64, arm64]
+    - target: rpm
+      arch: [x64, arm64]
+    - target: pacman
+      arch: [x64, arm64]
+    - target: tar.gz
+      arch: [x64, arm64]
   desktop:
     entry:
       Name: PwrAgent
@@ -173,6 +180,46 @@ linux:
 
 deb:
   priority: optional
+
+rpm:
+  packageName: pwragent
+  # Use SHA-256 file digests for current Fedora/RPM tooling.
+  fpm:
+    - "--rpm-digest"
+    - "sha256"
+  depends:
+    - alsa-lib
+    - gtk3
+    - libnotify
+    - nss
+    - libXScrnSaver
+    - libXtst
+    - xdg-utils
+    - at-spi2-core
+    - libuuid
+    - libsecret
+    - mesa-libgbm
+
+pacman:
+  packageName: pwragent
+  # electron-builder combines synopsis and description with a newline. Arch's
+  # .PKGINFO requires a single-line pkgdesc; the later FPM argument overrides it.
+  fpm:
+    - "--description"
+    - "Thread-centric coding agent desktop app"
+  # We ship Electron's upstream binary, not Arch's system Electron. Do not
+  # inherit electron-builder's list of Chromium build dependencies.
+  depends:
+    - alsa-lib
+    - gtk3
+    - nss
+    - libxss
+    - libxtst
+    - libnotify
+    - libsecret
+    - libdrm
+    - mesa
+    - xdg-utils
 
 win:
   icon: build/icon.png

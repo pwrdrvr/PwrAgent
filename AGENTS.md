@@ -402,9 +402,31 @@
   not add GPL to the npm dependency allowlist or change first-party MIT licensing.
 - Apart from that bundled Git exception, strong copyleft and source-available terms are permitted nowhere.
 - Those terms include GPL, AGPL, BSL, SSPL, and Commons Clause.
-- LGPL is also permitted nowhere.
-- PwrAgent ships no LGPL component, and the notice carries no FSF text and no written source offer.
-- An LGPL arrival would therefore have nothing to disclose with.
+- PwrDrvr LLC approved a scoped AppImage exception on 2026-10-01, to permit
+  the modern runtime without a system `libfuse.so.2` dependency.
+  - Permit only the unmodified AppImage `type2-runtime` release `20251108`
+    (commit `dd6cebedcbddde9c82f89b011e8e1d40b6e43868`), as distributed by
+    electron-builder's `toolsets.appimage: "1.0.3"`, as the AppImage ELF stub.
+  - This exception covers its statically linked libfuse 3.15.0 library under
+    LGPL-2.1-only. It does not cover LGPL libraries in the Electron payload,
+    native addons, or npm dependencies, or bundled `fusermount`/`fusermount3`
+    executables. A different runtime or library version needs a new decision.
+  - Keep first-party code and package declarations MIT. Do not add LGPL to
+    `ALLOWED_LICENSE_IDS`.
+  - Before shipping an AppImage, retain the runtime's MIT notice, full LGPL-2.1
+    text, libfuse's license split, and all linked-library notices in the
+    distribution and `THIRD_PARTY_LICENSES`. Include mimalloc's MIT notice and
+    use libzstd's BSD license alternative.
+  - Publish the complete pinned runtime and library source, patches, checksums,
+    and build/relink instructions beside the AppImage on the same GitHub
+    release. Preserve original source and identify modifications with dated
+    change notices, including the upstream libfuse `mount.c` patch.
+  - Identify the runtime stub and the separately executed Electron payload in
+    the notice. State that `fusermount`/`fusermount3` is a system executable,
+    not included in the AppImage.
+- LGPL remains prohibited outside that AppImage runtime exception. The
+  exception records approval; it does not itself add a shipped component or
+  satisfy the required disclosures and source distribution.
 - `MPL-2.0` is the one copyleft id on the allowlist.
 - Its copyleft binds the MPL-licensed files themselves.
 - It places no condition on the larger work that includes them.
@@ -654,10 +676,14 @@ Render a brand through `BrandLockup`
   - A new pin, including an auto-pinned new thread, lands at the top of the
     ordinary pins and never above a kept pin.
   - Cross tiers only explicitly: the **Keep at Top** check item in the
-    context menu, or a drop on the Keep at top target that a pin drag shows
-    (a ghost slot above the pins while no pin is kept, else the seam between
-    the tiers). Move Up, Move Down, and the shortcuts stay inside the pin's
-    tier.
+    context menu, or a drag. Move Up, Move Down, and the shortcuts stay
+    inside the pin's tier.
+  - A pin drag shows a ghost Keep at top slot: above the pins while no pin
+    is kept, else below the last kept pin. Only a drop inside the slot's own
+    box keeps. The slot must not overlap a row.
+  - A drop on a pin row adopts that row's tier. The line above the first
+    ordinary pin is the top of the ordinary pins; the lower half of the
+    last kept pin is the end of the kept pins.
   - The **Pinned** and **Keep at Top** check items toggle in place and keep
     the menu open. Return or a click outside closes it.
 - Sort unpinned directory threads by thread creation time.

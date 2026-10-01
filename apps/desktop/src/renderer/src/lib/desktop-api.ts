@@ -11,6 +11,7 @@ import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { useEffect, useState } from "react";
+import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../shared/federation-receiving-folder";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
 import type {
@@ -1165,6 +1166,7 @@ export type DesktopApi = {
   ) => Promise<ReadDesktopApplicationsResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
+  receivingFolder?: (request: ReceivingFolderRequest) => Promise<ReceivingFolderResponse>;
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;

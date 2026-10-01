@@ -847,6 +847,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <FederationCapabilities
+        desktopApi={props.desktopApi}
         federation={federation}
         saving={props.saving}
         onWriteConfig={props.onWriteConfig}

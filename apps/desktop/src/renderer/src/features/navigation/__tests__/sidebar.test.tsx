@@ -5918,7 +5918,7 @@ describe("Sidebar", () => {
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
-  it("keeps a dragged pin at top when it drops on the seam after the kept pins", async () => {
+  it("keeps a dragged pin at top when it drops on the slot below the kept pins", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
     const kept = {
@@ -5958,21 +5958,22 @@ describe("Sidebar", () => {
       />,
     );
 
-    // The seam mounts between the tiers, hidden until a drag starts.
-    const seam = container.querySelector(
+    // The slot mounts below the last kept pin, hidden until a drag starts.
+    const slot = container.querySelector(
       ".directory-row__keep-top-slot",
     ) as HTMLElement;
-    expect(seam).toHaveClass("directory-row__keep-top-slot--seam");
-    expect(seam).toHaveAttribute("aria-hidden", "true");
+    expect(slot).toHaveTextContent("Keep at top");
+    expect(slot).toHaveAttribute("aria-hidden", "true");
+    expect(slot).not.toHaveClass("is-drag-enabled");
     const keptRow = screen
       .getByRole("button", { name: /Release manager/i })
       .closest(".thread-row-shell") as HTMLElement;
     const ordinaryRow = screen
       .getByRole("button", { name: /Fresh pin/i })
       .closest(".thread-row-shell") as HTMLElement;
-    expect(keptRow.compareDocumentPosition(seam)
+    expect(keptRow.compareDocumentPosition(slot)
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(seam.compareDocumentPosition(ordinaryRow)
+    expect(slot.compareDocumentPosition(ordinaryRow)
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     const rect = (top: number, height: number): DOMRect => ({
@@ -5986,26 +5987,29 @@ describe("Sidebar", () => {
       x: 0,
       y: top,
     });
+    // The opened slot is a box of its own between the tiers: it overlaps
+    // neither the last kept row nor the first ordinary row.
     vi.spyOn(keptRow, "getBoundingClientRect").mockReturnValue(rect(50, 50));
-    vi.spyOn(seam, "getBoundingClientRect").mockReturnValue(rect(84, 32));
-    vi.spyOn(ordinaryRow, "getBoundingClientRect").mockReturnValue(rect(200, 50));
+    vi.spyOn(slot, "getBoundingClientRect").mockReturnValue(rect(104, 34));
+    vi.spyOn(ordinaryRow, "getBoundingClientRect").mockReturnValue(rect(142, 50));
 
-    startThreadPinPointerDrag(ordinaryRow, { x: 50, y: 225 });
-    moveThreadPinPointer({ x: 50, y: 100 });
+    startThreadPinPointerDrag(ordinaryRow, { x: 50, y: 175 });
+    moveThreadPinPointer({ x: 50, y: 120 });
+    expect(slot).toHaveClass("is-drag-enabled");
     expect(
       screen.getByRole("separator", {
         name: "Keep thread at top of pinned threads for PwrAgent",
       }),
-    ).toBe(seam);
+    ).toBe(slot);
     await waitFor(() => {
-      expect(seam).toHaveClass("is-drop-target-before");
+      expect(slot).toHaveClass("is-drop-target-before");
     });
-    // The held card covers the seam, so it carries the outcome itself.
+    // The held card covers the slot, so it carries the outcome itself.
     expect(
       document.body.querySelector(".thread-row--drag-image .thread-row__drop-label"),
     ).toHaveTextContent("Keep at top");
 
-    releaseThreadPinPointer({ x: 50, y: 100 });
+    releaseThreadPinPointer({ x: 50, y: 120 });
     await waitFor(() => {
       expect(onReorderThreadPins).toHaveBeenCalledWith([], {
         key: "codex:thread-ordinary",
@@ -6013,6 +6017,141 @@ describe("Sidebar", () => {
       });
     });
     expect(onSetThreadPin).not.toHaveBeenCalled();
+  });
+
+  it("keeps the top of the ordinary pins droppable below the Keep at top slot", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const kept = {
+      ...sharedThread,
+      id: "thread-kept",
+      title: "Release manager",
+      pinnedRank: String(-(2 ** 40)),
+    };
+    const fresh = {
+      ...sharedThread,
+      id: "thread-fresh",
+      title: "Fresh pin",
+      pinnedRank: "1024",
+    };
+    const old = {
+      ...sharedThread,
+      id: "thread-old",
+      title: "Old pin",
+      pinnedRank: "2048",
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[
+          {
+            ...directories[0]!,
+            ...{
+              threadKeys: [
+                "codex:thread-kept",
+                "codex:thread-fresh",
+                "codex:thread-old",
+              ],
+            },
+          },
+        ]}
+        inboxThreads={[kept, fresh, old]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-kept"
+        threads={[kept, fresh, old]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const slot = container.querySelector(
+      ".directory-row__keep-top-slot",
+    ) as HTMLElement;
+    const rowFor = (name: RegExp): HTMLElement => screen
+      .getByRole("button", { name })
+      .closest(".thread-row-shell") as HTMLElement;
+    const keptRow = rowFor(/Release manager/i);
+    const freshRow = rowFor(/Fresh pin/i);
+    const oldRow = rowFor(/Old pin/i);
+    const rect = (top: number, height: number): DOMRect => ({
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top,
+      width: 300,
+      x: 0,
+      y: top,
+    });
+    vi.spyOn(keptRow, "getBoundingClientRect").mockReturnValue(rect(50, 50));
+    vi.spyOn(slot, "getBoundingClientRect").mockReturnValue(rect(104, 34));
+    vi.spyOn(freshRow, "getBoundingClientRect").mockReturnValue(rect(142, 50));
+    vi.spyOn(oldRow, "getBoundingClientRect").mockReturnValue(rect(196, 50));
+    const dropLabel = (): Element | null => document.body.querySelector(
+      ".thread-row--drag-image .thread-row__drop-label",
+    );
+
+    // The top half of the first ordinary row is the top of the ordinary
+    // pins, not Keep at top: the slot above it is a box of its own.
+    startThreadPinPointerDrag(oldRow, { x: 50, y: 220 });
+    moveThreadPinPointer({ x: 50, y: 150 });
+    await waitFor(() => {
+      expect(freshRow).toHaveClass("is-drop-target-before");
+    });
+    expect(slot).toHaveClass("is-drag-enabled");
+    expect(slot).not.toHaveClass("is-drop-target-before");
+    expect(dropLabel()).toBeNull();
+    releaseThreadPinPointer({ x: 50, y: 150 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith(expect.any(Array), {
+        key: "codex:thread-old",
+        anchorKey: "codex:thread-fresh",
+        placement: "before",
+      });
+    });
+
+    // A kept pin dropped there adopts the ordinary tier through its anchor.
+    onReorderThreadPins.mockClear();
+    startThreadPinPointerDrag(keptRow, { x: 50, y: 60 });
+    moveThreadPinPointer({ x: 50, y: 150 });
+    await waitFor(() => {
+      expect(freshRow).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 150 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith(expect.any(Array), {
+        key: "codex:thread-kept",
+        anchorKey: "codex:thread-fresh",
+        placement: "before",
+      });
+    });
+
+    // The lower half of the last kept row still ends the kept tier.
+    onReorderThreadPins.mockClear();
+    startThreadPinPointerDrag(oldRow, { x: 50, y: 220 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    await waitFor(() => {
+      expect(keptRow).toHaveClass("is-drop-target-after");
+    });
+    releaseThreadPinPointer({ x: 50, y: 90 });
+    await waitFor(() => {
+      expect(onReorderThreadPins).toHaveBeenCalledWith(expect.any(Array), {
+        key: "codex:thread-old",
+        anchorKey: "codex:thread-kept",
+        placement: "after",
+      });
+    });
+    expect(onReorderThreadPins).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ keepAtTop: expect.anything() }),
+    );
   });
 
   it("stops keeping a pin dropped after the pins when every pin is kept", async () => {
@@ -6145,7 +6284,7 @@ describe("Sidebar", () => {
     const ghost = container.querySelector(
       ".directory-row__keep-top-slot",
     ) as HTMLElement;
-    expect(ghost).toHaveClass("directory-row__keep-top-slot--ghost");
+    expect(ghost).toHaveTextContent("Keep at top");
     expect(ghost).toHaveAttribute("aria-hidden", "true");
     expect(ghost).not.toHaveClass("is-drag-enabled");
     const firstRow = screen
