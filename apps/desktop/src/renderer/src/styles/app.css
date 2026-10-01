@@ -988,7 +988,10 @@ textarea,
   background: var(--status-suspended);
 }
 
-.new-thread-menu__target-dot[data-availability="unsupported"] {
+/* A peer without the row's project is also a can't-from-here: it needs the
+   project set up there, not a reconnect. */
+.new-thread-menu__target-dot[data-availability="unsupported"],
+.new-thread-menu__target-dot[data-availability="no-project"] {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--status-suspended);
 }
@@ -7283,6 +7286,78 @@ a.button {
   height: 1px;
   margin: 6px 0;
   background: var(--border-subtle);
+}
+
+/* A row that cascades a second menu to its right. The flyout is a child of
+   the wrapper, so the pointer can cross onto it without a mouseleave. */
+.thread-context-menu__cascade {
+  position: relative;
+}
+
+.thread-context-menu__cascade-chevron {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.thread-context-menu button:hover:not(:disabled) .thread-context-menu__cascade-chevron,
+.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__cascade-chevron,
+.thread-context-menu button[aria-expanded="true"] .thread-context-menu__cascade-chevron {
+  color: var(--accent-bright);
+}
+
+.thread-context-menu button[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-context-menu.thread-context-menu__flyout {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 2px);
+  min-width: 200px;
+}
+
+.thread-context-menu__group-label {
+  padding: 4px 10px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.thread-context-menu__machine-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-context-menu__machine-state {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.thread-context-menu button[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.thread-context-menu button[aria-disabled="true"]:hover,
+.thread-context-menu button[aria-disabled="true"]:focus-visible {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.thread-context-menu button:hover:not(:disabled):not([aria-disabled="true"]) .thread-context-menu__machine-state,
+.thread-context-menu button:focus-visible:not(:disabled):not([aria-disabled="true"]) .thread-context-menu__machine-state {
+  color: var(--accent-bright);
 }
 
 .rename-thread-backdrop {
@@ -32407,6 +32482,46 @@ button.pricing-token-miser__folded:focus-visible {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
   color: var(--button-text);
+}
+
+/* The launchpad's machine chip when it targets another machine. An accent
+   rim and mark, never the solid fill: Full Access owns that, and a thread
+   bound for a peer is a routing fact, not a risk. Local reads neutral. */
+.composer-dropdown--remote .composer-dropdown__button {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text-primary);
+}
+
+.composer-dropdown--remote .composer-dropdown__icon {
+  color: var(--accent);
+}
+
+/* The target machine is unreachable. Dashed, like a link that is down, and
+   muted: the draft is kept, but nothing will send until it reconnects. */
+.composer-dropdown--offline .composer-dropdown__button,
+.composer__fixed-value--machine[data-offline="true"][data-remote] {
+  border-style: dashed;
+  border-color: var(--text-muted);
+  color: var(--text-secondary);
+}
+
+.composer-dropdown--offline .composer-dropdown__icon,
+.composer__fixed-value--machine[data-offline="true"][data-remote] .composer-dropdown__icon {
+  color: var(--text-muted);
+}
+
+/* A sub-thread's machine is fixed by its parent, so the chip only reports. */
+.composer__fixed-value--machine {
+  gap: 6px;
+}
+
+.composer__fixed-value--machine[data-remote="true"] {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text-primary);
+}
+
+.composer__fixed-value--machine[data-remote="true"] .composer-dropdown__icon {
+  color: var(--accent);
 }
 
 .composer-dropdown__menu {

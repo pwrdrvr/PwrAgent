@@ -1,5 +1,6 @@
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
+import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
 import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
 import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navigation-archive-group";
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
@@ -85,6 +86,7 @@ import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
   getThreadPrimaryDirectory,
+  type SubthreadMachine,
   type ThreadWorkspaceMode,
 } from "./subthread-launchpads";
 
@@ -120,6 +122,17 @@ export type CreatingThreadState = {
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
+
+/** An owner's directory-less launchpad row, synthesized when it lists none. */
+function pickOwnerWorkspaceDirectory(
+  ownerDirectories: NavigationDirectorySummary[],
+): NavigationDirectorySummary {
+  return ownerDirectories.find((directory) => directory.kind === "workspace") ?? {
+    key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+    kind: "workspace",
+    label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
+  };
+}
 const FEDERATED_LAUNCHPAD_SELECTION_PREFIX = "federated-launchpad:";
 /**
  * A submitted launchpad whose thread is still starting. It has its own
@@ -191,6 +204,13 @@ type FederatedLaunchpadSession = {
   launchpad: NavigationLaunchpadDraft;
   target: FederationRemoteTarget;
 };
+
+function federatedLaunchpadSessionKey(
+  target: FederationRemoteTarget,
+  directoryKey: string,
+): string {
+  return JSON.stringify([target.instanceId, directoryKey]);
+}
 
 type ThreadNameObservation = {
   threadName: string;
@@ -2717,8 +2737,14 @@ function buildLaunchpadRelativeThreadKey(
   threadId: string | undefined,
   instanceId: FederationInstanceId | undefined,
   launchpadTarget: FederationTarget | undefined,
+  localInstanceId?: FederationInstanceId,
 ): string | undefined {
   if (!threadId) return undefined;
+  // A peer's child of a thread on this machine names this machine as the
+  // parent's owner, and this machine keys its own threads locally.
+  if (instanceId && instanceId === localInstanceId) {
+    return buildThreadIdentityKey(backend, threadId);
+  }
   const target: FederationTarget | undefined = instanceId
     ? { scope: "remote", instanceId }
     : launchpadTarget && isRemoteFederationTarget(launchpadTarget) ? launchpadTarget : undefined;
@@ -2729,6 +2755,12 @@ function buildLaunchpadRelativeThreadKey(
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  /**
+   * This machine's federation instance id. A sub-thread started on a peer
+   * names its local parent by it, and a parent link back to this machine
+   * resolves to the local thread rather than a federated one.
+   */
+  localFederationInstanceId?: FederationInstanceId;
   composerDraftStore?: ComposerDraftStore;
   attentionPromoteOnTurnEnd?: boolean;
   progressiveInitialRefresh?: boolean;
@@ -2765,6 +2797,7 @@ export function useThreadNavigation(
   createSubthread: (
     parent: NavigationThreadSummary,
     mode?: ThreadWorkspaceMode,
+    machine?: SubthreadMachine,
   ) => Promise<void>;
   /** Returns true when cancellation restores a sub-thread source selection. */
   discardLaunchpad: (directoryKey: string) => boolean;
@@ -2824,6 +2857,35 @@ export function useThreadNavigation(
   openFederatedWorkspaceLaunchpad: (
     target: FederationRemoteTarget,
   ) => Promise<void>;
+  /**
+   * Open the peer's counterpart of a local directory row: its Workspaces
+   * launchpad for the Workspaces row, else its project of the same name. A
+   * peer without that project reports it instead of opening Workspaces.
+   */
+  openFederatedProjectLaunchpad: (
+    target: FederationRemoteTarget,
+    localDirectory: ProjectIdentity,
+    targetLabel?: string,
+  ) => Promise<void>;
+  /** Whether the peer has the counterpart `openFederatedProjectLaunchpad` opens. */
+  federatedTargetHasProject: (
+    target: FederationRemoteTarget,
+    localDirectory: ProjectIdentity,
+  ) => Promise<boolean>;
+  /** Back/Forward into a peer launchpad recorded by directory key. */
+  restoreFederatedLaunchpad: (
+    target: FederationRemoteTarget,
+    directoryKey: string,
+    options?: { offline?: boolean; targetLabel?: string },
+  ) => Promise<void>;
+  /** The peer the selected launchpad session is addressed to, if any. */
+  selectedFederatedLaunchpadTarget?: FederationRemoteTarget;
+  /** The same project's launchpad on another machine, for the machine chip. */
+  planLaunchpadMachineRetarget: (
+    project: ProjectIdentity,
+    instanceId: string | undefined,
+    targetLabel?: string,
+  ) => Promise<{ directoryKey: string; open: () => Promise<void> } | undefined>;
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
   pickAndRegisterDirectory: (
     preferredBackend?: AppServerBackendKind,
@@ -3042,6 +3104,30 @@ export function useThreadNavigation(
   // network. Keep only the most recent launch intent so a slow prior peer or
   // project selection cannot replace the launchpad the operator just chose.
   const federatedLaunchpadOpenRevisionRef = useRef(0);
+  // The last session per peer launchpad, so Back can bring back a composer
+  // whose machine has since gone offline instead of failing to reopen it.
+  // An ending session (sent, discarded, reset) leaves the cache with it.
+  const federatedLaunchpadSessionsRef = useRef(
+    new Map<string, FederatedLaunchpadSession>(),
+  );
+  const previousFederatedLaunchpadRef = useRef<FederatedLaunchpadSession | undefined>(undefined);
+  useEffect(() => {
+    const previous = previousFederatedLaunchpadRef.current;
+    previousFederatedLaunchpadRef.current = federatedLaunchpad;
+    if (federatedLaunchpad) {
+      federatedLaunchpadSessionsRef.current.set(
+        federatedLaunchpadSessionKey(
+          federatedLaunchpad.target,
+          federatedLaunchpad.launchpad.directoryKey,
+        ),
+        federatedLaunchpad,
+      );
+    } else if (previous) {
+      federatedLaunchpadSessionsRef.current.delete(
+        federatedLaunchpadSessionKey(previous.target, previous.launchpad.directoryKey),
+      );
+    }
+  }, [federatedLaunchpad]);
   // Create / rename / archive keep their single error slot here — every
   // producer already clears it when the next attempt starts — but the slot
   // is now published to the notice stack instead of rendered inline. See
@@ -3259,6 +3345,7 @@ export function useThreadNavigation(
     directoryKey: getLaunchpadSelectionDirectoryKey(selectedItemKey), federationTarget: rendererFederationTarget,
   });
   const draftStore = options.composerDraftStore;
+  const localFederationInstanceId = options.localFederationInstanceId;
   const draftVersion = useSyncExternalStore(
     useCallback((listener: () => void) => draftStore?.subscribeDraftPresence(listener) ?? (() => undefined), [draftStore]),
     useCallback(() => draftStore?.getDraftPresenceVersion() ?? 0, [draftStore]),
@@ -5465,6 +5552,7 @@ export function useThreadNavigation(
     async (
       parent: NavigationThreadSummary,
       mode: ThreadWorkspaceMode = "same-worktree",
+      machine?: SubthreadMachine,
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
         setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
@@ -5492,13 +5580,39 @@ export function useThreadNavigation(
       // new thread to that same card — the thread it is a child of.
       const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
 
-      const federationTarget =
+      const parentOwnerTarget =
         parent.federation?.ref.target ?? rendererFederationTarget;
-      // The new thread is created on whichever instance owns `parent`, so a
-      // parent link to `parent` is always instance-local. This used to carry
+      const parentOwnerInstanceId =
+        parentOwnerTarget && isRemoteFederationTarget(parentOwnerTarget)
+          ? parentOwnerTarget.instanceId
+          : localFederationInstanceId;
+      // By default the new thread is created on whichever instance owns
+      // `parent`, so the parent link is instance-local. (This used to carry
       // the *grandparent's* instance id, because the parent recorded here used
-      // to be the group root rather than the card the operator clicked.
-      const parentThreadInstanceId = undefined;
+      // to be the group root rather than the card the operator clicked.)
+      //
+      // A new workspace needs nothing from the parent's disk, so it alone may
+      // start on another machine. The child then names the parent's owner,
+      // which is what files it under the parent across machines.
+      const machineInstanceId = machine
+        ? machine.instanceId ?? localFederationInstanceId
+        : undefined;
+      const crossMachine =
+        mode === "new-workspace"
+        && machine !== undefined
+        && machineInstanceId !== parentOwnerInstanceId;
+      if (crossMachine && !parentOwnerInstanceId) {
+        setCreateThreadError("This machine has no federation identity to link the sub-thread to its parent.");
+        return;
+      }
+      const federationTarget: FederationTarget | undefined = crossMachine
+        ? machine?.instanceId
+          ? { scope: "remote", instanceId: machine.instanceId }
+          : undefined
+        : parentOwnerTarget;
+      const parentThreadInstanceId = crossMachine
+        ? parentOwnerInstanceId
+        : undefined;
       setCreatingThread({
         backend: parent.source,
         executionMode: parent.executionMode ?? "default",
@@ -5576,9 +5690,7 @@ export function useThreadNavigation(
               updated.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata: Boolean(
-                  parent.federation || rendererFederationTarget,
-                ),
+                preserveOwnerCodexEnvironmentMetadata: Boolean(federationTarget),
               },
             ),
             parentThreadId: parent.id,
@@ -5617,6 +5729,7 @@ export function useThreadNavigation(
     },
     [
       desktopApi,
+      localFederationInstanceId,
       rendererFederationTarget,
       takePendingDirectoryGitStatus,
     ],
@@ -5874,8 +5987,45 @@ export function useThreadNavigation(
     [desktopApi, federatedLaunchpad],
   );
 
-  const openFederatedWorkspaceLaunchpad = useCallback(
-    async (target: FederationRemoteTarget): Promise<void> => {
+  /**
+   * The owner's whole directory index. Callers check the bridge first. An
+   * index the owner is still loading throws rather than reading as complete,
+   * so a half-loaded peer never answers "no such project".
+   */
+  const readOwnerDirectoryIndex = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      consumerId: string,
+      isCancelled: () => boolean = () => false,
+    ): Promise<NavigationDirectorySummary[]> => {
+      const page = await readNavigationQueryRange({
+        request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
+        read: (request) => desktopApi!.getNavigationQueryPage!(request, consumerId),
+        isCancelled: () => !mountedRef.current || isCancelled(),
+        maxBytes: 8 * 1024 * 1024,
+      }).finally(() => desktopApi?.releaseNavigationQuery?.(consumerId));
+      if (page.coverage.state !== "complete") {
+        throw new Error("The owner is still loading its directories. Retry when it is ready.");
+      }
+      return page.directories ?? [];
+    },
+    [desktopApi],
+  );
+
+  /**
+   * Read the owner's directory index, pick one row, and open its launchpad.
+   * `pick` returns undefined when the owner has no row to offer; the message
+   * it names then surfaces as the launchpad error instead of the composer
+   * quietly opening somewhere the operator did not ask for.
+   */
+  const openFederatedLaunchpadFromOwnerIndex = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      pick: (
+        ownerDirectories: NavigationDirectorySummary[],
+      ) => NavigationDirectorySummary | undefined,
+      missingMessage: string,
+    ): Promise<void> => {
       const openRevision = ++federatedLaunchpadOpenRevisionRef.current;
       if (!desktopApi?.getNavigationQueryPage) {
         if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
@@ -5886,28 +6036,21 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
       try {
-        const consumerId = `workspace-launchpad:${attentionViewId}:${openRevision}`;
-        const page = await readNavigationQueryRange({
-          request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
-          read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
-          isCancelled: () => !mountedRef.current || federatedLaunchpadOpenRevisionRef.current !== openRevision,
-          maxBytes: 8 * 1024 * 1024,
-        }).finally(() => desktopApi.releaseNavigationQuery?.(consumerId));
-        if (page.coverage.state !== "complete") throw new Error("The owner is still loading its directories. Retry when it is ready.");
-        const ownerDirectories = page.directories ?? [];
+        const ownerDirectories = await readOwnerDirectoryIndex(
+          target,
+          `workspace-launchpad:${attentionViewId}:${openRevision}`,
+          () => federatedLaunchpadOpenRevisionRef.current !== openRevision,
+        );
         if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
           return;
         }
-        const workspaceDirectory = ownerDirectories.find(
-          (directory) => directory.kind === "workspace",
-        ) ?? {
-          key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
-          kind: "workspace" as const,
-          label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
-        };
+        const directory = pick(ownerDirectories);
+        if (!directory) {
+          throw new Error(missingMessage);
+        }
         await openFederatedDirectoryLaunchpad(
           target,
-          workspaceDirectory,
+          directory,
           ownerDirectories,
           openRevision,
         );
@@ -5917,7 +6060,111 @@ export function useThreadNavigation(
         }
       }
     },
-    [desktopApi, openFederatedDirectoryLaunchpad, attentionViewId],
+    [desktopApi, openFederatedDirectoryLaunchpad, attentionViewId, readOwnerDirectoryIndex],
+  );
+
+  const openFederatedWorkspaceLaunchpad = useCallback(
+    async (target: FederationRemoteTarget): Promise<void> => {
+      await openFederatedLaunchpadFromOwnerIndex(
+        target,
+        pickOwnerWorkspaceDirectory,
+        "The owner has no workspace launchpad.",
+      );
+    },
+    [openFederatedLaunchpadFromOwnerIndex],
+  );
+
+  const openFederatedProjectLaunchpad = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      localDirectory: ProjectIdentity,
+      targetLabel?: string,
+    ): Promise<void> => {
+      await openFederatedLaunchpadFromOwnerIndex(
+        target,
+        (ownerDirectories) =>
+          localDirectory.kind === "workspace"
+            ? pickOwnerWorkspaceDirectory(ownerDirectories)
+            : findPeerCounterpartDirectory(localDirectory, ownerDirectories),
+        `${targetLabel ?? target.instanceId} has no project named ${localDirectory.label}.`,
+      );
+    },
+    [openFederatedLaunchpadFromOwnerIndex],
+  );
+
+  const federatedTargetHasProject = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      localDirectory: ProjectIdentity,
+    ): Promise<boolean> => {
+      if (localDirectory.kind === "workspace") {
+        return true;
+      }
+      if (!desktopApi?.getNavigationQueryPage) {
+        return false;
+      }
+      // The whole index, not a label filter: the origin match is what lets
+      // "PwrAgnt" here find "PwrAgent" there, and a name filter would drop it
+      // before the comparison ever ran.
+      const ownerDirectories = await readOwnerDirectoryIndex(
+        target,
+        `project-target:${attentionViewId}:${target.instanceId}:${localDirectory.label}`,
+      );
+      return Boolean(findPeerCounterpartDirectory(localDirectory, ownerDirectories));
+    },
+    [attentionViewId, desktopApi, readOwnerDirectoryIndex],
+  );
+
+  const restoreFederatedLaunchpad = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      directoryKey: string,
+      options?: { offline?: boolean; targetLabel?: string },
+    ): Promise<void> => {
+      // Navigating away does not end the peer session, so the common Back is
+      // a pure selection change: same composer, same draft, no peer round trip.
+      if (
+        federatedLaunchpad
+        && federationTargetsEqual(federatedLaunchpad.target, target)
+        && federatedLaunchpad.launchpad.directoryKey === directoryKey
+      ) {
+        ++federatedLaunchpadOpenRevisionRef.current;
+        setLaunchpadError(undefined);
+        setSelectedItemKey(buildFederatedLaunchpadSelectionKey(target));
+        return;
+      }
+      if (options?.offline) {
+        // Nothing can be read from an offline owner. Bring back the session
+        // as it was left, draft included; the composer shows the machine as
+        // offline and holds sends until it reconnects.
+        ++federatedLaunchpadOpenRevisionRef.current;
+        const cached = federatedLaunchpadSessionsRef.current.get(
+          federatedLaunchpadSessionKey(target, directoryKey),
+        );
+        if (!cached) {
+          setLaunchpadError(
+            `${options.targetLabel ?? target.instanceId} is offline. Try again when it reconnects.`,
+          );
+          return;
+        }
+        setLaunchpadError(undefined);
+        setFederatedLaunchpad(cached);
+        setSelectedItemKey(buildFederatedLaunchpadSelectionKey(target));
+        return;
+      }
+      // The session moved on (another machine, another project, or a send).
+      // Reopen the same project on the owner; its draft is viewer-local and
+      // comes back with the launchpad. A project the owner has since dropped
+      // falls back to its Workspaces launchpad rather than to nothing.
+      await openFederatedLaunchpadFromOwnerIndex(
+        target,
+        (ownerDirectories) =>
+          ownerDirectories.find((directory) => directory.key === directoryKey)
+          ?? pickOwnerWorkspaceDirectory(ownerDirectories),
+        "The owner has no workspace launchpad.",
+      );
+    },
+    [federatedLaunchpad, openFederatedLaunchpadFromOwnerIndex],
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -5995,6 +6242,78 @@ export function useThreadNavigation(
       );
     },
     [directories, openDirectoryLaunchpad]
+  );
+
+  /**
+   * Resolve where a launchpad lands when its machine chip moves it: the same
+   * project on `instanceId` (undefined is this machine). The composer moves
+   * its draft to the returned key before `open` switches the selection, so
+   * nothing typed is lost on the hop. A machine without the project answers
+   * undefined and an error, never that machine's Workspaces.
+   */
+  const planLaunchpadMachineRetarget = useCallback(
+    async (
+      project: ProjectIdentity,
+      instanceId: string | undefined,
+      targetLabel?: string,
+    ): Promise<{ directoryKey: string; open: () => Promise<void> } | undefined> => {
+      // A later pick supersedes this one, so a slow peer's index read cannot
+      // land after a faster one and open the machine the operator left.
+      const openRevision = ++federatedLaunchpadOpenRevisionRef.current;
+      setLaunchpadError(undefined);
+      if (instanceId === undefined) {
+        const directory = project.kind === "workspace"
+          ? pickOwnerWorkspaceDirectory(directories)
+          : findPeerCounterpartDirectory(project, directories);
+        if (!directory) {
+          setLaunchpadError(`This machine has no project named ${project.label}.`);
+          return undefined;
+        }
+        return {
+          directoryKey: directory.key,
+          open: () => openDirectoryLaunchpad(directory),
+        };
+      }
+      if (!desktopApi?.getNavigationQueryPage) {
+        setLaunchpadError("Desktop bridge requires bounded navigation support. Upgrade this instance.");
+        return undefined;
+      }
+      const target = { scope: "remote", instanceId } as const;
+      const superseded = () => federatedLaunchpadOpenRevisionRef.current !== openRevision;
+      try {
+        const ownerDirectories = await readOwnerDirectoryIndex(
+          target,
+          `launchpad-machine:${attentionViewId}:${openRevision}`,
+          superseded,
+        );
+        if (superseded()) {
+          return undefined;
+        }
+        const directory = project.kind === "workspace"
+          ? pickOwnerWorkspaceDirectory(ownerDirectories)
+          : findPeerCounterpartDirectory(project, ownerDirectories);
+        if (!directory) {
+          throw new Error(`${targetLabel ?? instanceId} has no project named ${project.label}.`);
+        }
+        return {
+          directoryKey: directory.key,
+          open: () => openFederatedDirectoryLaunchpad(target, directory, ownerDirectories, openRevision),
+        };
+      } catch (error) {
+        if (!superseded()) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+        return undefined;
+      }
+    },
+    [
+      attentionViewId,
+      desktopApi,
+      directories,
+      openDirectoryLaunchpad,
+      openFederatedDirectoryLaunchpad,
+      readOwnerDirectoryIndex,
+    ],
   );
 
   const pickAndRegisterDirectory = useCallback(
@@ -6752,12 +7071,14 @@ export function useThreadNavigation(
           materializeParentThreadId,
           materializeParentThreadInstanceId,
           submittedFederationTarget,
+          localFederationInstanceId,
         ),
         sourceThreadKey: buildLaunchpadRelativeThreadKey(
           materializeParentThreadBackend,
           materializeParentThreadId && (launchpad.sourceThreadId ?? materializeParentThreadId),
           materializeParentThreadInstanceId,
           submittedFederationTarget,
+          localFederationInstanceId,
         ),
         title: input?.find((item) => item.type === "text")?.text
           ?? launchpad.prompt ?? "New thread",
@@ -7092,6 +7413,7 @@ export function useThreadNavigation(
     [draftStore, rendererFederationTarget,
       refreshNavigation,
       activeFederatedLaunchpad,
+      localFederationInstanceId,
       desktopApi,
       directories,
       insertSubthreadBelowSource,
@@ -8358,6 +8680,11 @@ export function useThreadNavigation(
     openFederatedDirectoryLaunchpad,
     openWorkspaceLaunchpad,
     openFederatedWorkspaceLaunchpad,
+    openFederatedProjectLaunchpad,
+    federatedTargetHasProject,
+    restoreFederatedLaunchpad,
+    selectedFederatedLaunchpadTarget: activeFederatedLaunchpad?.target,
+    planLaunchpadMachineRetarget,
     pickAndRegisterDirectory,
     addProjectDirectory,
     pickAndAttachDirectoryToSelectedThread,

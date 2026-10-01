@@ -99,7 +99,7 @@ import {
   type ListAcpThreadRewindPointsResponse,
   type RewindAcpThreadRequest,
   type RewindAcpThreadResponse,
-  buildAppendPinRank,
+  buildPrependPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
   canIsolateMcpProviderServers,
@@ -15752,9 +15752,12 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The next rank at the bottom of the operator's pin list. Remote rows pinned
-   * into this viewer's main window own ranks in `remote_thread_pins`, not the
-   * local thread overlay, and new local pins join the same user-curated order,
+   * The next rank at the TOP of the operator's pin list: the thread was just
+   * created, so it is the one the operator is about to look for, and the
+   * bottom of a long pin list is the least visible place to put it. Remote
+   * rows pinned into this viewer's main window own ranks in
+   * `remote_thread_pins`, not the local thread overlay, and new local pins
+   * join the same user-curated order,
    * so rank allocation must include both stores or it can reuse a remote rank
    * and strand the two rows at the local/remote boundary.
    */
@@ -15773,7 +15776,7 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    return buildAppendPinRank([
+    return buildPrependPinRank([
       ...this.createdThreadVisibilityPinnedRanks,
       ...remotePinnedRanks,
     ]);

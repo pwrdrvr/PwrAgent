@@ -43,6 +43,7 @@ import {
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
   resolveToolIncidentVisibility,
+  SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
@@ -50,6 +51,9 @@ import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
+import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
+import type { LaunchpadMachineControl } from "./features/composer/LaunchpadMachineChip";
+import { findPeerCounterpartDirectory } from "./lib/federation-project-match";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
@@ -98,6 +102,7 @@ import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api"
 import {
   federationTargetsEqual,
   threadOwnerPlatform,
+  threadSummaryIdentityKey,
 } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
@@ -1595,6 +1600,7 @@ function DesktopAppShell(props: {
     onThreadActionError: handleThreadActionError,
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
+    localFederationInstanceId: liveFederationHealth?.instanceId,
   });
   // Handed to the sidebar, which hands them to memoized thread rows. Inline
   // arrows here were a new function on every render of this component, and a
@@ -1825,29 +1831,51 @@ function DesktopAppShell(props: {
   const threadSearchState = useThreadSearchPanelState();
   const historyLocation = useMemo<NavigationHistoryLocation | undefined>(() => {
     if (mainView === "search") {
-      return { view: "search" };
+      return { view: "search", label: "Search" };
     }
-    if (
-      mainView === "thread"
-      && navigation.selectedLaunchpad
-      // This short-lived session owns a peer's directories and cannot be
-      // restored by the local directory-key history entry. Its materialized
-      // thread is tracked normally once it is mounted below.
-      && (
-        !navigation.selectedLaunchpad.federationTarget
-        || !isRemoteFederationTarget(navigation.selectedLaunchpad.federationTarget)
-      )
-    ) {
+    if (mainView === "thread" && navigation.selectedLaunchpad) {
+      // A peer's launchpad session is keyed by the peer's own directory key,
+      // which only that peer can reopen, so its entry names the machine.
+      // Sub-thread launchpads aimed at a peer live in this window's own
+      // launchpad table and restore by key like any local launchpad.
+      const peerTarget = navigation.selectedFederatedLaunchpadTarget;
+      const peerLabel = peerTarget
+        ? newThreadFederationTargets.find((target) =>
+          target.instanceId === peerTarget.instanceId)?.label
+          ?? peerTarget.instanceId
+        : undefined;
       return {
         view: "launchpad",
         directoryKey: navigation.selectedLaunchpad.directoryKey,
+        ...(peerTarget ? { instanceId: peerTarget.instanceId } : {}),
+        label: `New thread in ${navigation.selectedLaunchpad.directoryLabel}${
+          peerLabel ? ` on ${peerLabel}` : ""
+        }`,
       };
     }
     if (mainView === "thread" && navigation.selectedThreadKey) {
-      return { view: "thread", threadKey: navigation.selectedThreadKey };
+      // The detail can still be the previous thread's for a render after
+      // the key moves; its title must not name this entry.
+      const selected = navigation.selectedThread;
+      const title = selected
+        && threadSummaryIdentityKey(selected) === navigation.selectedThreadKey
+        ? selected.title
+        : undefined;
+      return {
+        view: "thread",
+        threadKey: navigation.selectedThreadKey,
+        ...(title ? { label: title } : {}),
+      };
     }
     return undefined;
-  }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
+  }, [
+    mainView,
+    navigation.selectedFederatedLaunchpadTarget,
+    navigation.selectedLaunchpad,
+    navigation.selectedThread,
+    navigation.selectedThreadKey,
+    newThreadFederationTargets,
+  ]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
   const openWorkspaceLaunchpad = navigation.openWorkspaceLaunchpad;
@@ -1990,6 +2018,19 @@ function DesktopAppShell(props: {
       }
       setMainView("thread", () => {
         if (location.view === "launchpad") {
+          if (location.instanceId) {
+            const peer = newThreadFederationTargets.find((target) =>
+              target.instanceId === location.instanceId);
+            void navigation.restoreFederatedLaunchpad(
+              { scope: "remote", instanceId: location.instanceId },
+              location.directoryKey,
+              {
+                offline: peer?.availability === "offline",
+                ...(peer ? { targetLabel: peer.label } : {}),
+              },
+            );
+            return;
+          }
           selectDirectoryLaunchpad(location.directoryKey);
           return;
         }
@@ -1998,7 +2039,7 @@ function DesktopAppShell(props: {
           federationTarget: ref.ownerInstanceId ? { scope: "remote", instanceId: ref.ownerInstanceId } : undefined });
       });
     },
-    [navigation, selectDirectoryLaunchpad, setMainView],
+    [navigation, newThreadFederationTargets, selectDirectoryLaunchpad, setMainView],
   );
   // Loaded navigation pages cannot prove a history entry was deleted.
   const history = useNavigationHistory({
@@ -2070,6 +2111,8 @@ function DesktopAppShell(props: {
     () => ({
       canGoBack: history.canGoBack,
       canGoForward: history.canGoForward,
+      ...(history.backLabel ? { backLabel: history.backLabel } : {}),
+      ...(history.forwardLabel ? { forwardLabel: history.forwardLabel } : {}),
       onBack: history.goBack,
       onForward: history.goForward,
     }),
@@ -2422,13 +2465,90 @@ function DesktopAppShell(props: {
   };
   const createThreadOnFederationTarget = async (
     instanceId: string,
+    directory?: FederationProjectDirectory,
   ): Promise<void> => {
     setMainView("thread");
-    await navigation.openFederatedWorkspaceLaunchpad({
-      scope: "remote",
-      instanceId,
-    });
+    const target = { scope: "remote", instanceId } as const;
+    if (directory) {
+      await navigation.openFederatedProjectLaunchpad(
+        target,
+        directory,
+        newThreadFederationTargets.find((candidate) =>
+          candidate.instanceId === instanceId)?.label,
+      );
+      return;
+    }
+    await navigation.openFederatedWorkspaceLaunchpad(target);
   };
+  const federatedTargetHasProject = navigation.federatedTargetHasProject;
+  const checkFederationTargetProject = useCallback(
+    (instanceId: string, directory: FederationProjectDirectory) =>
+      federatedTargetHasProject({ scope: "remote", instanceId }, directory),
+    [federatedTargetHasProject],
+  );
+  const selectedLaunchpadForMachine = navigation.selectedLaunchpad;
+  const launchpadMachine = ((): LaunchpadMachineControl | undefined => {
+    // The chip offers a choice only where there is one: a window with no
+    // peers to start on keeps today's chip row exactly.
+    if (!selectedLaunchpadForMachine || newThreadFederationTargets.length === 0) {
+      return undefined;
+    }
+    const launchpadTarget = selectedLaunchpadForMachine.federationTarget;
+    const currentInstanceId =
+      launchpadTarget && isRemoteFederationTarget(launchpadTarget)
+        ? launchpadTarget.instanceId
+        : undefined;
+    const projectRow = navigation.selectedDirectory;
+    const project: FederationProjectDirectory = projectRow
+      ? {
+          kind: projectRow.kind,
+          label: projectRow.label,
+          ...(projectRow.path !== undefined ? { path: projectRow.path } : {}),
+          ...(projectRow.repositoryKey !== undefined
+            ? { repositoryKey: projectRow.repositoryKey }
+            : {}),
+        }
+      : {
+          kind: selectedLaunchpadForMachine.directoryKind,
+          label: selectedLaunchpadForMachine.directoryLabel,
+          ...(selectedLaunchpadForMachine.directoryPath !== undefined
+            ? { path: selectedLaunchpadForMachine.directoryPath }
+            : {}),
+        };
+    // A sub-thread's parent decides where it runs; the chip only reports.
+    const movable = !selectedLaunchpadForMachine.directoryKey.startsWith(
+      SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
+    );
+    return {
+      ...(currentInstanceId ? { currentInstanceId } : {}),
+      local: {
+        label: liveFederationHealth?.localLabel ?? "This machine",
+        ...(liveFederationHealth?.localCelestialIcon
+          ? { celestialIcon: liveFederationHealth.localCelestialIcon }
+          : {}),
+        ...(liveFederationHealth?.instanceId
+          ? { instanceId: liveFederationHealth.instanceId }
+          : {}),
+      },
+      targets: newThreadFederationTargets,
+      project,
+      localHasProject:
+        project.kind === "workspace"
+        || Boolean(findPeerCounterpartDirectory(project, navigation.directories)),
+      checkProject: checkFederationTargetProject,
+      ...(movable
+        ? {
+            planRetarget: (instanceId: string | undefined) =>
+              navigation.planLaunchpadMachineRetarget(
+                project,
+                instanceId,
+                newThreadFederationTargets.find((candidate) =>
+                  candidate.instanceId === instanceId)?.label,
+              ),
+          }
+        : {}),
+    };
+  })();
   const mastheadActions = {
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
@@ -2699,6 +2819,7 @@ function DesktopAppShell(props: {
       : {}),
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
+    launchpadMachine,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
@@ -3009,14 +3130,16 @@ function DesktopAppShell(props: {
             });
           }}
           newThreadFederationTargets={newThreadFederationTargets}
+          localMachineLabel={liveFederationHealth?.localLabel}
+          checkFederationTargetProject={checkFederationTargetProject}
           onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
             : addProjectDirectory}
           readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
-          onCreateSubthread={async (thread, mode) => {
+          onCreateSubthread={async (thread, mode, machine) => {
             setMainView("thread");
-            await navigation.createSubthread(thread, mode);
+            await navigation.createSubthread(thread, mode, machine);
           }}
           onForkThread={async (thread, mode) => {
             setMainView("thread");

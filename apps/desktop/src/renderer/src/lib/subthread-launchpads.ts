@@ -3,6 +3,12 @@ import { SUBTHREAD_LAUNCHPAD_KEY_PREFIX } from "@pwragent/shared";
 
 export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree" | "new-workspace";
 
+/** Where a sub-thread in a new workspace starts. */
+export type SubthreadMachine = {
+  /** Peer instance to start on; undefined is this machine. */
+  instanceId?: string;
+};
+
 export function getThreadPrimaryDirectory(thread: NavigationThreadSummary) {
   return thread.linkedDirectories.find((directory) =>
     (directory.worktreePath ?? directory.path) === thread.projectKey,

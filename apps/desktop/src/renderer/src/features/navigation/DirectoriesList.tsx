@@ -1993,12 +1993,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
               </button>
               {props.onOpenFederationTargetMenu ? (
                 <button
-                  // Deliberately not "...for a new thread in <directory>": the
-                  // selected machine opens its OWN launchpad with its own
-                  // projects, so the local directory does not scope the result.
-                  // It stays in the name only as row context, which also keeps
-                  // the name unique per row for locators.
-                  aria-label={`Start a new thread on another machine (from ${directory.label})`}
+                  // The row scopes the result: the chosen machine opens its
+                  // own project of the same name (or its Workspaces, from the
+                  // Workspaces row), and a machine without that project says
+                  // so instead of quietly starting the thread in Workspaces.
+                  aria-label={`Start a new thread in ${directory.label} on another machine`}
                   aria-haspopup="menu"
                   aria-expanded={
                     props.openFederationTargetMenuDirectoryKey === directory.key

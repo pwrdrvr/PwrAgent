@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildAppendPinRank,
   buildPinnedRanks,
+  buildPrependPinRank,
   comparePinnedThreads,
+  comparePinRanks,
   compareThreadsByCreatedAtDesc,
   moveThreadKey,
 } from "../thread-pins";
@@ -11,6 +13,15 @@ describe("thread pins", () => {
   it("appends after the highest existing rank", () => {
     expect(buildAppendPinRank([])).toBe("1024");
     expect(buildAppendPinRank(["1024", "3072", undefined, "bad"])).toBe("4096");
+  });
+
+  it("prepends before the lowest existing rank, past zero when needed", () => {
+    expect(buildPrependPinRank([])).toBe("1024");
+    expect(buildPrependPinRank(["3072", "1024", undefined, "bad"])).toBe("0");
+    expect(buildPrependPinRank(["0", "2048"])).toBe("-1024");
+    const ranks = ["-1024", "0", "1024"];
+    const prepended = buildPrependPinRank(ranks);
+    expect([...ranks, prepended].sort(comparePinRanks)[0]).toBe(prepended);
   });
 
   it("builds stable spaced ranks for a complete pinned order", () => {

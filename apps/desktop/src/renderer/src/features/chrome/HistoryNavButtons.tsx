@@ -5,6 +5,9 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 export type HistoryNavControls = {
   canGoBack: boolean;
   canGoForward: boolean;
+  /** Where Back leads, named in its tooltip so the hop is not a guess. */
+  backLabel?: string;
+  forwardLabel?: string;
   onBack: () => void;
   onForward: () => void;
 };
@@ -22,14 +25,19 @@ export function HistoryNavButtons(props: HistoryNavControls) {
   // time. Custom (not native `title`) so it triggers instantly over the whole
   // button, clamps to the window edge, and reads like the rest of the chrome.
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const backTip = `Back  (${formatPrimaryAccel("[")})`;
-  const forwardTip = `Forward  (${formatPrimaryAccel("]")})`;
+  const backTip = props.canGoBack && props.backLabel
+    ? `Back to ${props.backLabel}  (${formatPrimaryAccel("[")})`
+    : `Back  (${formatPrimaryAccel("[")})`;
+  const forwardTip = props.canGoForward && props.forwardLabel
+    ? `Forward to ${props.forwardLabel}  (${formatPrimaryAccel("]")})`
+    : `Forward  (${formatPrimaryAccel("]")})`;
   return (
     <div className="history-nav" role="group" aria-label="History navigation">
       <button
         type="button"
         className="history-nav__chip"
         aria-label="Back"
+        aria-description={props.canGoBack ? props.backLabel : undefined}
         data-testid="history-nav-back"
         disabled={!props.canGoBack}
         onClick={props.onBack}
@@ -44,6 +52,7 @@ export function HistoryNavButtons(props: HistoryNavControls) {
         type="button"
         className="history-nav__chip"
         aria-label="Forward"
+        aria-description={props.canGoForward ? props.forwardLabel : undefined}
         data-testid="history-nav-forward"
         disabled={!props.canGoForward}
         onClick={props.onForward}
