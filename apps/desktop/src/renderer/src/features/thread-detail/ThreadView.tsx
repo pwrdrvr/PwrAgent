@@ -79,7 +79,10 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
-import type { LaunchpadMachineControl } from "../composer/LaunchpadMachineChip";
+import {
+  describeLaunchpadMachineOffline,
+  type LaunchpadMachineControl,
+} from "../composer/LaunchpadMachineChip";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { ThreadContextPanel } from "./ThreadContextPanel";
@@ -3484,6 +3487,9 @@ export function ThreadView(props: ThreadViewProps) {
     const launchpadBackend = props.backends.find(
       (backend) => backend.kind === selectedLaunchpad.backend
     );
+    const launchpadMachineOffline = describeLaunchpadMachineOffline(
+      props.launchpadMachine,
+    );
     const selectedLaunchpadCodexEnvironment =
       selectedLaunchpad.codexEnvironmentOptions?.find(
         (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
@@ -3704,8 +3710,12 @@ export function ThreadView(props: ThreadViewProps) {
                 draftStore={props.composerDraftStore}
                 directory={props.selectedDirectory}
                 directories={props.directories}
-                disabled={props.launchpadConfigurationReady === false || !launchpadBackend?.available}
-                unavailableReason={launchpadBackend?.unavailableReason}
+                disabled={
+                  props.launchpadConfigurationReady === false
+                  || !launchpadBackend?.available
+                  || launchpadMachineOffline !== undefined
+                }
+                unavailableReason={launchpadMachineOffline ?? launchpadBackend?.unavailableReason}
                 launchpad={selectedLaunchpad}
                 launchpadMachine={props.launchpadMachine}
                 launchpadComposerScopeKey={props.pendingLaunchpadCreation?.composerScopeKey}

@@ -5139,6 +5139,82 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("brings back an offline peer's composer from its last session, and only while it lives", async () => {
+    const studio = { scope: "remote" as const, instanceId: "studio" };
+    const tower = { scope: "remote" as const, instanceId: "tower" };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const workspace = {
+      key: "workspace:new-thread", kind: "workspace" as const, label: "Workspaces",
+      threadKeys: [], needsAttentionCount: 0,
+    };
+    const project = {
+      key: "directory:/remote/ProjectA", kind: "directory" as const, label: "ProjectA",
+      path: "/remote/ProjectA", threadKeys: [], needsAttentionCount: 0,
+    };
+    const snapshot = (federationTarget?: FederationRemoteTarget): NavigationSnapshot => ({
+      backend: "all", fetchedAt: 1, unchanged: false, inboxThreadKeys: [], threads: [],
+      directories: federationTarget ? [workspace, project] : [], launchpadDefaults: defaults,
+      ...(federationTarget ? { federationTarget } : {}),
+    });
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey, directoryKind: request.directoryKind,
+        directoryLabel: request.directoryLabel, directoryPath: request.directoryPath,
+        backend: "codex", executionMode: "default", prompt: "", workMode: "local",
+        federationTarget: request.federationTarget, createdAt: 1, updatedAt: 2,
+      },
+      defaults,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({ directoryKey: project.key, defaults }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      resetDirectoryLaunchpad,
+      readPopulation: async (request) => snapshot(
+        request?.federationTarget?.scope === "remote" ? request.federationTarget : undefined,
+      ),
+      getNavigationQueryPage: async (request) => navigationQueryFixture(
+        request,
+        snapshot(request.federationTarget?.scope === "remote" ? request.federationTarget : undefined),
+      ),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.openFederatedDirectoryLaunchpad(studio, project);
+    });
+    await act(async () => {
+      await result.current.openFederatedWorkspaceLaunchpad(tower);
+    });
+    expect(result.current.selectedLaunchpad?.federationTarget).toEqual(tower);
+
+    // Studio went offline: Back restores its session without asking it.
+    ensureDirectoryLaunchpad.mockClear();
+    await act(async () => {
+      await result.current.restoreFederatedLaunchpad(studio, project.key, {
+        offline: true, targetLabel: "Studio Mac",
+      });
+    });
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: project.key, federationTarget: studio,
+    });
+
+    // A discarded session is over; Back must not resurrect it.
+    act(() => {
+      result.current.discardLaunchpad(project.key);
+    });
+    await waitFor(() => expect(result.current.selectedLaunchpad).toBeUndefined());
+    await act(async () => {
+      await result.current.restoreFederatedLaunchpad(studio, project.key, {
+        offline: true, targetLabel: "Studio Mac",
+      });
+    });
+    expect(result.current.selectedLaunchpad).toBeUndefined();
+    expect(result.current.launchpadError).toBe("Studio Mac is offline. Try again when it reconnects.");
+  });
+
   it("keeps the newest remote launchpad request selected", async () => {
     const firstTarget = { scope: "remote" as const, instanceId: "first-owner" };
     const secondTarget = { scope: "remote" as const, instanceId: "second-owner" };

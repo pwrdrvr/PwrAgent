@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  describeLaunchpadMachineOffline,
   LaunchpadMachineChip,
   type LaunchpadMachineControl,
 } from "../LaunchpadMachineChip";
@@ -82,6 +83,20 @@ describe("LaunchpadMachineChip", () => {
 
     fireEvent.click(options()[2]!);
     expect(onRetarget).toHaveBeenCalledWith("tower");
+  });
+
+  it("dashes an offline target and says why sends wait", () => {
+    const offline = control({ currentInstanceId: "attic" });
+    render(<LaunchpadMachineChip control={offline} onRetarget={() => undefined} />);
+
+    const chip = screen.getByRole("button", { name: "Machine" });
+    expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--offline");
+    expect(chip.closest(".composer-dropdown")).not.toHaveClass("composer-dropdown--remote");
+    expect(describeLaunchpadMachineOffline(offline))
+      .toBe("Attic Mini is offline. Your draft stays here until it reconnects.");
+    expect(describeLaunchpadMachineOffline(control({ currentInstanceId: "studio" })))
+      .toBeUndefined();
+    expect(describeLaunchpadMachineOffline(control())).toBeUndefined();
   });
 
   it("reports a sub-thread's fixed machine without offering a choice", () => {

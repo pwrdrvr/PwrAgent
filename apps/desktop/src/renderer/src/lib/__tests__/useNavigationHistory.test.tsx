@@ -275,6 +275,24 @@ describe("useNavigationHistory", () => {
     expect(restore).toHaveBeenLastCalledWith(remote);
   });
 
+  it("names where Back and Forward lead, taking a title that arrives late", () => {
+    const { hook, navigate, settle } = renderHistory(thread("codex:a"));
+    // The key moves before the detail with its title loads.
+    navigate({ ...thread("codex:a"), label: "Fix the parser" });
+    navigate({ ...launchpad("directory:/repo"), label: "New thread in repo" });
+    navigate(SEARCH);
+
+    expect(hook.result.current.backLabel).toBe("New thread in repo");
+    act(() => hook.result.current.goBack());
+    settle();
+    expect(hook.result.current.backLabel).toBe("Fix the parser");
+    expect(hook.result.current.forwardLabel).toBeUndefined();
+
+    // From an untracked surface, Back names the place it returns to.
+    navigate(undefined);
+    expect(hook.result.current.backLabel).toBe("New thread in repo");
+  });
+
   it("restores the prior thread after cancelling the active launchpad", () => {
     const {
       hook,

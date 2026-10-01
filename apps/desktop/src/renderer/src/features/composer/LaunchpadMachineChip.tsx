@@ -46,6 +46,24 @@ export type LaunchpadMachineControl = {
   ) => Promise<LaunchpadMachineRetarget | undefined>;
 };
 
+/**
+ * Why a launchpad cannot send right now because its machine is offline, or
+ * undefined. The draft stays editable: the peer usually comes back, and the
+ * operator can also move the draft to a machine that is up.
+ */
+export function describeLaunchpadMachineOffline(
+  control: LaunchpadMachineControl | undefined,
+): string | undefined {
+  if (!control?.currentInstanceId) {
+    return undefined;
+  }
+  const target = control.targets.find((candidate) =>
+    candidate.instanceId === control.currentInstanceId);
+  return target?.availability === "offline"
+    ? `${target.label} is offline. Your draft stays here until it reconnects.`
+    : undefined;
+}
+
 function MachineMark(props: {
   celestialIcon?: CelestialIconId;
   instanceId?: string;
@@ -94,6 +112,7 @@ export function LaunchpadMachineChip(props: {
   const currentLabel = control.currentInstanceId
     ? current?.label ?? control.currentInstanceId
     : control.local.label;
+  const currentOffline = current?.availability === "offline";
   const projectLabel = control.project?.label ?? "this project";
 
   const options: ComposerDropdownOption[] = [
@@ -163,8 +182,9 @@ export function LaunchpadMachineChip(props: {
     return (
       <span
         className="composer__fixed-value composer__fixed-value--machine"
-        aria-label={`Runs on ${currentLabel}`}
+        aria-label={`Runs on ${currentLabel}${currentOffline ? ", offline" : ""}`}
         data-remote={control.currentInstanceId ? "true" : undefined}
+        data-offline={currentOffline ? "true" : undefined}
       >
         <span aria-hidden="true" className="composer-dropdown__icon">
           <Icon size={13} />
@@ -180,8 +200,8 @@ export function LaunchpadMachineChip(props: {
       ariaLabel="Machine"
       disabled={props.disabled}
       icon={Icon}
-      tone={control.currentInstanceId ? "remote" : undefined}
-      tooltip={`Starts on ${currentLabel}`}
+      tone={currentOffline ? "offline" : control.currentInstanceId ? "remote" : undefined}
+      tooltip={currentOffline ? `${currentLabel} is offline` : `Starts on ${currentLabel}`}
       value={control.currentInstanceId ?? THIS_MACHINE_VALUE}
       options={options}
       onOpenChange={setOpen}

@@ -205,6 +205,13 @@ type FederatedLaunchpadSession = {
   target: FederationRemoteTarget;
 };
 
+function federatedLaunchpadSessionKey(
+  target: FederationRemoteTarget,
+  directoryKey: string,
+): string {
+  return JSON.stringify([target.instanceId, directoryKey]);
+}
+
 type ThreadNameObservation = {
   threadName: string;
   // Normalized, not raw: the retire check compares this against a snapshot
@@ -2869,6 +2876,7 @@ export function useThreadNavigation(
   restoreFederatedLaunchpad: (
     target: FederationRemoteTarget,
     directoryKey: string,
+    options?: { offline?: boolean; targetLabel?: string },
   ) => Promise<void>;
   /** The peer the selected launchpad session is addressed to, if any. */
   selectedFederatedLaunchpadTarget?: FederationRemoteTarget;
@@ -3096,6 +3104,30 @@ export function useThreadNavigation(
   // network. Keep only the most recent launch intent so a slow prior peer or
   // project selection cannot replace the launchpad the operator just chose.
   const federatedLaunchpadOpenRevisionRef = useRef(0);
+  // The last session per peer launchpad, so Back can bring back a composer
+  // whose machine has since gone offline instead of failing to reopen it.
+  // An ending session (sent, discarded, reset) leaves the cache with it.
+  const federatedLaunchpadSessionsRef = useRef(
+    new Map<string, FederatedLaunchpadSession>(),
+  );
+  const previousFederatedLaunchpadRef = useRef<FederatedLaunchpadSession | undefined>(undefined);
+  useEffect(() => {
+    const previous = previousFederatedLaunchpadRef.current;
+    previousFederatedLaunchpadRef.current = federatedLaunchpad;
+    if (federatedLaunchpad) {
+      federatedLaunchpadSessionsRef.current.set(
+        federatedLaunchpadSessionKey(
+          federatedLaunchpad.target,
+          federatedLaunchpad.launchpad.directoryKey,
+        ),
+        federatedLaunchpad,
+      );
+    } else if (previous) {
+      federatedLaunchpadSessionsRef.current.delete(
+        federatedLaunchpadSessionKey(previous.target, previous.launchpad.directoryKey),
+      );
+    }
+  }, [federatedLaunchpad]);
   // Create / rename / archive keep their single error slot here — every
   // producer already clears it when the next attempt starts — but the slot
   // is now published to the notice stack instead of rendered inline. See
@@ -6084,7 +6116,11 @@ export function useThreadNavigation(
   );
 
   const restoreFederatedLaunchpad = useCallback(
-    async (target: FederationRemoteTarget, directoryKey: string): Promise<void> => {
+    async (
+      target: FederationRemoteTarget,
+      directoryKey: string,
+      options?: { offline?: boolean; targetLabel?: string },
+    ): Promise<void> => {
       // Navigating away does not end the peer session, so the common Back is
       // a pure selection change: same composer, same draft, no peer round trip.
       if (
@@ -6094,6 +6130,25 @@ export function useThreadNavigation(
       ) {
         ++federatedLaunchpadOpenRevisionRef.current;
         setLaunchpadError(undefined);
+        setSelectedItemKey(buildFederatedLaunchpadSelectionKey(target));
+        return;
+      }
+      if (options?.offline) {
+        // Nothing can be read from an offline owner. Bring back the session
+        // as it was left, draft included; the composer shows the machine as
+        // offline and holds sends until it reconnects.
+        ++federatedLaunchpadOpenRevisionRef.current;
+        const cached = federatedLaunchpadSessionsRef.current.get(
+          federatedLaunchpadSessionKey(target, directoryKey),
+        );
+        if (!cached) {
+          setLaunchpadError(
+            `${options.targetLabel ?? target.instanceId} is offline. Try again when it reconnects.`,
+          );
+          return;
+        }
+        setLaunchpadError(undefined);
+        setFederatedLaunchpad(cached);
         setSelectedItemKey(buildFederatedLaunchpadSelectionKey(target));
         return;
       }

@@ -32496,6 +32496,20 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--accent);
 }
 
+/* The target machine is unreachable. Dashed, like a link that is down, and
+   muted: the draft is kept, but nothing will send until it reconnects. */
+.composer-dropdown--offline .composer-dropdown__button,
+.composer__fixed-value--machine[data-offline="true"][data-remote] {
+  border-style: dashed;
+  border-color: var(--text-muted);
+  color: var(--text-secondary);
+}
+
+.composer-dropdown--offline .composer-dropdown__icon,
+.composer__fixed-value--machine[data-offline="true"][data-remote] .composer-dropdown__icon {
+  color: var(--text-muted);
+}
+
 /* A sub-thread's machine is fixed by its parent, so the chip only reports. */
 .composer__fixed-value--machine {
   gap: 6px;

@@ -102,6 +102,7 @@ import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api"
 import {
   federationTargetsEqual,
   threadOwnerPlatform,
+  threadSummaryIdentityKey,
 } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
@@ -1830,7 +1831,7 @@ function DesktopAppShell(props: {
   const threadSearchState = useThreadSearchPanelState();
   const historyLocation = useMemo<NavigationHistoryLocation | undefined>(() => {
     if (mainView === "search") {
-      return { view: "search" };
+      return { view: "search", label: "Search" };
     }
     if (mainView === "thread" && navigation.selectedLaunchpad) {
       // A peer's launchpad session is keyed by the peer's own directory key,
@@ -1838,21 +1839,42 @@ function DesktopAppShell(props: {
       // Sub-thread launchpads aimed at a peer live in this window's own
       // launchpad table and restore by key like any local launchpad.
       const peerTarget = navigation.selectedFederatedLaunchpadTarget;
+      const peerLabel = peerTarget
+        ? newThreadFederationTargets.find((target) =>
+          target.instanceId === peerTarget.instanceId)?.label
+          ?? peerTarget.instanceId
+        : undefined;
       return {
         view: "launchpad",
         directoryKey: navigation.selectedLaunchpad.directoryKey,
         ...(peerTarget ? { instanceId: peerTarget.instanceId } : {}),
+        label: `New thread in ${navigation.selectedLaunchpad.directoryLabel}${
+          peerLabel ? ` on ${peerLabel}` : ""
+        }`,
       };
     }
     if (mainView === "thread" && navigation.selectedThreadKey) {
-      return { view: "thread", threadKey: navigation.selectedThreadKey };
+      // The detail can still be the previous thread's for a render after
+      // the key moves; its title must not name this entry.
+      const selected = navigation.selectedThread;
+      const title = selected
+        && threadSummaryIdentityKey(selected) === navigation.selectedThreadKey
+        ? selected.title
+        : undefined;
+      return {
+        view: "thread",
+        threadKey: navigation.selectedThreadKey,
+        ...(title ? { label: title } : {}),
+      };
     }
     return undefined;
   }, [
     mainView,
     navigation.selectedFederatedLaunchpadTarget,
     navigation.selectedLaunchpad,
+    navigation.selectedThread,
     navigation.selectedThreadKey,
+    newThreadFederationTargets,
   ]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
@@ -1997,9 +2019,15 @@ function DesktopAppShell(props: {
       setMainView("thread", () => {
         if (location.view === "launchpad") {
           if (location.instanceId) {
+            const peer = newThreadFederationTargets.find((target) =>
+              target.instanceId === location.instanceId);
             void navigation.restoreFederatedLaunchpad(
               { scope: "remote", instanceId: location.instanceId },
               location.directoryKey,
+              {
+                offline: peer?.availability === "offline",
+                ...(peer ? { targetLabel: peer.label } : {}),
+              },
             );
             return;
           }
@@ -2011,7 +2039,7 @@ function DesktopAppShell(props: {
           federationTarget: ref.ownerInstanceId ? { scope: "remote", instanceId: ref.ownerInstanceId } : undefined });
       });
     },
-    [navigation, selectDirectoryLaunchpad, setMainView],
+    [navigation, newThreadFederationTargets, selectDirectoryLaunchpad, setMainView],
   );
   // Loaded navigation pages cannot prove a history entry was deleted.
   const history = useNavigationHistory({
@@ -2083,6 +2111,8 @@ function DesktopAppShell(props: {
     () => ({
       canGoBack: history.canGoBack,
       canGoForward: history.canGoForward,
+      ...(history.backLabel ? { backLabel: history.backLabel } : {}),
+      ...(history.forwardLabel ? { forwardLabel: history.forwardLabel } : {}),
       onBack: history.goBack,
       onForward: history.goForward,
     }),

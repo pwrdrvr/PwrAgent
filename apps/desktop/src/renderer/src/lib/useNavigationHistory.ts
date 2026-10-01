@@ -11,10 +11,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
  * places you navigate back to. The caller signals those by passing
  * `current: undefined`.
  */
-export type NavigationHistoryLocation =
+export type NavigationHistoryLocation = (
   | { view: "launchpad"; directoryKey: string; instanceId?: string }
   | { view: "search" }
-  | { view: "thread"; threadKey: string };
+  | { view: "thread"; threadKey: string }
+) & {
+  /**
+   * What the place was called when it was visited, for the Back/Forward
+   * tooltips. Not part of its identity: a renamed thread is the same place.
+   */
+  label?: string;
+};
 
 /** Per-stack depth cap, matching what a browser-ish history needs. */
 const MAX_HISTORY_DEPTH = 50;
@@ -130,6 +137,9 @@ export function useNavigationHistory(args: {
 }): {
   canGoBack: boolean;
   canGoForward: boolean;
+  /** Label of the place Back would open, when it was recorded with one. */
+  backLabel?: string;
+  forwardLabel?: string;
   goBack: () => void;
   goForward: () => void;
 } {
@@ -153,6 +163,13 @@ export function useNavigationHistory(args: {
     const prev = stacksRef.current;
     if (prev.cursor !== undefined && sameLocation(prev.cursor, current)) {
       // Same place (or our own goBack/goForward restore) — nothing to record.
+      // A thread's title often arrives after its key, so the cursor takes
+      // the newer label rather than keeping a blank one for the back stack.
+      if (current.label !== undefined && current.label !== prev.cursor.label) {
+        const next: HistoryStacks = { ...prev, cursor: current };
+        stacksRef.current = next;
+        setStacks(next);
+      }
       return;
     }
     const baseBack =
@@ -274,9 +291,14 @@ export function useNavigationHistory(args: {
     stacks.back.length > 0 ||
     (current === undefined && stacks.cursor !== undefined);
   const canGoForward = stacks.forward.length > 0;
+  // Mirrors goBack: from an untracked surface, Back returns to the cursor.
+  const backLabel = current === undefined
+    ? stacks.cursor?.label
+    : stacks.back[stacks.back.length - 1]?.label;
+  const forwardLabel = stacks.forward[0]?.label;
 
   return useMemo(
-    () => ({ canGoBack, canGoForward, goBack, goForward }),
-    [canGoBack, canGoForward, goBack, goForward],
+    () => ({ backLabel, canGoBack, canGoForward, forwardLabel, goBack, goForward }),
+    [backLabel, canGoBack, canGoForward, forwardLabel, goBack, goForward],
   );
 }
