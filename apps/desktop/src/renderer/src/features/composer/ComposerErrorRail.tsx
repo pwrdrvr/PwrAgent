@@ -11,6 +11,8 @@ export type ComposerErrorEntry = {
   message: string | undefined;
   /** Changes on every report, so an identical repeat is a new error to dismiss. */
   occurrence?: number;
+  retry?: { label: string; onClick: () => void };
+  dismissible?: boolean;
 };
 
 /**
@@ -53,6 +55,8 @@ export function ComposerErrorRail(props: {
           desktopApi={props.desktopApi}
           label={entry.label}
           message={entry.message}
+          retry={entry.retry}
+          dismissible={entry.dismissible}
           onDismiss={() => {
             setDismissed((current) => new Map(current).set(entry.id, dismissalKey(entry)));
           }}
@@ -70,6 +74,8 @@ function ComposerErrorRow(props: {
   desktopApi?: Pick<DesktopApi, "copyText">;
   label: string;
   message: string;
+  retry?: ComposerErrorEntry["retry"];
+  dismissible?: boolean;
   onDismiss: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -112,6 +118,15 @@ function ComposerErrorRow(props: {
           </div>
         )}
         <span className="composer__queued-env-action-actions">
+          {props.retry ? (
+            <button
+              className="composer__secondary-action"
+              type="button"
+              onClick={props.retry.onClick}
+            >
+              {props.retry.label}
+            </button>
+          ) : null}
           <TranscriptCopyButton
             className="transcript-copy-button--composer-error"
             copiedLabel="Copied error"
@@ -119,13 +134,15 @@ function ComposerErrorRow(props: {
             label={`Copy error: ${props.label}`}
             text={props.message}
           />
-          <button
-            className="composer__secondary-action composer__queued-env-action-dismiss"
-            type="button"
-            onClick={() => props.onDismiss()}
-          >
-            Dismiss
-          </button>
+          {props.dismissible !== false ? (
+            <button
+              className="composer__secondary-action composer__queued-env-action-dismiss"
+              type="button"
+              onClick={() => props.onDismiss()}
+            >
+              Dismiss
+            </button>
+          ) : null}
         </span>
       </div>
       {detail && open ? (

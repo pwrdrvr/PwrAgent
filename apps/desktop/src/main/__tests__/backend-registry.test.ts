@@ -5515,7 +5515,7 @@ describe("DesktopBackendRegistry", () => {
       await internals.prepareTokenMiserRuntime();
 
       expect(internals.tokenMiserRuntimePreparationFailure).toBe(
-        "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
+        "Running Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
       );
       expect(resolveRuntime).not.toHaveBeenCalled();
       expect(ensureInstalled).not.toHaveBeenCalled();
@@ -5797,7 +5797,7 @@ describe("DesktopBackendRegistry", () => {
       },
     })).resolves.toMatchObject({
       reason:
-        "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
+        "Running Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
       state: "unavailable",
     });
     await expect(readActivation({

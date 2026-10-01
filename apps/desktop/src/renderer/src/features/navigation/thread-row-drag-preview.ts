@@ -71,11 +71,17 @@ export function createThreadRowPointerDragPreview(
     y: Math.max(0, Math.min(point.y - preview.rect.top, preview.rect.height)),
   };
   preview.element.style.willChange = "transform";
+  // Tilt around the grab point, so the spot under the pointer stays put.
+  preview.element.style.transformOrigin = `${offset.x}px ${offset.y}px`;
 
+  // The tilt angle is a stylesheet custom property rather than a constant
+  // here: this inline transform would override a `rotate()` declared in CSS,
+  // and the reduced-motion rule that zeroes the tilt belongs in CSS too.
   const move = (nextPoint: Point): void => {
     const x = nextPoint.x - offset.x;
     const y = nextPoint.y - offset.y;
-    preview.element.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    preview.element.style.transform =
+      `translate3d(${x}px, ${y}px, 0) rotate(var(--thread-row-drag-tilt, 0deg))`;
   };
   move(point);
 

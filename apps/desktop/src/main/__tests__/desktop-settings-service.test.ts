@@ -1889,6 +1889,118 @@ describe("DesktopSettingsService", () => {
     configStore.dispose();
   });
 
+  it.each([
+    ["Token Miser", "[experimental]\ntoken_miser_enabled = true\n"],
+    ["PwrAgent Codex build", "[models.codex]\nmanaged_builds = true\n"],
+  ])("waits for managed Codex instead of pinning an ordinary cache when %s is enabled", async (_setting, config) => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const ordinary = path.join(root, "ordinary-codex");
+    fs.writeFileSync(ordinary, "fixture", { mode: 0o755 });
+    fs.writeFileSync(configPath, config);
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command: ordinary, source: "application", version: "0.153.4" }],
+      selectedCommand: ordinary,
+      selectedVersion: "0.153.4",
+    });
+    const runtime = {
+      command: "/managed/codex",
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      metadata: {
+        asset: "bundle", checkedAt: 1, installedAt: 1,
+        repository: "pwrdrvr/codex", schemaVersion: 1 as const,
+        sha256: "a".repeat(64), tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const ensureManaged = vi.fn(async () => {
+      await gate;
+      return runtime;
+    });
+    const retain = vi.fn(async () => undefined);
+    const discover = vi.fn(async (command?: string) => ({
+      candidates: [{ command: command!, source: "config" as const,
+        executable: true, selected: true, version: runtime.metadata.version }],
+      selectedCommand: command,
+    }));
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      ensureManagedCodexRuntime: ensureManaged,
+      retainCachedCodexCommand: retain,
+      codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
+    });
+    // A selection-change callback resolves the executable re-entrantly, just
+    // as the backend registry does when it opens the app-server transport.
+    const launched: string[] = [];
+    const stop = service.watchManagedCodexRuntime(async () => {
+      launched.push((await service.resolveCodexCommand()).command);
+    });
+    const startup = service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+    const resolved = service.resolveCodexCommand();
+    try {
+      await vi.waitFor(() => expect(ensureManaged).toHaveBeenCalledOnce());
+      expect(retain).not.toHaveBeenCalled();
+      expect(service.isCodexDiscoveryPending()).toBe(true);
+      release();
+      await expect(resolved).resolves.toMatchObject({ command: runtime.command });
+      await startup;
+      expect(launched).toEqual([runtime.command]);
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: runtime.command });
+      expect(configStore.read("providers").codex.lastKnownGood?.selectedCommand)
+        .toBe(runtime.command);
+      const snapshot = await service.readSettingsProjection();
+      expect(snapshot.models.codex.discovery.selectedCommand).toBe(runtime.command);
+    } finally {
+      release();
+      await startup;
+      stop();
+      configStore.dispose();
+    }
+  });
+
+  it("allows an ordinary startup fallback after managed Codex installation fails", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const ordinary = path.join(root, "ordinary-codex");
+    fs.writeFileSync(ordinary, "fixture", { mode: 0o755 });
+    fs.writeFileSync(configPath, "[experimental]\ntoken_miser_enabled = true\n");
+    const configStore = new DesktopConfigStore({ configPath });
+    const candidate = { command: ordinary, source: "application" as const, version: "0.153.4" };
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [candidate], selectedCommand: ordinary, selectedVersion: candidate.version,
+    });
+    const retain = vi.fn(async () => undefined);
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      ensureManagedCodexRuntime: vi.fn(async () => { throw new Error("offline"); }),
+      retainCachedCodexCommand: retain,
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({
+          candidates: [{ ...candidate, executable: true, selected: true }],
+          selectedCommand: ordinary,
+        })),
+        invalidate: vi.fn(), resolve: vi.fn(),
+      },
+    });
+    try {
+      const startup = service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+      const resolved = service.resolveCodexCommand();
+      await startup;
+      await expect(resolved).resolves.toMatchObject({ command: ordinary });
+      expect(retain).not.toHaveBeenCalled();
+      expect(service.isCodexDiscoveryPending()).toBe(false);
+      const snapshot = await service.readSettingsProjection();
+      expect(snapshot.runtime.tokenMiser?.managedCodex)
+        .toMatchObject({ state: "unavailable", reason: "offline" });
+    } finally {
+      configStore.dispose();
+    }
+  });
+
   it.each([false, undefined])("rejects a cached managed Codex when Token Miser is %s", async (enabled) => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

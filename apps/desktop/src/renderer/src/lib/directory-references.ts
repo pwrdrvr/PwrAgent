@@ -48,7 +48,7 @@ export function findDirectoryReferenceTrigger(
 
 const CANDIDATE_LIMIT = 10;
 
-type ReferenceDirectory = Pick<NavigationDirectorySummary,
+export type ReferenceDirectory = Pick<NavigationDirectorySummary,
   "key" | "kind" | "label" | "path" | "latestUpdatedAt"
 >;
 

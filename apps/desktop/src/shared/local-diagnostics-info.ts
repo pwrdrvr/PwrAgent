@@ -31,6 +31,22 @@ function available(value: string | undefined): string {
   return value?.trim() || "Unavailable";
 }
 
+function buildIdentityLines(metadata: AppMetadata, prefix = ""): string[] {
+  const identity = metadata.buildIdentity;
+  const buildKind = identity?.kind === "development" ? "Development"
+    : identity?.kind === "packaged" ? "Packaged" : "Unavailable";
+  return [
+    `${prefix}PwrAgent version: ${available(metadata.applicationVersion)}`,
+    `${prefix}PwrAgent build: ${buildKind}`,
+    ...(identity?.kind === "development" ? [
+      `${prefix}PwrAgent development app path: ${available(identity.appPath)}`,
+      `${prefix}PwrAgent development checkout path: ${available(identity.checkoutPath)}`,
+      `${prefix}PwrAgent development branch (startup): ${identity.detachedHead ? "Detached HEAD" : available(identity.branch)}`,
+      `${prefix}PwrAgent development commit SHA (startup): ${available(identity.commitSha)}`,
+    ] : []),
+  ];
+}
+
 function processIdLines(metadata: AppMetadata): string[] {
   return [
     `Main process PID: ${metadata.mainProcessId}`,
@@ -42,6 +58,7 @@ function processIdLines(metadata: AppMetadata): string[] {
 
 function viewerSupportLines(metadata: AppMetadata): string[] {
   return [
+    ...buildIdentityLines(metadata, "Viewer "),
     `Viewer PwrAgent profile: ${metadata.activeProfileName}`,
     `Viewer main process PID: ${metadata.mainProcessId}`,
     ...(metadata.rendererProcessId === undefined
@@ -137,6 +154,7 @@ export function buildTroubleshootingDiagnosticsInfo(
 ): string {
   return [
     `Collected at (UTC): ${new Date().toISOString()}`,
+    ...buildIdentityLines(metadata),
     `PwrAgent profile: ${metadata.activeProfileName}`,
     ...processIdLines(metadata),
     `PwrAgent log path: ${available(metadata.logFilePath)}`,
@@ -156,6 +174,7 @@ export function buildStarMapDiagnosticsInfo(
   return [
     `Collected at (UTC): ${new Date().toISOString()}`,
     "Surface: Federation Star Map",
+    ...buildIdentityLines(metadata),
     ...(intakeTarget
       ? [
           "Thread creation state: Intake open; no thread created yet",
@@ -186,6 +205,7 @@ export function buildLocalThreadDiagnosticsInfo(
     ...(remoteThreadContext
       ? viewerSupportLines(metadata)
       : [
+          ...buildIdentityLines(metadata),
           `PwrAgent profile: ${metadata.activeProfileName}`,
           ...processIdLines(metadata),
           `PwrAgent log path: ${available(metadata.logFilePath)}`,

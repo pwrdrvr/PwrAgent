@@ -14,11 +14,12 @@ import type {
   AppServerSkillSummary,
   ThreadJumpCandidate,
 } from "@pwragent/shared";
-import { FolderIcon, PullRequestIcon, ThreadIcon } from "../../icons";
+import { CelestialIcon, FolderIcon, PullRequestIcon, ThreadIcon } from "../../icons";
+import { filterAtReferenceCandidates, type InstanceReference } from "../../lib/instance-references";
+import { InstanceGlyph } from "../federation/InstanceGlyph";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   buildDirectoryReferenceInsertText,
-  filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
 import {
@@ -42,7 +43,7 @@ import type {
 import {
   adjustSkillTokenIndexesForTextChange,
   applySkillOriginVisibility,
-  createComposerDirectoryToken,
+  createComposerAtReferenceToken,
   createComposerPullRequestToken,
   createComposerSkillToken,
   createComposerThreadToken,
@@ -91,6 +92,8 @@ export type ComposerMentionSources = {
   directories?: readonly Pick<NavigationDirectorySummary,
     "key" | "kind" | "label" | "path" | "latestUpdatedAt"
   >[];
+  /** Federation machines/profiles behind `@`. */
+  instances?: readonly InstanceReference[];
   /** Called when `@` or `#` opens a popover. */
   ensureNavigationLoaded?: (query?: string) => void;
   releaseNavigationLoaded?: () => void;
@@ -159,6 +162,7 @@ type MentionKind = "commands" | "directories" | "hash" | "skills";
 
 const NO_COMMANDS: readonly ComposerSlashCommand[] = [];
 const NO_DIRECTORIES: readonly NavigationDirectorySummary[] = [];
+const NO_INSTANCES: readonly InstanceReference[] = [];
 const NO_SKILLS: readonly AppServerSkillSummary[] = [];
 const NO_THREADS: readonly ThreadJumpCandidate[] = [];
 
@@ -242,6 +246,7 @@ export function useComposerMentions(params: {
   const skills = sources?.skills ?? NO_SKILLS;
   const commands = sources?.commands ?? NO_COMMANDS;
   const directories = sources?.directories ?? NO_DIRECTORIES;
+  const instances = sources?.instances ?? NO_INSTANCES;
   const threads = sources?.threads ?? NO_THREADS;
 
   // Read live from the editor rather than from tracked state: the caret
@@ -300,8 +305,8 @@ export function useComposerMentions(params: {
     () =>
       directoryQuery === undefined
         ? []
-        : filterDirectoryReferenceCandidates([...directories], directoryQuery),
-    [directories, directoryQuery],
+        : filterAtReferenceCandidates(directories, instances, directoryQuery),
+    [directories, instances, directoryQuery],
   );
   const hashOptions = useMemo(
     () =>
@@ -605,7 +610,7 @@ export function useComposerMentions(params: {
       const directory = directoryOptions[index] ?? directoryOptions[0];
       if (directory?.path) {
         insertToken(directoryTrigger, (at) =>
-          createComposerDirectoryToken(directory, at),
+          createComposerAtReferenceToken(directory, at),
         );
       }
       return;
@@ -753,20 +758,26 @@ export function useComposerMentions(params: {
       );
     });
   } else if (kind === "directories") {
-    label = "Directories";
+    label = "Projects and instances";
     options = directoryOptions.map((directory, index) =>
       renderOption(
         index,
         <>
           <span className="compact-composer__mention-title">
-            <FolderIcon size={12} aria-hidden="true" />
+            {directory.kind === "instance" ? (
+              directory.icon
+                ? <CelestialIcon icon={directory.icon} size={12} />
+                : <InstanceGlyph instanceId={directory.instanceId} size={12} />
+            ) : <FolderIcon size={12} aria-hidden="true" />}
             <HighlightedAutocompleteLabel
               label={directory.label}
               query={query}
             />
           </span>
           <span className="compact-composer__mention-meta">
-            {buildDirectoryReferenceInsertText(directory)}
+            {directory.kind === "instance"
+              ? `Federation · ${directory.status}`
+              : buildDirectoryReferenceInsertText(directory)}
           </span>
         </>,
       ),

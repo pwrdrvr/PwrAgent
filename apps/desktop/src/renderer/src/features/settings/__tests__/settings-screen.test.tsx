@@ -2094,6 +2094,7 @@ describe("SettingsScreen", () => {
           readAppMetadata: vi.fn(async () => ({
             applicationName: "PwrAgent",
             applicationVersion: "1.2.3",
+            buildIdentity: { kind: "packaged" as const },
             copyright: "Copyright © 2026 PwrDrvr LLC.",
             homepage: "https://pwragent.ai",
             documentationUrl: "https://docs.pwragent.ai",
@@ -2124,6 +2125,8 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(copyText).toHaveBeenLastCalledWith([
         "Collected at (UTC): 2026-09-14T04:30:45.123Z",
+        "PwrAgent version: 1.2.3",
+        "PwrAgent build: Packaged",
         "PwrAgent profile: work",
         "Main process PID: 4100",
         "Renderer process PID: 4101",

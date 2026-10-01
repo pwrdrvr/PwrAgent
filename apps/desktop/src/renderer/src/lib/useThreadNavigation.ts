@@ -3074,6 +3074,8 @@ export function useThreadNavigation(
   loadedRows?: NavigationLoadedRows;
   pagedNavigation: ReturnType<typeof useBoundedNavigationWindow>;
   selectedLaunchpadConfigurationReady: boolean;
+  selectedLaunchpadConfigurationError?: string;
+  refreshSelectedLaunchpadConfiguration: () => Promise<void>;
   threads: NavigationThreadSummary[];
 } {
   const directoryDisclosure = useNavigationDirectoryDisclosure();
@@ -8990,6 +8992,8 @@ export function useThreadNavigation(
     loadedRows: state.rows,
     pagedNavigation: boundedNavigation,
     selectedLaunchpadConfigurationReady: Boolean(activeFederatedLaunchpad) || launchpadConfiguration.ready,
+    selectedLaunchpadConfigurationError: activeFederatedLaunchpad ? undefined : launchpadConfiguration.error,
+    refreshSelectedLaunchpadConfiguration: launchpadConfiguration.refresh,
     threads,
   };
 }

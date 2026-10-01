@@ -19,11 +19,13 @@ import type { AppServerSkillSummary } from "@pwragent/shared";
  *   - pull-request references (`kind: "pull-request"`): `name` is the
  *     `owner/repo#123` label and `path` the repository-scoped PR URL; serializes to the
  *     Markdown link the transcript hydrates into its live PR chip.
+ *   - instance references (`kind: "instance"`): `name` is the machine/profile
+ *     label and `path` its `pwragent://instance/...` URL.
  */
 export type ComposerSkillToken = AppServerSkillSummary & {
   id: string;
   index: number;
-  kind?: "directory" | "file" | "pull-request" | "thread";
+  kind?: "directory" | "file" | "instance" | "pull-request" | "thread";
   /**
    * Pull-request chips only: the `pr-chip--*` modifiers the sidebar chip would
    * render for this PR, resolved when the token was minted. The composer draws

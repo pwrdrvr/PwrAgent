@@ -1430,6 +1430,20 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain("<em>safe</em>");
   });
 
+  it("renders Federation references as instance chips without opening external or local-file links", () => {
+    const openApplication = vi.fn();
+    const { container } = render(<ThreadMarkdown
+      desktopApi={{ openApplication }}
+      text="Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)."
+    />);
+    const chip = container.querySelector(".chip--instance");
+    expect(chip).toHaveTextContent("@DESKTOP-LAB / dev");
+    expect(chip).toHaveAttribute("title", "@DESKTOP-LAB / dev · windows-dev");
+    expect(container.querySelector(".directory-chip")).toBeNull();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(openApplication).not.toHaveBeenCalled();
+  });
+
   it("renders composer directory references as chips", () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/fixture-user";

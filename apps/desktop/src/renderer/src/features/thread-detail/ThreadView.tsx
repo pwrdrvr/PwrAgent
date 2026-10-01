@@ -807,6 +807,8 @@ export type ThreadViewProps = {
   composerDisabled: boolean;
   workspaceActionsBlocked?: boolean;
   launchpadConfigurationReady?: boolean;
+  launchpadConfigurationError?: string;
+  onReloadLaunchpadConfiguration?: () => Promise<void>;
   composerDraftStore?: ComposerDraftStore;
   composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
@@ -3722,6 +3724,8 @@ export function ThreadView(props: ThreadViewProps) {
                 launchpadComposerScopeKey={props.pendingLaunchpadCreation?.composerScopeKey}
                 launchpadMaterializing={launchpadMaterializing}
                 launchpadError={props.launchpadError}
+                launchpadConfigurationError={props.launchpadConfigurationError}
+                onReloadLaunchpadConfiguration={props.onReloadLaunchpadConfiguration}
                 pastedImageMaxPatches={props.pastedImageMaxPatches}
                 pdfAnalysisEnabled={props.pdfAnalysisEnabled}
                 tokenMiserEnabled={props.tokenMiserEnabled}

@@ -43,6 +43,7 @@ import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
+import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
 
 function Composer(props: ComponentProps<typeof ProductionComposer>) {
   const desktopApi = useMemo<DesktopApi>(() => ({
@@ -606,6 +607,128 @@ function createScheduledActionApi(options?: {
 }
 
 describe("Composer", () => {
+  it("can start a restored project draft after another project starts a placeholder thread", async () => {
+    const store = createComposerDraftStore();
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: store,
+      onMaterializeLaunchpad,
+      skills: [],
+    };
+    const first = createRetargetingLaunchpad(retargetingPwrSnap, "Investigate the build");
+    const second = createRetargetingLaunchpad(retargetingPwrGit, "");
+    const view = render(<Composer {...props} directory={retargetingPwrSnap} launchpad={first} />);
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+    view.rerender(<Composer {...props} directory={retargetingPwrGit} launchpad={second} />);
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Placeholder" } });
+    await clickButton("Start thread");
+    view.rerender(<Composer {...props} thread={{
+      id: "placeholder", source: "codex", title: "Placeholder", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    expect(screen.getByLabelText("Reply")).toBeInTheDocument();
+    view.rerender(<Composer {...props} directory={retargetingPwrSnap} launchpad={first} />);
+    expect(screen.getByLabelText("New thread")).toHaveValue("Investigate the build");
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Investigate the build failure" } });
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+    await clickButton("Start thread");
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(2);
+    expect(onMaterializeLaunchpad.mock.calls.at(-1)).toEqual([
+      retargetingPwrSnap.key,
+      [{ type: "text", text: "Investigate the build failure" }],
+      undefined,
+      undefined,
+      [],
+    ]);
+  });
+
+  it("reloads a failed configuration read after returning to a project draft", async () => {
+    const store = createComposerDraftStore();
+    let readsOfFirst = 0;
+    const reload = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationLaunchpadConfig"]>>>>();
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationLaunchpadConfig"]>>(async (request) => {
+      if (request.directoryKey === retargetingPwrSnap.key && ++readsOfFirst === 2) {
+        throw new Error("Navigation read cancelled");
+      }
+      if (request.directoryKey === retargetingPwrSnap.key && readsOfFirst === 3) return reload.promise;
+      return { protocol: 2, revision: "config", directoryKey: request.directoryKey,
+        defaults: { backend: "codex", executionMode: "default" } };
+    });
+    const api: DesktopApi = { getNavigationLaunchpadConfig: read };
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
+    function Harness() {
+      const [selection, setSelection] = useState<"first" | "second" | "placeholder">("first");
+      const directory = selection === "first" ? retargetingPwrSnap : retargetingPwrGit;
+      const configuration = useNavigationLaunchpadConfiguration({ desktopApi: api,
+        enabled: true, directoryKey: selection === "placeholder" ? undefined : directory.key });
+      return <>
+        <button onClick={() => setSelection("second")}>Other project</button>
+        <button onClick={() => setSelection("first")}>Back to draft</button>
+        <Composer backends={[backendSummary("codex")]} directory={directory}
+          desktopApi={api} draftStore={store} skills={[]}
+          launchpad={selection === "placeholder" ? undefined
+            : createRetargetingLaunchpad(directory, selection === "first" ? "Investigate the build" : "")}
+          thread={selection === "placeholder" ? {
+            id: "placeholder", source: "codex", title: "Placeholder", titleSource: "explicit",
+            linkedDirectories: [], inbox: { inInbox: false },
+          } : undefined}
+          disabled={!configuration.ready}
+          launchpadConfigurationError={configuration.error}
+          onReloadLaunchpadConfiguration={configuration.refresh}
+          onMaterializeLaunchpad={async (...args) => {
+            await onMaterializeLaunchpad(...args);
+            if (directory === retargetingPwrGit) setSelection("placeholder");
+          }} />
+      </>;
+    }
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled());
+    await clickButton("Other project");
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Placeholder" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled());
+    await clickButton("Start thread");
+    await clickButton("Back to draft");
+    expect(await screen.findByRole("alert", { name: "Couldn't load thread settings" })).toHaveTextContent("Navigation read cancelled");
+    expect(screen.getByLabelText("New thread")).toHaveValue("Investigate the build");
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Investigate the build failure" } });
+    await clickButton("Reload thread settings");
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeDisabled();
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+    await act(async () => reload.resolve({ protocol: 2, revision: "reloaded", directoryKey: retargetingPwrSnap.key,
+      defaults: { backend: "codex", executionMode: "default" } }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled());
+    expect(screen.queryByRole("alert", { name: "Couldn't load thread settings" })).not.toBeInTheDocument();
+    await clickButton("Start thread");
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(2);
+    expect(onMaterializeLaunchpad.mock.calls.at(-1)?.[1]).toEqual([{ type: "text", text: "Investigate the build failure" }]);
+  });
+
+  it("can start after selecting a project mention that initially had no result", async () => {
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
+    const props = {
+      backends: [backendSummary("codex")],
+      directory: retargetingPwrSnap,
+      launchpad: createRetargetingLaunchpad(retargetingPwrSnap, ""),
+      onMaterializeLaunchpad,
+      skills: [],
+    };
+    const view = render(<Composer {...props} directories={[]} />);
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Investigate @PwrGit" } });
+    await flushReactUpdates();
+    expect(screen.queryByRole("option", { name: /PwrGit/ })).not.toBeInTheDocument();
+    view.rerender(<Composer {...props} directories={[retargetingPwrGit]} />);
+    fireEvent.click(await screen.findByRole("option", { name: /PwrGit/ }));
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+    await clickButton("Start thread");
+    expect(onMaterializeLaunchpad.mock.calls[0]?.[1]).toEqual([
+      { type: "text", text: `Investigate ${buildDirectoryReferenceMarkdown({ label: retargetingPwrGit.label, path: retargetingPwrGit.path! })}` },
+    ]);
+    expect(onMaterializeLaunchpad.mock.calls[0]?.[4]).toEqual([retargetingPwrGit.path]);
+  });
+
   it("skips unchanged parent renders while keeping changed callbacks and inputs live", async () => {
     const composerRenders = vi.spyOn(composerMentionSources, "useComposerMentionSources");
     const firstCancel = vi.fn();
@@ -2396,7 +2519,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Check @" },
     });
-    const autocomplete = await screen.findByRole("listbox", { name: "Directories" });
+    const autocomplete = await screen.findByRole("listbox", { name: "Projects and instances" });
     for (const name of ["+ Add directory…", "+ Add file…"]) {
       const action = screen.getByRole("button", { name });
       expect(within(autocomplete).queryByRole("button", { name }))
@@ -17531,6 +17654,39 @@ describe("Composer", () => {
     }
   });
 
+  it("inserts a Federation instance mention and sends its ID without attaching a directory", async () => {
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+    const attachDirectoryToThread = vi.fn<NonNullable<DesktopApi["attachDirectoryToThread"]>>();
+    render(<Composer
+      desktopApi={{
+        onAgentEvent: () => () => undefined,
+        startTurn,
+        attachDirectoryToThread,
+        readFederationHealth: async () => ({ health: {
+          enabled: true, role: "gateway", status: "connected",
+          peers: [{ id: "windows-dev", label: "DESKTOP-LAB", profileName: "dev",
+            role: "client", status: "connected", capabilities: [] }],
+        } }),
+      }}
+      backends={[backendSummary("codex")]}
+      draftStore={createComposerDraftStore()}
+      skills={[]}
+      thread={{ id: "thread-1", title: "Work", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "Investigate @DESK" } });
+    const option = await screen.findByRole("option", { name: /DESKTOP-LAB \/ dev/ });
+    fireEvent.click(option);
+    await waitFor(() => expect(screen.getByTestId("composer-tiptap-input")
+      .querySelector('[data-mention-kind="instance"]')).toHaveTextContent("@DESKTOP-LAB / dev"));
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: "Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)" }],
+    })));
+    expect(attachDirectoryToThread).not.toHaveBeenCalled();
+  });
+
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/example";
@@ -17585,7 +17741,7 @@ describe("Composer", () => {
         target: { value: "Read MARKET-4803 in @catalog" },
       });
 
-      const listbox = await screen.findByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Projects and instances" });
       expect(listbox.parentElement).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
         within(listbox).getByRole("option", { name: /catalog-portal/ })
@@ -17616,7 +17772,7 @@ describe("Composer", () => {
         "/Users/example/Projects/catalog-portal"
       );
       expect(
-        screen.queryByRole("listbox", { name: "Directories" })
+        screen.queryByRole("listbox", { name: "Projects and instances" })
       ).not.toBeInTheDocument();
 
       await clickButton("Start thread");
@@ -17690,7 +17846,7 @@ describe("Composer", () => {
       input.setSelectionRange(prefix.length, prefix.length);
       input.editor.view.dispatch(input.editor.state.tr.insertText("@rep"));
     });
-    await screen.findByRole("listbox", { name: "Directories" });
+    await screen.findByRole("listbox", { name: "Projects and instances" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Tab" });
 
@@ -17777,7 +17933,7 @@ describe("Composer", () => {
         target: { value: beforeMention },
       });
 
-      const listbox = await screen.findByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Projects and instances" });
       fireEvent.click(
         within(listbox).getByRole("option", { name: /grok-build/ }),
       );
@@ -18136,7 +18292,7 @@ describe("Composer", () => {
         target: { value: "Check @" },
       });
 
-      const listbox = await screen.findByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Projects and instances" });
       expect(within(listbox).getAllByRole("option")).toHaveLength(1);
       expect(within(listbox).queryByRole("button")).not.toBeInTheDocument();
       // Only the file action renders — this composer has no
@@ -18161,7 +18317,7 @@ describe("Composer", () => {
         "/Users/fixture-user/notes/spec.md"
       );
       expect(
-        screen.queryByRole("listbox", { name: "Directories" })
+        screen.queryByRole("listbox", { name: "Projects and instances" })
       ).not.toBeInTheDocument();
 
       await clickButton("Start thread");
@@ -18237,7 +18393,7 @@ describe("Composer", () => {
         target: { value: "Look in @" },
       });
 
-      await screen.findByRole("listbox", { name: "Directories" });
+      await screen.findByRole("listbox", { name: "Projects and instances" });
       await clickButton("+ Add directory…");
 
       expect(onPickDirectoryForReference).toHaveBeenCalledOnce();
@@ -22731,7 +22887,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Check @sea" } });
     expect(
-      await screen.findByRole("listbox", { name: "Directories" })
+      await screen.findByRole("listbox", { name: "Projects and instances" })
     ).toBeInTheDocument();
 
     const transcript = screen.getByRole("button", {
@@ -22741,7 +22897,7 @@ describe("Composer", () => {
     fireEvent.keyDown(transcript, { key: "Escape", code: "Escape" });
 
     expect(
-      screen.queryByRole("listbox", { name: "Directories" })
+      screen.queryByRole("listbox", { name: "Projects and instances" })
     ).not.toBeInTheDocument();
     expect(textarea).toHaveValue("Check @sea");
     expect(transcript).toHaveFocus();

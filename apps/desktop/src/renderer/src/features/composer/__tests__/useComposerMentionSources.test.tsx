@@ -11,6 +11,30 @@ import {
 beforeEach(resetComposerMentionSourcesCache);
 
 describe("bounded composer mention sources", () => {
+  it("loads Federation identities only while a mention picker is open, independently of directory failures", async () => {
+    const readFederationHealth = vi.fn(async () => ({ health: {
+      enabled: true, role: "gateway" as const, status: "connected" as const,
+      instanceId: "local", localLabel: "Studio", localProfileName: "default",
+      peers: [{ id: "windows-dev", label: "DESKTOP-LAB", profileName: "dev",
+        role: "client" as const, status: "connected" as const, capabilities: [] }],
+    } }));
+    const desktopApi: DesktopApi = {
+      readFederationHealth,
+      getNavigationQueryPage: async () => { throw new Error("Directory owner offline"); },
+    };
+    const { result } = renderHook(() => useComposerMentionSources({ desktopApi }));
+    expect(readFederationHealth).not.toHaveBeenCalled();
+    act(() => result.current.ensureLoaded("DESK"));
+    await waitFor(() => expect(result.current.instances).toHaveLength(2));
+    expect(result.current.directories).toEqual([]);
+    expect(result.current.instances[1]).toMatchObject({ label: "DESKTOP-LAB / dev", path: "pwragent://instance/windows-dev" });
+    act(() => result.current.ensureLoaded("DESKTOP"));
+    expect(readFederationHealth).toHaveBeenCalledTimes(1);
+    act(() => result.current.release());
+    act(() => result.current.ensureLoaded("dev"));
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalledTimes(2));
+  });
+
   it("modern mentions never read snapshots and can find a thread outside the initial page", async () => {
     const threads = Array.from({ length: 1_001 }, (_, index): NavigationThreadSummary => ({
       id: `thread-${index}`,

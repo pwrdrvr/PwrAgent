@@ -33,6 +33,7 @@ import {
   buildFileReferenceTooltip,
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
+import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
@@ -274,6 +275,21 @@ const SkillMention = Mention.extend({
           : []),
       ];
     }
+    if (node.attrs.kind === "instance") {
+      const label = String(node.attrs.name ?? "instance");
+      const path = String(node.attrs.path ?? "");
+      return ["span", {
+        class: "chip chip--instance composer-tiptap-input__mention",
+        "data-type": "mention",
+        "data-mention-kind": "instance",
+        "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+        "data-id": String(node.attrs.id ?? ""),
+        "data-label": label,
+        "data-skill-name": label,
+        "data-skill-path": path,
+        "data-tooltip": `${label}\n${path}`,
+      }, `@${label}`];
+    }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
       // Directory-reference chip: `name` is the tracked directory's
       // label, `path` its absolute path. File-reference chips are the
@@ -340,6 +356,12 @@ const SkillMention = Mention.extend({
     ];
   },
   renderText: ({ node }) => {
+    if (node.attrs.kind === "instance") {
+      return buildInstanceReferenceMarkdown({
+        label: String(node.attrs.name ?? "instance"),
+        path: String(node.attrs.path ?? ""),
+      });
+    }
     if (node.attrs.kind === "pull-request") {
       const path = String(node.attrs.path ?? node.attrs.name ?? "");
       const pr = parsePullRequestUrl(path);
@@ -1186,6 +1208,7 @@ function mentionAttrsToSkill(
   const kind =
     attrs.kind === "directory"
     || attrs.kind === "file"
+    || attrs.kind === "instance"
     || attrs.kind === "pull-request"
     || attrs.kind === "thread"
       ? attrs.kind
@@ -2454,7 +2477,7 @@ function applyExternalSkillInsertion(params: {
   // Re-locate the autocomplete trigger the token replaced — `@` for a
   // directory-reference chip, `#` for a thread/PR reference, `$` for a skill.
   const findTrigger =
-    insertedSkill.kind === "directory"
+    insertedSkill.kind === "directory" || insertedSkill.kind === "instance"
       ? findDirectoryReferenceTrigger
       : insertedSkill.kind === "thread"
           || insertedSkill.kind === "pull-request"
@@ -3310,7 +3333,8 @@ export const ComposerTiptapInput = forwardRef<
           }
           return;
         }
-        if (attrs["data-mention-kind"] === "pull-request") return;
+        if (attrs["data-mention-kind"] === "pull-request"
+          || attrs["data-mention-kind"] === "instance") return;
         // `data-skill-name`, not the text: a chip that names its origin
         // carries the origin label after the name.
         const tooltip = buildSkillTooltip(

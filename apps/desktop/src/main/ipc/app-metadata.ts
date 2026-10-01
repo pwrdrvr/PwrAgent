@@ -22,10 +22,12 @@ import {
   type AppLicenseDocument,
   type AppLicenseDocumentKind,
   type AppMetadata,
+  type AppBuildIdentity,
 } from "../../shared/app-metadata";
 import { readAppLogSnapshot, subscribeAppLogEntries } from "../app-logs";
 import { showAppLogWindow } from "../app-log-window";
 import { resolveApplicationVersion } from "../app-version";
+import { readAppBuildIdentity } from "../app-build-identity";
 import { showChangelogWindow } from "../changelog-window";
 import { showThirdPartyNoticesWindow } from "../license-document-window";
 import {
@@ -40,6 +42,11 @@ import { subscribersForChannel } from "../window-channels";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 
 let unsubscribeAppLogEntries: (() => void) | undefined;
+let startupBuildIdentity: Promise<AppBuildIdentity> | undefined;
+
+function getStartupBuildIdentity(): Promise<AppBuildIdentity> {
+  return startupBuildIdentity ??= readAppBuildIdentity(app.isPackaged, app.getAppPath());
+}
 
 function readDecoratedAppLogSnapshot(): AppLogSnapshot {
   const snapshot = readAppLogSnapshot({
@@ -49,9 +56,9 @@ function readDecoratedAppLogSnapshot(): AppLogSnapshot {
   return logFilePath ? { ...snapshot, logFilePath } : snapshot;
 }
 
-export function resolveAppMetadata(
+export async function resolveAppMetadata(
   rendererProcessId?: number,
-): AppMetadata {
+): Promise<AppMetadata> {
   const activeProfileName = resolveActiveProfileName();
   const logFilePath = getMainLogFilePath();
   const codexProfilePath =
@@ -60,6 +67,7 @@ export function resolveAppMetadata(
   return {
     applicationName: app.getName(),
     applicationVersion: resolveApplicationVersion(app.getVersion()),
+    buildIdentity: await getStartupBuildIdentity(),
     copyright: APP_COPYRIGHT,
     homepage: PWRAGENT_HOMEPAGE_URL,
     documentationUrl: PWRAGENT_DOCUMENTATION_URL,
@@ -118,6 +126,9 @@ export async function readAppChangelogDocument(): Promise<AppChangelogDocument> 
 }
 
 export function registerAppMetadataIpcHandlers(): void {
+  // Capture before windows load: a later checkout switch cannot relabel the
+  // code this process started with when an operator copies diagnostics.
+  void getStartupBuildIdentity();
   unsubscribeAppLogEntries?.();
   unsubscribeAppLogEntries = subscribeAppLogEntries((entry) => {
     for (const webContents of subscribersForChannel(APP_LOG_ENTRY_EVENT_CHANNEL)) {

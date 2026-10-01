@@ -571,7 +571,7 @@ for (const theme of AUDIT_THEMES) {
         await test.step("directory autocomplete with sibling actions", async () => {
           await textbox.fill("@");
           const directories = app.window.getByRole("listbox", {
-            name: "Directories",
+            name: "Projects and instances",
           });
           await expect(directories.getByRole("option").first()).toBeVisible();
           await expect(directories.getByRole("button")).toHaveCount(0);
@@ -850,7 +850,7 @@ for (const theme of AUDIT_THEMES) {
             directoryRow.getByRole("button", { name: "Load more threads", exact: true }),
           ).toBeVisible();
           // Independent owner pages admit ten unpinned roots and two pins. The
-          // Keep at top seam, the pin-drop boundary, and the section
+          // Keep at top slot, the pin-drop boundary, and the section
           // disclosure are listitems; paging controls sit outside the list.
           //
           // Direct children: `getByRole` matches DESCENDANTS, so it would also
