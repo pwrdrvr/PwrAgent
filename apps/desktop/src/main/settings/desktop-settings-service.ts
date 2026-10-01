@@ -2726,13 +2726,23 @@ export class DesktopSettingsService {
     if (
       !selected
       || (
+        this.options.ensureManagedCodexRuntime
+        && this.resolveManagedCodexEnabled()
+        && !this.codexDiscoverySettled
+        && managedCodexTagForCommand(selected.command) === undefined
+      )
+      || (
         !this.resolveManagedCodexEnabled()
         && managedCodexTagForCommand(selected.command) !== undefined
         && selected.command !== configuredCommand
       )
     ) {
-      // A durable discovery result is not authorization to keep the managed
-      // build after it is switched off. Explicit operator paths still win.
+      // An ordinary cached executable cannot serve a startup that wants the
+      // managed build: pinning it would suppress the managed selection change
+      // for this whole process. Wait for discovery; if installation fails,
+      // its settled result can still select the ordinary fail-open fallback.
+      // Conversely, a cached managed build cannot survive being switched off.
+      // Explicit operator paths still win when managed builds are off.
       return undefined;
     }
     return {
