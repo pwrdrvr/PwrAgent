@@ -89,6 +89,8 @@ import {
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadProviderModelDefaults,
+  changedProviderModelDefaultBackends,
   estimateTokenUsageCost,
   isAcpBackendId,
   isRemoteFederationTarget,
@@ -7215,44 +7217,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     previous: Record<string, DesktopProviderModelDefaults>,
     next: Record<string, DesktopProviderModelDefaults>,
   ): number {
-    const changedBackends = [...new Set([
-      ...Object.keys(previous),
-      ...Object.keys(next),
-    ])].filter((backend) => {
-      const before = previous[backend];
-      const after = next[backend];
-      return before?.model !== after?.model
-        || before?.reasoningEffortsByModel[before.model ?? ""]
-          !== after?.reasoningEffortsByModel[after.model ?? ""];
-    }) as AppServerBackendKind[];
+    const changedBackends = changedProviderModelDefaultBackends(previous, next);
     if (changedBackends.length === 0) return 0;
-
-    const replaceModels = <T extends NavigationLaunchpadDefaults>(
-      value: T,
-      includeAll = false,
-    ): T => {
-      const seeded = applyNavigationLaunchpadProviderSettingsPatch(value, {});
-      const providerSettings = { ...seeded.providerSettings };
-      for (const backend of changedBackends) {
-        if (
-          !includeAll
-          && value.backend !== backend
-          && providerSettings[backend] === undefined
-        ) continue;
-        const preference = next[backend];
-        providerSettings[backend] = {
-          ...providerSettings[backend],
-          model: preference?.model,
-          reasoningEffort: preference?.reasoningEffortsByModel[preference.model ?? ""],
-          reasoningEffortsByModel: preference?.reasoningEffortsByModel,
-        };
-      }
-      return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
-    };
 
     // One commit regardless of the number of directories or changed providers.
     return this.stateDb.raw.transaction(() => {
-      this.writeLaunchpadDefaults(replaceModels(this.readLaunchpadDefaults(), true));
+      this.writeLaunchpadDefaults(applyNavigationLaunchpadProviderModelDefaults(
+        this.readLaunchpadDefaults(), next, changedBackends, true,
+      ));
       const update = this.stateDb.raw.prepare(
         "UPDATE directory_launchpads SET payload = ?, updated_at = ?, settings_touched_at = ? WHERE directory_path = ?",
       );
@@ -7263,7 +7235,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           launchpad.backend === backend
           || launchpad.providerSettings?.[backend] !== undefined
         )) continue;
-        const updated = replaceModels(launchpad);
+        const updated = applyNavigationLaunchpadProviderModelDefaults(launchpad, next, changedBackends);
         updated.updatedAt = now;
         updated.settingsTouchedAt = now;
         update.run(JSON.stringify(updated), now, now, updated.directoryKey);

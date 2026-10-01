@@ -11,6 +11,7 @@ import {
 import type {
   AgentEvent,
   AppServerThreadTitleSource,
+  DesktopProviderModelDefaults,
   FederationRemoteTarget,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -7336,6 +7337,100 @@ describe("useThreadNavigation", () => {
       solUpdate.resolve(solResponse);
       await secondUpdate;
     });
+  });
+
+  it.each([
+    { model: "gpt-6.1-sol", reasoningEffort: "low" },
+    { model: "gpt-6-sol", reasoningEffort: "low" },
+    { model: undefined, reasoningEffort: undefined },
+  ])("reconciles open drafts before submitting after defaults change to $model/$reasoningEffort", async (selection) => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "codex", executionMode: "full-access" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      directoryPath: "/fixture", model: "gpt-6-sol", reasoningEffort: "high", workMode: "worktree",
+      prompt: "unsent draft", editorDocument: { type: "doc", content: [] },
+      fileAttachments: [{ id: "file", label: "fixture.txt", path: "/fixture.txt" }],
+      imageAttachments: [{ id: "image", name: "fixture.png", size: 10, type: "image/png", url: "data:image/png;base64,AA==" }],
+      fastMode: true, codexEnvironmentId: "fixture-environment", mcpConnectionIds: ["fixture-connection"],
+      createdAt: 1, updatedAt: 1,
+    };
+    const inactive: NavigationLaunchpadDraft = {
+      ...launchpad, directoryKey: "directory:/inactive", backend: "acp:kimi", model: "kimi-k3",
+      providerSettings: { codex: { model: "gpt-6-sol", reasoningEffort: "high", fastMode: true } },
+    };
+    const remote: NavigationLaunchpadDraft = {
+      ...launchpad, directoryKey: "directory:/remote", federationTarget: { scope: "remote", instanceId: "peer" },
+    };
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "created-thread", executionMode: "full-access" as const, workMode: "worktree" as const,
+    }));
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [launchpad, inactive, remote].map((draft) => ({
+          key: draft.directoryKey, kind: "directory" as const, label: "Fixture", path: draft.directoryPath,
+          threadKeys: [], needsAttentionCount: 0, launchpad: draft,
+        })), launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async (request) => ({
+        launchpad: [launchpad, inactive, remote].find((draft) => draft.directoryKey === request.directoryKey)!, defaults,
+      })),
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+    const before: Record<string, DesktopProviderModelDefaults> = {
+      codex: { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } },
+    };
+    const after: Record<string, DesktopProviderModelDefaults> = selection.model
+      ? { codex: { model: selection.model, reasoningEffortsByModel: { [selection.model]: selection.reasoningEffort! } } }
+      : {};
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: before, threadViewVisible: true },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(3));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories.find((directory) => directory.key === remote.directoryKey)!); });
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories.find((directory) => directory.key === inactive.directoryKey)!); });
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories.find((directory) => directory.key === launchpad.directoryKey)!); });
+    expect(result.current.selectedLaunchpad).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "high" });
+    rerender({ providerModelDefaults: after, threadViewVisible: false });
+    rerender({ providerModelDefaults: after, threadViewVisible: true });
+    await waitFor(() => expect(result.current.selectedLaunchpad).toMatchObject({
+      ...launchpad, ...selection, editorDocument: launchpad.editorDocument,
+    }));
+    const parked = result.current.directories.find((directory) => directory.key === inactive.directoryKey)!.launchpad!;
+    expect(parked).toMatchObject({ model: "kimi-k3", prompt: "unsent draft", fileAttachments: launchpad.fileAttachments });
+    expect(parked.providerSettings?.codex).toMatchObject(selection);
+    expect(result.current.directories.find((directory) => directory.key === remote.directoryKey)?.launchpad).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "high" });
+    await act(async () => { await result.current.materializeDirectoryLaunchpad(launchpad.directoryKey); });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      launchpad: expect.objectContaining({ ...launchpad, ...selection }),
+    }));
+  });
+
+  it("keeps deliberate draft choices on the first Settings snapshot and unrelated refreshes", async () => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "codex", executionMode: "default" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      model: "custom-model", reasoningEffort: "high", workMode: "local", prompt: "draft", createdAt: 1, updatedAt: 1,
+    };
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [{ key: launchpad.directoryKey, kind: "directory", label: "Fixture",
+          threadKeys: [], needsAttentionCount: 0, launchpad }], launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: undefined as Record<string, DesktopProviderModelDefaults> | undefined },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories[0]!); });
+    const providerModelDefaults = { codex: { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } } };
+    rerender({ providerModelDefaults });
+    rerender({ providerModelDefaults: structuredClone(providerModelDefaults) });
+    expect(result.current.selectedLaunchpad).toMatchObject({ model: "custom-model", reasoningEffort: "high", prompt: "draft" });
   });
 
   it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
