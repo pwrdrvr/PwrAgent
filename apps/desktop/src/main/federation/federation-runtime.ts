@@ -118,7 +118,7 @@ import {
   navigationQueryEventRequiresRefresh,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
-  buildAppendPinRank,
+  buildPrependPinRank,
   buildFederatedThreadRef,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
@@ -5821,7 +5821,7 @@ async function mountRemoteParentForLocalChild(
   ) {
     await overlayStore.setRemoteThreadLocalPin({
       ref,
-      pinnedRank: buildAppendPinRank(
+      pinnedRank: buildPrependPinRank(
         [
           ...localRanks.map((entry) => entry.pinnedRank),
           ...remotePins.map((pin) => pin.localPinnedRank),

@@ -7570,6 +7570,8 @@ export class CodexAppServerClient {
   >();
   private readonly threadListTextCache = new ThreadListTextCache();
   private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
+  private threadListingGeneration = 0;
+  private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
     (
@@ -7662,7 +7664,6 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
-      if (navigationQueryEventRequiresRefresh(method)) this.pendingThreadListings.clear();
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       if (!isKnownCodexMethod) {
         logUnhandledCodexMessage({
@@ -7708,6 +7709,7 @@ export class CodexAppServerClient {
         method,
         params,
       );
+      if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
       if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
         this.handleHelperThreadNotification(normalized.method, normalized);
@@ -7966,7 +7968,7 @@ export class CodexAppServerClient {
     this.initializeResult = null;
     this.availableHelperModels = [];
     this.rejectHelperTurnWaiters(helperTurnError);
-    this.pendingThreadListings.clear();
+    this.invalidateThreadListings();
     this.threadListTextCache.clear();
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
@@ -8719,6 +8721,19 @@ export class CodexAppServerClient {
     }
   }
 
+  /** Mutation fences also arrive locally through the registry, without a
+   * notification on this connection. Existing readers keep their ownership;
+   * callers after the fence cannot join their pre-mutation physical read.
+   */
+  invalidateThreadListings(notification?: AppServerNotification): void {
+    if (notification) {
+      if (this.threadListingInvalidations.has(notification)) return;
+      this.threadListingInvalidations.add(notification);
+    }
+    this.threadListingGeneration += 1;
+    this.pendingThreadListings.clear();
+  }
+
   async listThreads(params?: {
     archived?: boolean;
     enrichDirectories?: boolean;
@@ -8734,6 +8749,7 @@ export class CodexAppServerClient {
     // through different cache keys. Share the complete listing, including
     // directory observations, until it settles. Never retain a completed scan.
     const key = JSON.stringify([
+      this.threadListingGeneration,
       params?.archived === true, params?.enrichDirectories ?? true,
       params?.filter?.trim() || "", params?.limit, params?.maxPages,
       params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,

@@ -4,6 +4,7 @@ import {
   compareCloudflaredVersions,
   createCloudflaredReleaseCheck,
 } from "../federation/cloudflared-release";
+import { ReleaseCheckDeferredError } from "../github-release-cache";
 
 function release(tag: unknown, status = 200) {
   return vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
@@ -46,6 +47,23 @@ describe("cloudflared release check", () => {
     await expect(createCloudflaredReleaseCheck({
       fetch: vi.fn(async () => { throw new TypeError("fetch failed"); }),
     })()).resolves.toBeUndefined();
+  });
+
+  it("retries a deferred lookup at the release cache retry time", async () => {
+    let now = 0;
+    const retryAt = 10 * 60_000;
+    const fetch = release("2026.9.0");
+    fetch.mockRejectedValueOnce(new ReleaseCheckDeferredError(retryAt));
+    const check = createCloudflaredReleaseCheck({ fetch, now: () => now });
+
+    await expect(check()).resolves.toBeUndefined();
+    now = retryAt - 1;
+    await expect(check()).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    now = retryAt;
+    await expect(check()).resolves.toBe("2026.9.0");
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("shares one lookup between concurrent status reads", async () => {

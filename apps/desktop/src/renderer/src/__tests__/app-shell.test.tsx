@@ -573,6 +573,7 @@ describe("App", () => {
         status: "connected" as const,
         capabilities: [
           "thread_navigation",
+          "launchpad_metadata",
           "environment_actions",
         ] as const,
       },
@@ -650,6 +651,9 @@ describe("App", () => {
     await flushReactUpdates();
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
+    // The composer says where the thread will start, before anything is sent.
+    expect(screen.getByRole("button", { name: "Machine" }))
+      .toHaveTextContent("Studio Mac / work");
 
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
     expect(await screen.findByRole("option", { name: /PwrAgent/ }))
@@ -676,6 +680,7 @@ describe("App", () => {
         status: "connected" as const,
         capabilities: [
           "thread_navigation",
+          "launchpad_metadata",
           "environment_actions",
         ] as const,
       },
@@ -730,6 +735,7 @@ describe("App", () => {
             capabilities: [
               "remote_window",
               "thread_navigation",
+              "launchpad_metadata",
               "environment_actions",
             ] as const,
           },
@@ -741,6 +747,7 @@ describe("App", () => {
             capabilities: [
               "remote_window",
               "thread_navigation",
+              "launchpad_metadata",
               "environment_actions",
             ] as const,
           },

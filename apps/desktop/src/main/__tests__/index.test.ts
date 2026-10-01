@@ -6,6 +6,7 @@ import type {
   applyRememberedLinuxPasswordStore,
   relaunchForLinuxSecretStore,
 } from "../linux-password-store";
+import { ElectronQuitModel } from "./helpers/electron-quit-model";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
@@ -2121,6 +2122,9 @@ describe("bootstrapApp", () => {
     expect(quitMock).not.toHaveBeenCalled();
     expect(disposeAgentIpcHandlersMock).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+    // The retry is a setImmediate (quit-retry.ts), which the fake clock runs
+    // only on a tick that advances time.
+    await vi.advanceTimersByTimeAsync(1);
     expect(quitMock).toHaveBeenCalledOnce();
     expect(stopWindowDiagnosticsMock).toHaveBeenCalledOnce();
     if (settlement === "resolve") resolveStop();
@@ -2160,6 +2164,7 @@ describe("bootstrapApp", () => {
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(13_999);
     expect(quitMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(quitMock).toHaveBeenCalledOnce();
     expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
@@ -2462,8 +2467,88 @@ describe("bootstrapApp", () => {
     await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
-    expect(requestQuitMock).toHaveBeenCalledWith({ source: "before-quit" });
+    expect(requestQuitMock).toHaveBeenCalledWith({
+      performQuit: expect.any(Function),
+      source: "before-quit",
+    });
     expect(quitMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("under a native quit (Dock → Quit, logout, Electron's SIGTERM)", () => {
+    // Route the real handlers through a model of Electron's quit state
+    // machine. The quit manager is mocked here, so mirror createQuitManager's
+    // no-blocker path: allow the quit and call performQuit synchronously,
+    // which is what makes before-quit re-entrant.
+    async function bootWithElectronQuitModel(
+      options: { quitAllowed?: boolean } = {},
+    ): Promise<ElectronQuitModel> {
+      await import("../index");
+      await flushMicrotasks();
+      const model = new ElectronQuitModel(["main"]);
+      let quitAllowed = options.quitAllowed ?? false;
+      isQuitAllowedMock.mockImplementation(() => quitAllowed);
+      allowImmediateQuitMock.mockImplementation(() => {
+        quitAllowed = true;
+      });
+      requestQuitMock.mockImplementation(
+        async (options?: { performQuit?: () => void }) => {
+          quitAllowed = true;
+          (options?.performQuit ?? model.quit)();
+          return true;
+        },
+      );
+      quitMock.mockImplementation(model.quit);
+      getAllWindowsMock.mockImplementation(() => model.browserWindows());
+      for (const name of ["before-quit", "will-quit", "window-all-closed"]) {
+        model.on(name, (event) => appEventHandlers.get(name)?.(event));
+      }
+      return model;
+    }
+
+    it("never re-enters app.quit() inside the before-quit dispatch", async () => {
+      const model = await bootWithElectronQuitModel();
+
+      await model.quitFromNativeTask();
+      await model.settle();
+
+      // Resource shutdown closes the window while Electron is not quitting,
+      // so window-all-closed may come first; either it or the retry then
+      // issues the final pass.
+      expect(model.reentrantQuits).toBe(0);
+      expect(model.emitted.filter((name) => name === "before-quit")).toHaveLength(3);
+      expect(model.emitted.slice(-3)).toEqual(["before-quit", "will-quit", "quit"]);
+    });
+
+    // `quitAllowed: true` is a quit the manager already accepted whose
+    // performQuit has not run yet, such as the Agent tool's deferred stop;
+    // that native pass starts resource shutdown inside its own dispatch.
+    it.each([false, true])("retries after the dispatch when resource shutdown settles inside it (quit already allowed: %s)", async (quitAllowed) => {
+      // Shutdown rejects before it closes a window, so its retry settles in
+      // the microtask checkpoint of whichever pass started it. Retried from a
+      // native pass, the nested pass starts closing the window, the outer
+      // pass clears is_quitting_, and only window-all-closed asking again
+      // ends the quit.
+      federationShutdownExitingMock.mockImplementation(() => {
+        throw new Error("federation shutdown notice failed");
+      });
+      const model = await bootWithElectronQuitModel({ quitAllowed });
+
+      await model.quitFromNativeTask();
+      await model.settle();
+
+      expect(mainLogWarnMock).toHaveBeenCalledWith(
+        "main process shutdown barrier failed",
+        expect.objectContaining({ source: "before-quit" }),
+      );
+      expect(model.reentrantQuits).toBe(0);
+      expect(model.emitted).not.toContain("window-all-closed");
+      expect(model.emitted.slice(-4)).toEqual([
+        "close:main",
+        "closed:main",
+        "will-quit",
+        "quit",
+      ]);
+    });
   });
 
   it("initializes app state in active-profile mode when boot decision is open", async () => {

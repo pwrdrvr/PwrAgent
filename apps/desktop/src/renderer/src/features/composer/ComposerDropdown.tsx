@@ -71,7 +71,13 @@ export function ComposerDropdown(props: {
   icon?: ComposerDropdownIcon;
   id?: string;
   kind?: "branch";
-  tone?: "danger";
+  /**
+   * `danger` is Full Access. `remote` marks a chip whose choice routes the
+   * thread to another machine: an accent rim and an accent icon, louder than
+   * a neutral chip and quieter than the solid Full Access fill. `offline`
+   * is that machine while it is unreachable: a dashed rim, muted.
+   */
+  tone?: "danger" | "remote" | "offline";
   onChange: (value: string) => void;
   onOpenChange?: (open: boolean) => void;
   onPointerEnter?: () => void;
@@ -232,6 +238,8 @@ export function ComposerDropdown(props: {
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
         props.tone === "danger" ? "composer-dropdown--danger" : "",
+        props.tone === "remote" ? "composer-dropdown--remote" : "",
+        props.tone === "offline" ? "composer-dropdown--offline" : "",
         open ? "composer-dropdown--open" : "",
       ]
         .filter(Boolean)

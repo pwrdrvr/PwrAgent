@@ -1,4 +1,4 @@
-import { fetchGitHubReleaseMetadata } from "../github-release-cache";
+import { fetchGitHubReleaseMetadata, ReleaseCheckDeferredError } from "../github-release-cache";
 
 /**
  * Whether a newer cloudflared exists than the one installed.
@@ -42,6 +42,7 @@ export function createCloudflaredReleaseCheck(options: {
     if (cached && now() - cached.at < cached.ttl) return cached.version;
     pending ??= (async () => {
       let version: string | undefined;
+      let retryAt: number | undefined;
       try {
         const response = await fetcher(CLOUDFLARED_LATEST_RELEASE_URL, {
           headers: { Accept: "application/vnd.github+json" },
@@ -53,8 +54,14 @@ export function createCloudflaredReleaseCheck(options: {
           const tag = typeof body.tag_name === "string" ? body.tag_name.replace(/^v/, "") : "";
           version = VERSION.test(tag) ? tag : undefined;
         }
-      } catch { /* Offline or throttled: report nothing. */ }
-      cached = { at: now(), ttl: version ? CHECK_TTL_MS : RETRY_AFTER_FAILURE_MS, version };
+      } catch (error) {
+        if (error instanceof ReleaseCheckDeferredError) retryAt = error.retryAt;
+        // An unavailable lookup reports nothing.
+      }
+      const checkedAt = now();
+      let ttl = version ? CHECK_TTL_MS : RETRY_AFTER_FAILURE_MS;
+      if (retryAt !== undefined) ttl = Math.max(0, retryAt - checkedAt);
+      cached = { at: checkedAt, ttl, version };
       return version;
     })().finally(() => { pending = undefined; });
     return pending;

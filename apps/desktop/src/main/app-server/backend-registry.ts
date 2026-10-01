@@ -1,3 +1,4 @@
+import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
@@ -98,7 +99,7 @@ import {
   type ListAcpThreadRewindPointsResponse,
   type RewindAcpThreadRequest,
   type RewindAcpThreadResponse,
-  buildAppendPinRank,
+  buildPrependPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
   canIsolateMcpProviderServers,
@@ -821,6 +822,7 @@ type BackendClient = {
   readConfiguredMcpServerNames?(params?: {
     cwd?: string;
   }): Promise<string[]>;
+  invalidateThreadListings?(notification?: AppServerNotification): void;
   listThreads(
     params?: {
       archived?: boolean;
@@ -8443,6 +8445,8 @@ export class DesktopBackendRegistry {
   private createdThreadVisibilityPinnedRanks: string[] = [];
   private readonly createdThreadVisibilityLock = new PerKeyAsyncLock();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+  private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
+  private readonly archiveCleanupNotifications = new WeakSet<AppServerNotification>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly pendingThreadHandoffs = new Map<string, PendingThreadHandoffSummary>();
   private readonly acceptedHandoffTaskRequests = new Map<
@@ -11745,11 +11749,15 @@ export class DesktopBackendRegistry {
     if (durableThreads) {
       return durableThreads;
     }
+    if (params.forceRefresh && !params.skipArchivedMetadataRefresh) {
+      this.invalidateArchiveCleanupReads(params.backend);
+    }
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "codex") {
+      const archiveGeneration = this.archiveCleanupReads.generation("codex");
       const threads = await this.filterArchivedThreadsPresentInActiveList({
         archived: params.archived,
         backend: "codex",
@@ -11764,7 +11772,10 @@ export class DesktopBackendRegistry {
           skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
         }, diagnostics),
       });
-      if (!params.skipArchivedMetadataRefresh) {
+      // Listings that began before a restore cannot authorize destructive
+      // cleanup, including archived reads made outside the cleanup pool.
+      if (!params.skipArchivedMetadataRefresh
+        && this.archiveCleanupReads.generation("codex") === archiveGeneration) {
         this.scheduleThreadListArchiveStateCleanup({
           backend: "codex",
           filter: params.filter,
@@ -13604,6 +13615,7 @@ export class DesktopBackendRegistry {
       result = { threadId: request.threadId };
     }
     this.invalidateThreadListCache(backend);
+    this.invalidateArchiveCleanupReads(backend);
     if (backend === "codex") await this.archiveTokenMiserThread(result.threadId);
     const messagingCleanup = await this.cleanupMessagingForArchivedThread({
       backend,
@@ -13763,6 +13775,7 @@ export class DesktopBackendRegistry {
       });
     }
     this.invalidateThreadListCache(backend);
+    this.invalidateArchiveCleanupReads(backend);
     this.clearArchivedMessagingCleanupCache({
       backend,
       threadId: result.threadId,
@@ -15744,9 +15757,12 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The next rank at the bottom of the operator's pin list. Remote rows pinned
-   * into this viewer's main window own ranks in `remote_thread_pins`, not the
-   * local thread overlay, and new local pins join the same user-curated order,
+   * The next rank at the TOP of the operator's pin list: the thread was just
+   * created, so it is the one the operator is about to look for, and the
+   * bottom of a long pin list is the least visible place to put it. Remote
+   * rows pinned into this viewer's main window own ranks in
+   * `remote_thread_pins`, not the local thread overlay, and new local pins
+   * join the same user-curated order,
    * so rank allocation must include both stores or it can reuse a remote rank
    * and strand the two rows at the local/remote boundary.
    */
@@ -15765,7 +15781,7 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    return buildAppendPinRank([
+    return buildPrependPinRank([
       ...this.createdThreadVisibilityPinnedRanks,
       ...remotePinnedRanks,
     ]);
@@ -23950,6 +23966,7 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
+    this.invalidateArchiveCleanupReads();
     // A recovery drain waiting for other Codex turns gives up now; the final
     // Codex close below still waits for that drain before it runs.
     this.codexInvalidIdRecoveryAbort.abort();
@@ -25337,6 +25354,7 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        this.invalidateArchiveCleanupForNotification(backend, notification);
         if (
           backend === "codex"
           && notification.method === "account/rateLimits/updated"
@@ -25799,6 +25817,7 @@ export class DesktopBackendRegistry {
 
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
     if (!backend) {
+      this.invalidateArchiveCleanupReads();
       this.threadListCache.clear();
       return;
     }
@@ -26004,103 +26023,62 @@ export class DesktopBackendRegistry {
 
     const nextActiveThreadIds = new Set(params.threads.map((thread) => thread.id));
     const previousActiveThreadIds = this.activeThreadIdsByBackend.get(params.backend);
+    if (previousActiveThreadIds && (
+      previousActiveThreadIds.size !== nextActiveThreadIds.size
+      || [...previousActiveThreadIds].some((id) => !nextActiveThreadIds.has(id))
+    )) {
+      this.invalidateArchiveCleanupReads(params.backend);
+    }
     this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
-    await this.cleanupArchivedBindingsMissingFromActiveList({
-      backend: params.backend,
-      activeThreadIds: nextActiveThreadIds,
-    });
-    if (!previousActiveThreadIds) {
-      return;
-    }
-
-    const missingThreadIds = [...previousActiveThreadIds].filter(
-      (threadId) => !nextActiveThreadIds.has(threadId),
+    const missingThreadIds = new Set(
+      [...previousActiveThreadIds ?? []].filter((id) => !nextActiveThreadIds.has(id)),
     );
-    if (missingThreadIds.length === 0) {
-      return;
-    }
-
-    try {
-      const archivedThreads = await this.getClient(params.backend).listThreads({
-        archived: true,
-      }, {
-        callerReason: "archive-transition-cleanup",
-        ownerId: this.threadListCacheOwnerId,
-      });
-      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
-      await Promise.all(
-        missingThreadIds
-          .filter((threadId) => archivedThreadIds.has(threadId))
-          .map((threadId) =>
-            this.cleanupMessagingForArchivedThread({
-              backend: params.backend,
-              threadId,
-              origin: "state-refresh",
-            }),
-          ),
-      );
-    } catch (error) {
-      backendRegistryLog.warn("archived thread transition cleanup failed", {
-        backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
-        threadIds: missingThreadIds,
-      });
-    }
-  }
-
-  private async cleanupArchivedBindingsMissingFromActiveList(params: {
-    activeThreadIds: Set<string>;
-    backend: AppServerBackendKind;
-  }): Promise<void> {
     const store = this.resolveMessagingArchiveCleanupStore();
-    if (!store) return;
-
-    let bindings;
-    try {
-      bindings = await store.findActiveBindingsForBackend({
-        backend: params.backend,
-      });
-    } catch (error) {
-      backendRegistryLog.warn("archived binding lookup failed", {
-        backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
+    if (store) {
+      try {
+        const bindings = await store.findActiveBindingsForBackend({ backend: params.backend });
+        for (const binding of bindings) {
+          if (!nextActiveThreadIds.has(binding.threadId)) missingThreadIds.add(binding.threadId);
+        }
+      } catch (error) {
+        backendRegistryLog.warn("archived binding lookup failed", {
+          backend: params.backend,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
-
-    const missingBoundThreadIds = [
-      ...new Set(
-        bindings
-          .map((binding) => binding.threadId)
-          .filter((threadId) => !params.activeThreadIds.has(threadId)),
-      ),
-    ];
-    if (missingBoundThreadIds.length === 0) return;
+    if (missingThreadIds.size === 0 || this.closed) return;
 
     try {
-      const archivedThreads = await this.getClient(params.backend).listThreads({
-        archived: true,
-      }, {
-        callerReason: "archive-bound-binding-cleanup",
-        ownerId: this.threadListCacheOwnerId,
+      // Both transition and binding candidates need the same archive authority.
+      // Turn/status invalidations still refresh active summaries, but cannot
+      // change this membership. Use cheap IDs and one shared paginated walk.
+      const evidence = await this.archiveCleanupReads.read(params.backend, async () => {
+        if (this.closed) throw new Error("Registry closed during archive cleanup.");
+        const threads = await this.getClient(params.backend).listThreads({
+          archived: true,
+          enrichDirectories: false,
+        }, {
+          callerReason: "archive-cleanup",
+          ownerId: this.threadListCacheOwnerId,
+        });
+        return new Set(threads.map((thread) => thread.id));
       });
-      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
+      if (this.closed || !this.archiveCleanupReads.isCurrent(params.backend, evidence)) return;
+      const activeThreadIds = this.activeThreadIdsByBackend.get(params.backend);
       await Promise.all(
-        missingBoundThreadIds
-          .filter((threadId) => archivedThreadIds.has(threadId))
-          .map((threadId) =>
-            this.cleanupMessagingForArchivedThread({
-              backend: params.backend,
-              threadId,
-              origin: "state-refresh",
-            }),
-          ),
+        [...missingThreadIds]
+          .filter((id) => evidence.threadIds.has(id) && !activeThreadIds?.has(id))
+          .map((threadId) => this.cleanupMessagingForArchivedThread({
+            backend: params.backend,
+            threadId,
+            origin: "state-refresh",
+          })),
       );
     } catch (error) {
-      backendRegistryLog.warn("archived bound binding cleanup failed", {
+      backendRegistryLog.warn("archived thread cleanup membership read failed", {
         backend: params.backend,
         error: error instanceof Error ? error.message : String(error),
-        threadIds: missingBoundThreadIds,
       });
     }
   }
@@ -41109,7 +41087,33 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private invalidateArchiveCleanupReads(
+    backend?: AppServerBackendKind,
+    notification?: AppServerNotification,
+  ): void {
+    this.archiveCleanupReads.invalidate(backend);
+    if (!backend || backend === "codex") this.codexClient.invalidateThreadListings?.(notification);
+  }
+
+  private invalidateArchiveCleanupForNotification(
+    backend: AppServerBackendKind,
+    notification: AppServerNotification,
+  ): void {
+    if (
+      (notification.method === "thread/archived"
+        || notification.method === "thread/unarchived"
+        || notification.method === "account/updated")
+      && !this.archiveCleanupNotifications.has(notification)
+    ) {
+      // Provider notifications enter before async cleanup, then reach emit.
+      // One notification must advance the archive generation only once.
+      this.archiveCleanupNotifications.add(notification);
+      this.invalidateArchiveCleanupReads(backend, notification);
+    }
+  }
+
   private emit(event: AgentEvent): Promise<void> {
+    this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     const emitted = this.emitEvent(event);
     const method = event.notification.method;
     if (
