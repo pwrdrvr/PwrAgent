@@ -5948,6 +5948,96 @@ describe("Sidebar", () => {
       .not.toBeInTheDocument();
   });
 
+  it("offers Send to Another Machine for a thread this window owns", async () => {
+    const onSendThreadToMachine = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSendThreadToMachine={onSendThreadToMachine}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    const menu = screen.getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+    // Beside Archive: a Move ends in one.
+    expect(items.indexOf("Send to Another Machine…")).toBe(items.indexOf("Archive Thread") - 1);
+    await clickElement(screen.getByRole("menuitem", { name: "Send to Another Machine…" }));
+
+    expect(onSendThreadToMachine).toHaveBeenCalledWith(sharedThread);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("omits Send to Another Machine without a receiver or for a peer's thread", () => {
+    const peerThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-peer",
+      title: "Peer thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-laptop" },
+          threadId: "thread-peer",
+        },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities: ["turn_control"],
+      },
+    };
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Send to Another Machine…" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[peerThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-peer"
+        threads={[peerThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSendThreadToMachine={() => undefined}
+      />
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Peer thread" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Send to Another Machine…" })).toBeNull();
+  });
+
   it("flips the thread actions menu above the overflow button near the viewport bottom", () => {
     Object.defineProperty(window, "innerHeight", {
       configurable: true,

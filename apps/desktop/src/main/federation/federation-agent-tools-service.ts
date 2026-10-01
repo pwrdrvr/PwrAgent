@@ -139,6 +139,14 @@ export function createFederationAgentToolsHandler(
   const cursors = new Map<string, InstanceListCursorEntry>();
   return async (request) => {
     try {
+      if (request.operation === "handoff_instance_thread") {
+        const result = await runtime().handoffInstanceThread(request.args, request.args.sourceInstanceId);
+        const ref = {
+          backend: "codex", threadId: result.threadId,
+          ...(result.instanceId !== runtime().localFederationInstanceId() ? { instanceId: result.instanceId } : {}),
+        } as const;
+        return ok({ ...result, threadLink: buildThreadMarkdownLink({ ...ref, title: "Transferred thread" }) });
+      }
       if (request.operation === "push_instance_file") {
         const result = await runtime().pushFile({ scope: "remote", instanceId: request.args.instanceId }, request.args.sourcePath, request.args.name);
         return ok({ ...result, instanceId: request.args.instanceId });

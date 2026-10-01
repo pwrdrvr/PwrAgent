@@ -941,6 +941,10 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "fs/readFile") {
+      this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: { dataBase64: Buffer.from("opaque handoff fixture").toString("base64") } }));
+      return;
+    }
     if (payload.method === "thread/read") {
       const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
       const transientErrors = threadId
@@ -1384,6 +1388,31 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("exports handoff bytes through the protocol-provided path without opening private storage", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    MockTransport.readThreadResultByThreadId.set("handoff-source", {
+      thread: { id: "handoff-source", path: "/private/codex/history.jsonl", cwd: "/fixture/workspace", name: "Source title", status: { type: "idle" }, turns: [] },
+    });
+    const result = await client.exportThreadForHandoff("handoff-source");
+    expect(result).toMatchObject({ title: "Source title", cwd: "/fixture/workspace", rolloutBase64: Buffer.from("opaque handoff fixture").toString("base64") });
+    const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+    expect(requests.find((request) => request.method === "fs/readFile")?.params).toEqual({ path: "/private/codex/history.jsonl" });
+    await client.close();
+  });
+
+  it("rejects handoff of an active provider thread before reading its file", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    MockTransport.readThreadResultByThreadId.set("handoff-active", {
+      thread: { id: "handoff-active", path: "/private/codex/history.jsonl", status: { type: "active", activeFlags: [] }, turns: [] },
+    });
+    await expect(client.exportThreadForHandoff("handoff-active")).rejects.toThrow("source turn");
+    const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+    expect(requests.some((request) => request.method === "fs/readFile")).toBe(false);
+    await client.close();
+  });
+
   it("forwards Auto through create, resume, fork, turn start, and live updates", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.serverVersion = "0.153.4";

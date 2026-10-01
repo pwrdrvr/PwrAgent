@@ -53,6 +53,7 @@ export class FederationFilePushReceiver {
   constructor(private readonly options: {
     allowed: () => boolean;
     directory: () => string;
+    onCompleted?: (peerId: string, result: FilePushResult) => void;
   }) {}
 
   handle(peerId: string, method: string, input: unknown): Promise<unknown> {
@@ -154,7 +155,9 @@ export class FederationFilePushReceiver {
           throw error;
         }
         await this.remove(id);
-        return { path: destination, sizeBytes: transfer.size, sha256 } satisfies FilePushResult;
+        const result = { path: destination, sizeBytes: transfer.size, sha256 } satisfies FilePushResult;
+        this.options.onCompleted?.(peerId, result);
+        return result;
       }
       throw new Error("Too many files with this name in the incoming folder.");
     } catch (error) {

@@ -28,6 +28,7 @@ export const FEDERATION_CAPABILITIES = [
   "gateway_relay",
   "remote_pty",
   "file_push",
+  "thread_handoff",
   "file_pull",
   "event_subscriptions",
   "turn_input_blobs",

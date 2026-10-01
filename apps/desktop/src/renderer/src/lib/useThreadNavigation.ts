@@ -2876,6 +2876,11 @@ export function useThreadNavigation(
     target: FederationRemoteTarget,
     localDirectory: ProjectIdentity,
   ) => Promise<boolean>;
+  /** The peer's own directory row for a local project, or undefined. */
+  findFederatedCounterpartDirectory: (
+    target: FederationRemoteTarget,
+    localDirectory: ProjectIdentity,
+  ) => Promise<NavigationDirectorySummary | undefined>;
   /** Back/Forward into a peer launchpad recorded by directory key. */
   restoreFederatedLaunchpad: (
     target: FederationRemoteTarget,
@@ -6169,6 +6174,23 @@ export function useThreadNavigation(
     [attentionViewId, desktopApi, readOwnerDirectoryIndex],
   );
 
+  const findFederatedCounterpartDirectory = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      localDirectory: ProjectIdentity,
+    ): Promise<NavigationDirectorySummary | undefined> => {
+      if (!desktopApi?.getNavigationQueryPage) {
+        return undefined;
+      }
+      const ownerDirectories = await readOwnerDirectoryIndex(
+        target,
+        `project-counterpart:${attentionViewId}:${target.instanceId}:${localDirectory.label}`,
+      );
+      return findPeerCounterpartDirectory(localDirectory, ownerDirectories);
+    },
+    [attentionViewId, desktopApi, readOwnerDirectoryIndex],
+  );
+
   const restoreFederatedLaunchpad = useCallback(
     async (
       target: FederationRemoteTarget,
@@ -8751,6 +8773,7 @@ export function useThreadNavigation(
     openFederatedWorkspaceLaunchpad,
     openFederatedProjectLaunchpad,
     federatedTargetHasProject,
+    findFederatedCounterpartDirectory,
     restoreFederatedLaunchpad,
     selectedFederatedLaunchpadTarget: activeFederatedLaunchpad?.target,
     planLaunchpadMachineRetarget,

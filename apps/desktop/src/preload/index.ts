@@ -422,6 +422,8 @@ import type {
   ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
+  HandoffInstanceThreadRequest,
+  HandoffInstanceThreadResult,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
   SetFederationEventSubscriptionsRequest,
@@ -698,6 +700,7 @@ import {
   FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
+  FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
   STAR_MAP_COMMAND_CHANNEL,
@@ -1371,6 +1374,10 @@ const desktopApi = Object.freeze({
     request: RevokeFederationPeerRequest,
   ): Promise<RevokeFederationPeerResponse> =>
     await ipcRenderer.invoke(FEDERATION_REVOKE_PEER_CHANNEL, request),
+  handoffThreadToInstance: async (
+    request: HandoffInstanceThreadRequest,
+  ): Promise<HandoffInstanceThreadResult> =>
+    await ipcRenderer.invoke(FEDERATION_HANDOFF_THREAD_CHANNEL, request),
   resetFederationEnrollment: async (
     request?: ResetFederationEnrollmentRequest,
   ): Promise<ResetFederationEnrollmentResponse> =>

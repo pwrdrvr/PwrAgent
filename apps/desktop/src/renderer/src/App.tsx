@@ -51,6 +51,13 @@ import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
+import { buildThreadHandoffTargets } from "./features/federation/thread-handoff-targets";
+import {
+  SendThreadToMachineDialog,
+  type FindThreadHandoffRepository,
+  type SendThreadToMachineRequest,
+  type SendThreadToMachineSource,
+} from "./features/federation/SendThreadToMachineDialog";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type { LaunchpadMachineControl } from "./features/composer/LaunchpadMachineChip";
 import { findPeerCounterpartDirectory } from "./lib/federation-project-match";
@@ -2486,6 +2493,123 @@ function DesktopAppShell(props: {
     }
     await navigation.openFederatedWorkspaceLaunchpad(target);
   };
+  // Send to Another Machine. The thread is captured when the dialog opens:
+  // a Move archives the source before the request returns, and the dialog
+  // must outlive its row. The live row, while it exists, still decides
+  // whether a turn is running.
+  const [sendToMachineThread, setSendToMachineThread] =
+    useState<NavigationThreadSummary>();
+  const threadHandoffTargets = useMemo(
+    () =>
+      desktopApi?.handoffThreadToInstance && !readRendererFederationTarget()
+        ? buildThreadHandoffTargets(liveFederationHealth)
+        : [],
+    [desktopApi?.handoffThreadToInstance, liveFederationHealth],
+  );
+  const findFederatedCounterpartDirectory =
+    navigation.findFederatedCounterpartDirectory;
+  const findThreadHandoffRepository = useCallback<FindThreadHandoffRepository>(
+    async (instanceId, project) => {
+      const counterpart = await findFederatedCounterpartDirectory(
+        { scope: "remote", instanceId },
+        project,
+      );
+      if (!counterpart?.path) {
+        return undefined;
+      }
+      const localRepository = project.repositoryKey?.toLowerCase();
+      return {
+        path: counterpart.path,
+        matchedBy:
+          localRepository
+          && counterpart.repositoryKey?.toLowerCase() === localRepository
+            ? "origin"
+            : "name",
+      };
+    },
+    [findFederatedCounterpartDirectory],
+  );
+  const sendToMachineSource = ((): SendThreadToMachineSource | undefined => {
+    if (!sendToMachineThread) {
+      return undefined;
+    }
+    const identityKey = threadSummaryIdentityKey(sendToMachineThread);
+    const live = navigation.threads.find((thread) =>
+      threadSummaryIdentityKey(thread) === identityKey) ?? sendToMachineThread;
+    // The primary workspace decides the project, as sidebar grouping does.
+    const linked = live.linkedDirectories[0];
+    const descriptor = linked ? classifyDirectory(linked) : undefined;
+    const directoryRow = descriptor
+      ? navigation.directories.find((directory) => directory.key === descriptor.key)
+      : undefined;
+    const repositoryKey = directoryRow?.repositoryKey ?? live.primaryGitRepository;
+    // Only a Git checkout needs a receiving repository. A directory with no
+    // Git evidence travels like a Workspaces thread: history only.
+    const isGitProject = descriptor?.kind === "directory" && Boolean(
+      repositoryKey
+      || live.gitBranch
+      || linked?.gitBranch
+      || live.gitWorkingState
+      || directoryRow?.gitStatus,
+    );
+    const project = isGitProject && descriptor
+      ? {
+          kind: "directory" as const,
+          label: directoryRow?.label ?? descriptor.label,
+          ...((directoryRow?.path ?? descriptor.path) !== undefined
+            ? { path: directoryRow?.path ?? descriptor.path }
+            : {}),
+          ...(repositoryKey !== undefined ? { repositoryKey } : {}),
+        }
+      : undefined;
+    return {
+      title: live.title,
+      ...(project ? { project } : {}),
+      ...(live.gitBranch ?? linked?.gitBranch
+        ? { gitBranch: live.gitBranch ?? linked?.gitBranch }
+        : {}),
+      ...(live.gitWorkingState ? { gitWorkingState: live.gitWorkingState } : {}),
+      busy: live.threadStatus === "active",
+    };
+  })();
+  const sendThreadToMachine = async (
+    thread: NavigationThreadSummary,
+    request: SendThreadToMachineRequest,
+  ): Promise<void> => {
+    const result = await desktopApi!.handoffThreadToInstance!({
+      sourceThreadId: thread.id,
+      targetInstanceId: request.targetInstanceId,
+      operation: request.operation,
+      ...(request.targetRepositoryPath
+        ? { targetRepositoryPath: request.targetRepositoryPath }
+        : {}),
+    });
+    setSendToMachineThread(undefined);
+    const targetLabel = threadHandoffTargets.find((target) =>
+      target.instanceId === result.instanceId)?.label ?? result.instanceId;
+    // A Move whose archive could not be confirmed is a completed Copy, and
+    // says so: the backend returns the ready destination with a warning.
+    const moved = request.operation === "move" && result.sourceArchived;
+    showAppNotice({
+      id: `thread-handoff:${result.handoffId}`,
+      title: `${moved ? "Moved" : "Copied"} to ${targetLabel}`,
+      message: moved
+        ? `The original thread is archived.${
+          request.targetRepositoryPath ? " Its worktree stays on disk." : ""
+        }`
+        : "The original thread is still here.",
+      ...(result.warnings.length > 0 ? { detail: result.warnings.join("\n") } : {}),
+      autoDismiss: result.warnings.length === 0,
+    });
+    // The destination is a peer's thread: open it the way a thread link does,
+    // which pins the remote row into this window first.
+    showThreadFromLink({
+      backend: result.backend,
+      threadId: result.threadId,
+      instanceId: result.instanceId,
+      instanceLabel: targetLabel,
+    });
+  };
   const federatedTargetHasProject = navigation.federatedTargetHasProject;
   const checkFederationTargetProject = useCallback(
     (instanceId: string, directory: FederationProjectDirectory) =>
@@ -3055,6 +3179,15 @@ function DesktopAppShell(props: {
       onShowThread={showThreadFromLink}
       threads={navigation.threads}
     >
+      {sendToMachineThread && sendToMachineSource ? (
+        <SendThreadToMachineDialog
+          source={sendToMachineSource}
+          targets={threadHandoffTargets}
+          findRepository={findThreadHandoffRepository}
+          onClose={() => setSendToMachineThread(undefined)}
+          onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+        />
+      ) : null}
       {codexLoginProfile ? (
         <CodexAuthProfileLoginDialog
           desktopApi={desktopApi}
@@ -3141,6 +3274,9 @@ function DesktopAppShell(props: {
           localMachineLabel={liveFederationHealth?.localLabel}
           checkFederationTargetProject={checkFederationTargetProject}
           onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
+          onSendThreadToMachine={threadHandoffTargets.length > 0
+            ? setSendToMachineThread
+            : undefined}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
             : addProjectDirectory}

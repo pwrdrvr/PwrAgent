@@ -1,5 +1,6 @@
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
+import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -739,6 +740,10 @@ export type DesktopApi = {
   readFederationHealth?: (
     request?: ReadFederationHealthRequest,
   ) => Promise<ReadFederationHealthResponse>;
+  /** Copy or move a thread this instance owns to a peer, with its Git workspace. */
+  handoffThreadToInstance?: (
+    request: HandoffInstanceThreadRequest,
+  ) => Promise<HandoffInstanceThreadResult>;
   /** On-demand load poll for Star Map health indicators. Omitted or
    *  local instanceId samples locally; a remote id rides the
    *  short-timeout `backend.getLoadStatus` federation RPC. `load` is

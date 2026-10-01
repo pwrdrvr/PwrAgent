@@ -3020,6 +3020,96 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,
+      projectKey: "/old-checkout",
+      linkedDirectories: [{ id: "/old-checkout", label: "repo", path: "/old-checkout", kind: "local" }],
+    };
+    const exported = {
+      cwd: "/old-checkout", rolloutBase64: "b3BhcXVl",
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      exportThreadForHandoff: vi.fn(async () => exported),
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:handoff-source": {
+        backend: "codex", threadId: "handoff-source", executionMode: "default",
+        extraLinkedDirectories: [{ id: "pwragent-handoff:codex:handoff-source", label: "repo", path: "/repo", kind: "worktree", worktreePath: "/new-checkout" }],
+      },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    onTestFinished(() => registry.close());
+    expect(await registry.exportThreadForHandoff(thread.id)).toEqual({ ...exported, cwd: "/new-checkout" });
+  });
+
+  it("registers an imported handoff worktree with its repository before navigation enrichment", async () => {
+    const repositoryPath = "/repo/app";
+    const worktreePath = "/repo/app/.worktrees/handoff/app";
+    const prepareLaunchpadWorkspace = vi.fn();
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const overlayStore = createOverlayStoreMock();
+    const client = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+      gitDirectoryService: { prepareLaunchpadWorkspace, recordCodexWorktreeOwnerThread } as never,
+    });
+    onTestFinished(() => registry.close());
+    const response = await registry.forkThread({ backend: "codex", sourceThreadId: "source",
+      directoryKind: "directory", directoryLabel: "app", directoryPath: `${worktreePath}/packages`, workMode: "worktree",
+      importedWorktree: { repositoryPath, worktreePath },
+    });
+    expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    expect(client.lastForkThreadParams?.cwd).toBe(`${worktreePath}/packages`);
+    expect(response.linkedDirectory).toMatchObject({ kind: "worktree", path: expectedDir(repositoryPath), worktreePath: expectedDir(worktreePath) });
+    expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
+      .toMatchObject({ extraLinkedDirectories: [expect.objectContaining({ path: expectedDir(repositoryPath), worktreePath: expectedDir(worktreePath) })] });
+    expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({ threadId: response.threadId, worktreePath });
+  });
+
+  it("reserves a handoff source against turn admission and releases on failure", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "handoff-source", input: [{ type: "text" as const, text: "Continue" }] };
+    await expect(registry.withThreadHandoff(params.threadId, async () => {
+      await expect(registry.submitTurn(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitTurnIfIdle(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow("being handed off");
+      await expect(registry.startTurn(params)).rejects.toThrow("being handed off");
+      await expect(registry.withThreadHandoff(params.threadId, async () => {})).rejects.toThrow("being handed off");
+      throw new Error("transfer failed");
+    })).rejects.toThrow("transfer failed");
+    await expect(registry.withThreadHandoff(params.threadId, async () => "released")).resolves.toBe("released");
+  });
+
+  it("rejects handoff while a turn start is awaiting its provider", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const started = createDeferred<{ backend: "codex"; threadId: string; turnId: string }>();
+    const internal = registry as unknown as { startTurnWithoutHandoff: () => Promise<{ backend: "codex"; threadId: string; turnId: string }> };
+    vi.spyOn(internal, "startTurnWithoutHandoff").mockImplementation(async () => await started.promise);
+    const pending = registry.startTurn({ backend: "codex", threadId: "handoff-source", input: [{ type: "text", text: "Continue" }] });
+    await expect(registry.withThreadHandoff("handoff-source", async () => {})).rejects.toThrow("Wait for source turns");
+    started.resolve({ backend: "codex", threadId: "handoff-source", turnId: "turn" });
+    await pending;
+    await expect(registry.withThreadHandoff("handoff-source", async () => "released")).resolves.toBe("released");
+  });
+
+  it("archives a handoff source without cleaning its worktree", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,
+      linkedDirectories: [{ id: "worktree", kind: "worktree", label: "repo", path: "/repo", worktreePath: "/.codex/worktrees/handoff/repo" }],
+    };
+    const client = new MockBackendClient({ threads: [thread] });
+    const archive = vi.fn();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), worktreeArchiveService: { archive } as never });
+    onTestFinished(() => registry.close());
+    const result = await registry.archiveThread({ backend: "codex", threadId: thread.id, preserveWorktrees: true });
+    expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
+    expect(archive).not.toHaveBeenCalled();
+    expect(result.cleanup).toEqual([]);
+  });
+
   it("routes an activity detail read directly to one provider turn without reading ledgers or base history", async () => {
     const entry = { type: "activity" as const, id: "activity-command", summary: "Ran build", details: [] };
     const readThreadActivity = vi.fn(async () => entry);
