@@ -6966,92 +6966,22 @@ a.button {
     0 0 14px var(--accent-shadow);
 }
 
-/* The Keep at top target, shown only while a pin drag is live. Two forms
-   share `.directory-row__keep-top-slot`, which is what the drag session hit-tests:
-
-   - The seam, between pins kept at top and ordinary pins. It mounts inside the
-     same zero-height `.directory-row__pin-drop-boundary` as the append slot,
-     so a drag never moves a row. Unlike the append slot it sits between two
-     pinned rows, so its hit band is centered on the seam.
-   - The ghost slot, when no pin is kept yet. The top of the pins stays the
-     ordinary top-pin drop point, so the lane gets a compact slot of its own
-     above it. Opening it shifts the list once, by about 40px. */
-.directory-row__keep-top-slot--seam {
-  position: absolute;
-  top: -16px;
-  right: 6px;
-  left: 6px;
-  height: 32px;
-  cursor: grabbing;
-  pointer-events: none;
-}
-
-.directory-row__keep-top-slot--seam.is-drag-enabled {
-  pointer-events: auto;
-}
-
-.directory-row__keep-top-slot--seam::after {
-  content: "";
-  position: absolute;
-  top: 16px;
-  right: 8px;
-  left: 8px;
-  height: 1px;
-  border-radius: 999px;
-  background: var(--border-subtle);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.directory-row__keep-top-slot--seam::before {
-  content: "Keep at top";
-  position: absolute;
-  z-index: 1;
-  top: 16px;
-  right: 14px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--bg-sidebar);
-  box-shadow: 0 0 0 1px var(--border-subtle);
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 14px;
-  text-transform: uppercase;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.directory-row__keep-top-slot--seam.is-drag-enabled::after,
-.directory-row__keep-top-slot--seam.is-drag-enabled::before {
-  opacity: 1;
-}
-
-.directory-row__keep-top-slot--seam.is-drop-target-before::after {
-  height: 3px;
-  background: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--row-active-tint-strong),
-    0 0 14px var(--accent-shadow);
-}
-
-/* The held card covers this label while it is the target and carries its own
-   copy (`.thread-row__drop-label`). */
-.directory-row__keep-top-slot--seam.is-drop-target-before::before {
-  opacity: 0;
-}
-
-/* The ghost slot's boundary grows only while its slot is open. */
-.directory-row__pin-drop-boundary:has(> .directory-row__keep-top-slot--ghost.is-drag-enabled) {
+/* The Keep at top slot, shown only while a pin drag is live: above the pins
+   while none is kept, else below the last kept pin. It mounts in the same
+   `.directory-row__pin-drop-boundary` as the append slot, but that boundary
+   grows to hold it, so the slot is a box of its own and never overlaps a row.
+   Only a drop inside that box keeps; the top half of the first ordinary pin
+   stays that row's "before" target, and its indicator is the one line on
+   the tier boundary. The deeper bottom padding keeps that 3px line clear of
+   the slot's border, so it reads as the row's edge rather than the slot's.
+   Opening the slot shifts the rows below it once, by about 46px. */
+.directory-row__pin-drop-boundary:has(> .directory-row__keep-top-slot.is-drag-enabled) {
   height: auto;
   margin-block: 0;
-  padding: 2px 2px 11px;
+  padding: 2px 2px 6px;
 }
 
-.directory-row__keep-top-slot--ghost {
-  position: relative;
+.directory-row__keep-top-slot {
   display: none;
   height: 34px;
   align-items: center;
@@ -7066,28 +6996,16 @@ a.button {
   text-transform: uppercase;
 }
 
-.directory-row__keep-top-slot--ghost.is-drag-enabled {
+.directory-row__keep-top-slot.is-drag-enabled {
   display: flex;
 }
 
 /* The kept pin's glyph: filled, as on a kept row. */
-.directory-row__keep-top-slot--ghost path {
+.directory-row__keep-top-slot path {
   fill: currentColor;
 }
 
-/* The seam under the lane, above the ordinary pins. */
-.directory-row__keep-top-slot--ghost::after {
-  content: "";
-  position: absolute;
-  right: 6px;
-  bottom: -7px;
-  left: 6px;
-  height: 1px;
-  background: var(--border-subtle);
-  pointer-events: none;
-}
-
-.directory-row__keep-top-slot--ghost.is-drop-target-before {
+.directory-row__keep-top-slot.is-drop-target-before {
   border-style: solid;
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 9%, transparent);

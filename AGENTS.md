@@ -676,10 +676,14 @@ Render a brand through `BrandLockup`
   - A new pin, including an auto-pinned new thread, lands at the top of the
     ordinary pins and never above a kept pin.
   - Cross tiers only explicitly: the **Keep at Top** check item in the
-    context menu, or a drop on the Keep at top target that a pin drag shows
-    (a ghost slot above the pins while no pin is kept, else the seam between
-    the tiers). Move Up, Move Down, and the shortcuts stay inside the pin's
-    tier.
+    context menu, or a drag. Move Up, Move Down, and the shortcuts stay
+    inside the pin's tier.
+  - A pin drag shows a ghost Keep at top slot: above the pins while no pin
+    is kept, else below the last kept pin. Only a drop inside the slot's own
+    box keeps. The slot must not overlap a row.
+  - A drop on a pin row adopts that row's tier. The line above the first
+    ordinary pin is the top of the ordinary pins; the lower half of the
+    last kept pin is the end of the kept pins.
   - The **Pinned** and **Keep at Top** check items toggle in place and keep
     the menu open. Return or a click outside closes it.
 - Sort unpinned directory threads by thread creation time.

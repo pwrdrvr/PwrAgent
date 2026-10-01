@@ -382,8 +382,9 @@ function resolveThreadPinPointerDropTarget(
     return undefined;
   }
 
-  // The Keep at top seam overlaps the rows on both sides of it, so it is
-  // tested before rows: inside its band the drop always means "keep".
+  // The Keep at top slot is a box of its own between rows, never over one,
+  // so only a drop inside it means "keep". The line above the first ordinary
+  // pin stays that row's "before" target: the top of the ordinary pins.
   if (
     session.keepAtTopTargetElement
     && getPointInsideElement(session.keepAtTopTargetElement, session.lastPoint)
@@ -1658,11 +1659,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
       props.onReorderThreadPins
       && directoryUnpinnedThreadCount > 0
     );
-    // Kept pins sort first, so the Keep at top target sits before the first
-    // ordinary pin: a zero-height seam after kept pins, or a ghost slot above
-    // the pins when none is kept yet. With no ordinary pin loaded it would
-    // share the append target's boundary; dropping on the last kept row's
-    // lower half keeps there.
+    // Kept pins sort first, so the Keep at top slot sits before the first
+    // ordinary pin: below the last kept pin, or above the pins when none is
+    // kept yet. With no ordinary pin loaded it would share the append
+    // target's boundary; dropping on the last kept row's lower half keeps
+    // there.
     const keepAtTopSeamIndex = props.onReorderThreadPins
       ? directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread))
       : -1;
@@ -2113,8 +2114,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
                               {pinnedIndex === keepAtTopSeamIndex ? (
-                                // Same zero-height, role-carrying boundary as
-                                // the append target below; see its comment.
+                                // Same role-carrying boundary as the append
+                                // target below; see its comment. It grows to
+                                // hold the slot only while a drag is live.
                                 <div
                                   className="directory-row__pin-drop-boundary"
                                   role="listitem"
@@ -2122,17 +2124,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   <div
                                     aria-label={`Keep thread at top of pinned threads for ${directory.label}`}
                                     aria-hidden="true"
-                                    className={`directory-row__keep-top-slot directory-row__keep-top-slot--${
-                                      pinnedIndex === 0 ? "ghost" : "seam"
-                                    }`}
+                                    className="directory-row__keep-top-slot"
                                     role="separator"
                                   >
-                                    {pinnedIndex === 0 ? (
-                                      <>
-                                        <PinIcon size={12} />
-                                        Keep at top
-                                      </>
-                                    ) : null}
+                                    <PinIcon size={12} />
+                                    Keep at top
                                   </div>
                                 </div>
                               ) : null}
