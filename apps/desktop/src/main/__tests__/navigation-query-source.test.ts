@@ -22,7 +22,7 @@ function createSource() {
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
   const listeners = new Set<(event: AgentEvent) => void>();
-  const listThreads = vi.fn(async () => { await gate; return []; });
+  const listThreads = vi.fn(async (_params?: { forceRefresh?: boolean }) => { await gate; return []; });
   const registry = {
     listThreads,
     onEvent: (listener: (event: AgentEvent) => void) => {
@@ -37,6 +37,7 @@ function createSource() {
   return {
     finish, listThreads, listeners,
     read: (backend?: AppServerBackendScope) => loadLocalNavigationQueryIndex({ registry, backend, callerReason: "source-event-regression" }),
+    refresh: () => loadLocalNavigationQueryIndex({ registry, callerReason: "source-event-regression", refreshProviders: true }),
     emit: (method: string) => {
       const event = { backend: "codex", notification: { method, params: { threadId: "thread" } } } as AgentEvent;
       for (const listener of listeners) listener(event);
@@ -62,6 +63,19 @@ describe("owner index source event admission", () => {
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
+  });
+
+  it("runs a provider refresh beside an in-flight read without costing it a retry", async () => {
+    const source = createSource();
+    const first = source.read();
+    await Promise.resolve();
+    const refreshed = source.refresh();
+    await Promise.resolve();
+    source.finish();
+    await Promise.all([first, refreshed]);
+    // The refresh lists providers afresh; the read in flight finishes once.
+    expect(source.listThreads.mock.calls.map(([params]) => Boolean(params?.forceRefresh)))
+      .toEqual([false, true]);
   });
 
   it("does not restart an index for a subagent event with unchanged navigation", async () => {

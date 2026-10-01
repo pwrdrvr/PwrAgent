@@ -681,6 +681,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   };
 
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
+  private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
   constructor(private readonly stateDb: StateDb) {}
 
@@ -7319,6 +7320,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
   }
 
+  /**
+   * A launchpad row can add a directory to the navigation index, and its
+   * writes publish no event of their own. Listeners hear only writes that can
+   * change the index's directory set, not every draft save.
+   */
+  onDirectoryLaunchpadsChanged(listener: () => void): () => void {
+    this.directoryLaunchpadListeners.add(listener);
+    return () => {
+      this.directoryLaunchpadListeners.delete(listener);
+    };
+  }
+
+  private notifyDirectoryLaunchpadsChanged(): void {
+    for (const listener of this.directoryLaunchpadListeners) {
+      listener();
+    }
+  }
+
   async upsertDirectoryLaunchpad(
     launchpad: DirectoryLaunchpadOverlayState,
   ): Promise<DirectoryLaunchpadOverlayState> {
@@ -7343,6 +7362,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         next.updatedAt ?? now,
         next.settingsTouchedAt ?? null,
       );
+    if (launchpadDirectoryIdentity(current) !== launchpadDirectoryIdentity(next)) {
+      this.notifyDirectoryLaunchpadsChanged();
+    }
     return next;
   }
 
@@ -7355,12 +7377,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         this.putDirectoryOverlay(params.directoryKey, { ...current, pinnedRank: undefined });
       }
     })();
+    this.notifyDirectoryLaunchpadsChanged();
   }
 
   async resetDirectoryLaunchpad(params: { directoryKey: string }): Promise<void> {
-    this.stateDb.raw
+    const removed = this.stateDb.raw
       .prepare("DELETE FROM directory_launchpads WHERE directory_path = ?")
       .run(params.directoryKey);
+    if (removed.changes > 0) {
+      this.notifyDirectoryLaunchpadsChanged();
+    }
   }
 
   async readDirectoryGitStatusCache(): Promise<
@@ -9375,4 +9401,24 @@ function subAgentHasTerminalEvidence(subAgent: ThreadSubAgentSummary): boolean {
     || subAgent.outcome !== undefined
     || subAgent.completionSource !== undefined
   );
+}
+
+/**
+ * What a launchpad row contributes to the navigation index's directory set:
+ * nothing unless it passes the same presence test as the index read in
+ * `readNavigationQueryIndex`, otherwise its kind, label and path.
+ */
+function launchpadDirectoryIdentity(
+  launchpad: DirectoryLaunchpadOverlayState | undefined,
+): string | undefined {
+  if (!launchpad) {
+    return undefined;
+  }
+  const present = Boolean(launchpad.prompt?.trim())
+    || (launchpad.imageAttachments?.length ?? 0) > 0
+    || launchpad.registeredAt != null
+    || launchpad.settingsTouchedAt != null;
+  return present
+    ? JSON.stringify([launchpad.directoryKind, launchpad.directoryLabel, launchpad.directoryPath ?? null])
+    : undefined;
 }

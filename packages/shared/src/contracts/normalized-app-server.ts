@@ -2396,6 +2396,11 @@ export type AppServerNotification =
       method: "navigation/directory/removed";
       params: { directoryKey: string };
     }
+  /** See `NAVIGATION_DIRECTORY_SET_CHANGED_METHOD`. */
+  | {
+      method: "navigation/directorySet/changed";
+      params: { reason: "changed" | "subscribed" };
+    }
   | {
       method: "directory/pin/added";
       params: {

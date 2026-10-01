@@ -34,6 +34,12 @@ export const FEDERATION_CAPABILITIES = [
   "turn_input_blobs",
   "transport_brotli",
   "shutdown_notice",
+  /**
+   * The owner announces every change to the directory set it serves, while
+   * a viewer holds a `directory_set` subscription. See
+   * `NAVIGATION_DIRECTORY_SET_CHANGED_METHOD`.
+   */
+  "navigation_directory_set_events",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
@@ -77,6 +83,8 @@ export const FEDERATION_EVENT_CLASSES = [
   "pending_requests",
   "scheduled_actions",
   "star_map",
+  /** Threadless; carries only `navigation/directorySet/changed`. */
+  "directory_set",
 ] as const;
 
 export type FederationEventClass =
@@ -115,6 +123,20 @@ export type SetFederationEventSubscriptionsRequest = {
 
 export type SetFederationEventSubscriptionsResponse = {
   subscriptions: FederationEventSubscription[];
+};
+
+export type WatchFederatedDirectorySetRequest = {
+  instanceId: FederationInstanceId;
+};
+
+/**
+ * `watch` is null until the owner acknowledges the watch, and for an owner
+ * that cannot announce directory-set changes. An index read that began under
+ * `generation` still reflects the owner's directory set while a later
+ * response returns the same generation.
+ */
+export type WatchFederatedDirectorySetResponse = {
+  watch: { generation: number } | null;
 };
 
 export type FederationInstanceRole = "gateway" | "client" | "dual";

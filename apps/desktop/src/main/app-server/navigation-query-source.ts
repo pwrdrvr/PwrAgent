@@ -2,12 +2,20 @@ import type {
   AppServerBackendScope,
   NavigationDirectorySummary,
 } from "@pwragent/shared";
-import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
+import {
+  NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  navigationQueryEventRequiresRefresh,
+} from "@pwragent/shared";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { NavigationIndexReadPool } from "./navigation-index-read-pool";
+import {
+  directorySetMayHaveChanged,
+  NavigationDirectorySetAnnouncer,
+} from "./navigation-directory-set-announcer";
+import { getMainLogger } from "../log";
 
 const indexReads = new NavigationIndexReadPool(1_000);
 const sourceIds = new WeakMap<object, number>();
@@ -26,6 +34,8 @@ function sourceId(value: object): number {
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
+  /** List provider threads afresh rather than from the thread-list cache. */
+  refreshProviders?: boolean;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
 }): Promise<NavigationQueryIndex> {
@@ -33,8 +43,10 @@ export async function loadLocalNavigationQueryIndex(params: {
   const registry = params.registry ?? getDesktopBackendRegistry();
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
+  // A refresh reads under its own key: it must not be served a retained or
+  // in-flight index that predates it, nor cost other readers a retry.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    overlayStore.readNavigationSourceVersion?.()]);
+    overlayStore.readNavigationSourceVersion?.(), ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   let subscribed = false;
   return indexReads.read(key, async (signal) => {
     // An event during a scan makes its result stale. The read pool shares one
@@ -49,13 +61,52 @@ export async function loadLocalNavigationQueryIndex(params: {
       // Eviction/expiry/cancellation aborts the lifetime and releases it.
       signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     }
-    return await buildLocalNavigationQueryIndex({ ...params, registry, signal });
+    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal });
+    // Only the whole-owner index is what viewers read as its directory set.
+    if (backend === "all" && !params.registry) {
+      getNavigationDirectorySetAnnouncer().observe(index.directories);
+    }
+    return index;
   }, params.signal);
+}
+
+const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
+let directorySetAnnouncer: NavigationDirectorySetAnnouncer | undefined;
+
+/** This owner's announcer; the federation runtime says when viewers watch it. */
+export function getNavigationDirectorySetAnnouncer(): NavigationDirectorySetAnnouncer {
+  directorySetAnnouncer ??= new NavigationDirectorySetAnnouncer({
+    publish: (reason) => {
+      void getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: { method: NAVIGATION_DIRECTORY_SET_CHANGED_METHOD, params: { reason } },
+      });
+    },
+    rebuild: ({ refreshProviders }) => loadLocalNavigationQueryIndex({
+      callerReason: "directory-set-announcer",
+      refreshProviders,
+    }),
+    subscribeInputs: (changed) => {
+      const unsubscribeEvents = getDesktopBackendRegistry().onEvent?.((event) => {
+        if (directorySetMayHaveChanged(event)) changed();
+      });
+      const unsubscribeLaunchpads = getDesktopOverlayStore().onDirectoryLaunchpadsChanged?.(changed);
+      return () => {
+        unsubscribeEvents?.();
+        unsubscribeLaunchpads?.();
+      };
+    },
+    onRebuildError: (error) => directorySetLog.warn("directory set re-check failed", {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  });
+  return directorySetAnnouncer;
 }
 
 async function buildLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
+  refreshProviders?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
 }): Promise<NavigationQueryIndex> {
@@ -66,6 +117,7 @@ async function buildLocalNavigationQueryIndex(params: {
     backend: backend === "all" ? undefined : backend,
     callerReason: params.callerReason,
     enrichDirectories: true,
+    ...(params.refreshProviders ? { forceRefresh: true } : {}),
   });
   params.signal?.throwIfAborted();
   const index = overlayStore.readNavigationQueryIndex({
