@@ -47,7 +47,9 @@ export function useNativeVoiceNotices(
     return controller.subscribe((view) => {
       const ended = previous !== "idle" && view.status === "idle";
       previous = view.status;
-      if (ended && view.endedAfterReply) {
+      // Director voice keeps its panel open after the session, and the
+      // panel says how it ended; the notice is for thread voice's bar.
+      if (ended && view.endedAfterReply && view.mode !== "director") {
         showNotice({
           id: NATIVE_VOICE_ENDED_NOTICE_ID,
           title: "Live voice",
@@ -136,19 +138,24 @@ export function VoiceStatus({ controller, view }: { controller: NativeVoiceContr
 /**
  * How long the session has been live, ticking each second: the time the
  * operator is paying for. Its own state, so the tick re-renders only this.
+ * With `until`, the session is over and the clock stands still.
  */
-export function VoiceElapsed({ since }: { since?: number }) {
+export function VoiceElapsed({ since, until }: { since?: number; until?: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (since === undefined) return;
+    if (since === undefined || until !== undefined) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [since]);
+  }, [since, until]);
   if (since === undefined) return null;
-  const elapsed = formatElapsedMs(now - since);
+  const elapsed = formatElapsedMs((until ?? now) - since);
   return (
-    <span className="native-voice__elapsed" role="timer" aria-label={`Voice open for ${elapsed}`}>
+    <span
+      className="native-voice__elapsed"
+      role="timer"
+      aria-label={until === undefined ? `Voice open for ${elapsed}` : `Voice was open for ${elapsed}`}
+    >
       {elapsed}
     </span>
   );

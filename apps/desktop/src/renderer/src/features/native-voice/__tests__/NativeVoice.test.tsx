@@ -308,6 +308,62 @@ it("keeps director voice through navigation and shows what its tools did", async
   await waitFor(() => expect(directorPanel()).toBeNull());
 });
 
+// Ask, mute, listen: the session ends after the reply, and the operator
+// still has the transcript to read.
+it("keeps the director transcript after a muted session ends, until closed or started again", async () => {
+  const f = voiceFixture();
+  render(<><DirectorVoicePanel api={f.api} /><Notices api={f.api} /></>);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  try {
+    f.emit({ sessionId, type: "transcript", role: "user", text: "Which PRs are green?", done: true });
+    f.emit({ sessionId, type: "transcript", role: "assistant", text: "Two sample PRs are green.", done: true });
+    fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  } finally {
+    vi.useRealTimers();
+  }
+  await waitFor(() => expect(f.owner.getView().status).toBe("idle"));
+  expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+
+  const panel = directorPanel();
+  expect(panel).toHaveTextContent("Ended after the reply");
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("Voice: Two sample PRs are green.");
+  expect(screen.getByRole("timer")).toHaveAccessibleName(/^Voice was open for /);
+  expect(screen.queryByRole("textbox", { name: "Message voice" })).toBeNull();
+  // The panel says how it ended; no second notice repeats it.
+  expect(noticeCard("native-voice-ended")).toBeNull();
+
+  // Starting again replaces the old transcript with the new session's.
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start director voice" })); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  expect(f.api.startNativeVoice).toHaveBeenCalledTimes(2);
+  expect(directorPanel()).toHaveTextContent("Microphone live");
+  expect(screen.queryByRole("log", { name: "Voice transcript" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
+  await waitFor(() => expect(directorPanel()).toBeNull());
+});
+
+it("keeps an ended director panel until the operator closes it", async () => {
+  const f = voiceFixture();
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
+  f.emit({ sessionId, type: "transcript", role: "assistant", text: "Sample answer.", done: true });
+  // The service closes the session; nothing the operator did.
+  f.emit({ sessionId, type: "closed" });
+  await waitFor(() => expect(f.owner.getView().status).not.toBe("listening"));
+  await waitFor(() => expect(directorPanel()).toHaveTextContent("Voice ended"));
+  expect(directorPanel()).toHaveTextContent("Voice: Sample answer.");
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
+  expect(directorPanel()).toBeNull();
+});
+
 it("reports a Voice manager that cannot be opened instead of starting voice", async () => {
   const f = voiceFixture();
   vi.mocked(f.api.openVoiceManager!).mockResolvedValueOnce({ status: "failed", error: "Sample manager failure." });

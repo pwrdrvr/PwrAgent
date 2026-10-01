@@ -49,6 +49,14 @@ PwrAgent rewrites its `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `QWEN.md`
 whenever the thread opens. If the remembered thread was archived, PwrAgent
 makes a new one. Main gives the director prompt only to that thread.
 
+Director voice starts without Codex's startup context
+(`includeStartupContext: false`). That context summarizes the thread's recent
+turns for the realtime model. On the Voice manager, the last turn is the
+operator's previous request, and the realtime model answered it again as soon
+as the session opened. The rest of the context maps the manager's empty
+workspace. Thread voice keeps the context, because there it describes the
+coding work the operator wants to discuss.
+
 Director voice does its work through the PwrAgent dynamic tools. It uses
 `list_attention_threads` to summarize what needs the operator on every
 connected machine: running turns, unread threads, and threads waiting on input.
@@ -79,7 +87,7 @@ keeps the latest snapshot in memory only and accepts it only from local main
 windows. When no window has published, the tool returns `focus_not_published`,
 and the manager asks the operator which thread they mean.
 
-While director voice runs, it shows in a floating panel. Drag the header to
+Director voice shows in a floating panel. Drag the header to
 move the panel. Drag the corner grip, or focus the grip and use the arrow keys,
 to resize it. It opens at the top right, clear of the notice stack in the
 bottom-left corner. The window remembers the panel's position and size, and
@@ -91,8 +99,14 @@ The panel shows:
 - the live state;
 - the thread or launchpad the window is looking at;
 - the session clock, the microphone toggle, copy, and **End director voice**,
-  which ends the session;
+  which ends the session and closes the panel;
 - the transcript with its receipts, and **Message voice**.
+
+The panel outlives a session that ends on its own: muted after its reply, closed
+by the service, or failed. It keeps the transcript and stops the clock at the
+session's length. The state reads **Ended after the reply** or **Voice ended**.
+The mic button becomes **Start director voice**, and the close button becomes
+**Close director voice**. Starting again clears the old transcript.
 
 The panel also shows any question that the Voice manager's turn is waiting on.
 A tool can ask the operator something on the thread it runs in, and nobody
@@ -125,8 +139,10 @@ for hours, a turn blocked on a question, and a reply whose last line never
 reports done.
 
 So "ask, mute, listen" plays the whole answer, including a delegated turn's
-result, and the session does not stay open afterwards. When this happens, an
-ordinary notice says that voice ended after its reply. The voice manager or
+result, and the session does not stay open afterwards. When this happens to
+thread voice, an ordinary notice says that voice ended after its reply. The
+director panel says so itself and stays open. Main logs `native voice session
+stopped` once `thread/realtime/stop` returns. The voice manager or
 coding turn itself is billed as usual, whatever the microphone does.
 
 A voice failure in either mode is an ordinary app notice titled **Live voice**,

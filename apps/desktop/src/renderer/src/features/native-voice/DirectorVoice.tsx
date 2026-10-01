@@ -395,25 +395,74 @@ type DirectorVoicePanelProps = {
 };
 
 /**
- * Director voice while it runs: a panel the operator can drag by its header
- * and resize from its corner, remembered between sessions. It is a working
- * surface, not a notice. It holds the conversation, the tool receipts, the
- * typed input, and any question the Voice manager is waiting on. Closing
- * ends voice. An error leaves the panel and arrives as an ordinary notice
- * (`useNativeVoiceNotices`).
+ * Director voice: a panel the operator can drag by its header and resize
+ * from its corner, remembered between sessions. It is a working surface, not
+ * a notice. It holds the conversation, the tool receipts, the typed input,
+ * and any question the Voice manager is waiting on.
+ *
+ * The panel outlives the session. When voice ends on its own (muted after a
+ * reply, or a failure, which also arrives as an ordinary notice through
+ * `useNativeVoiceNotices`), the transcript stays with the clock stopped
+ * until the operator closes it or starts again. Closing a live panel ends
+ * voice and closes it.
  *
  * Mounted for the window's life; its geometry, tooltips and request watch
- * exist only while a session is open.
+ * exist only while the panel is open.
  */
 export function DirectorVoicePanel(props: DirectorVoicePanelProps) {
   const { controller, view } = useNativeVoice(props.api);
-  const open = view.mode === "director" && view.status !== "idle" && view.status !== "error";
-  if (!open || !view.threadId) return null;
-  return <OpenDirectorVoicePanel {...props} controller={controller} threadId={view.threadId} view={view} />;
+  const [shown, setShown] = useState<ShownDirectorVoice>();
+  const closing = useRef(false);
+  useEffect(() => controller.subscribe((next) => {
+    const live = next.mode === "director" && isVoiceActive(next) && next.threadId !== undefined;
+    if (live) {
+      setShown({ view: next });
+      return;
+    }
+    const endedAt = Date.now();
+    const closed = closing.current;
+    closing.current = false;
+    setShown((current) => {
+      if (!current || current.endedAt !== undefined) return current;
+      // The last live view keeps the transcript; a failure clears the
+      // controller's own view before the operator has read it.
+      return closed ? undefined : { view: current.view, endedAt };
+    });
+  }), [controller]);
+  if (!shown?.view.threadId) return null;
+  return (
+    <OpenDirectorVoicePanel
+      {...props}
+      controller={controller}
+      endedAt={shown.endedAt}
+      // Another session (thread voice) is open: starting again would be refused.
+      otherVoiceActive={isVoiceActive(view)}
+      onClose={() => {
+        if (shown.endedAt !== undefined) {
+          setShown(undefined);
+          return;
+        }
+        closing.current = true;
+        if (view.status !== "stopping") void controller.stop();
+      }}
+      threadId={shown.view.threadId}
+      view={shown.endedAt === undefined ? shown.view : { ...shown.view, status: "idle", muted: false }}
+    />
+  );
 }
 
-function OpenDirectorVoicePanel({ controller, desktopApi, focus, launchpad, onOpenThread, threadId, view }:
-  DirectorVoicePanelProps & { controller: NativeVoiceController; threadId: string; view: VoiceView }) {
+type ShownDirectorVoice = { view: VoiceView; endedAt?: number };
+
+function OpenDirectorVoicePanel({
+  api, controller, desktopApi, endedAt, focus, launchpad, onClose, onOpenThread, otherVoiceActive, threadId, view,
+}: DirectorVoicePanelProps & {
+  controller: NativeVoiceController;
+  endedAt?: number;
+  onClose: () => void;
+  otherVoiceActive: boolean;
+  threadId: string;
+  view: VoiceView;
+}) {
   const [request, setRequest] = useVoiceManagerRequest(desktopApi, threadId);
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const { rect, moveHandleProps, resizeHandleProps } = useFloatingPanelRect({
@@ -427,6 +476,8 @@ function OpenDirectorVoicePanel({ controller, desktopApi, focus, launchpad, onOp
       return { x: viewport.width - width - PANEL_EDGE, y: PANEL_LIMITS.topReserve, width, height };
     },
   });
+  const ended = endedAt !== undefined;
+  const closeLabel = ended ? "Close director voice" : "End director voice";
   const listening = view.status === "listening";
   const looking = focus
     ? `Looking at ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}.`
@@ -442,10 +493,29 @@ function OpenDirectorVoicePanel({ controller, desktopApi, focus, launchpad, onOp
     >
       <header className="director-voice-panel__head" {...moveHandleProps}>
         <p className="director-voice-panel__title">Director voice</p>
-        <VoiceStatus controller={controller} view={view} />
-        <VoiceElapsed since={view.liveSince} />
+        {ended ? (
+          <span className="native-voice__status" role="status" aria-label="Voice status">
+            {view.endedAfterReply ? "Ended after the reply" : "Voice ended"}
+          </span>
+        ) : <VoiceStatus controller={controller} view={view} />}
+        <VoiceElapsed since={view.liveSince} until={endedAt} />
         <div className="director-voice-panel__actions">
-          <VoiceMicToggle controller={controller} view={view} />
+          {ended ? (
+            otherVoiceActive ? null : (
+              <button
+                className="sidebar__icon-button"
+                type="button"
+                aria-label="Start director voice"
+                {...tooltipHandlers(tooltip, "Start director voice again")}
+                onClick={() => {
+                  tooltip.hide();
+                  void toggleDirectorVoice(api, controller);
+                }}
+              >
+                <MicIcon size={16} aria-hidden="true" />
+              </button>
+            )
+          ) : <VoiceMicToggle controller={controller} view={view} />}
           <button
             className="app-notice-toast__icon-button"
             type="button"
@@ -460,11 +530,11 @@ function OpenDirectorVoicePanel({ controller, desktopApi, focus, launchpad, onOp
           <button
             className="app-notice-toast__icon-button"
             type="button"
-            aria-label="End director voice"
-            {...tooltipHandlers(tooltip, "End director voice")}
+            aria-label={closeLabel}
+            {...tooltipHandlers(tooltip, closeLabel)}
             onClick={() => {
               tooltip.hide();
-              if (view.status !== "stopping") void controller.stop();
+              onClose();
             }}
           >
             <CloseIcon size={13} aria-hidden="true" />

@@ -1,5 +1,8 @@
 import type { NativeVoiceEvent, NativeVoiceMode, NativeVoiceStart, NativeVoiceTarget, NativeVoiceText } from "../../shared/native-voice";
+import { getMainLogger } from "../log";
 import { describeNativeVoiceAction, type NativeVoiceBackend, type NativeVoiceNotification } from "./native-voice-protocol";
+
+const log = getMainLogger("pwragent:native-voice");
 
 /** What the realtime model is told it is, per mode. Both keep replies short. */
 export const NATIVE_VOICE_PROMPTS: Record<NativeVoiceMode, string> = {
@@ -39,6 +42,7 @@ export class NativeVoiceSessionManager {
 
   private async establish(session: Session): Promise<void> {
     try {
+      const mode = session.request.mode ?? "thread";
       const backend = await this.acquire(session.request.threadId);
       session.backend = backend;
       if (session.cancelled) return;
@@ -64,9 +68,16 @@ export class NativeVoiceSessionManager {
         transport: { type: "webrtc", sdp: session.request.sdp },
         clientManagedHandoffs: false,
         flushTranscriptTailOnSessionEnd: false,
-        prompt: NATIVE_VOICE_PROMPTS[session.request.mode ?? "thread"],
+        prompt: NATIVE_VOICE_PROMPTS[mode],
+        // Codex's startup context summarizes the thread's recent turns. The
+        // Voice manager's last turn is the operator's previous request, and
+        // the realtime model answers it again the moment the session opens.
+        // Its machine map scans the manager's empty workspace, so the
+        // director loses nothing.
+        includeStartupContext: mode === "thread",
       });
       session.established = true;
+      log.info("native voice session started", { threadId: session.request.threadId, mode });
     } catch (error) {
       this.emit(session, { type: "error", message: error instanceof Error ? error.message : "Voice startup failed." });
       // Do not await stop here: stop waits for this startup promise to settle.
@@ -118,6 +129,12 @@ export class NativeVoiceSessionManager {
         // replacement session on the same thread (SDP carries no session id).
         await session.start.catch(() => undefined);
         if (!session.disconnected) await session.backend?.stop(session.request.threadId);
+        // The record that the billed realtime session ended.
+        log.info("native voice session stopped", {
+          threadId: session.request.threadId,
+          established: session.established === true,
+          disconnected: session.disconnected === true,
+        });
         this.release(session);
       } catch (error) {
         // Keep ownership when the service could still be live. A retry or a

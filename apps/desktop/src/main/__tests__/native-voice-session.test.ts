@@ -126,11 +126,13 @@ describe("native voice ownership", () => {
   it("tells the realtime model which mode it is in", async () => {
     const thread = fixture();
     await thread.manager.start(1, thread.request, thread.emit);
-    expect(thread.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.thread }));
+    expect(thread.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.thread, includeStartupContext: true }));
     await thread.manager.stopOwner(1);
     const director = fixture();
     await director.manager.start(1, { ...director.request, mode: "director" }, director.emit);
-    expect(director.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.director }));
+    // Startup context replays the Voice manager's last request, which the
+    // realtime model then answers again before the operator says anything.
+    expect(director.backend.start).toHaveBeenCalledWith(expect.objectContaining({ prompt: NATIVE_VOICE_PROMPTS.director, includeStartupContext: false }));
     expect(NATIVE_VOICE_PROMPTS.director).toContain("read_operator_focus");
     await director.manager.stopOwner(1);
   });
