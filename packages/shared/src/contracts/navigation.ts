@@ -27,7 +27,7 @@ import type {
   MessagingConversationKind,
   MessagingToolUpdateMode,
 } from "./messaging";
-import type { DesktopGhDiscoverySnapshot } from "./settings";
+import type { DesktopGhDiscoverySnapshot, DesktopProviderModelDefaults } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
 import type { CelestialIconId } from "./celestial";
@@ -899,6 +899,49 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
           providerSettings,
         };
   return projectNavigationLaunchpadProviderSettings(base as T);
+}
+
+export function changedProviderModelDefaultBackends(
+  previous: Record<string, DesktopProviderModelDefaults>,
+  next: Record<string, DesktopProviderModelDefaults>,
+): AppServerBackendKind[] {
+  return [...new Set([
+    ...Object.keys(previous),
+    ...Object.keys(next),
+  ])].filter((backend) => {
+    const before = previous[backend];
+    const after = next[backend];
+    return before?.model !== after?.model
+      || before?.reasoningEffortsByModel[before.model ?? ""]
+        !== after?.reasoningEffortsByModel[after.model ?? ""];
+  }) as AppServerBackendKind[];
+}
+
+/** Replace only provider model choices; retain the launchpad's unsent content. */
+export function applyNavigationLaunchpadProviderModelDefaults<T extends NavigationLaunchpadDefaults>(
+  value: T,
+  defaults: Record<string, DesktopProviderModelDefaults>,
+  changedBackends: AppServerBackendKind[],
+  includeAll = false,
+): T {
+  const relevantBackends = changedBackends.filter((backend) =>
+    includeAll
+    || value.backend === backend
+    || value.providerSettings?.[backend] !== undefined
+  );
+  if (relevantBackends.length === 0) return value;
+  const seeded = applyNavigationLaunchpadProviderSettingsPatch(value, {});
+  const providerSettings = { ...seeded.providerSettings };
+  for (const backend of relevantBackends) {
+    const preference = defaults[backend];
+    providerSettings[backend] = {
+      ...providerSettings[backend],
+      model: preference?.model,
+      reasoningEffort: preference?.reasoningEffortsByModel[preference.model ?? ""],
+      reasoningEffortsByModel: preference?.reasoningEffortsByModel,
+    };
+  }
+  return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
 }
 
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {

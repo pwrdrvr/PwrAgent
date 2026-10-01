@@ -71,6 +71,32 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("applies a profile model default to many launchpads in one commit", async () => {
+    const before = { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } };
+    const after = { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } };
+    await store.setLaunchpadDefaults({ backend: "codex", model: before.model, reasoningEffort: "high" });
+    for (let i = 0; i < 100; i++) {
+      await store.upsertDirectoryLaunchpad({
+        directoryKey: `directory:/repo-${i}`, directoryKind: "directory", directoryLabel: `Repo ${i}`,
+        backend: "codex", executionMode: "default", workMode: "local", prompt: "draft",
+        model: before.model, reasoningEffort: "high", createdAt: 1, updatedAt: 1,
+      });
+    }
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(store.applyProviderModelDefaults({ codex: before }, { codex: after })).toBe(100);
+    });
+    expect(writes.commits).toBe(1);
+    expectSqliteWriteBudget({
+      scenario: "profile-model-default-launchpads",
+      note: "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",
+      writes,
+    });
+    const { writes: unchanged } = await measureSqliteWrites(async () => {
+      expect(store.applyProviderModelDefaults({ codex: after }, { codex: after })).toBe(0);
+    });
+    expect(unchanged.commits).toBe(0);
+  });
+
   it("claims a monitor suggestion once per turn, durably, with no per-poll writes", async () => {
     const target = { backend: "codex" as const, threadId: "monitor-parent", turnId: "turn-1" };
     await store.setThreadMonitorJobSuggestions({ ...target, enabled: false });

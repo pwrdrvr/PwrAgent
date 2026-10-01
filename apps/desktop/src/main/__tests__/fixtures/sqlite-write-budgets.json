@@ -594,6 +594,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "profile-model-default-launchpads": {
+    "commits": 1,
+    "note": "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",
+    "observedWalBytes": 74160,
+    "rowsChanged": 110,
+    "statements": 106
+  },
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",

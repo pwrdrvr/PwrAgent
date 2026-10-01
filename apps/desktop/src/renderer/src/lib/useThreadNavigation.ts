@@ -22,6 +22,7 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
+  DesktopProviderModelDefaults,
   FederationInstanceId,
   FederationRemoteTarget,
   FederationTarget,
@@ -45,6 +46,8 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadProviderModelDefaults,
+  changedProviderModelDefaultBackends,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   classifyDirectory,
@@ -2755,6 +2758,7 @@ function buildLaunchpadRelativeThreadKey(
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   /**
    * This machine's federation instance id. A sub-thread started on a peer
    * names its local parent by it, and a parent link back to this machine
@@ -3235,6 +3239,33 @@ export function useThreadNavigation(
   // A visible sidebar must load and refresh even when another app has focus.
   // Keep foreground state separate: background updates must not mark rows read.
   const [viewVisible, setViewVisible] = useState(isRendererViewVisible);
+  const previousProviderModelDefaultsRef = useRef(options.providerModelDefaults);
+  useLayoutEffect(() => {
+    const previous = previousProviderModelDefaultsRef.current;
+    const next = options.providerModelDefaults;
+    previousProviderModelDefaultsRef.current = next;
+    // The first Settings snapshot establishes a baseline. It must not reset
+    // a draft's deliberate model selection merely because this window opened.
+    if (!previous || !next || rendererFederationTarget) return;
+    const changedBackends = changedProviderModelDefaultBackends(previous, next);
+    if (changedBackends.length === 0) return;
+    const reconcile = (draft: NavigationLaunchpadDraft): NavigationLaunchpadDraft =>
+      draft.federationTarget?.scope === "remote"
+        ? draft
+        : applyNavigationLaunchpadProviderModelDefaults(draft, next, changedBackends);
+    setLocalLaunchpads((current) => Object.fromEntries(
+      Object.entries(current).map(([key, draft]) => [key, reconcile(draft)]),
+    ));
+    setState((current) => current.rows ? {
+      ...current,
+      rows: {
+        ...current.rows,
+        directoryRows: indexLoadedDirectoryRows(loadedDirectoryRows(current.rows).map((directory) =>
+          directory.launchpad ? { ...directory, launchpad: reconcile(directory.launchpad) } : directory
+        )),
+      },
+    } : current);
+  }, [options.providerModelDefaults, rendererFederationTarget]);
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);

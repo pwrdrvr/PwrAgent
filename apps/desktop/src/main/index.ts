@@ -1634,7 +1634,13 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerAppIconDragIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
-      onConfigPatchWritten: async (patch) => {
+      onConfigPatchWritten: async (patch, previousProviderDefaults) => {
+        if (previousProviderDefaults) {
+          getDesktopOverlayStore().applyProviderModelDefaults(
+            previousProviderDefaults,
+            getDesktopSettingsService().resolveProviderModelDefaults(),
+          );
+        }
         // The registry observes the normalized provider domain, including
         // external file replacements. Await the same deduplicated invalidation
         // here so a direct Settings write cannot return ahead of its runtime
