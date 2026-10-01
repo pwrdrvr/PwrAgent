@@ -7780,7 +7780,7 @@ function hasTokenMiserModelGuidance(
 }
 
 const TOKEN_MISER_MANAGED_CAPABILITY_REASON =
-  "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.";
+  "Running Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.";
 
 function hasTokenMiserActivationTransport(
   capabilities: CodexServerCapabilities | undefined,
