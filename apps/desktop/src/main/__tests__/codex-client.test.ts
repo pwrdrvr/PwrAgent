@@ -14315,9 +14315,16 @@ describe("CodexAppServerClient", () => {
     client.onNotification(ordinary);
     await client.startRealtime({ threadId: "voice-fixture", version: "v3", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0\r\nfixture" } });
     const transport = MockTransport.instances.at(-1)!;
+    codexClientLogWarn.mockClear();
+    codexClientLogDebug.mockClear();
     transport.emitInbound({ method: "thread/realtime/transcript/delta", params: { threadId: "voice-fixture", role: "user", delta: "Hello" } });
     await vi.waitFor(() => expect(realtime).toHaveBeenCalledOnce());
     expect(ordinary).not.toHaveBeenCalled();
+    // Spoken words stay memory-only: realtime payloads never reach the log,
+    // not even the one-time shape record an unmodeled method gets.
+    for (const log of [codexClientLogWarn, codexClientLogDebug]) {
+      expect(JSON.stringify(log.mock.calls)).not.toContain("Hello");
+    }
     await client.appendRealtimeText("voice-fixture", "Check progress.");
     await client.stopRealtime("voice-fixture");
     const requests = transport.sentMessages.map((message) => JSON.parse(message));

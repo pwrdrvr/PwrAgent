@@ -262,9 +262,7 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
     <section className="native-voice-bar" aria-label="Thread voice">
       <div className="native-voice-bar__row">
         <VoiceStatus controller={controller} view={view} />
-        <span className="native-voice-bar__tick">
-          {last ? <><strong>{last.role === "user" ? "You" : "Voice"}:</strong> {last.text}</> : null}
-        </span>
+        <span className="native-voice-bar__spacer" />
         {listening ? (
           <button className="button button--ghost" type="button" aria-pressed={view.muted} onClick={() => controller.setMuted(!view.muted)}>
             {view.muted ? "Unmute" : "Mute"}
@@ -279,6 +277,13 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
           End voice
         </button>
       </div>
+      {/* The latest line in full: a spoken reply cut off at an ellipsis is
+          the one thing the operator came to read. */}
+      {last && !open ? (
+        <p className="native-voice-bar__latest">
+          <strong>{last.role === "user" ? "You" : "Voice"}:</strong> {last.text}
+        </p>
+      ) : null}
       {view.error ? <p className="native-voice__error" role="alert">{view.error}</p> : null}
       {open ? (
         <div className="native-voice-bar__panel" id={panelId}>

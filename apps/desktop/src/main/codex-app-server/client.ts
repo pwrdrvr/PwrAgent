@@ -7669,7 +7669,10 @@ export class CodexAppServerClient {
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
-      if (!isKnownCodexMethod) {
+      // Realtime is routed to live voice below, never logged: its payloads
+      // carry the operator's spoken words and session SDP, which stay memory
+      // only.
+      if (!isKnownCodexMethod && !method.startsWith("thread/realtime/")) {
         logUnhandledCodexMessage({
           kind: "notification",
           method,

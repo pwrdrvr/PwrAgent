@@ -76,6 +76,33 @@ describe("native voice browser lifecycle", () => {
     expect(f.listeners.size).toBe(0);
   });
 
+  // The order a live session produced: the operator's words finish while the
+  // voice is already answering. One shared "current row" split the reply at
+  // "Yeah, it's" and repeated the operator's line beneath it.
+  it("keeps one row per spoken line when speech and reply stream at once", async () => {
+    const f = fixture();
+    const start = f.controller.start("fixture-thread");
+    await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce());
+    f.connect();
+    await start;
+    const say = (role: "user" | "assistant", text: string, done = false) =>
+      f.send({ sessionId: "fixture-session", type: "transcript", role, text, done });
+    say("user", "Hey, is");
+    say("user", " this thing working?");
+    say("assistant", "Yeah, it's");
+    say("user", "Hey, is this thing working? It looks sweet.", true);
+    say("assistant", " working.");
+    say("assistant", " What do you want to try?");
+    say("assistant", "Yeah, it's working. What do you want to try?", true);
+    say("user", "Check the build.", true);
+    expect(f.views.at(-1)?.transcript.map((row) => [row.role, row.text])).toEqual([
+      ["user", "Hey, is this thing working? It looks sweet."],
+      ["assistant", "Yeah, it's working. What do you want to try?"],
+      ["user", "Check the build."],
+    ]);
+    await f.controller.stop();
+  });
+
   it("stops tracks from a microphone permission result arriving after stop", async () => {
     const f = fixture();
     const permission = deferred<MediaStream>();

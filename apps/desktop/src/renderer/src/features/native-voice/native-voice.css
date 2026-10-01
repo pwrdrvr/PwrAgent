@@ -81,15 +81,19 @@
   gap: 8px;
   min-width: 0;
 }
-.native-voice-bar__tick {
+.native-voice-bar__spacer {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.native-voice-bar__tick strong,
+.native-voice-bar__latest {
+  max-height: calc(1.5em * 6);
+  margin: 4px 0 2px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.native-voice-bar__latest strong,
 .native-voice-feed strong {
   color: var(--text-primary);
   font-weight: 600;
@@ -108,7 +112,7 @@
 }
 
 .native-voice-feed {
-  max-height: 180px;
+  max-height: min(40vh, 360px);
   overflow-y: auto;
   color: var(--text-secondary);
 }

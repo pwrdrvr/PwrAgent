@@ -72,7 +72,13 @@ const MAX_ACTION_ROWS = 20;
 export class NativeVoiceController {
   private resources?: Resources;
   private view: VoiceView = { status: "idle", muted: false, transcript: [], actions: [] };
-  private partialRole?: string;
+  /**
+   * The row each speaker is still streaming into. Speech and reply stream at
+   * once: the operator's words finish ("done") while the voice is already
+   * answering, so one shared "current row" split the reply and repeated the
+   * operator's line.
+   */
+  private openRows = new Map<string, number>();
   private seq = 0;
   private readonly listeners = new Set<(view: VoiceView) => void>();
   constructor(
@@ -129,7 +135,7 @@ export class NativeVoiceController {
     if (this.resources) return;
     const resources: Resources = { id: this.platform.id(), started: false, accepted: false, activating: false, cancelled: false };
     this.resources = resources;
-    this.partialRole = undefined;
+    this.openRows.clear();
     this.publish({ status: "checking", error: undefined, mode, threadId, muted: false, transcript: [], actions: [] });
     try {
       const capability = await this.api.nativeVoiceCapability();
@@ -204,21 +210,23 @@ export class NativeVoiceController {
         break;
       case "transcript": {
         const transcript = [...this.view.transcript];
-        if (this.partialRole === event.role && transcript.length) {
-          const last = transcript[transcript.length - 1];
-          transcript[transcript.length - 1] = { ...last, text: event.done ? event.text : last.text + event.text };
+        const openSeq = this.openRows.get(event.role);
+        const index = openSeq === undefined ? -1 : transcript.findIndex((row) => row.seq === openSeq);
+        if (index >= 0) {
+          const row = transcript[index]!;
+          transcript[index] = { ...row, text: event.done ? event.text : row.text + event.text };
         } else {
-          transcript.push({ role: event.role, text: event.text, seq: ++this.seq });
+          const seq = ++this.seq;
+          transcript.push({ role: event.role, text: event.text, seq });
+          if (!event.done) this.openRows.set(event.role, seq);
         }
-        this.partialRole = event.done ? undefined : event.role;
+        if (event.done) this.openRows.delete(event.role);
         // Voice text is memory-only, bounded and discarded on the next session.
         this.publish({ transcript: transcript.slice(-MAX_TRANSCRIPT_ROWS).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
         break;
       }
       case "action": {
         const { type: _type, sessionId: _sessionId, ...action } = event;
-        // A receipt splits the transcript: the next spoken line starts a new row.
-        this.partialRole = undefined;
         this.publish({ actions: [...this.view.actions, { ...action, seq: ++this.seq }].slice(-MAX_ACTION_ROWS) });
         break;
       }
