@@ -652,9 +652,11 @@ export function Sidebar(props: SidebarProps) {
       }),
     scope: props.browseMode,
     // A pin or reorder settles with its pages invalidated; their re-read,
-    // not the command's reply, carries the new order.
+    // not the command's reply, carries the new order. A failed read stays
+    // stale, so it counts as landed: waiting on it would leave the list
+    // following background updates under the pointer until it leaves.
     outstandingReads: [...props.pagedNavigation?.resources.values() ?? []]
-      .filter((resource) => resource.state.stale)
+      .filter((resource) => resource.state.stale && !resource.state.error)
       .map((resource) => resource.id),
     value: {
       directories: props.directories,
