@@ -230,19 +230,23 @@ it("rereads when the period or instances change, and on focus once the data is s
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
   expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: now - 7 * 24 * HOUR, to: now }));
 
+  choosePeriod("30 days");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(6));
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: now - 30 * 24 * HOUR, to: now }));
+
   // Turning an instance off rereads the rest; the last one cannot be turned off.
   fireEvent.click(screen.getByRole("button", { name: "Owner" }));
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(5));
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(7));
   expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ federationTarget: { scope: "local" } }));
   fireEvent.click(screen.getByRole("button", { name: "Local" }));
   expect(screen.getByRole("button", { name: "Local" })).toHaveAttribute("aria-pressed", "true");
 
   // Fresh data survives a focus; stale data is reread.
   act(() => { window.dispatchEvent(new Event("focus")); });
-  expect(readUsageActivity).toHaveBeenCalledTimes(5);
+  expect(readUsageActivity).toHaveBeenCalledTimes(7);
   now += 2 * 60_000;
   act(() => { window.dispatchEvent(new Event("focus")); });
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(6));
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(8));
 });
 
 it("filters and ranks threads without rereading or launching analysis", async () => {

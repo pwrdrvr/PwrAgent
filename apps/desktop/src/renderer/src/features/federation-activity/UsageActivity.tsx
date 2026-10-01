@@ -22,7 +22,7 @@ const localDate = (date: Date) => new Date(date.getTime() - date.getTimezoneOffs
 const sourceId = (target: FederationTarget) => target.scope === "local" ? "local" : target.instanceId;
 
 type Source = { label: string; target: FederationTarget; status?: string };
-type Preset = "reset" | "five" | "today" | "day" | "week" | "custom";
+type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
 type Snapshot = {
   queryKey: string; from: number; to: number; preset: Preset; readAt: number;
@@ -35,6 +35,7 @@ const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
   { value: "today", label: "Today", title: "Since midnight" },
   { value: "day", label: "24 h", title: "The last 24 hours" },
   { value: "week", label: "7 days", title: "The last 7 days" },
+  { value: "month", label: "30 days", title: "The last 30 days" },
   { value: "custom", label: "Custom", title: "Choose a start and end" },
 ];
 
@@ -211,6 +212,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       : preset === "today" ? today.getTime()
       : preset === "day" ? end - DAY
       : preset === "week" ? end - 7 * DAY
+      : preset === "month" ? end - 30 * DAY
       : known ?? end - (preset === "five" ? 5 * 3_600_000 : 8 * DAY);
     if (preset !== "custom") start = Math.max(start, end - MAX_WINDOW);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end - start > MAX_WINDOW) {
