@@ -8,6 +8,7 @@ import type {
   FederationHostInfo,
   FederationInstanceDescriptor,
   FederationAttentionThreadSummary,
+  FederationInstanceBackendSummary,
   FederationInstanceId,
   FederationLoadStatus,
   FederatedThreadRef,
@@ -385,10 +386,13 @@ async function listInstanceProjects(
     return resolved.response;
   }
   const instance = resolved.instance;
-  const page = await readInstanceNavigation(runtime, instance, {
-    protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index" },
-    pageSize: args.limit ?? 100, cursor: args.cursor,
-  });
+  const [page, backends] = await Promise.all([
+    readInstanceNavigation(runtime, instance, {
+      protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index" },
+      pageSize: args.limit ?? 100, cursor: args.cursor,
+    }),
+    listInstanceBackends(backendFor(runtime, instance)),
+  ]);
   const result: ListInstanceProjectsResult = {
     instanceId: instance.instanceId,
     instanceLabel: instance.label,
@@ -405,8 +409,38 @@ async function listInstanceProjects(
         hasLaunchpad: directory.launchpadPresent,
         ...(directory.launchpadBackend ? { backend: directory.launchpadBackend } : {}),
       })),
+    ...backends,
   };
   return ok(result);
+}
+
+/**
+ * The providers an instance can start threads on, with exact model IDs. A
+ * spoken "Grok 4.7" otherwise has nothing to be matched against, and the model
+ * goes looking for a tool that does not exist. A failure only drops the list.
+ */
+async function listInstanceBackends(
+  backend: FederationBackendOperations,
+): Promise<Pick<ListInstanceProjectsResult, "backends" | "backendsError">> {
+  try {
+    const response = await backend.listBackends({});
+    return {
+      backends: response.backends
+        .filter((summary) => summary.available)
+        .map((summary): FederationInstanceBackendSummary => {
+          const models = summary.launchpadOptions?.models ?? [];
+          const defaultModel = models.find((model) => model.current)?.id;
+          return {
+            backend: summary.kind,
+            label: summary.label,
+            models: models.map((model) => model.id),
+            ...(defaultModel ? { defaultModel } : {}),
+          };
+        }),
+    };
+  } catch (error) {
+    return { backendsError: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 const DEFAULT_ATTENTION_PAGE_SIZE = 25;

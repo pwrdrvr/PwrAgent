@@ -396,6 +396,13 @@ sidebar makes. Each row says whether a turn is running, the thread is unread,
 or it waits on the operator. A peer that fails is listed under `failures` and
 does not fail the call.
 
+`list_instance_projects` also lists the instance's available backends with
+their exact model IDs and default model, read with the same `listBackends`
+call the composer's model picker uses. An agent asked for "Grok 4.7" can then
+pass `backend` and `model` to `create_instance_thread` without guessing. If
+the instance cannot list its backends, the projects still return and
+`backendsError` says why.
+
 The general `send_message_to_thread` tool also routes transparently across
 federation. Remote create and search results carry cross-instance links and an
 `instanceId`; newer tool definitions pass that owner directly. PwrAgent also

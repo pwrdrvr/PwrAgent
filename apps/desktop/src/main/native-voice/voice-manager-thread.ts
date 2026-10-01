@@ -24,8 +24,9 @@ export const VOICE_MANAGER_AGENT_INSTRUCTIONS = [
   "- Use stop_thread only when the operator explicitly asks to stop a turn, and only after you have confirmed which thread and machine.",
   "- For \"what needs me\", \"what's running\" or \"what's waiting\", call list_attention_threads, which covers every connected machine. Summarize by machine: what is running, what is unread, what is waiting on the operator. Read a thread with read_thread or get_thread_status only when the operator wants detail.",
   "- When read_operator_focus reports a launchpad, the operator is starting a new thread in that project, and a request to do something is the new thread's task. Create it with create_instance_thread: projectKey from the launchpad, its instanceId, or the local instanceId from list_federation_instances when it has none, and the request as input. Leave backend, model and the other settings out unless the operator names them; the launchpad's own settings apply. Say back the project and machine, then the threadLink.",
-  "- Start work on another machine with list_federation_instances, then list_instance_projects, then create_instance_thread. Name the machine and project back before you create it when the operator was vague about either.",
-  "- Start new local work in its own thread with handoff_task.",
+  "- Start every new thread with create_instance_thread, on this machine too: list_federation_instances for the instanceId, list_instance_projects for the projectKey. Name the machine and project back before you create it when the operator was vague about either.",
+  "- When the operator names a provider or model, take backend and the exact model ID from the backends list_instance_projects returns for that instance. Pick the closest listed model to what you heard, and say which one you chose.",
+  "- Never use handoff_task. It asks the operator questions on this thread, and nobody is reading this thread.",
   "- Answer status questions about one thread with get_thread_status or read_thread.",
   "- Reply in one or two plain sentences that read well aloud: no tables, no code blocks, no raw links.",
   "- Report only what a tool result says happened. When a tool fails, say so and say why.",
@@ -57,11 +58,11 @@ const MANAGER_AGENTS_MD = [
 export type VoiceManagerDeps = {
   registry?: Pick<
     ReturnType<typeof getDesktopBackendRegistry>,
-    "startThread" | "renameThread" | "listThreads"
+    "startThread" | "renameThread" | "listThreads" | "setThreadTokenMiser"
   >;
   overlayStore?: Pick<
     ReturnType<typeof getDesktopOverlayStore>,
-    "getVoiceManagerThread" | "setVoiceManagerThread" | "getLaunchpadDefaults"
+    "getVoiceManagerThread" | "setVoiceManagerThread" | "getLaunchpadDefaults" | "getThreadOverlayState"
   >;
   listThreadIds?: () => Promise<Set<string>>;
   workspaceDir?: () => string;
@@ -84,6 +85,7 @@ export async function openVoiceManagerThread(
     const remembered = overlayStore.getVoiceManagerThread();
     if (remembered?.backend === "codex" && (await threadStillExists(remembered.threadId, deps))) {
       await refreshManagerWorkspace(deps.workspaceDir);
+      await turnOffTokenMiser(remembered.threadId, deps);
       return { status: "ready", threadId: remembered.threadId, created: false };
     }
     const registry = deps.registry ?? getDesktopBackendRegistry();
@@ -93,6 +95,7 @@ export async function openVoiceManagerThread(
       backend: "codex",
       ...codexSettingsFrom(defaults),
       cwd: workspace,
+      tokenMiserEnabled: false,
       agent: {
         name: VOICE_MANAGER_AGENT_NAME,
         instructions: VOICE_MANAGER_AGENT_INSTRUCTIONS,
@@ -163,6 +166,26 @@ async function ensureManagerWorkspace(workspaceDir?: () => string): Promise<stri
     ),
   );
   return directory;
+}
+
+/**
+ * The manager runs without Token Miser. Its turns are short tool chains whose
+ * results it must read at once, so paging output out saves nothing and every
+ * retrieval is another round trip while the operator waits on a spoken answer.
+ * Managers made before this rule are switched off once; a failure only logs.
+ */
+async function turnOffTokenMiser(threadId: string, deps: VoiceManagerDeps): Promise<void> {
+  try {
+    const overlayStore = deps.overlayStore ?? getDesktopOverlayStore();
+    const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+    if (overlay?.tokenMiserEnabled === false) return;
+    const registry = deps.registry ?? getDesktopBackendRegistry();
+    await registry.setThreadTokenMiser({ backend: "codex", threadId, enabled: false });
+  } catch (error) {
+    log.warn("could not turn Token Miser off for the voice manager", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**

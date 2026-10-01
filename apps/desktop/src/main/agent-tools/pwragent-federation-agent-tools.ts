@@ -104,7 +104,7 @@ function descriptionForOperation(
     case "list_federation_instances":
       return "List the local instance and known PwrAgent peers. Results include identity, purpose, status, capabilities, and host facts. Use this before you route work to a machine. Profiles with the same machineId share one host. Do not add their CPU, memory, or disk capacity. Host facts come from the last connection. Set includeLoad=true for current load, available memory, free disk, and sample time. A peer can omit load if it does not reply in time. Load is per machineId. Count it once. Use query instead of paging when possible. Cursor tokens expire after about one minute. A local-only result is valid when Federation is disabled. Only local or connected instances can accept work.";
     case "list_instance_projects":
-      return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread.";
+      return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread. The result also lists the instance's available backends with exact model IDs. Pass those to create_instance_thread when the user names a provider or model.";
     case "create_instance_thread":
       return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider other than the target launchpad's configured provider. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "list_attention_threads":
@@ -209,7 +209,11 @@ function inputSchemaForOperation(
             description:
               "Provider backend override, for example `codex` or `acp:grok`. Omit to inherit the target launchpad backend.",
           },
-          model: { type: "string" },
+          model: {
+            type: "string",
+            description:
+              "Exact model ID from the backends list_instance_projects returns for this instance. Omit to inherit the launchpad model.",
+          },
           reasoningEffort: { type: "string" },
           executionMode: { type: "string" },
           fastMode: { type: "boolean" },

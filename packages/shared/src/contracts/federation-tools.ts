@@ -158,6 +158,15 @@ export type FederationInstanceProjectSummary = {
   executionMode?: ThreadExecutionMode;
 };
 
+/** A provider the instance can start threads on, with its exact model IDs. */
+export type FederationInstanceBackendSummary = {
+  backend: AppServerBackendKind;
+  label: string;
+  models: string[];
+  /** The model a new thread gets when none is named. */
+  defaultModel?: string;
+};
+
 export type ListInstanceProjectsResult = {
   instanceId: FederationInstanceId;
   instanceLabel: string;
@@ -165,6 +174,10 @@ export type ListInstanceProjectsResult = {
   projects: FederationInstanceProjectSummary[];
   complete: boolean;
   nextCursor?: string;
+  /** Available providers, so a named model need not be guessed. */
+  backends?: FederationInstanceBackendSummary[];
+  /** Why `backends` is missing when the instance could not list them. */
+  backendsError?: string;
 };
 
 export type CreateInstanceThreadToolArgs = {

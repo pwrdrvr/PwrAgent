@@ -563,6 +563,68 @@ describe("federation agent tools service", () => {
     ]);
   });
 
+  // Director voice spent two minutes on "start it with Grok 4.7" because no
+  // tool named the instance's providers or their exact model IDs.
+  it("lists the instance's available backends with exact model IDs", async () => {
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [
+        {
+          kind: "codex",
+          label: "OpenAI",
+          available: true,
+          launchpadOptions: { models: [{ id: "sample-codex-a", current: true }, { id: "sample-codex-b" }] },
+        },
+        {
+          kind: "acp:grok",
+          label: "Grok",
+          available: true,
+          launchpadOptions: { models: [{ id: "sample-grok-a" }] },
+        },
+        { kind: "acp:qwen", label: "Qwen", available: false },
+      ],
+    }));
+    const studio = buildHealth({
+      peers: [{ id: "pwr_studio", label: "Studio Mac", role: "client", status: "connected", capabilities: ["thread_navigation"] }],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => studio,
+        remoteBackend: (() => ({ readPopulation: async () => buildSnapshot({ directories: [] }), listBackends })) as never,
+      }),
+    });
+
+    const response = await handler({ operation: "list_instance_projects", context, args: { instanceId: "pwr_studio" } });
+
+    expect(listBackends).toHaveBeenCalledWith({});
+    expect((response as { ok: true; data: ListInstanceProjectsResult }).data.backends).toEqual([
+      { backend: "codex", label: "OpenAI", models: ["sample-codex-a", "sample-codex-b"], defaultModel: "sample-codex-a" },
+      { backend: "acp:grok", label: "Grok", models: ["sample-grok-a"] },
+    ]);
+  });
+
+  it("still lists projects when the instance cannot list its backends", async () => {
+    const studio = buildHealth({
+      peers: [{ id: "pwr_studio", label: "Studio Mac", role: "client", status: "connected", capabilities: ["thread_navigation"] }],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => studio,
+        remoteBackend: (() => ({
+          readPopulation: async () => buildSnapshot({ directories: [] }),
+          listBackends: async () => { throw new Error("sample peer refused"); },
+        })) as never,
+      }),
+    });
+
+    const response = await handler({ operation: "list_instance_projects", context, args: { instanceId: "pwr_studio" } });
+
+    expect(response).toMatchObject({ ok: true, data: { projects: [], backendsError: "sample peer refused" } });
+    expect((response as { ok: true; data: ListInstanceProjectsResult }).data.backends).toBeUndefined();
+  });
+
   it("returns not_found for an unknown instance", async () => {
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.

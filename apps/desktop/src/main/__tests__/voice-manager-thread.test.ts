@@ -25,18 +25,22 @@ function deps(options: {
   remembered?: { backend: string; threadId: string };
   threads?: Array<{ id: string; archivedAt?: number }>;
   launchpadBackend?: string;
+  tokenMiserEnabled?: boolean;
 } = {}) {
   const startThread = vi.fn(async (_params: Record<string, unknown>) => ({ backend: "codex", threadId: "sample-made" }));
   const renameThread = vi.fn(async () => ({}));
+  const setThreadTokenMiser = vi.fn(async () => ({}));
   const setVoiceManagerThread = vi.fn();
   const listThreads = vi.fn(async () => options.threads ?? []);
   return {
-    startThread, renameThread, setVoiceManagerThread, listThreads,
+    startThread, renameThread, setThreadTokenMiser, setVoiceManagerThread, listThreads,
     deps: {
       workspaceDir: () => workspace,
-      registry: { startThread, renameThread, listThreads } as never,
+      registry: { startThread, renameThread, listThreads, setThreadTokenMiser } as never,
       overlayStore: {
         getVoiceManagerThread: () => options.remembered,
+        getThreadOverlayState: async () =>
+          options.tokenMiserEnabled === undefined ? undefined : { tokenMiserEnabled: options.tokenMiserEnabled },
         setVoiceManagerThread,
         getLaunchpadDefaults: async () => ({
           backend: options.launchpadBackend ?? "codex",
@@ -54,7 +58,7 @@ describe("Voice manager thread", () => {
     const f = deps();
     expect(await openVoiceManagerThread(f.deps)).toEqual({ status: "ready", threadId: "sample-made", created: true });
     expect(f.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      backend: "codex", cwd: workspace, model: "sample-model", reasoningEffort: "medium",
+      backend: "codex", cwd: workspace, model: "sample-model", reasoningEffort: "medium", tokenMiserEnabled: false,
       agent: expect.objectContaining({ instructions: expect.stringContaining("read_operator_focus") }),
     }));
     expect(f.renameThread).toHaveBeenCalledWith({ backend: "codex", threadId: "sample-made", name: VOICE_MANAGER_THREAD_TITLE });
@@ -68,7 +72,32 @@ describe("Voice manager thread", () => {
       }
       // On a launchpad, the spoken request is the new thread's task.
       expect(written).toContain("read_operator_focus reports a launchpad");
+      // handoff_task asks its questions on this thread, which nobody reads,
+      // and a named model comes from the instance's listed backends.
+      expect(written).toContain("Never use handoff_task");
+      expect(written).not.toMatch(/with handoff_task/);
+      expect(written).toContain("backends list_instance_projects returns");
     }
+  });
+
+  it("turns Token Miser off on a remembered manager that still has it", async () => {
+    const f = deps({ remembered: { backend: "codex", threadId: "sample-kept" }, threads: [{ id: "sample-kept" }] });
+    await openVoiceManagerThread(f.deps);
+    expect(f.setThreadTokenMiser).toHaveBeenCalledWith({ backend: "codex", threadId: "sample-kept", enabled: false });
+  });
+
+  it("leaves a remembered manager alone once Token Miser is off", async () => {
+    const f = deps({
+      remembered: { backend: "codex", threadId: "sample-kept" }, threads: [{ id: "sample-kept" }], tokenMiserEnabled: false,
+    });
+    await openVoiceManagerThread(f.deps);
+    expect(f.setThreadTokenMiser).not.toHaveBeenCalled();
+  });
+
+  it("still opens the manager when Token Miser cannot be turned off", async () => {
+    const f = deps({ remembered: { backend: "codex", threadId: "sample-kept" }, threads: [{ id: "sample-kept" }] });
+    f.setThreadTokenMiser.mockRejectedValueOnce(new Error("sample store down"));
+    expect(await openVoiceManagerThread(f.deps)).toEqual({ status: "ready", threadId: "sample-kept", created: false });
   });
 
   it("reopens the remembered thread instead of creating a second one", async () => {

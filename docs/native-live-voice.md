@@ -53,9 +53,15 @@ Director voice does its work through the PwrAgent dynamic tools. It uses
 connected machine: running turns, unread threads, and threads waiting on input.
 It uses `search_threads` with an `instanceId` to find a thread on another
 machine. It uses `send_message_to_thread` and `steer_thread` to direct it, and
-`stop_thread` only after the operator confirms. It starts work on another
-machine with `list_federation_instances`, `list_instance_projects`, and
-`create_instance_thread`. The realtime model delegates to the Voice manager's Codex turn. That
+`stop_thread` only after the operator confirms. It starts every new
+thread, local or remote, with `list_federation_instances`,
+`list_instance_projects`, and `create_instance_thread`, and takes a named
+provider and model from the backends `list_instance_projects` reports. It never
+uses `handoff_task`: that tool can ask the operator to trust a directory, and
+the question would wait on the Voice manager thread, which the operator does
+not read. The Voice manager runs with Token Miser off. Its turns are short tool
+chains whose results it needs at once, so paging output out only adds round
+trips while the operator waits for a spoken answer. The realtime model delegates to the Voice manager's Codex turn. That
 turn calls the tools, so thread and tool policies and federation RBAC apply as
 usual.
 
