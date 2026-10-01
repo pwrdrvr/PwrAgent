@@ -108,7 +108,7 @@ describe("Directories lens thread list ARIA", () => {
     );
     // Pins and the ten unpinned roots have independent owner pages.
     expect(rows).toHaveLength(12);
-    // The sub-thread list, the Keep at top seam, the pin-drop boundary, and
+    // The sub-thread list, the Keep at top slot, the pin-drop boundary, and
     // the disclosure.
     expect(nonRows).toHaveLength(4);
 
