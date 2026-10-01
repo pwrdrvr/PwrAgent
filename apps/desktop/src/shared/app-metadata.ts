@@ -1,9 +1,22 @@
 export const PWRAGENT_HOMEPAGE_URL = "https://pwragent.ai";
 export const PWRAGENT_DOCUMENTATION_URL = "https://docs.pwragent.ai";
 
+export type AppBuildIdentity =
+  | { kind: "packaged" }
+  | {
+      kind: "development";
+      appPath: string;
+      checkoutPath?: string;
+      branch?: string;
+      commitSha?: string;
+      detachedHead?: boolean;
+    };
+
 export type AppMetadata = {
   applicationName: string;
   applicationVersion: string;
+  /** Checkout identity captured at process startup, never re-read on copy. */
+  buildIdentity?: AppBuildIdentity;
   copyright: string;
   homepage: string;
   documentationUrl: string;

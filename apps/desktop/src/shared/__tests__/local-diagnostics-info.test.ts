@@ -9,6 +9,7 @@ import {
 const metadata: AppMetadata = {
   applicationName: "PwrAgent",
   applicationVersion: "1.2.3",
+  buildIdentity: { kind: "packaged" },
   copyright: "Copyright © 2026 PwrDrvr LLC.",
   homepage: "https://pwragent.ai",
   documentationUrl: "https://docs.pwragent.ai",
@@ -30,6 +31,17 @@ describe("local diagnostics info", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each([
+    ["thread", buildLocalThreadDiagnosticsInfo],
+    ["Star Map", buildStarMapDiagnosticsInfo],
+  ])("includes the app version in %s diagnostics", (_surface, build) => {
+    expect(build({}, metadata)).toContain("PwrAgent version: 1.2.3");
+  });
+
+  it("includes the app version in Troubleshooting diagnostics", () => {
+    expect(buildTroubleshootingDiagnosticsInfo(metadata)).toContain("PwrAgent version: 1.2.3");
   });
 
   it.each([
@@ -66,6 +78,8 @@ describe("local diagnostics info", () => {
     ).toBe([
       "Collected at (UTC): 2026-09-14T04:30:45.123Z",
       "Surface: Federation Star Map",
+      "PwrAgent version: 1.2.3",
+      "PwrAgent build: Packaged",
       "Thread creation state: Intake open; no thread created yet",
       "Target instance ID: peer-harold-mbp-2018",
       "Target instance label: Harold-MBP-2018",
@@ -95,6 +109,8 @@ describe("local diagnostics info", () => {
       "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
       "Provider/backend: codex",
       "Thread title: Fix handoff project paths and diagnostics",
+      "PwrAgent version: 1.2.3",
+      "PwrAgent build: Packaged",
       "PwrAgent profile: personal",
       "Main process PID: 4100",
       "Renderer process PID: 4101",
@@ -163,6 +179,8 @@ describe("local diagnostics info", () => {
       "Federation routing target: remote:owner-instance",
       "Federation source backend: codex",
       "Federation source thread ID: remote-thread",
+      "Viewer PwrAgent version: 1.2.3",
+      "Viewer PwrAgent build: Packaged",
       "Viewer PwrAgent profile: personal",
       "Viewer main process PID: 4100",
       "Viewer renderer process PID: 4101",
@@ -266,6 +284,8 @@ describe("local diagnostics info", () => {
       "Federation routing target: remote:remote-viewer-instance",
       "Federation source backend: codex",
       "Federation source thread ID: direct-remote-thread",
+      "Viewer PwrAgent version: 1.2.3",
+      "Viewer PwrAgent build: Packaged",
       "Viewer PwrAgent profile: personal",
       "Viewer main process PID: 4100",
       "Viewer renderer process PID: 4101",
@@ -322,11 +342,62 @@ describe("local diagnostics info", () => {
   it("formats the Troubleshooting payload with profile, PIDs, and log path", () => {
     expect(buildTroubleshootingDiagnosticsInfo(metadata)).toBe([
       "Collected at (UTC): 2026-09-14T04:30:45.123Z",
+      "PwrAgent version: 1.2.3",
+      "PwrAgent build: Packaged",
       "PwrAgent profile: personal",
       "Main process PID: 4100",
       "Renderer process PID: 4101",
       "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
     ].join("\n"));
+  });
+
+  it.each([
+    ["thread", (value: AppMetadata) => buildLocalThreadDiagnosticsInfo({}, value)],
+    ["Star Map", (value: AppMetadata) => buildStarMapDiagnosticsInfo({}, value)],
+    ["Troubleshooting", buildTroubleshootingDiagnosticsInfo],
+  ])("includes development startup provenance in %s diagnostics", (_surface, build) => {
+    const output = build({ ...metadata, buildIdentity: {
+      kind: "development", appPath: "/repo/PwrAgent/apps/desktop", checkoutPath: "/repo/PwrAgent",
+      branch: "fix/composer", commitSha: "1234567890abcdef1234567890abcdef12345678",
+    } });
+    expect(output).toContain([
+      "PwrAgent version: 1.2.3",
+      "PwrAgent build: Development",
+      "PwrAgent development app path: /repo/PwrAgent/apps/desktop",
+      "PwrAgent development checkout path: /repo/PwrAgent",
+      "PwrAgent development branch (startup): fix/composer",
+      "PwrAgent development commit SHA (startup): 1234567890abcdef1234567890abcdef12345678",
+    ].join("\n"));
+  });
+
+  it("labels a detached development checkout and unavailable Git identity", () => {
+    const detached = buildTroubleshootingDiagnosticsInfo({ ...metadata, buildIdentity: {
+      kind: "development", appPath: "/repo/apps/desktop", checkoutPath: "/repo",
+      detachedHead: true, commitSha: "1234567890abcdef1234567890abcdef12345678",
+    } });
+    expect(detached).toContain("PwrAgent development branch (startup): Detached HEAD");
+    const untracked = buildTroubleshootingDiagnosticsInfo({ ...metadata, buildIdentity: {
+      kind: "development", appPath: "/source-copy/apps/desktop",
+    } });
+    expect(untracked).toContain("PwrAgent development checkout path: Unavailable");
+    expect(untracked).toContain("PwrAgent development branch (startup): Unavailable");
+    expect(untracked).toContain("PwrAgent development commit SHA (startup): Unavailable");
+    expect(buildTroubleshootingDiagnosticsInfo({ ...metadata, buildIdentity: undefined }))
+      .toContain("PwrAgent build: Unavailable");
+  });
+
+  it("labels development build provenance as the viewer for a remote thread", () => {
+    const output = buildLocalThreadDiagnosticsInfo({ federationWindowTarget: {
+      scope: "remote", instanceId: "remote-viewer",
+    } }, { ...metadata, buildIdentity: {
+      kind: "development", appPath: "/repo/apps/desktop", checkoutPath: "/repo",
+      branch: "viewer-branch", commitSha: "1234567890abcdef1234567890abcdef12345678",
+    } });
+    expect(output).toContain("Viewer PwrAgent version: 1.2.3");
+    expect(output).toContain("Viewer PwrAgent build: Development");
+    expect(output).toContain("Viewer PwrAgent development checkout path: /repo");
+    expect(output).toContain("Viewer PwrAgent development branch (startup): viewer-branch");
+    expect(output).not.toMatch(/^PwrAgent development/m);
   });
 
   it("omits unavailable renderer PIDs and labels unavailable paths", () => {
