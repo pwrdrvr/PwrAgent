@@ -96,9 +96,11 @@ import {
   PullRequestIcon,
   SearchIcon,
   ThreadIcon,
+  CelestialIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
-import { InstanceChip } from "../federation/InstanceGlyph";
+import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
+import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -120,7 +122,6 @@ import {
   buildDirectoryReferenceTooltip,
   buildFileReferenceTooltip,
   fileLabelFromPath,
-  filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
   normalizeDirectoryReferencePath,
@@ -176,6 +177,7 @@ import {
 import {
   adjustSkillTokenIndexesForTextChange,
   applySkillOriginVisibility,
+  createComposerAtReferenceToken,
   createComposerDirectoryToken,
   createComposerFileToken,
   createComposerPullRequestToken,
@@ -4590,11 +4592,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return [];
     }
 
-    return filterDirectoryReferenceCandidates(
-      [...mentionNavigation.directories],
+    return filterAtReferenceCandidates(
+      mentionNavigation.directories,
+      mentionNavigation.instances,
       directoryRefTrigger.query,
     );
-  }, [mentionNavigation.directories, directoryRefTrigger]);
+  }, [mentionNavigation.directories, mentionNavigation.instances, directoryRefTrigger]);
   const filteredHashReferenceOptions = useMemo(() => {
     if (!hashReferenceTrigger) {
       return [];
@@ -8372,7 +8375,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const applyDirectoryReference = (
-    directory: Pick<NavigationDirectorySummary, "label" | "path">,
+    directory: Pick<NavigationDirectorySummary, "label" | "path"> & { kind?: string },
   ): void => {
     if (!inputRef.current) {
       return;
@@ -8416,7 +8419,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         nextDraft,
         skillTokens,
       }),
-      createComposerDirectoryToken(directory, tokenIndex),
+      createComposerAtReferenceToken(directory, tokenIndex),
     ];
 
     // Same protected-update dance as applySkill: the editability sync in
@@ -12020,7 +12023,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
             <div
-              aria-label="Directories"
+              aria-label="Projects and instances"
               id={directoryRefListboxId}
               role="listbox"
             >
@@ -12049,14 +12052,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   onKeyDown={handleAutocompleteKeyDown}
                 >
                   <span className="composer__autocomplete-title">
-                    <FolderIcon size={13} aria-hidden="true" />
+                    {directory.kind === "instance" ? (
+                      directory.icon
+                        ? <CelestialIcon icon={directory.icon} size={13} />
+                        : <InstanceGlyph instanceId={directory.instanceId} size={13} />
+                    ) : <FolderIcon size={13} aria-hidden="true" />}
                     <HighlightedAutocompleteLabel
                       label={directory.label}
                       query={directoryRefTrigger?.query ?? ""}
                     />
                   </span>
                   <span className="composer__autocomplete-meta">
-                    {buildDirectoryReferenceInsertText(directory)}
+                    {directory.kind === "instance"
+                      ? `Federation · ${directory.status}`
+                      : buildDirectoryReferenceInsertText(directory)}
                   </span>
                 </button>
               ))}

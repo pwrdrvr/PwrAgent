@@ -2366,7 +2366,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Check @" },
     });
-    const autocomplete = await screen.findByRole("listbox", { name: "Directories" });
+    const autocomplete = await screen.findByRole("listbox", { name: "Projects and instances" });
     for (const name of ["+ Add directory…", "+ Add file…"]) {
       const action = screen.getByRole("button", { name });
       expect(within(autocomplete).queryByRole("button", { name }))
@@ -17338,6 +17338,39 @@ describe("Composer", () => {
     }
   });
 
+  it("inserts a Federation instance mention and sends its ID without attaching a directory", async () => {
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+    const attachDirectoryToThread = vi.fn<NonNullable<DesktopApi["attachDirectoryToThread"]>>();
+    render(<Composer
+      desktopApi={{
+        onAgentEvent: () => () => undefined,
+        startTurn,
+        attachDirectoryToThread,
+        readFederationHealth: async () => ({ health: {
+          enabled: true, role: "gateway", status: "connected",
+          peers: [{ id: "windows-dev", label: "DESKTOP-LAB", profileName: "dev",
+            role: "client", status: "connected", capabilities: [] }],
+        } }),
+      }}
+      backends={[backendSummary("codex")]}
+      draftStore={createComposerDraftStore()}
+      skills={[]}
+      thread={{ id: "thread-1", title: "Work", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "Investigate @DESK" } });
+    const option = await screen.findByRole("option", { name: /DESKTOP-LAB \/ dev/ });
+    fireEvent.click(option);
+    await waitFor(() => expect(screen.getByTestId("composer-tiptap-input")
+      .querySelector('[data-mention-kind="instance"]')).toHaveTextContent("@DESKTOP-LAB / dev"));
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: "Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)" }],
+    })));
+    expect(attachDirectoryToThread).not.toHaveBeenCalled();
+  });
+
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/example";
@@ -17392,7 +17425,7 @@ describe("Composer", () => {
         target: { value: "Read MARKET-4803 in @catalog" },
       });
 
-      const listbox = await screen.findByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Projects and instances" });
       expect(listbox.parentElement).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
         within(listbox).getByRole("option", { name: /catalog-portal/ })
@@ -17423,7 +17456,7 @@ describe("Composer", () => {
         "/Users/example/Projects/catalog-portal"
       );
       expect(
-        screen.queryByRole("listbox", { name: "Directories" })
+        screen.queryByRole("listbox", { name: "Projects and instances" })
       ).not.toBeInTheDocument();
 
       await clickButton("Start thread");
@@ -17512,7 +17545,7 @@ describe("Composer", () => {
         target: { value: beforeMention },
       });
 
-      const listbox = await screen.findByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Projects and instances" });
       fireEvent.click(
         within(listbox).getByRole("option", { name: /grok-build/ }),
       );
@@ -17808,7 +17841,7 @@ describe("Composer", () => {
         target: { value: "Check @" },
       });
 
-      const listbox = await screen.findByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Projects and instances" });
       expect(within(listbox).getAllByRole("option")).toHaveLength(1);
       expect(within(listbox).queryByRole("button")).not.toBeInTheDocument();
       // Only the file action renders — this composer has no
@@ -17833,7 +17866,7 @@ describe("Composer", () => {
         "/Users/fixture-user/notes/spec.md"
       );
       expect(
-        screen.queryByRole("listbox", { name: "Directories" })
+        screen.queryByRole("listbox", { name: "Projects and instances" })
       ).not.toBeInTheDocument();
 
       await clickButton("Start thread");
@@ -17909,7 +17942,7 @@ describe("Composer", () => {
         target: { value: "Look in @" },
       });
 
-      await screen.findByRole("listbox", { name: "Directories" });
+      await screen.findByRole("listbox", { name: "Projects and instances" });
       await clickButton("+ Add directory…");
 
       expect(onPickDirectoryForReference).toHaveBeenCalledOnce();
@@ -22403,7 +22436,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Check @sea" } });
     expect(
-      await screen.findByRole("listbox", { name: "Directories" })
+      await screen.findByRole("listbox", { name: "Projects and instances" })
     ).toBeInTheDocument();
 
     const transcript = screen.getByRole("button", {
@@ -22413,7 +22446,7 @@ describe("Composer", () => {
     fireEvent.keyDown(transcript, { key: "Escape", code: "Escape" });
 
     expect(
-      screen.queryByRole("listbox", { name: "Directories" })
+      screen.queryByRole("listbox", { name: "Projects and instances" })
     ).not.toBeInTheDocument();
     expect(textarea).toHaveValue("Check @sea");
     expect(transcript).toHaveFocus();

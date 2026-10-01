@@ -41,9 +41,10 @@ export type ComposerDraftSkillToken = {
    * marks a known-thread reference: `name` is its display title and `path`
    * is its canonical `pwragent://thread/...` URL. "pull-request" marks a
    * repository-scoped PR reference: `name` is its `#123` label and `path` is
-   * the full provider URL.
+   * the full provider URL. "instance" marks a Federation machine/profile:
+   * `name` is its display label and `path` its `pwragent://instance/...` URL.
    */
-  kind?: "directory" | "file" | "pull-request" | "thread";
+  kind?: "directory" | "file" | "instance" | "pull-request" | "thread";
   /**
    * Pull-request chips only: the `pr-chip--*` modifiers that give the chip its
    * status color, resolved when the chip was minted. Persisted with the draft

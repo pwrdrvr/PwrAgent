@@ -5,6 +5,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { normalizeImageFile } from "../../../lib/image-normalization";
+import { buildInstanceReferenceUrl } from "../../../lib/instance-references";
 import { CompactComposer } from "../CompactComposer";
 
 vi.mock("../../../lib/image-normalization", () => ({
@@ -762,6 +763,24 @@ describe("CompactComposer markdown", () => {
         fireEvent.keyDown(input, { key: "Enter" });
       });
       expect(onSend).toHaveBeenCalledWith("look in [@app](/dev/app)");
+    });
+
+    it.each(["click", "keyboard"])("selects a Federation machine/profile with %s and sends its identity", async (method) => {
+      const { onSend, container } = renderComposer({
+        mentionSources: {
+          instances: [{
+            kind: "instance", key: "instance:windows-dev", instanceId: "windows-dev",
+            label: "DESKTOP-LAB / dev", path: buildInstanceReferenceUrl("windows-dev"), status: "connected",
+          }],
+        },
+      });
+      const input = openPicker("Investigate @DESK");
+      expect(screen.getByRole("listbox").getAttribute("aria-label")).toBe("Projects and instances");
+      if (method === "click") fireEvent.click(screen.getByRole("option"));
+      else fireEvent.keyDown(input, { key: "Enter" });
+      expect(container.querySelector('[data-mention-kind="instance"]')?.textContent).toBe("@DESKTOP-LAB / dev");
+      await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+      expect(onSend).toHaveBeenCalledWith("Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)");
     });
 
     it("offers threads on # and serializes the thread url", async () => {
