@@ -12,6 +12,7 @@ import type {
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -528,6 +529,39 @@ describe("settings ipc", () => {
       status: "ok",
       testedAt: 1234,
     });
+  });
+
+  it("awaits launchpad updates when a profile model default is saved", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-model-default-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const before = { codex: { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } } };
+    const after = { codex: { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } } };
+    await service.writeConfigPatchTargeted({ models: { providerDefaults: before } });
+    const db = openInMemoryStateDb();
+    stateDbs.push(db);
+    const store = new SqliteOverlayStore(db);
+    await store.setLaunchpadDefaults({ backend: "codex", model: "gpt-6-sol", reasoningEffort: "high" });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo",
+      backend: "codex", executionMode: "default", workMode: "local", prompt: "draft",
+      model: "gpt-6-sol", reasoningEffort: "high", createdAt: 1, updatedAt: 1,
+    });
+    const onConfigPatchWritten = vi.fn(async (_patch, previous) => {
+      store.applyProviderModelDefaults(previous, service.resolveProviderModelDefaults());
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service, { onConfigPatchWritten });
+    const patch = { models: { providerDefaults: after } };
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, { patch });
+    expect(onConfigPatchWritten).toHaveBeenCalledWith(patch, before);
+    expect(await store.getLaunchpadDefaults()).toMatchObject({ model: "gpt-6.1-sol", reasoningEffort: "low" });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/repo" })).toMatchObject({ model: "gpt-6.1-sol", reasoningEffort: "low", prompt: "draft" });
+    expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
   });
 
   it("does not rebuild backend clients after targeted model settings changes", async () => {

@@ -2936,7 +2936,7 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("saves defaults and confirms launchpad, thread, and Fast bulk actions", async () => {
+  it("saves defaults without a separate launchpad action and confirms thread and Fast actions", async () => {
     const snapshot = createSnapshot();
     snapshot.models.providerDefaults = {
       codex: {
@@ -3146,32 +3146,13 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Apply to launchpads" }));
-    const launchpadConfirmation =
-      await screen.findByText("Apply to 1 launchpad?");
-    expect(launchpadConfirmation.closest(".settings-field")).toHaveTextContent(
-      "Codex",
-    );
     expect(
       screen.queryByRole("button", { name: "Apply to launchpads" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
-    await waitFor(() => {
-      expect(updateDirectoryLaunchpad).toHaveBeenCalledTimes(1);
-    });
-    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "directory:/repo-a",
-      patch: {
-        model: "gpt-5.6-sol",
-        reasoningEffort: "high",
-      },
-      stickySettingsChanged: true,
-    });
-    expect(
-      screen.getByText(
-        "Updated 1 Codex launchpad. Existing threads were not changed.",
-      ),
-    ).toBeInTheDocument();
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(screen.getByText(
+      "Changing a model or reasoning updates all launchpads for that provider in this profile. Existing threads keep their settings.",
+    )).toBeInTheDocument();
     expect(
       screen.getByRole("combobox", { name: "Codex default model" }),
     ).toHaveClass("settings-select--chip");
