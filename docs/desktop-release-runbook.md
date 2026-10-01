@@ -439,11 +439,17 @@ publishing. It installs RPMs in Fedora containers and the x64 pacman package in
 an Arch container, checking package dependencies and Electron's shared libraries.
 These checks do not replace a desktop launch on GNOME Wayland or Omarchy/Hyprland.
 
-AppImage is excluded under the repository's third-party license policy: the
-modern [AppImage runtime](https://github.com/AppImage/type2-runtime/blob/main/LICENSE)
-statically includes LGPL libfuse. The tar.gz artifact supplies a portable download
-without that runtime. Flatpak/Flathub needs a separate design for coding-agent
-and terminal processes, project access, profile state, and secrets. In particular,
+AppImage is not currently built. The [third-party license policy](../AGENTS.md#changing-the-allowlist)
+records approval for electron-builder's AppImage toolset `1.0.3`, whose pinned
+[runtime `20251108`](https://github.com/AppImage/type2-runtime/blob/20251108/LICENSE)
+statically includes libfuse. Shipping it requires the specified license notices
+and complete source/build materials on the same GitHub release. The exception
+covers only the runtime stub; any shared libraries electron-builder copies into
+the Electron payload require a separate license review. The tar.gz artifact
+remains the portable download in this workflow.
+
+Flatpak/Flathub needs a separate design for coding-agent and terminal processes,
+project access, profile state, and secrets. In particular,
 [`flatpak-spawn --host`](https://docs.flatpak.org/en/latest/sandbox-permissions.html)
 runs children outside Flatpak's folder restrictions; enabling it would not provide
 the folder sandbox operators expect from Flatseal.
