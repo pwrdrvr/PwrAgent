@@ -22,8 +22,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: package-manager-distribution
-  cancel-in-progress: false
+  group: package-manager-distribution-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'stable' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   prepare:
