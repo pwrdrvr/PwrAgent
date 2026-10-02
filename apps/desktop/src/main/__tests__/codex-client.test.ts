@@ -12293,6 +12293,60 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each<{ settings: DesktopHelperModelSettings; model: string; effort: string }>([
+    { settings: { helpers: {} }, model: "gpt-6-luna", effort: "low" },
+    { settings: { defaultModel: "gpt-5.5", helpers: {} }, model: "gpt-5.5", effort: "low" },
+    {
+      settings: {
+        defaultModel: "gpt-5.5",
+        helpers: { federation_instance_names: { model: "gpt-5.6-luna", reasoningEffort: "high" } },
+      },
+      model: "gpt-5.6-luna",
+      effort: "high",
+    },
+  ])("runs federation naming with the configured model $model and effort $effort", async ({ settings, model, effort }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { generateFederationShortNames, planFederationShortNames } =
+      await import("../federation/federation-short-name-generator");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      readHelperModelSettings: () => settings,
+    });
+    MockTransport.modelListResult = createModelListResponse(
+      ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.5"].map((id) => createCodexModel({
+        id,
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Quick" },
+          { reasoningEffort: "high", description: "Deep" },
+        ],
+      })),
+    );
+    MockTransport.threadStartResult = { thread: { id: "helper" }, instructionSources: [] };
+    MockTransport.turnStartResult = {
+      turn: { id: "helper-turn", output: [{
+        type: "text",
+        text: '{"names":[{"label":"Studio-MBP-M5-Max","shortName":"M5 Max"}]}',
+      }] },
+    };
+    try {
+      const result = await generateFederationShortNames({
+        plan: planFederationShortNames([{ label: "Studio-MBP-M5-Max", profiles: ["default"] }]),
+        generate: (params) => client.generateStructuredObject({
+          ...params,
+          isMatch: (record) => Array.isArray(record.names),
+        }),
+      });
+      expect(result).toEqual({ ok: true, names: new Map([["Studio-MBP-M5-Max", "M5 Max"]]), model });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+        (message) => JSON.parse(message) as { method?: string; params?: { model?: string; effort?: string } },
+      );
+      expect(requests.find((request) => request.method === "thread/start")?.params?.model).toBe(model);
+      expect(requests.find((request) => request.method === "turn/start")?.params?.effort).toBe(effort);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("reads the helper catalog once, even when it is empty and turns start together", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
