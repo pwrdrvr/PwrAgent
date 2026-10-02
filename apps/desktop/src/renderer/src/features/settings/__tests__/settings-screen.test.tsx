@@ -2435,6 +2435,20 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("refreshes Archived Threads after leaving and reopening the tab", async () => {
+    const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [] as AppServerThreadSummary[] }));
+    render(<SettingsScreen desktopApi={{ listThreads }} settings={createSettingsState()} initialSection="archived" onClose={() => undefined} />);
+    await waitFor(() => expect(listThreads).toHaveBeenCalledExactlyOnceWith({ archived: true }));
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    const thread: AppServerThreadSummary = {
+      id: "swept-thread", title: "Automatically archived thread", titleSource: "explicit", source: "codex", linkedDirectories: [],
+    };
+    listThreads.mockResolvedValue({ backend: "all", fetchedAt: Date.now(), threads: [thread] });
+    fireEvent.click(screen.getByRole("button", { name: "Archived Threads" }));
+    expect(await screen.findByText(thread.title)).toBeInTheDocument();
+    expect(listThreads).toHaveBeenCalledTimes(2);
+  });
+
   it("lists archived threads and restores one", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-archived",

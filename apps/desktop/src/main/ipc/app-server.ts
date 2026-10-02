@@ -1545,6 +1545,7 @@ class DesktopAppServerService {
       backend,
       archived: request.archived,
       callerReason: "ipc-list-threads",
+      forceRefresh: request.archived === true,
       filter: request.filter,
     });
     const hydratedThreads = await hydrateRetainedThreadOverlayData(

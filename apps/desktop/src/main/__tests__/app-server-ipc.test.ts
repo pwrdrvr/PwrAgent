@@ -4535,6 +4535,11 @@ describe("app server ipc", () => {
       { archived: true } satisfies AppServerListThreadsRequest,
     );
 
+    expect(listThreads).toHaveBeenCalledWith(expect.objectContaining({
+      archived: true,
+      callerReason: "ipc-list-threads",
+      forceRefresh: true,
+    }));
     expect(getThreadOverlayStates).toHaveBeenCalledWith({
       backend: "codex",
       threadIds: ["thread-archived"],
