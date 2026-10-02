@@ -50,6 +50,21 @@ describe("turn failure acknowledgements", () => {
     );
   });
 
+  it("versions a repeated queue failure while keeping the original turn acknowledged", () => {
+    const store = createTurnFailureAcknowledgements();
+    const scope = turnFailureScopeKey("codex", "retry-fixture");
+    store.report(scope, "original-turn", "Capacity");
+    store.dismissMatching(scope, "Capacity");
+    store.reportQueueFailure(scope, "Capacity");
+    expect(store.isDismissed(scope, "Capacity")).toBe(false);
+    expect(store.report(scope, "original-turn", "Capacity")).toBe(false);
+    expect(store.isDismissed(scope, "Capacity")).toBe(false);
+    store.dismissMatching(scope, "Capacity");
+    expect(store.isDismissed(scope, "Capacity")).toBe(true);
+    store.reportQueueFailure(scope, "Capacity");
+    expect(store.isDismissed(scope, "Capacity")).toBe(false);
+  });
+
   it("keeps subscriptions stable and repaints only when the row's boolean changes", () => {
     const scope = turnFailureScopeKey("codex", "render-budget-thread");
     const unrelated = turnFailureScopeKey("codex", "other-render-budget-thread");
@@ -77,8 +92,19 @@ describe("turn failure acknowledgements", () => {
     });
     expect(painted).toHaveBeenCalledTimes(settled);
     expect(subscribe).toHaveBeenCalledTimes(subscriptions);
+    act(() => turnFailureAcknowledgements.reportQueueFailure(scope, "Capacity"));
+    expect(painted.mock.calls.length - settled).toBeLessThanOrEqual(2);
+    expect(painted).toHaveBeenLastCalledWith(false);
+    const reopened = painted.mock.calls.length;
+    act(() => {
+      for (let index = 0; index < 100; index += 1) {
+        turnFailureAcknowledgements.reportQueueFailure(scope, "Capacity");
+      }
+    });
+    expect(painted).toHaveBeenCalledTimes(reopened);
+    expect(subscribe).toHaveBeenCalledTimes(subscriptions);
     unmount();
     act(() => turnFailureAcknowledgements.report(scope, "next-render-turn", "Capacity"));
-    expect(painted).toHaveBeenCalledTimes(settled);
+    expect(painted).toHaveBeenCalledTimes(reopened);
   });
 });

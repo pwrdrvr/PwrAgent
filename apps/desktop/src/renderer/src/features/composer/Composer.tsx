@@ -4312,6 +4312,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const acknowledgeQueuedFailure = (queued: QueuedTurnDraft): void => {
     turnFailureAcknowledgements.dismissMatching(failureScope, queued.holdReason ?? queued.errorMessage);
   };
+  const reportQueuedFailure = (message: string): void => {
+    turnFailureAcknowledgements.reportQueueFailure(failureScope, message);
+    setSendError(message);
+  };
   const releaseHeldQueuedTurn = async (
     queued: QueuedTurnDraft,
     scopeKey = composerScopeKey,
@@ -4322,7 +4326,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
     if (!queued.queueEntryId || !props.desktopApi?.releaseQueuedTurn) {
-      setSendError("Queued turn retry is unavailable.");
+      reportQueuedFailure("Queued turn retry is unavailable.");
       return;
     }
     updateSending(true);
@@ -4358,7 +4362,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           manualReleaseRequired: true,
           holdReason: message,
         }));
-        setSendError(message);
+        reportQueuedFailure(message);
         return;
       }
       const message = response.disposition === "busy"
@@ -4366,9 +4370,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         : response.disposition === "not_head"
           ? "Retry the first held message before this one."
           : "This queued message is no longer held for retry.";
-      setSendError(message);
+      reportQueuedFailure(message);
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
+      reportQueuedFailure(error instanceof Error ? error.message : String(error));
     } finally {
       updateSending(false);
     }
@@ -6865,7 +6869,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           const failureMessage = scheduledActionFailureMessage(response.action);
           if (failureMessage) {
             updateSending(false);
-            setSendError(failureMessage);
+            reportQueuedFailure(failureMessage);
             return;
           }
           if (
@@ -6907,7 +6911,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         },
         (error) => {
           updateSending(false);
-          setSendError(error instanceof Error ? error.message : String(error));
+          reportQueuedFailure(error instanceof Error ? error.message : String(error));
         },
       );
       return;

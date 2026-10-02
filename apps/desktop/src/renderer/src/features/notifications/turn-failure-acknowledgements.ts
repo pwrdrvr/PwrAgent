@@ -24,10 +24,14 @@ export function createTurnFailureAcknowledgements() {
   const scopesById = new Map<string, { scope: string; message: string }>();
   const listeners = new Map<string, Set<() => void>>();
   const dismissalListeners = new Set<(id: string) => void>();
+  const acknowledgedIds = new Set<string>();
+  let queueFailureSequence = 0;
   const notify = (scope: string): void => {
     for (const listener of listeners.get(scope) ?? []) listener();
   };
   const dismiss = (id: string): boolean => {
+    if (acknowledgedIds.has(id)) return false;
+    acknowledgedIds.add(id);
     const identity = scopesById.get(id);
     if (!identity) return false;
     const { scope, message } = identity;
@@ -38,17 +42,27 @@ export function createTurnFailureAcknowledgements() {
     for (const listener of dismissalListeners) listener(id);
     return true;
   };
+  const report = (scope: string, id: string, message: string): boolean => {
+    if (acknowledgedIds.has(id)) return false;
+    let messages = latest.get(scope);
+    if (!messages) { messages = new Map(); latest.set(scope, messages); }
+    const previous = messages.get(message);
+    // A replay of the same incident must not undo acknowledgement.
+    if (previous?.id === id) return true;
+    if (previous) scopesById.delete(previous.id);
+    messages.set(message, { id, dismissed: false });
+    scopesById.set(id, { scope, message });
+    notify(scope);
+    return true;
+  };
   return {
-    report(scope: string, id: string, message: string): void {
-      let messages = latest.get(scope);
-      if (!messages) { messages = new Map(); latest.set(scope, messages); }
-      const previous = messages.get(message);
-      // A replay of the same incident must not undo acknowledgement.
-      if (previous?.id === id) return;
-      if (previous) scopesById.delete(previous.id);
-      messages.set(message, { id, dismissed: false });
-      scopesById.set(id, { scope, message });
-      notify(scope);
+    report,
+    reportQueueFailure(scope: string | undefined, message: string): void {
+      if (!scope) return;
+      // Rejected admission need not emit turn/failed. It is a fresh failure
+      // even when the backend repeats an acknowledged turn's error text.
+      queueFailureSequence += 1;
+      report(scope, `queued-failure:${queueFailureSequence}`, message);
     },
     dismiss,
     dismissMatching(scope: string | undefined, message: string | undefined): void {

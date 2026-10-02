@@ -1406,8 +1406,7 @@ function DesktopAppShell(props: {
         };
         const noticeId = turnFailureNoticeId(identity);
         const scope = turnFailureScopeKey(identity.backend, identity.threadId, instanceId);
-        turnFailureAcknowledgements.report(scope, noticeId, errorMessage);
-        if (turnFailureAcknowledgements.isDismissed(scope, errorMessage)) return;
+        if (!turnFailureAcknowledgements.report(scope, noticeId, errorMessage)) return;
         dispatchAppNotice({
           type: "backend-error",
           signal: {
@@ -1431,6 +1430,17 @@ function DesktopAppShell(props: {
             ),
           },
         });
+        return;
+      }
+      if (event.notification.method === "thread/turnQueue/updated") {
+        const params = event.notification.params;
+        if ((params.status === "blocked" || params.status === "failed")
+          && typeof params.errorMessage === "string") {
+          turnFailureAcknowledgements.reportQueueFailure(
+            turnFailureScopeKey(event.backend, params.threadId, instanceId),
+            params.errorMessage,
+          );
+        }
         return;
       }
       if (
