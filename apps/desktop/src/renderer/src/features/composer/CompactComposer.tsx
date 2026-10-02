@@ -1,4 +1,4 @@
-import type { CodexSpeed } from "@pwragent/shared";
+import { CODEX_SPEED_LABELS, type CodexSpeed } from "@pwragent/shared";
 import {
   useCallback,
   useEffect,
@@ -273,8 +273,12 @@ export function CompactComposer(props: CompactComposerProps) {
     props.reasoningEffort
       ? { danger: false, key: "reasoning", text: props.reasoningEffort }
       : undefined,
-    settings?.speed === "ultrafast"
-      ? { danger: false, key: "speed", text: "Ultrafast" }
+    // Any paid tier the model offers is named, Fast as well as Ultrafast.
+    // A saved tier the model does not offer does not run, so it is not.
+    settings?.speed
+      && settings.speed !== "standard"
+      && settings.speeds?.includes(settings.speed)
+      ? { danger: false, key: "speed", text: CODEX_SPEED_LABELS[settings.speed] }
       : undefined,
     accessLabel
       ? {
@@ -765,7 +769,7 @@ export function CompactComposer(props: CompactComposerProps) {
         (settings?.speeds ?? []).map((speed) => optionRow({
           checked: speed === settings?.speed,
           key: speed,
-          label: speed === "ultrafast" ? "Ultrafast" : speed === "fast" ? "Fast" : "Standard",
+          label: CODEX_SPEED_LABELS[speed],
           onSelect: () => settings?.onSelectSpeed?.(speed),
         })),
       );
@@ -808,7 +812,7 @@ export function CompactComposer(props: CompactComposerProps) {
         {speedSection ? settingRow(
           "Speed",
           <span className="compact-composer__menu-value">
-            {settings?.speed === "ultrafast" ? "Ultrafast" : settings?.speed === "fast" ? "Fast" : "Standard"}
+            {CODEX_SPEED_LABELS[settings?.speed ?? "standard"]}
           </span>,
           "speed",
         ) : null}

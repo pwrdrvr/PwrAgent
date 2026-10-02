@@ -2,6 +2,12 @@ import type { BackendModelOption } from "./contracts/backend";
 
 export type CodexSpeed = "standard" | "fast" | "ultrafast";
 
+export const CODEX_SPEED_LABELS: Record<CodexSpeed, string> = {
+  standard: "Standard",
+  fast: "Fast",
+  ultrafast: "Ultrafast",
+};
+
 export function codexSpeedOptions(
   model: BackendModelOption | undefined,
   allowed = true,

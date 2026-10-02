@@ -533,6 +533,21 @@ describe("CompactComposer settings menu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it.each([
+    ["fast", ["standard", "fast", "ultrafast"], "Thread settings: gpt-6-astra · Fast"],
+    ["ultrafast", ["standard", "fast", "ultrafast"], "Thread settings: gpt-6-astra · Ultrafast"],
+    ["fast", ["standard", "fast"], "Thread settings: gpt-6-astra · Fast"],
+    ["standard", ["standard", "fast", "ultrafast"], "Thread settings: gpt-6-astra"],
+    // A saved tier the model does not offer does not run, so the chip
+    // must not claim it.
+    ["ultrafast", ["standard", "fast"], "Thread settings: gpt-6-astra"],
+  ] as const)("names speed %s on the chip only when offered (%j)", (speed, speeds, name) => {
+    renderComposer({ model: "gpt-6-astra", settingsMenu: settingsMenu({
+      speeds: [...speeds], speed, onSelectSpeed: vi.fn(),
+    }) });
+    expect(screen.getByRole("button", { name }).getAttribute("aria-haspopup")).toBe("menu");
+  });
+
   it("toggles fast mode in place without closing the menu", () => {
     const menu = settingsMenu();
     renderComposer({ fastMode: false, settingsMenu: menu });

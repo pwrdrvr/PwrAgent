@@ -1355,6 +1355,30 @@ describe("Composer", () => {
     }
   });
 
+  it.each([
+    [{ fastMode: false }, "Standard", false],
+    [{ fastMode: true }, "Fast", true],
+    [{ serviceTier: "ultrafast", fastMode: false }, "Ultrafast", true],
+  ] as const)("draws Speed %j like the Fast toggle it replaces", (settings, label, active) => {
+    render(<Composer skills={[]} codexFastAllowed
+      backends={[backendSummary("codex", { models: [{
+        id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"],
+      }] })]}
+      thread={{ id: "speed-look", title: "Speed", titleSource: "explicit", source: "codex",
+        model: "gpt-6-astra", ...settings, linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const trigger = screen.getByRole("button", { name: "Speed" });
+    const dropdown = trigger.closest(".composer-dropdown");
+    expect(trigger).toHaveAttribute("aria-description", `Speed: ${label}`);
+    // Standard keeps the toggle's icon-only circle; a paid tier is named and lit.
+    expect(dropdown).toHaveClass(active ? "composer-dropdown--active" : "composer-dropdown--icon-only");
+    expect(dropdown).not.toHaveClass(active ? "composer-dropdown--icon-only" : "composer-dropdown--active");
+    expect(trigger.textContent).toBe(active ? label : "");
+    openDropdown("Speed");
+    expect(screen.getByRole("option", { name: "Ultrafast" })).toHaveAccessibleDescription(
+      "The fastest tier this model offers",
+    );
+  });
+
   it.each([true, false])("uses the owner's Fast mode policy (%s), independent of the viewer", (allowed) => {
     const target = { scope: "remote" as const, instanceId: "owner" };
     render(<Composer skills={[]} codexFastAllowed={!allowed}
