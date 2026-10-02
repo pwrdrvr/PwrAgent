@@ -3,7 +3,7 @@ import type { FocusEvent, MouseEvent } from "react";
 import { CelestialIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceGlyph } from "../federation/InstanceGlyph";
-import { federationChipTooltip, type FederationInstanceChipModel } from "./FederationInstanceChips";
+import { federationChipName, federationChipTooltip, type FederationInstanceChipModel } from "./FederationInstanceChips";
 import { federationTransportShortTag } from "./federation-transport";
 
 /**
@@ -76,7 +76,7 @@ export function FederationStarMapPreview(props: {
         return <button type="button" key={chip.instanceId}
           className={`federation-sky__body${chip.online ? " federation-sky__body--online" : ""}`}
           style={place(index)}
-          aria-label={`Open ${chip.label} on the Star Map`}
+          aria-label={`Open ${federationChipName(chip)} on the Star Map`}
           {...describe(federationChipTooltip(chip, minute, "Click to open on the Star Map"))}
           onClick={() => { tooltip.hide(); props.onOpenInstance(chip.instanceId); }}>
           {chip.icon ? <CelestialIcon icon={chip.icon} size={10} /> : <InstanceGlyph instanceId={chip.instanceId} size={10} />}

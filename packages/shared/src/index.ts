@@ -20,6 +20,7 @@ export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
 export * from "./contracts/federation";
 export * from "./contracts/federation-cloudflare";
+export * from "./contracts/federation-short-names";
 export * from "./contracts/federation-tools";
 export * from "./contracts/thread-instance-handoff";
 export * from "./contracts/messaging";

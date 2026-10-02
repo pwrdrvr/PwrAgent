@@ -40,6 +40,7 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import { FederationShortNameField } from "./FederationShortNameField";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
 import { useSettingsDraft } from "./useSettingsDraft";
@@ -700,6 +701,23 @@ export function FederationSettings(props: FederationSettingsProps) {
               </span>
             }
           />
+          {effectiveHealth.instanceId ? (
+            <SettingsField
+              label="Short name"
+              sub="Drawn in place of the instance name where space is tight: the Star Map, the Federation popover, Federation Activity. Chosen by the gateway unless you rename it, and synced across the federation."
+              control={
+                <FederationShortNameField
+                  instanceId={effectiveHealth.instanceId}
+                  label={effectiveHealth.localLabel ?? effectiveHealth.instanceId}
+                  shortLabel={effectiveHealth.localShortLabel}
+                  source={effectiveHealth.localShortLabelSource}
+                  desktopApi={props.desktopApi}
+                  onChanged={() => void loadHealth()}
+                  onError={setActionError}
+                />
+              }
+            />
+          ) : null}
           <SettingsField
             label="Purpose notes"
             sub="What this machine is for, e.g. 'Studio Mac — PwrSnap dev + screen recording'. Shown to peers and read by agents when routing work to an instance."
@@ -1305,6 +1323,15 @@ export function FederationSettings(props: FederationSettingsProps) {
                       ))}
                     </select>
                   </span>
+                  <FederationShortNameField
+                    instanceId={peer.id}
+                    label={peer.label}
+                    shortLabel={peer.shortLabel}
+                    source={peer.shortLabelSource}
+                    desktopApi={props.desktopApi}
+                    onChanged={() => void loadHealth()}
+                    onError={setActionError}
+                  />
                   <button
                     className="button button--secondary"
                     type="button"

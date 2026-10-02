@@ -542,6 +542,31 @@ describe("Activity report controls", () => {
       .toEqual([["72%", "22px"], ["79%", "86px"], ["21%", "86px"]]);
   });
 
+  it("draws the federation's short name on a body, and keeps the full name in its tooltip and accessible name", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "local";
+    snapshot.health.peers = [
+      { id: "studio", label: "Studio-MBP-M5-Max", shortLabel: "M5 Max", profileName: "default",
+        role: "gateway", status: "connected", capabilities: [] },
+      { id: "studio-dev", label: "Studio-MBP-M5-Max", shortLabel: "M5 Max", profileName: "dev",
+        role: "client", status: "connected", capabilities: [] },
+      { id: "laptop", label: "MBP-M2-Max", role: "client", status: "connected", capabilities: [] },
+    ];
+    render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => structuredClone(snapshot) }}
+      onOpen={vi.fn()} />);
+    const sky = await openSky();
+    const bodies = within(sky).getAllByRole("button").slice(0, 3);
+    expect(bodies.map((body) => body.querySelector(".federation-sky__host")?.textContent))
+      .toEqual(["MBP-M2-Max", "M5 Max", "M5 Max"]);
+    expect(bodies.map((body) => body.getAttribute("aria-label"))).toEqual([
+      "Open MBP-M2-Max on the Star Map",
+      "Open M5 Max / default (Studio-MBP-M5-Max) on the Star Map",
+      "Open M5 Max / dev (Studio-MBP-M5-Max) on the Star Map",
+    ]);
+    fireEvent.focus(bodies[2]);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Studio-MBP-M5-Max / dev");
+  });
+
   it("gives the eighth place to the instances that do not fit, and an empty sky says so", async () => {
     const snapshot = fixture();
     snapshot.health.instanceId = "local";

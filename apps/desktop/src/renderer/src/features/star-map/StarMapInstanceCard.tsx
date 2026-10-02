@@ -97,6 +97,11 @@ export function StarMapInstanceCard(props: {
   instanceId: string;
   label: string;
   /**
+   * The federation's short name for the machine. Drawn in place of
+   * `label`; the tooltip and every accessible name keep the full label.
+   */
+  shortLabel?: string;
+  /**
    * Rendered on its own line under the machine name. Only set when the
    * profile is needed to tell two instances apart — stacking keeps the
    * name pill narrow instead of letting "machine / profile" widen it.
@@ -133,6 +138,12 @@ export function StarMapInstanceCard(props: {
   const fullLabel = props.profileName
     ? `${props.label} / ${props.profileName}`
     : props.label;
+  const machine = props.shortLabel ?? props.label;
+  // Names start with what the card shows, so voice control can say it, and
+  // still carry the full label a short name stands in for.
+  const nameLabel = props.shortLabel
+    ? `${props.profileName ? `${machine} / ${props.profileName}` : machine} (${props.label})`
+    : fullLabel;
 
   return (
     <div
@@ -144,7 +155,7 @@ export function StarMapInstanceCard(props: {
       <span className="star-map-instance__actions">
         {props.onLoadMoreThreads ? (
           <InstanceAction className="star-map-instance__action--more"
-            label={`Load more threads on ${fullLabel}`}
+            label={`Load more threads on ${nameLabel}`}
             busy={props.loadingThreads}
             onClick={props.onLoadMoreThreads}
           >
@@ -154,7 +165,7 @@ export function StarMapInstanceCard(props: {
         {props.onIntake ? (
           <InstanceAction
             className="star-map-instance__action--intake"
-            label={`New thread on ${fullLabel}`}
+            label={`New thread on ${nameLabel}`}
             onClick={props.onIntake}
           >
             +
@@ -165,8 +176,8 @@ export function StarMapInstanceCard(props: {
             className="star-map-instance__action--load"
             label={
               props.loadShown
-                ? `Hide load for ${fullLabel}`
-                : `Show load for ${fullLabel} (CPU, memory, disk)`
+                ? `Hide load for ${nameLabel}`
+                : `Show load for ${nameLabel} (CPU, memory, disk)`
             }
             pressed={props.loadShown === true}
             onClick={props.onToggleLoad}
@@ -185,8 +196,8 @@ export function StarMapInstanceCard(props: {
             className="star-map-instance__action--open"
             label={
               props.isLocal
-                ? `Open this instance (${fullLabel})`
-                : `Open remote viewer for ${fullLabel}`
+                ? `Open this instance (${nameLabel})`
+                : `Open remote viewer for ${nameLabel}`
             }
             onClick={props.onOpen}
           >
@@ -198,7 +209,7 @@ export function StarMapInstanceCard(props: {
         type="button"
         className="star-map-instance__body"
         aria-pressed={props.selected === true}
-        aria-label={`Focus ${fullLabel}`}
+        aria-label={`Focus ${nameLabel}`}
         onClick={props.onSelect}
       >
         <span className="star-map-instance__glow" aria-hidden="true" />
@@ -224,7 +235,7 @@ export function StarMapInstanceCard(props: {
           }
           onMouseLeave={labelTooltip.hide}
         >
-          <span className="star-map-instance__machine">{props.label}</span>
+          <span className="star-map-instance__machine">{machine}</span>
           {props.profileName ? (
             <span className="star-map-instance__profile">
               {props.profileName}

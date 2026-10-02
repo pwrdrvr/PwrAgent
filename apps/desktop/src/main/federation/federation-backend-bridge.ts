@@ -148,6 +148,8 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  SetFederationShortNameRequest,
+  SetFederationShortNameResponse,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
   SetCodexThreadEnvironmentRequest,
@@ -502,6 +504,7 @@ export const FEDERATION_BACKEND_METHODS = {
   getLoadStatus: "backend.getLoadStatus",
   trustCodexProject: "backend.trustCodexProject",
   setCelestialIcon: "backend.setCelestialIcon",
+  setFederationShortName: "backend.setFederationShortName",
   starMapIntake: "backend.starMapIntake",
 } as const;
 
@@ -644,6 +647,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // cosmetic state; thread_navigation is the least-privileged grant every
   // browsing peer already holds.
   [FEDERATION_BACKEND_METHODS.setCelestialIcon]: "thread_navigation",
+  // Short-name overrides go to the gateway for the same reason, under the
+  // same least-privileged grant.
+  [FEDERATION_BACKEND_METHODS.setFederationShortName]: "thread_navigation",
   // Intake creates a thread and starts its first turn on the owning
   // instance — the same trust the materialize-launchpad path carries.
   [FEDERATION_BACKEND_METHODS.starMapIntake]: "environment_actions",
@@ -916,6 +922,14 @@ export type FederationBackendOperations = {
   setCelestialIcon(
     request: SetCelestialIconRequest,
   ): Promise<SetCelestialIconResponse>;
+  /**
+   * Optional so test doubles need not implement it; without it the handler
+   * is not registered and callers receive method_not_found, which is also
+   * what a gateway that predates short names answers.
+   */
+  setFederationShortName?(
+    request: SetFederationShortNameRequest,
+  ): Promise<SetFederationShortNameResponse>;
   starMapIntake(
     request: FederationStarMapIntakeRequest,
   ): Promise<StarMapIntakeResponse>;
@@ -1810,6 +1824,16 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SetCelestialIconRequest,
       ),
   );
+  const setFederationShortName = params.backend.setFederationShortName?.bind(params.backend);
+  if (setFederationShortName) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.setFederationShortName,
+      async (envelope) =>
+        await setFederationShortName(
+          envelope.params as SetFederationShortNameRequest,
+        ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.starMapIntake,
     async (envelope) => {
@@ -2797,6 +2821,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetCelestialIconResponse> {
     return await this.rpc.request<SetCelestialIconResponse>({
       method: FEDERATION_BACKEND_METHODS.setCelestialIcon,
+      params: request,
+    });
+  }
+
+  async setFederationShortName(
+    request: SetFederationShortNameRequest,
+  ): Promise<SetFederationShortNameResponse> {
+    return await this.rpc.request<SetFederationShortNameResponse>({
+      method: FEDERATION_BACKEND_METHODS.setFederationShortName,
       params: request,
     });
   }

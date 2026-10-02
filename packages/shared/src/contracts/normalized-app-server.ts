@@ -1584,6 +1584,12 @@ export type FederationCelestialIconsChangedNotification = {
   };
 };
 
+/** The short-name map changed; surfaces re-read federation health. */
+export type FederationShortNamesChangedNotification = {
+  method: "federation/shortNames/changed";
+  params: Record<string, never>;
+};
+
 export type StarMapArrangementChangedNotification = {
   method: "starMap/arrangement/changed";
   params: {
@@ -2431,6 +2437,7 @@ export type AppServerNotification =
   | FederationPeerStatusChangedNotification
   | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification
+  | FederationShortNamesChangedNotification
   | StarMapArrangementChangedNotification
   | StarMapIntakeStatusNotification
   | AppServerPendingRequestNotification;

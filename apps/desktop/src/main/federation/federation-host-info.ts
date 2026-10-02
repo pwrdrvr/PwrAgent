@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared";
 import { resolvePwragentRoot } from "../profile";
 import { readAvailableMemoryBytes } from "./federation-available-memory";
+import { detectVirtualMachine } from "./federation-virtual-machine";
 
 const MACHINE_ID_FILENAME = "machine-id";
 
@@ -57,9 +58,12 @@ export async function readOrCreateFederationMachineId(options?: {
  */
 export async function collectFederationHostInfo(options?: {
   rootDir?: string;
+  detectVirtualMachine?: () => Promise<boolean | undefined>;
 }): Promise<FederationHostInfo> {
   const rootDir = options?.rootDir ?? resolvePwragentRoot();
   const machineId = await readOrCreateFederationMachineId({ rootDir });
+  const virtualMachine = await (options?.detectVirtualMachine ?? detectVirtualMachine)();
+  const cpuModel = os.cpus()[0]?.model?.replace(/\s+/g, " ").trim().slice(0, 120);
   let diskFreeBytes: number | undefined;
   try {
     const stats = await fs.statfs(rootDir);
@@ -73,9 +77,11 @@ export async function collectFederationHostInfo(options?: {
     hostname: os.hostname(),
     arch: os.arch(),
     cpuCount: os.cpus().length,
+    ...(cpuModel ? { cpuModel } : {}),
     memoryBytes: os.totalmem(),
     ...(diskFreeBytes !== undefined ? { diskFreeBytes } : {}),
     ...(machineId ? { machineId } : {}),
+    ...(virtualMachine !== undefined ? { virtualMachine } : {}),
   };
 }
 
