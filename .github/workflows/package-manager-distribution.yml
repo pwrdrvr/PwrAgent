@@ -47,6 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           mkdir -p distribution
@@ -57,7 +58,8 @@ jobs:
             import fs from "node:fs";
             const a = JSON.parse(fs.readFileSync("distribution/preflight.json"));
             const relevant = !process.env.EVENT_TAG || process.env.EVENT_TAG === `v${a.stable.version}`;
-            console.log(relevant && [a.homebrew, a.winget].some(c => c.version !== a.stable.version && c.pending.length === 0));
+            const validation = ["pull_request", "workflow_dispatch"].includes(process.env.EVENT_NAME);
+            console.log(relevant && (validation || [a.homebrew, a.winget].some(c => c.version !== a.stable.version && c.pending.length === 0)));
           ')"
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
           if [ "$needed" = true ]; then
