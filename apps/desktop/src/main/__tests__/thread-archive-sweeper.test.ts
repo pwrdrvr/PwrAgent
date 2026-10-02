@@ -39,7 +39,7 @@ function harness(candidates = [candidate()]) {
     refreshCandidate: vi.fn(async (item: ThreadArchiveCandidate) => item),
     isBusy: vi.fn(() => false),
     canArchive: vi.fn(async () => true),
-    archive: vi.fn(async (_item: ThreadArchiveCandidate) => {}),
+    archive: vi.fn<ConstructorParameters<typeof ThreadArchiveSweeper>[0]["archive"]>(async () => {}),
     workspaceIsSafe: vi.fn(async (_cwd: string, _signal: AbortSignal) => true),
     onError: vi.fn(),
   };
