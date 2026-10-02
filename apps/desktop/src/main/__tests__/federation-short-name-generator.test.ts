@@ -182,7 +182,7 @@ describe("validateFederationShortNameAnswer", () => {
 describe("generateFederationShortNames", () => {
   const plan = planFederationShortNames([studio, laptop]);
 
-  it("runs one Codex structured turn with the helper default model and a deliberate turn budget", async () => {
+  it("routes one structured turn through the instance names helper with a deliberate turn budget", async () => {
     const generate = vi.fn<FederationStructuredGenerator>(async () => ({
       status: "ok",
       object: { names: [{ label: "Studio-MBP-M5-Max", shortName: "M5 Max" }] },
@@ -193,10 +193,11 @@ describe("generateFederationShortNames", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(generate.mock.calls[0][0]).toMatchObject({
       helper: "federation_instance_names",
-      model: undefined,
       turnTimeoutMs: FEDERATION_SHORT_NAME_TURN_TIMEOUT_MS,
       schemaName: "federation_instance_short_names",
     });
+    expect(generate.mock.calls[0][0]).not.toHaveProperty("model");
+    expect(generate.mock.calls[0][0]).not.toHaveProperty("reasoningEffort");
   });
 
   it("marks an unavailable backend or a thrown call as unanswered", async () => {

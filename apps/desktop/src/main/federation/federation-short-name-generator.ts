@@ -254,16 +254,6 @@ export function validateFederationShortNameAnswer(
 }
 
 /**
- * The model for short-name turns. Undefined defers to the Codex client's
- * helper default (`getDefaultHelperModel`: gpt-6-luna when the backend
- * offers it, otherwise the thread-title helper model). This is the one seam
- * a Default Models setting replaces.
- */
-export function resolveFederationShortNameModel(): string | undefined {
-  return undefined;
-}
-
-/**
  * Protocol round-trip budget, per request. `runHelperStructuredTurn`
  * applies it to each of its calls (thread start, turn start, cleanup), not
  * as a total, so it stays at the helper default.
@@ -279,7 +269,6 @@ export const FEDERATION_SHORT_NAME_TURN_TIMEOUT_MS = 60_000;
 
 export type FederationStructuredGenerator = (params: {
   helper: "federation_instance_names";
-  model?: string;
   system: string;
   prompt: string;
   schema: Record<string, unknown>;
@@ -305,7 +294,6 @@ export async function generateFederationShortNames(params: {
   try {
     result = await params.generate({
       helper: "federation_instance_names",
-      model: resolveFederationShortNameModel(),
       system: FEDERATION_SHORT_NAME_SYSTEM_PROMPT,
       prompt: buildFederationShortNamePrompt(params.plan),
       schema: FEDERATION_SHORT_NAME_SCHEMA,
