@@ -46,6 +46,14 @@ jobs:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: pnpm release:check
 
+      - name: Compare authoritative Homebrew and Winget channels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json"
+          cat "$RUNNER_TEMP/package-manager-preflight.json" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Typecheck
         env:
           NODE_OPTIONS: --max-old-space-size=4096

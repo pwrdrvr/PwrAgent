@@ -1,0 +1,249 @@
+name: Package manager distribution
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/package-manager-distribution.yml
+      - scripts/package-manager-release*
+      - scripts/submit-package-manager-release.mjs
+  # Releases are built as prereleases. Only explicit stable promotion qualifies.
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      submit:
+        description: Open Homebrew and Winget PRs after platform validation
+        type: boolean
+        default: false
+  schedule:
+    - cron: "43 8 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-manager-distribution
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      needed: ${{ steps.generate.outputs.needed }}
+      automation_sha: ${{ steps.checkout.outputs.commit }}
+    steps:
+      - id: checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Use the current automation even when promoting an older product tag.
+          ref: ${{ github.event_name == 'release' && 'main' || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - id: generate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p distribution
+          node scripts/package-manager-release.mjs --audit > distribution/preflight.json
+          cat distribution/preflight.json >> "$GITHUB_STEP_SUMMARY"
+          # shellcheck disable=SC2016
+          needed="$(node --input-type=module -e '
+            import fs from "node:fs";
+            const a = JSON.parse(fs.readFileSync("distribution/preflight.json"));
+            const relevant = !process.env.EVENT_TAG || process.env.EVENT_TAG === `v${a.stable.version}`;
+            console.log(relevant && [a.homebrew, a.winget].some(c => c.version !== a.stable.version && c.pending.length === 0));
+          ')"
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+          if [ "$needed" = true ]; then
+            node scripts/package-manager-release.mjs --out distribution/current --previous-out distribution/previous
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: package-manager-inputs
+          path: |
+            distribution/preflight.json
+            distribution/current/audit.json
+            distribution/current/Casks
+            distribution/current/manifests
+            distribution/previous/Casks
+            distribution/previous/manifests
+          if-no-files-found: error
+
+  homebrew:
+    needs: prepare
+    if: needs.prepare.outputs.needed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-inputs
+          path: distribution
+      - name: Validate architecture, signature and notarization of both DMGs
+        run: |
+          set -euo pipefail
+          version="$(jq -r .stable.version distribution/current/audit.json)"
+          for arch in arm64 universal; do
+            name="PwrAgent-${version}-${arch}.dmg"
+            curl --fail --location --retry 3 -o "$RUNNER_TEMP/$name" "https://github.com/pwrdrvr/PwrAgent/releases/download/v${version}/${name}"
+            expected="$(jq -r --arg name "$name" '.hashes[$name]' distribution/current/audit.json)"
+            echo "$expected  $RUNNER_TEMP/$name" | shasum -a 256 --check
+            mount="$RUNNER_TEMP/mount-$arch"
+            mkdir -p "$mount"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$RUNNER_TEMP/$name"
+            app="$mount/PwrAgent.app"
+            actual="$(lipo -archs "$app/Contents/MacOS/PwrAgent")"
+            if [ "$arch" = arm64 ]; then
+              test "$actual" = arm64
+            else
+              test "$actual" = "x86_64 arm64" || test "$actual" = "arm64 x86_64"
+            fi
+            test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 12.0
+            codesign --verify --deep --strict "$app"
+            codesign -dv --verbose=2 "$app" 2>&1 | grep -q 'TeamIdentifier=T44CNHC4UH'
+            spctl --assess --type execute --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            hdiutil detach "$mount"
+          done
+      - name: Validate fresh install and upgrade through Homebrew
+        run: |
+          set -euo pipefail
+          tap="$(brew --repository)/Library/Taps/pwrdrvr/homebrew-distribution-validation"
+          mkdir -p "$tap/Casks"
+          git init -q "$tap"
+          git -C "$tap" remote add origin https://github.com/pwrdrvr/homebrew-tap
+          cp distribution/current/Casks/pwragent.rb "$tap/Casks/pwragent.rb"
+          git -C "$tap" -c user.name=distribution-validation -c user.email=validation@pwragent.ai -c commit.gpgsign=false add Casks/pwragent.rb
+          git -C "$tap" -c user.name=distribution-validation -c user.email=validation@pwragent.ai -c commit.gpgsign=false commit -m "Validate generated PwrAgent cask"
+          token=pwrdrvr/distribution-validation/pwragent
+          if brew trust --help >/dev/null 2>&1; then brew trust --cask "$token"; fi
+          brew style "$tap/Casks/pwragent.rb"
+          brew audit --cask --online "$token"
+          brew install --cask "$token"
+          test -d /Applications/PwrAgent.app
+          test ! -L /Applications/PwrAgent.app
+          expected="$(jq -r .stable.version distribution/current/audit.json)"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$expected"
+          brew uninstall --cask "$token"
+          cp distribution/previous/Casks/pwragent.rb "$tap/Casks/pwragent.rb"
+          brew install --cask "$token"
+          previous="$(jq -r .previousVersion distribution/current/audit.json)"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$previous"
+          cp distribution/current/Casks/pwragent.rb "$tap/Casks/pwragent.rb"
+          brew upgrade --cask --greedy "$token"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$expected"
+          codesign --verify --deep --strict /Applications/PwrAgent.app
+          spctl --assess --type execute --verbose=2 /Applications/PwrAgent.app
+          brew uninstall --cask "$token"
+
+  winget:
+    needs: prepare
+    if: needs.prepare.outputs.needed == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-inputs
+          path: distribution
+      - name: Install Microsoft's WinGet client
+        shell: pwsh
+        run: |
+          Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
+          Repair-WinGetPackageManager -AllUsers
+          Add-Content $env:GITHUB_PATH "$env:LOCALAPPDATA\Microsoft\WindowsApps"
+      - name: Validate signed installer, fresh user/machine installs and upgrade
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $audit = Get-Content distribution/current/audit.json -Raw | ConvertFrom-Json
+          $version = $audit.stable.version
+          $previous = $audit.previousVersion
+          $currentManifest = "distribution/current/manifests/p/PwrDrvr/PwrAgent/$version"
+          winget validate --manifest $currentManifest
+          if ($LASTEXITCODE) { throw "winget validate failed" }
+          winget settings --enable LocalManifestFiles
+          if ($LASTEXITCODE) { throw "Could not enable local manifests" }
+          foreach ($v in @($previous, $version)) {
+            $installer = "$env:RUNNER_TEMP/PwrAgent-$v-setup.exe"
+            Invoke-WebRequest "https://github.com/pwrdrvr/PwrAgent/releases/download/v$v/PwrAgent-$v-windows-x64-setup.exe" -OutFile $installer
+            $root = if ($v -eq $version) { "current" } else { "previous" }
+            $text = Get-Content "distribution/$root/manifests/p/PwrDrvr/PwrAgent/$v/PwrDrvr.PwrAgent.installer.yaml" -Raw
+            $expected = [regex]::Match($text, 'InstallerSha256: ([A-F0-9]{64})').Groups[1].Value
+            if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $expected) { throw "Installer checksum mismatch" }
+            $signature = Get-AuthenticodeSignature $installer
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch 'PwrDrvr LLC') { throw "Invalid publisher signature" }
+          }
+          $installDir = "$env:RUNNER_TEMP\pwragent-user"
+          function Assert-InstalledVersion($expected) {
+            $exe = "$installDir\PwrAgent.exe"
+            if ((Get-Item $exe).VersionInfo.ProductVersion -ne $expected) { throw "Wrong installed version" }
+            $bytes = [System.IO.File]::ReadAllBytes($exe)
+            $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x8664) { throw "Installed executable is not x64" }
+            if ((Get-AuthenticodeSignature $exe).Status -ne "Valid") { throw "Installed executable signature failed" }
+          }
+          winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE) { throw "Fresh user install failed" }
+          Assert-InstalledVersion $version
+          winget uninstall --name PwrAgent --exact --silent --disable-interactivity
+          if ($LASTEXITCODE) { throw "User uninstall failed" }
+          # Install the actual previous stable version, then exercise local-manifest upgrade.
+          $previousManifest = "distribution/previous/manifests/p/PwrDrvr/PwrAgent/$previous"
+          winget install --manifest $previousManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE) { throw "Upgrade baseline install failed" }
+          Assert-InstalledVersion $previous
+          winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE) { throw "Upgrade failed" }
+          Assert-InstalledVersion $version
+          winget uninstall --name PwrAgent --exact --silent --disable-interactivity
+          if ($LASTEXITCODE) { throw "Upgrade uninstall failed" }
+          $installDir = "$env:RUNNER_TEMP\pwragent-machine"
+          winget install --manifest $currentManifest --scope machine --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE) { throw "Fresh machine install failed" }
+          Assert-InstalledVersion $version
+          winget uninstall --name PwrAgent --exact --silent --disable-interactivity
+          if ($LASTEXITCODE) { throw "Machine uninstall failed" }
+
+  submit:
+    needs: [prepare, homebrew, winget]
+    if: needs.prepare.outputs.needed == 'true' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.submit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.automation_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-inputs
+          path: distribution
+      - name: Open channel PRs without merging or claiming publication
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN }}
+          WINGET_FORK_REPO: ${{ vars.WINGET_FORK_REPO }}
+          DISTRIBUTION_VALIDATION_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Configure DISTRIBUTION_TOKEN for the tap, Winget fork and upstream PR creation. Validated inputs are in package-manager-inputs."
+            exit 1
+          fi
+          node scripts/submit-package-manager-release.mjs distribution/current | tee -a "$GITHUB_STEP_SUMMARY"

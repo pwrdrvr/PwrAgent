@@ -224,6 +224,12 @@ GitHub Latest).
 
 ## Cutting a release (CI path — preferred)
 
+Before editing release metadata, run `pnpm release:channels --audit` and follow
+the [package-manager distribution preflight](package-manager-distribution.md).
+Every release, including alpha/beta candidates, records authoritative Homebrew
+and Winget versions, pending submissions and blockers. Stable package entries
+change only after a suffix-free release is promoted.
+
 ```bash
 # 1. Bump the desktop version and add a matching top CHANGELOG.md entry.
 # Treat apps/desktop/package.json as the release version source.
@@ -548,6 +554,16 @@ gh release edit v<version> --repo pwrdrvr/PwrAgent --latest --prerelease=false
 
 No retag is needed. Clearing the flag on a suffix-free tag moves it from
 Stable · Prerelease into Stable · Latest.
+
+Promotion also begins the [Homebrew and Winget channel procedure](package-manager-distribution.md).
+Monitor `package-manager-distribution.yml` through checksum/architecture,
+signature, install/upgrade validation and package submissions. Dispatch it
+with `submit=true` if the promotion event did not start a run. Review and merge
+the tap PR, monitor Microsoft's manifest validation/review, then verify both
+authoritative files and refreshed package-manager clients. Include versions,
+submission links, last check times and next actions in the release handoff.
+Pending review, credentials, CLA or cache/index propagation remains an explicit
+channel blocker; do not report publication merely because a PR is open.
 
 **Promote suffix-free tags only.** `--latest` also repoints
 `/releases/latest/download/`, so promoting a suffixed tag such as
