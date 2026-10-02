@@ -492,7 +492,7 @@ describe("Activity report controls", () => {
       onOpen={onOpen} />);
     const sky = await openSky();
     const buttons = within(sky).getAllByRole("button");
-    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+    expect(buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent?.replace("↗", "").trim())).toEqual([
       "Open Laptop on the Star Map",
       "Open Travel laptop on the Star Map",
       "Open Build VM on the Star Map",
@@ -562,8 +562,7 @@ describe("Activity report controls", () => {
     const empty = await openSky();
     expect(empty).toHaveTextContent("No other instances yet");
     expect(empty).toHaveTextContent("Star Map · 1 instance");
-    expect(within(empty).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
-      .toEqual(["Open the Star Map"]);
+    expect(within(empty).getAllByRole("button")).toEqual([within(empty).getByRole("button", { name: "Open the Star Map" })]);
   });
 
   it("closes the Activity window's menu when the pointer goes down outside it", async () => {

@@ -99,8 +99,10 @@ export function FederationStarMapPreview(props: {
         <span className="federation-sky__label"><strong>Star Map</strong>
           {` · ${total} ${total === 1 ? "instance" : "instances"}`}
           {props.chips.length ? ` · ${online || "none"} connected` : null}</span>
-        <button type="button" className="federation-sky__cta" aria-label="Open the Star Map" onClick={props.onOpen}>
-          Open Star Map <span aria-hidden="true">↗</span>
+        {/* Not "Open Star Map": that is the header trigger's name, and a
+            spoken or substring match on it must not land here instead. */}
+        <button type="button" className="federation-sky__cta" onClick={props.onOpen}>
+          Open the Star Map <span aria-hidden="true">↗</span>
         </button>
       </span>
     </div>

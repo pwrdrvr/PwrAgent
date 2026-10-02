@@ -39070,7 +39070,7 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-sky__sun { position: absolute; left: 50%; top: 70px; width: 14px; height: 14px; border-radius: 999px; background: var(--text-primary); box-shadow: 0 0 0 4px var(--bg-panel), 0 0 0 5px var(--border-strong); transform: translate(-50%, -50%); }
 .federation-sky__body { position: absolute; display: inline-flex; align-items: center; gap: 4px; max-width: min(150px, 39%); height: 20px; margin: 0; padding: 0 6px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-panel-elevated); color: var(--text-secondary); font: 550 9.5px/1.2 var(--font-sans, sans-serif); white-space: nowrap; cursor: pointer; transform: translate(-50%, -50%); }
 .federation-sky__body--online { border-color: var(--accent-border); color: var(--text-primary); }
-.federation-sky__body:hover, .federation-sky__body:focus-visible { z-index: 1; border-color: var(--border-strong); background: var(--bg-panel-hover); color: var(--text-primary); box-shadow: 0 3px 8px var(--shadow-tint-faint); transform: translate(-50%, calc(-50% - 1px)); }
+.federation-sky__body:hover, .federation-sky__body:focus-visible { z-index: 1; border-color: var(--border-strong); background: var(--bg-panel-hover); color: var(--text-primary); box-shadow: 0 3px 8px var(--shadow-tint-faint); }
 .federation-sky__body--online:hover, .federation-sky__body--online:focus-visible { border-color: var(--accent); }
 .federation-sky__body:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .federation-sky__body--more { padding: 0 8px; font-weight: 500; }
@@ -39083,9 +39083,9 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-sky__body .federation-chip__tag { padding: 0 3px; font-size: 8px; }
 .federation-sky__alone { position: absolute; left: 50%; top: 92px; color: var(--text-muted); font-size: 11px; white-space: nowrap; transform: translateX(-50%); }
 .federation-sky__caption { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.federation-sky__label { padding: 3px 8px; border-radius: 6px; background: var(--bg-panel-elevated); color: var(--text-secondary); font-size: 10.5px; }
+.federation-sky__label { min-width: 0; overflow: hidden; padding: 3px 8px; border-radius: 6px; background: var(--bg-panel-elevated); color: var(--text-secondary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .federation-sky__label strong { color: var(--text-primary); font-weight: 650; }
-.federation-sky__cta { margin: 0; padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel-elevated); color: var(--text-primary); font: 550 11px/1.2 var(--font-sans, sans-serif); cursor: pointer; }
+.federation-sky__cta { flex: none; margin: 0; padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel-elevated); color: var(--text-primary); font: 550 11px/1.2 var(--font-sans, sans-serif); white-space: nowrap; cursor: pointer; }
 .federation-sky__cta:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 /* Empty sky opens the map too, so pointing at it lights the button; pointing
    at a body lights only the body. */
