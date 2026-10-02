@@ -15,6 +15,7 @@ describe("federation tool contracts", () => {
       "list_instance_projects",
       "create_instance_thread",
       "search_federation_threads",
+      "list_attention_threads",
       "push_instance_file",
       "handoff_instance_thread",
     ]);

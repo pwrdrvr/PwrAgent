@@ -5832,9 +5832,13 @@ a.button {
     transform 120ms ease;
 }
 
+/* Keyboard focus only. `:focus-within` also matches a button that took focus
+   from a mouse click, which pinned its tooltip open over the next control
+   until focus moved: after clicking the composer mic, its "End voice" tooltip
+   sat beside the voice bar's End voice and read as a second button. */
 .tooltip-target[data-tooltip]:hover::after,
 .tooltip-target[data-tooltip]:focus-visible::after,
-.tooltip-target[data-tooltip]:focus-within::after {
+.tooltip-target[data-tooltip]:has(:focus-visible)::after {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }

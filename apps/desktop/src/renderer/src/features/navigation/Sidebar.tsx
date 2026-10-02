@@ -186,6 +186,8 @@ import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirec
 import { BrandLockup } from "../chrome/BrandLockup";
 
 type SidebarProps = {
+  /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
+  mastheadVoiceControl?: ReactNode;
   directoryDisclosure?: NavigationDirectoryDisclosure;
   /** True while a full-window layer (Settings, Automations) covers it. */
   inert?: boolean;
@@ -2246,6 +2248,7 @@ export function Sidebar(props: SidebarProps) {
         <BrandLockup variant="sidebar" />
 
         <div className="sidebar__masthead-actions">
+          {federationLabel ? null : props.mastheadVoiceControl}
           <MastheadActionButton
             ariaLabel="Search threads"
             // ⌘K leads: it's the one an operator reaches for by reflex, and

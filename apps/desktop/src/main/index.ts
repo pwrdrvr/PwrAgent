@@ -1,3 +1,4 @@
+import { registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
 import { configureBundledGit } from "./bundled-git";
 import {
   applyRememberedLinuxPasswordStore,
@@ -1584,6 +1585,7 @@ export function bootstrapApp(): void {
     wireWindowControlsBridge();
     installWindowFrameSync(app);
     registerAppServerIpcHandlers();
+    registerNativeVoiceIpcHandlers();
     void startAppServerOwnerNavigation().catch((error) => {
       mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
     });

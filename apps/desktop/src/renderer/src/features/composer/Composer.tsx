@@ -1,3 +1,5 @@
+import { NativeVoiceBar, NativeVoiceToggle, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
+import { DirectorVoiceComposerToggle } from "../native-voice/DirectorVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -2712,6 +2714,18 @@ function ComposerApplicationButton(props: {
 }
 
 export const Composer = memo(function Composer(props: ComposerProps) {
+  const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
+  // Thread voice talks to a local Codex thread; every other composer still
+  // mounts the bar so a failed stop can be retried wherever the window lands.
+  const {
+    threadId: nativeVoiceThreadId,
+    directorHint: nativeVoiceDirectorHint,
+  } = threadVoiceTarget(props.thread, props.launchpad);
+  // Director voice runs only in a local main window, where the Voice manager
+  // and the published focus live.
+  const directorVoiceApi = nativeVoiceApi?.openVoiceManager && !readRendererFederationTarget()
+    ? nativeVoiceApi
+    : undefined;
   const threadLinks = useThreadLinks();
   const pullRequestLinks = usePullRequestLinks();
   const rendererFederationTarget = readRendererFederationTarget();
@@ -10897,6 +10911,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           }
         }}
       >
+      {/* Outside the pending fieldset: a hot microphone's End voice must work
+          while a send is being prepared. */}
+      {nativeVoiceApi ? (
+        <NativeVoiceBar api={nativeVoiceApi} threadId={nativeVoiceThreadId} />
+      ) : null}
       <fieldset className="composer__pending-controls" disabled={preparingSend}>
         {/* Issue #240: removed the visible "Reply" / "New thread" /
           "Review" eyebrow that used to sit above the composer. The
@@ -13192,6 +13211,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ? () => void props.desktopApi?.openUsageActivity?.()
               : undefined}
           />
+          {nativeVoiceApi && nativeVoiceThreadId ? (
+            <NativeVoiceToggle
+              api={nativeVoiceApi}
+              threadId={nativeVoiceThreadId}
+              turnRunning={props.thread?.threadStatus === "active"}
+            />
+          ) : directorVoiceApi && nativeVoiceDirectorHint ? (
+            <DirectorVoiceComposerToggle api={directorVoiceApi} hint={nativeVoiceDirectorHint} />
+          ) : null}
           {preparingSend ? (
             <button
               className="button button--ghost composer__cancel-preparation"

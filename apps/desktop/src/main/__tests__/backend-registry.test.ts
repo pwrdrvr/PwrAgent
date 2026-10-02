@@ -142,6 +142,7 @@ import {
   PwrAgentFederatedThreadMessageError,
   type PwrAgentFederatedThreadMessageRequest,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
+import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools/pwragent-tool-search";
 
 const jeepStickerPageFixture = fileURLToPath(
   new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
@@ -2143,7 +2144,7 @@ class MockBackendClient {
     };
   }
 
-  refreshThreadTools = vi.fn(async (_params: { threadId: string; dynamicTools: unknown }): Promise<void> => {});
+  refreshThreadTools = vi.fn(async (_params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void> => {});
 
   async injectThreadItems(params: { threadId: string; items: unknown[] }): Promise<void> {
     this.injectedThreadItems.push(params);
@@ -3115,6 +3116,99 @@ describe("DesktopBackendRegistry", () => {
     expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
     expect(archive).not.toHaveBeenCalled();
     expect(result.cleanup).toEqual([]);
+  });
+
+  function voiceClient(options: ConstructorParameters<typeof MockBackendClient>[0] = {}) {
+    return Object.assign(new MockBackendClient({
+      initializeResult: { userAgent: "codex/0.159.0", methods: ["turn/start"] },
+      serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+      ...options,
+    }), {
+      startRealtime: vi.fn(async () => {}), stopRealtime: vi.fn(async () => {}), appendRealtimeText: vi.fn(async () => {}),
+      onRealtimeEvent: vi.fn(() => () => {}), onRealtimeDisconnect: vi.fn(() => () => {}),
+    });
+  }
+
+  it("preserves the coding start reservation when voice joins during preparation", async () => {
+    const codexClient = voiceClient();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const preparing = createDeferred<void>();
+    const ready = createDeferred<string | undefined>();
+    const internals = registry as unknown as { resolveThreadEnvironmentCwd: () => Promise<string | undefined> };
+    vi.spyOn(internals, "resolveThreadEnvironmentCwd").mockImplementationOnce(async () => {
+      preparing.resolve();
+      return await ready.promise;
+    });
+    const request = { backend: "codex" as const, threadId: "sample-admission", input: [{ type: "text" as const, text: "Sample coding task" }] };
+    const starting = registry.startTurn(request);
+    let voice: Awaited<ReturnType<typeof registry.acquireNativeVoiceBackend>> | undefined;
+    try {
+      await preparing.promise;
+      voice = await registry.acquireNativeVoiceBackend(request.threadId);
+      expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      await expect(registry.startTurn(request)).rejects.toThrow("already active");
+      expect(codexClient.startTurnCallCount).toBe(0);
+      ready.resolve(undefined);
+      await starting;
+      expect(codexClient.startTurnCallCount).toBe(1);
+    } finally {
+      ready.resolve(undefined);
+      await starting;
+      voice?.release();
+      await registry.close();
+    }
+  });
+
+  it("prepares idle voice handoffs with current model, effort, workspace and environment", async () => {
+    const threadId = "sample-voice-settings";
+    const cwd = "/sample/project";
+    const runtime: CodexThreadEnvironmentRuntime = {
+      environmentId: "sample-environment", environmentName: "Sample environment", executionTarget: "local",
+      cwd, shellEnvironment: { SAMPLE_TOOLCHAIN: "enabled" },
+    };
+    const codexClient = voiceClient({
+      models: [{ id: "sample-model", label: "Sample model", supportsReasoning: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" }],
+      threads: [{ id: threadId, title: "Sample task", titleSource: "explicit", source: "codex", linkedDirectories: [{ id: "sample-directory", kind: "local", label: "Sample project", path: cwd }] }],
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      [`codex:${threadId}`]: { backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [], codexEnvironmentRuntime: runtime },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      await registry.setThreadModelSettings({ backend: "codex", threadId, model: "sample-model", reasoningEffort: "high" });
+      const voice = await registry.acquireNativeVoiceBackend(threadId);
+      expect(codexClient.refreshThreadTools).toHaveBeenCalledWith(expect.objectContaining({
+        threadId, model: "sample-model", reasoningEffort: "high", cwd: runtime.cwd,
+        codexEnvironmentRuntime: runtime, approvalPolicy: "on-request", sandbox: "workspace-write",
+      }));
+      voice.release();
+    } finally { await registry.close(); }
+  });
+
+  it("resumes idle voice threads with the existing PwrAgent catalog and inherits active coding threads", async () => {
+    const codexClient = Object.assign(new MockBackendClient({
+      threads: [], initializeResult: { userAgent: "codex/0.159.0-pwragent.1" },
+      serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+    }), {
+      startRealtime: vi.fn(async () => {}), stopRealtime: vi.fn(async () => {}), appendRealtimeText: vi.fn(async () => {}),
+      onRealtimeEvent: vi.fn(() => () => {}), onRealtimeDisconnect: vi.fn(() => () => {}),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      expect(await registry.nativeVoiceCapability()).toEqual({ available: true });
+      const idle = await registry.acquireNativeVoiceBackend("voice-fixture");
+      expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+      expect(codexClient.refreshThreadTools.mock.calls[0][0].threadId).toBe("voice-fixture");
+      const tools = JSON.stringify(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools);
+      expect(tools).toContain("send_message_to_thread");
+      expect(tools).toContain("get_thread");
+      idle.release();
+      idle.release();
+      await emitStartedTurn(registry, "codex", "voice-fixture", "coding-fixture");
+      const active = await registry.acquireNativeVoiceBackend("voice-fixture");
+      expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+      active.release();
+    } finally { await registry.close(); }
   });
 
   it("routes an activity detail read directly to one provider turn without reading ledgers or base history", async () => {
@@ -4797,6 +4891,46 @@ describe("DesktopBackendRegistry", () => {
       }) as { success: boolean; contentItems: Array<{ text: string }> };
       expect(result.success).toBe(true);
       expect(JSON.parse(result.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("loads a known working set eagerly for the Voice manager and messaging-bound threads", async () => {
+    let discovery = true;
+    const overlayStore = Object.assign(createOverlayStoreMock(), {
+      getVoiceManagerThread: () => ({ backend: "codex", threadId: "voice-manager" }),
+    });
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore,
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [{ id: "binding-bound", backend: "codex", threadId: "bound-thread" }],
+      }),
+      resolveCodexToolDiscovery: () => discovery,
+    });
+    const eagerNames = async (threadId: string) => {
+      await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Continue." }] });
+      await emitCompletedTurn(registry, "codex", threadId);
+      return pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools)
+        .filter((tool) => !(tool as { deferLoading?: boolean }).deferLoading)
+        .map((tool) => tool.name)
+        .sort();
+    };
+    try {
+      // The 2026-10-01 Voice manager turn had only tool_search eager and
+      // searched seven times before its first useful call.
+      expect(await eagerNames("voice-manager")).toEqual(["tool_search", ...VOICE_MANAGER_EAGER_TOOLS].sort());
+      expect(await eagerNames("bound-thread")).toEqual(["tool_search", ...MESSAGING_EAGER_TOOLS].sort());
+      expect(await eagerNames("thread-1")).toEqual(["tool_search"]);
+      // Without discovery nothing is deferred, so the sets change nothing.
+      discovery = false;
+      expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).length).toBeGreaterThan(0);
+      await registry.startTurn({ backend: "codex", threadId: "voice-manager", input: [{ type: "text", text: "Continue." }] });
+      expect(pwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools).some((tool) => tool.name === "tool_search")).toBe(false);
     } finally {
       await registry.close();
     }
@@ -16041,6 +16175,37 @@ script = "echo setup"
       );
       return { codexClient, events, fail, recoveryUpdates, registry };
     }
+
+    it("drains deferred recovery when the final voice lease is released", async () => {
+      const { codexClient, fail, recoveryUpdates, registry } = await startFailingThread({
+        initializeResult: { userAgent: "codex/0.159.0", methods: ["turn/start"] },
+        serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
+      });
+      Object.assign(codexClient, {
+        startRealtime: vi.fn(async () => {}), stopRealtime: vi.fn(async () => {}), appendRealtimeText: vi.fn(async () => {}),
+        onRealtimeEvent: vi.fn(() => () => {}), onRealtimeDisconnect: vi.fn(() => () => {}),
+      });
+      const first = await registry.acquireNativeVoiceBackend("sample-voice-first");
+      const last = await registry.acquireNativeVoiceBackend("sample-voice-last");
+      try {
+        await fail();
+        await waitForCondition(() => recoveryUpdates().some((update) => update.status === "waiting"));
+        first.release();
+        first.release();
+        await flushAsync();
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        last.release();
+        await waitForCondition(() => recoveryUpdates().some((update) => update.status === "succeeded"));
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+        expect(codexClient.startTurnCallCount).toBe(2);
+        await registry.startTurn({ backend: "codex", threadId: "sample-next-task", input: [{ type: "text", text: "Sample next task" }] });
+        expect(codexClient.startTurnCallCount).toBe(3);
+      } finally {
+        first.release();
+        last.release();
+        await registry.close();
+      }
+    });
 
     it("waits for another thread's live turn to end before repairing", async () => {
       const busyThreadId = "thread-busy-during-repair";

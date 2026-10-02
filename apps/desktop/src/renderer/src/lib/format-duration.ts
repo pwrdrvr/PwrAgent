@@ -40,3 +40,24 @@ export function formatRunningDurationMs(ms?: number): string {
   if (totalSeconds < 1) return "0s";
   return formatDurationMs(totalSeconds * 1_000);
 }
+
+/**
+ * A live clock: `45s`, `1m 06s`, `1h 2m 3s`. Seconds are padded under an
+ * hour so a ticking label keeps its width. The turn timer ("Working for")
+ * and the live voice session timer both read this.
+ */
+export function formatElapsedMs(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (totalMinutes > 0) {
+    return `${totalMinutes}m ${seconds.toString().padStart(2, "0")}s`;
+  }
+  return `${seconds}s`;
+}

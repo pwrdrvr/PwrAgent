@@ -382,13 +382,26 @@ not verified measurements.
 
 In-thread agents get a `federation` tool catalog (`list_federation_instances`,
 `list_instance_projects`, `create_instance_thread`,
-`search_federation_threads`, `push_instance_file`) that composes the same capability-gated RPCs the
+`search_federation_threads`, `list_attention_threads`, `push_instance_file`) that composes the same capability-gated RPCs the
 UI uses; agent-originated cross-instance control is authorized exactly like
 operator-originated control, with enrollment as the trust boundary. Instances
 describe themselves to peers with the Settings → Federation "Instance name"
 and "Purpose notes" fields, so agents can route work by what each machine is
 for. Operators can steer routing and thread-startup defaults with
 [`~/.pwragent/AGENTS.md`](agent-operator-preferences.md).
+
+`list_attention_threads` reads the Attention lens from each owner, this
+instance and every connected peer with `thread_navigation`, the same query the
+sidebar makes. Each row says whether a turn is running, the thread is unread,
+or it waits on the operator. A peer that fails is listed under `failures` and
+does not fail the call.
+
+`list_instance_projects` also lists the instance's available backends with
+their exact model IDs and default model, read with the same `listBackends`
+call the composer's model picker uses. An agent asked for "Grok 4.7" can then
+pass `backend` and `model` to `create_instance_thread` without guessing. If
+the instance cannot list its backends, the projects still return and
+`backendsError` says why.
 
 The general `send_message_to_thread` tool also routes transparently across
 federation. Remote create and search results carry cross-instance links and an
