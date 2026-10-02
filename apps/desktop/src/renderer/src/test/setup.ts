@@ -1,4 +1,12 @@
-import { act, fireEvent } from "@testing-library/react";
+import { act, configure, fireEvent } from "@testing-library/react";
+
+/**
+ * A durable notice card is drawn over hidden copies of its kind's other
+ * notices, which only lend it their size (AppNoticeStack.tsx). They are
+ * aria-hidden, so role queries already skip them; text queries would find
+ * every page of the card at once.
+ */
+configure({ defaultIgnore: "script, style, .app-notice-toast--sizer *" });
 
 /**
  * jsdom implements `getClientRects` on Element but not on Range, and

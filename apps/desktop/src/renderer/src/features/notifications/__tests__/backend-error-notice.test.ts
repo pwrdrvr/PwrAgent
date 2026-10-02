@@ -137,6 +137,7 @@ describe("resolveBackendErrorNotice", () => {
     expect(repairing).toEqual({
       autoDismiss: false,
       detail: "Fix the flaky test",
+      dismissGroup: { key: "agent-error", label: "agent error notices" },
       id: "codex-invalid-id-recovery:codex:thread-1:turn-9",
       message: invalidIdFailure,
       status: {
@@ -217,6 +218,7 @@ describe("resolveBackendErrorNotice", () => {
     );
     expect(notice).toEqual({
       autoDismiss: false,
+      dismissGroup: { key: "agent-error", label: "agent error notices" },
       id: "turn-failed:codex:thread-1:turn-9",
       title: "Turn failed",
       message: "stream disconnected before completion",

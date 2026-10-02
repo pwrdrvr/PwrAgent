@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNoticeStack } from "../AppNoticeStack";
@@ -65,23 +66,23 @@ function DurableHarness(props: { initial: AppNoticeToastNotice[] }) {
 }
 
 const SHORT_THEN_TALL: AppNoticeToastNotice[] = [
-  { id: "short", title: "Short", message: "One line.", autoDismiss: false },
+  { id: "peer:short", title: "Short", message: "One line.", autoDismiss: false },
   {
-    id: "tall",
+    id: "peer:tall",
     title: "Tall",
     message: "A message long enough to wrap onto several lines of the card.",
     detail: "And a detail line under it.",
     autoDismiss: false,
   },
-  { id: "last", title: "Last", message: "Done.", autoDismiss: false },
+  { id: "peer:last", title: "Last", message: "Done.", autoDismiss: false },
 ];
 
 describe("AppNoticeStack", () => {
   it("navigates durable notices in order and dismisses each one independently", async () => {
     const initial: AppNoticeToastNotice[] = [
-      { id: "first", title: "First", message: "One", autoDismiss: false },
-      { id: "second", title: "Second", message: "Two", autoDismiss: false },
-      { id: "third", title: "Third", message: "Three", autoDismiss: false },
+      { id: "test:first", title: "First", message: "One", autoDismiss: false },
+      { id: "test:second", title: "Second", message: "Two", autoDismiss: false },
+      { id: "test:third", title: "Third", message: "Three", autoDismiss: false },
     ];
 
     function Harness() {
@@ -118,11 +119,9 @@ describe("AppNoticeStack", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(await screen.findByText("Third")).toBeInTheDocument();
-    expect(screen.getByText("1 of 1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Previous notice" }))
-      .toBeDisabled();
-    expect(screen.getByRole("button", { name: "Next notice" }))
-      .toBeDisabled();
+    // One notice left: nothing to page.
+    expect(screen.queryByRole("navigation", { name: "Durable notices" }))
+      .not.toBeInTheDocument();
   });
 
   it("dismisses every notice in the active notice group", async () => {
@@ -172,7 +171,6 @@ describe("AppNoticeStack", () => {
     }));
 
     expect(await screen.findByText("Turn failed")).toBeInTheDocument();
-    expect(screen.getByText("1 of 1")).toBeInTheDocument();
     expect(screen.queryByText("Cost A")).not.toBeInTheDocument();
     expect(screen.queryByText("Cost B")).not.toBeInTheDocument();
   });
@@ -227,7 +225,71 @@ describe("AppNoticeStack", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(await screen.findByText("Peer A spend")).toBeInTheDocument();
-    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+    expect(screen.queryByText("Peer B spend")).not.toBeInTheDocument();
+  });
+
+  it("gives each kind of notice its own card, pager and Dismiss all", async () => {
+    const { container } = render(
+      <DurableHarness
+        initial={[
+          { id: "peer-down:a", title: "Mac is shutting down", message: "A", autoDismiss: false },
+          { id: "cpu:1", title: "Hot CPU profile", message: "B", autoDismiss: false },
+          { id: "peer-down:b", title: "Mini is shutting down", message: "C", autoDismiss: false },
+          { id: "peer-down:c", title: "Studio is shutting down", message: "D", autoDismiss: false },
+        ]}
+      />,
+    );
+
+    // In order of each kind's first notice, so nothing jumps as one arrives.
+    const cards = () => Array.from(
+      container.querySelectorAll<HTMLElement>(".app-notice-toast:not(.app-notice-toast--sizer)"),
+    );
+    expect(cards().map((card) => card.dataset.noticeId)).toEqual([
+      "peer-down:a",
+      "cpu:1",
+    ]);
+    const [peers, cpu] = cards();
+    expect(within(peers!).getByText("1 of 3")).toBeInTheDocument();
+    // A kind of one has nothing to page or to dismiss all of.
+    expect(within(cpu!).queryByRole("navigation")).not.toBeInTheDocument();
+    expect(within(cpu!).queryByRole("button", { name: /^Dismiss all/ }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(within(peers!).getByRole("button", { name: "Next notice" }));
+    expect(within(peers!).getByText("Mini is shutting down")).toBeInTheDocument();
+    expect(within(cpu!).getByText("Hot CPU profile")).toBeInTheDocument();
+
+    fireEvent.click(within(peers!).getByRole("button", {
+      name: "Dismiss all notices like this",
+    }));
+    expect(cards().map((card) => card.dataset.noticeId)).toEqual(["cpu:1"]);
+  });
+
+  it("lays the kind's other notices out hidden in the card's grid cell", () => {
+    const { container } = render(<DurableHarness initial={SHORT_THEN_TALL} />);
+    const kind = container.querySelector(".app-notice-kind")!;
+    const sizers = Array.from(kind.querySelectorAll(".app-notice-toast--sizer"));
+
+    // Every notice the card can page to lends it its size; the one it shows
+    // is the card itself.
+    expect(sizers.map((sizer) => sizer.querySelector(".app-notice-toast__title")?.textContent))
+      .toEqual(["Tall", "Last"]);
+    for (const sizer of sizers) {
+      expect(sizer).toHaveAttribute("aria-hidden", "true");
+      expect(sizer).toHaveAttribute("inert");
+      expect(sizer).not.toHaveAttribute("role");
+      expect(sizer).not.toHaveAttribute("data-notice-id");
+      // With the card's own pager and Dismiss all, which take up room too.
+      expect(sizer.querySelector(".app-notice-toast__footer")).not.toBeNull();
+      expect(sizer.querySelector(".app-notice-toast__dismiss-all")).not.toBeNull();
+    }
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
+    expect(
+      Array.from(kind.querySelectorAll(".app-notice-toast--sizer .app-notice-toast__title"))
+        .map((title) => title.textContent),
+    ).toEqual(["Short", "Last"]);
   });
 
   it("never shrinks the card below the closed notice while the pointer stays on the stack", () => {
