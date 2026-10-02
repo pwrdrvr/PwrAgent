@@ -125,7 +125,7 @@ import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
-import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
@@ -51309,6 +51309,7 @@ script = "printf setup"
   });
 
   it("does not report a cleanup failure when an archived thread has no linked worktrees", async () => {
+    mainLoggerMock.warn.mockClear();
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive local thread",
@@ -51338,8 +51339,84 @@ script = "printf setup"
 
     expect(archiveWorktree).not.toHaveBeenCalled();
     expect(response.cleanup).toEqual([]);
+    expect(mainLoggerMock.warn).not.toHaveBeenCalledWith(
+      "archive thread worktree cleanup skipped: no worktree candidates",
+      expect.anything(),
+    );
 
     await registry.close();
+  });
+
+  it.each([true, false])("only treats a missing cleanup target as a quiet skip (target missing: %s)", async (targetMissing) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-archive-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const worktreePath = path.join(root, "worktree");
+    const repositoryPath = path.join(root, "missing-repository");
+    if (!targetMissing) {
+      await mkdir(worktreePath);
+    }
+    const thread: AppServerThreadSummary = {
+      id: "thread-missing-worktree",
+      title: "Archive old thread",
+      titleSource: "explicit",
+      source: "codex",
+      updatedAt: 2,
+      linkedDirectories: [{
+        id: "worktree-directory",
+        kind: "worktree",
+        label: "Old worktree",
+        path: repositoryPath,
+        worktreePath,
+      }],
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const upsertSnapshot = vi.spyOn(overlayStore, "upsertWorktreeSnapshot");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      worktreeArchiveService: new WorktreeArchiveService(),
+    });
+    onTestFinished(() => registry.close());
+    mainLoggerMock.warn.mockClear();
+    mainLoggerMock.info.mockClear();
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: thread.id,
+    });
+
+    expect(codexClient.lastArchiveThreadParams).toEqual({ threadId: thread.id });
+    expect(upsertSnapshot).not.toHaveBeenCalled();
+    if (targetMissing) {
+      expect(response.cleanup).toEqual([{
+        worktreePath,
+        branch: undefined,
+        removedWorktree: false,
+        deletedBranch: false,
+        skippedReason: "Worktree directory no longer exists.",
+      }]);
+      expect(mainLoggerMock.warn).not.toHaveBeenCalledWith(
+        "archive thread worktree cleanup failed",
+        expect.anything(),
+      );
+    } else {
+      expect(response.cleanup).toEqual([expect.objectContaining({
+        worktreePath,
+        removedWorktree: false,
+        error: expect.stringContaining("ENOENT"),
+      })]);
+      expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+        "archive thread worktree cleanup failed",
+        expect.objectContaining({ worktreePath, error: expect.stringContaining("ENOENT") }),
+      );
+    }
+    expect(mainLoggerMock.info.mock.calls.some(([event]) =>
+      String(event).startsWith("archive thread worktree cleanup"),
+    )).toBe(false);
   });
 
   it("restores archived thread worktrees from retained snapshots", async () => {

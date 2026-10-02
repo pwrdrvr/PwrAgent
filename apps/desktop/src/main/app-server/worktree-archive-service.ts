@@ -54,6 +54,13 @@ type WorktreeArchiveServiceOptions = {
   gitEnv?: NodeJS.ProcessEnv;
 };
 
+export class MissingArchiveWorktreeError extends Error {
+  constructor(worktreePath: string) {
+    super(`Worktree directory no longer exists: ${worktreePath}`);
+    this.name = "MissingArchiveWorktreeError";
+  }
+}
+
 async function runGit(
   cwd: string,
   args: string[],
@@ -151,7 +158,17 @@ export class WorktreeArchiveService {
   }
 
   async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
-    const worktreePath = await realpath(path.resolve(params.worktreePath));
+    let worktreePath: string;
+    try {
+      worktreePath = await realpath(path.resolve(params.worktreePath));
+    } catch (error) {
+      // Only a missing target before snapshot preparation is a routine skip.
+      // Missing repository paths and later filesystem failures remain errors.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new MissingArchiveWorktreeError(params.worktreePath);
+      }
+      throw error;
+    }
     const worktreeListPath = params.repositoryPath
       ? await realpath(path.resolve(params.repositoryPath))
       : worktreePath;

@@ -612,7 +612,7 @@ import {
   type AcpAvailableCommandsStoreLike,
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
-import { WorktreeArchiveService } from "./worktree-archive-service";
+import { MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
 import { ThreadArchiveSweeper, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import {
@@ -31190,7 +31190,7 @@ export class DesktopBackendRegistry {
     ];
 
     if (uniqueCandidates.length === 0) {
-      backendRegistryLog.warn("archive thread worktree cleanup skipped: no worktree candidates", {
+      backendRegistryLog.debug("archive thread worktree cleanup skipped: no worktree candidates", {
         backend: params.backend,
         threadId: params.thread.id,
         linkedDirectoryCount: params.thread.linkedDirectories.length,
@@ -31222,7 +31222,7 @@ export class DesktopBackendRegistry {
               activeThreadIds.length === 1
                 ? `Worktree is still used by another active thread: ${activeThreadIds[0]}.`
                 : `Worktree is still used by other active threads: ${activeThreadIds.join(", ")}.`;
-            backendRegistryLog.info("archive thread worktree cleanup skipped: shared worktree", {
+            backendRegistryLog.debug("archive thread worktree cleanup skipped: shared worktree", {
               backend: params.backend,
               threadId: params.thread.id,
               activeThreadIds,
@@ -31238,17 +31238,17 @@ export class DesktopBackendRegistry {
             };
           }
 
-          backendRegistryLog.info("archive thread worktree cleanup removing worktree", {
-            backend: params.backend,
-            threadId: params.thread.id,
-            repositoryPath: candidate.repositoryPath,
-            worktreePath: candidate.worktreePath,
-          });
           const snapshot = await this.worktreeArchiveService.archive({
             backend: params.backend,
             threadId: params.thread.id,
             worktreePath: candidate.worktreePath,
             repositoryPath: candidate.repositoryPath,
+          });
+          backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
+            backend: params.backend,
+            threadId: params.thread.id,
+            repositoryPath: snapshot.repositoryPath,
+            worktreePath: snapshot.worktreePath,
           });
           await this.overlayStore.upsertWorktreeSnapshot({
             backend: params.backend,
@@ -31313,6 +31313,21 @@ export class DesktopBackendRegistry {
             deletedBranch: false,
           };
         } catch (error) {
+          if (error instanceof MissingArchiveWorktreeError) {
+            backendRegistryLog.debug("archive thread worktree cleanup skipped: missing worktree", {
+              backend: params.backend,
+              threadId: params.thread.id,
+              repositoryPath: candidate.repositoryPath,
+              worktreePath: candidate.worktreePath,
+            });
+            return {
+              worktreePath: candidate.worktreePath,
+              branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+              removedWorktree: false,
+              deletedBranch: false,
+              skippedReason: "Worktree directory no longer exists.",
+            };
+          }
           backendRegistryLog.warn("archive thread worktree cleanup failed", {
             backend: params.backend,
             threadId: params.thread.id,
