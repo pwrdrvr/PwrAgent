@@ -8570,6 +8570,32 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("summarizes input to a worker in the live summary's words", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-agent-input", {
+      thread: {
+        turns: [{
+          id: "turn-input",
+          status: "completed",
+          items: [
+            { type: "subAgentActivity", id: "input-review", kind: "interacted",
+              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const replay = await client.readThread({ threadId: "thread-agent-input" });
+      // The live summary of the same group; see live-transcript-activity.
+      expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
+        summary: "Sent input to 1 agent",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("keeps a row per worker when parallel workers share a UUIDv7 prefix", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     // UUIDv7 leads with a millisecond timestamp, so workers started together

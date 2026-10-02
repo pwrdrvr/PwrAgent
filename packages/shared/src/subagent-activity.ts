@@ -261,13 +261,15 @@ export function isSubAgentActivityDetail(
 /**
  * The activity summary's words for worker reports ("Started 3 agents",
  * "3 finished"). Live and replayed summaries both use them, so the header does
- * not change its wording when the turn is read back. Input is not counted:
- * it is message delivery, and its rows say so.
+ * not change its wording when the turn is read back. Input is counted too:
+ * a group that holds only input would otherwise have no words, and each side
+ * falls back to its own different text.
  */
 export function subAgentActivitySummaryParts(
   details: AppServerThreadActivityDetail[],
 ): string[] {
   let started = 0;
+  let messaged = 0;
   let finished = 0;
   let interrupted = 0;
   for (const detail of details) {
@@ -277,6 +279,9 @@ export function subAgentActivitySummaryParts(
     switch (detail.command?.subAgent?.operation) {
       case "spawn":
         started += 1;
+        break;
+      case "send_input":
+        messaged += 1;
         break;
       case "complete":
         finished += 1;
@@ -290,6 +295,7 @@ export function subAgentActivitySummaryParts(
   }
   return [
     started > 0 ? `Started ${started} agent${started === 1 ? "" : "s"}` : undefined,
+    messaged > 0 ? `Sent input to ${messaged} agent${messaged === 1 ? "" : "s"}` : undefined,
     finished > 0 ? `${finished} finished` : undefined,
     interrupted > 0 ? `${interrupted} interrupted` : undefined,
   ].filter((part): part is string => Boolean(part));

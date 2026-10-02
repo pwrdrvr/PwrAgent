@@ -302,7 +302,7 @@ describe("buildLiveToolDetails", () => {
     expect(summarizeLiveActivity(details)).toBe("Started 3 agents · 3 finished");
   });
 
-  it("leaves input to a worker out of the live summary", () => {
+  it("counts input to a worker in the live summary, as replay does", () => {
     const details = [
       ...buildLiveToolDetails({
         type: "subAgentActivity", id: "started-review", kind: "started",
@@ -318,8 +318,11 @@ describe("buildLiveToolDetails", () => {
       "Started review_savers",
       "Sent input to review_savers",
     ]);
-    // Input is message delivery; it is not counted as a tool or a worker.
-    expect(summarizeLiveActivity(details)).toBe("Started 1 agent");
+    // Input is message delivery, so it is not counted as a tool.
+    expect(summarizeLiveActivity(details)).toBe("Started 1 agent · Sent input to 1 agent");
+    // A group of input alone still has words; the replay summarizer gives the
+    // same ones.
+    expect(summarizeLiveActivity(details.slice(1))).toBe("Sent input to 1 agent");
   });
 
   it("surfaces dynamic tool result images without adding their base64 to the label", () => {
