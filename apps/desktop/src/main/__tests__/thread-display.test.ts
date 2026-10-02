@@ -307,6 +307,7 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
   }));
   // The owner deliberately keeps these live helpers in memory, not the overlay.
   const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
+    automaticArchiveReservations: new Map(),
     overlayStore: {
       getThreadOverlayState: async () => ({ subAgents: [] }),
       readThreadPricing: async () => data.pricing,
