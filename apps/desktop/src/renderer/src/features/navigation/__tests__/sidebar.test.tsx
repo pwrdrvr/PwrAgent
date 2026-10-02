@@ -6154,13 +6154,20 @@ describe("Sidebar", () => {
     );
   });
 
-  it("stops keeping a pin dropped after the pins when every pin is kept", async () => {
+  it.each(["local", "mounted remote"] as const)("stops keeping a %s pin dropped after the pins when every pin is kept", async (owner) => {
     const onReorderThreadPins = vi.fn(async () => undefined);
-    const keptFirst = {
+    const keptFirst: NavigationThreadSummary = {
       ...sharedThread,
       id: "thread-kept-first",
       title: "Release manager",
       pinnedRank: String(-(2 ** 40)),
+      ...(owner === "mounted remote" ? {
+        linkedDirectories: [{ id: "owner-repo", label: "PwrAgent", path: "/owner/github/PwrAgent", kind: "local" as const }],
+        federation: {
+          ref: { backend: "codex" as const, target: { scope: "remote" as const, instanceId: "peer" }, threadId: "thread-kept-first" },
+          instanceLabel: "Peer",
+        },
+      } : {}),
     };
     const keptSecond = {
       ...sharedThread,
@@ -6184,7 +6191,7 @@ describe("Sidebar", () => {
             ...directories[0]!,
             ...{
               threadKeys: [
-                "codex:thread-kept-first",
+                threadSummaryIdentityKey(keptFirst),
                 "codex:thread-kept-second",
                 "codex:thread-unpinned",
               ],
@@ -6194,7 +6201,7 @@ describe("Sidebar", () => {
         inboxThreads={[keptFirst, keptSecond, unpinned]}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey="codex:thread-kept-first"
+        selectedItemKey={threadSummaryIdentityKey(keptFirst)}
         threads={[keptFirst, keptSecond, unpinned]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -6234,13 +6241,13 @@ describe("Sidebar", () => {
     releaseThreadPinPointer({ x: 50, y: 165 });
     await waitFor(() => {
       expect(onReorderThreadPins).toHaveBeenCalledWith([], {
-        key: "codex:thread-kept-first",
+        key: threadSummaryIdentityKey(keptFirst),
         keepAtTop: false,
       });
     });
   });
 
-  it("opens a ghost Keep at top slot above the pins while the lane is empty", async () => {
+  it.each(["local", "mounted remote"] as const)("opens a ghost Keep at top slot for a %s pin while the lane is empty", async (owner) => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const first = {
       ...sharedThread,
@@ -6248,11 +6255,18 @@ describe("Sidebar", () => {
       title: "Fresh pin",
       pinnedRank: "1024",
     };
-    const second = {
+    const second: NavigationThreadSummary = {
       ...sharedThread,
       id: "thread-second",
       title: "Release manager",
       pinnedRank: "2048",
+      ...(owner === "mounted remote" ? {
+        linkedDirectories: [{ id: "owner-repo", label: "PwrAgent", path: "/owner/github/PwrAgent", kind: "local" as const }],
+        federation: {
+          ref: { backend: "codex" as const, target: { scope: "remote" as const, instanceId: "peer" }, threadId: "thread-second" },
+          instanceLabel: "Peer",
+        },
+      } : {}),
     };
 
     const { container } = render(
@@ -6262,7 +6276,7 @@ describe("Sidebar", () => {
         directories={[
           {
             ...directories[0]!,
-            ...{ threadKeys: ["codex:thread-first", "codex:thread-second"] },
+            ...{ threadKeys: [threadSummaryIdentityKey(first), threadSummaryIdentityKey(second)] },
           },
         ]}
         inboxThreads={[first, second]}
@@ -6321,7 +6335,7 @@ describe("Sidebar", () => {
     releaseThreadPinPointer({ x: 50, y: 55 });
     await waitFor(() => {
       expect(onReorderThreadPins).toHaveBeenCalledWith([], {
-        key: "codex:thread-second",
+        key: threadSummaryIdentityKey(second),
         keepAtTop: true,
       });
     });
