@@ -303,7 +303,7 @@ const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 type CodexClientOptions = {
   authenticationRecovery?: boolean;
-  /** The profile's Settings → Default Models choices, read per helper turn. */
+  /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
   command?: string;
   args?: string[];
@@ -9272,7 +9272,7 @@ export class CodexAppServerClient {
   }
 
   /**
-   * The model and effort one helper turn runs, by the shared Default Models
+   * The model and effort one helper turn runs, by the shared helper model
    * rule. Reuses the catalog from the last `model/list`, so a title, diff, or
    * tool-output summary never fetches a list of its own; the catalog is read
    * once only while nothing has been listed yet. Refresh updates it.
@@ -9909,7 +9909,7 @@ export class CodexAppServerClient {
    * generation path; the output record is identified by `isMatch`.
    */
   async generateStructuredObject(params: {
-    /** Which Default Models row picks the model. */
+    /** Which helper is running, for its per-helper override and effort. */
     helper: HelperModelId;
     /** Overrides the row for this call only, when Codex offers it. */
     model?: string;

@@ -24284,7 +24284,7 @@ export class DesktopBackendRegistry {
 
   /**
    * One-shot structured generation as an ephemeral Codex helper turn. The
-   * helper's Default Models row picks the model, and that model is a Codex
+   * Helper model setting picks the model, and that model is a Codex
    * model, so this runs on Codex whenever Codex is available regardless of
    * the launchpad default; otherwise it returns "unavailable".
    */
@@ -37883,7 +37883,7 @@ export class DesktopBackendRegistry {
       );
     }
     // The agent's requested model wins when Codex offers it; otherwise the
-    // Task monitors row in Settings → Default Models decides.
+    // Helper model setting decides.
     const selection = resolveHelperModel({
       helper: "task_monitors",
       settings: this.resolveHelperModelSettingsFn(),

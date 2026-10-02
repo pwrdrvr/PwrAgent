@@ -3,7 +3,8 @@ import type { BackendModelOption } from "./contracts/backend";
 /**
  * Model turns PwrAgent starts on the operator's behalf. Each one resolves its
  * model through `resolveHelperModel`, never through a constant at the call
- * site, so Settings → AI Providers → Default Models can name what will run.
+ * site, so the Helper model row on Settings → AI Providers can name what
+ * will run.
  *
  * Ids are persisted in the profile `config.toml`; never rename one.
  */
@@ -22,118 +23,73 @@ export const HELPER_MODEL_IDS = [
 
 export type HelperModelId = (typeof HELPER_MODEL_IDS)[number];
 
-export type HelperModelGroup =
-  | "threads"
-  | "token_miser"
-  | "tools"
-  | "federation";
-
 export type HelperModelDefinition = {
   id: HelperModelId;
-  group: HelperModelGroup;
   label: string;
-  description: string;
-  /** Effort used when neither the row nor the request names one. */
+  /** Effort used when neither a setting nor the request names one. */
   defaultReasoningEffort: string;
-  /** Backends whose models the row may choose. The first is the default. */
+  /** Backends whose models the helper may run. The first is the default. */
   backends: readonly string[];
 };
-
-export const HELPER_MODEL_GROUPS: readonly {
-  id: HelperModelGroup;
-  eyebrow: string;
-  title: string;
-  description?: string;
-}[] = [
-  { id: "threads", eyebrow: "Threads", title: "Thread helpers" },
-  {
-    id: "token_miser",
-    eyebrow: "Token Miser",
-    title: "Tool output",
-    description: "Runs on Codex. Turn these on or off in Experimental.",
-  },
-  { id: "tools", eyebrow: "Tools", title: "Tool helpers" },
-  { id: "federation", eyebrow: "Federation", title: "Gateway helpers" },
-];
 
 export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
   {
     id: "thread_titles",
-    group: "threads",
     label: "Thread titles",
-    description: "Names a thread after its first turn.",
     defaultReasoningEffort: "low",
     backends: ["codex"],
   },
   {
     id: "task_monitors",
-    group: "threads",
     label: "Task monitors",
-    description: "Watches a long-running job the agent hands off.",
     defaultReasoningEffort: "medium",
     backends: ["codex"],
   },
   {
     id: "token_miser_evaluation",
-    group: "token_miser",
     label: "Output evaluation",
-    description: "Decides whether a large tool result is condensed.",
     defaultReasoningEffort: "medium",
     backends: ["codex"],
   },
   {
     id: "token_miser_focused_summaries",
-    group: "token_miser",
     label: "Focused summaries",
-    description: "Writes the summary the agent reads in place of the full output.",
     defaultReasoningEffort: "medium",
     backends: ["codex"],
   },
   {
     id: "token_miser_polling_reviews",
-    group: "token_miser",
     label: "Polling reviews",
-    description: "Suggests a monitor job when the agent keeps polling.",
     defaultReasoningEffort: "medium",
     backends: ["codex"],
   },
   {
     id: "diff_condensation",
-    group: "tools",
     label: "Diff condensation",
-    description: "Groups a large diff into focused changes.",
     defaultReasoningEffort: "low",
     backends: ["codex"],
   },
   {
     id: "automation_prompts",
-    group: "tools",
     label: "Automation prompts",
-    description: "Drafts the prompt from your description of an automation.",
     defaultReasoningEffort: "low",
     backends: ["codex"],
   },
   {
     id: "star_map_intake",
-    group: "tools",
     label: "Star Map intake",
-    description: "Picks a directory and starts the [+] intake agent.",
     defaultReasoningEffort: "low",
     backends: ["codex"],
   },
   {
     id: "usage_analysis",
-    group: "tools",
     label: "Usage analysis",
-    description: "Default for Analyze in Usage Activity. Each run can still pick.",
     defaultReasoningEffort: "low",
     backends: ["codex", "acp:grok"],
   },
   {
     id: "federation_instance_names",
-    group: "federation",
     label: "Instance names",
-    description: "Gives each gateway machine a short name.",
     defaultReasoningEffort: "low",
     backends: ["codex"],
   },
@@ -160,11 +116,18 @@ export type DesktopHelperModelChoice = {
 };
 
 export type DesktopHelperModelSettings = {
-  /** Codex model every helper left on Helper default uses. Absent = Automatic. */
+  /** Codex model every helper runs unless its own row names one. Absent = Automatic. */
   defaultModel?: string;
   /**
-   * Per-helper choices keyed by helper id. Ids this build does not know are
-   * kept, so saving from an older build does not drop a newer build's rows.
+   * Effort every Codex helper runs unless its own row names one. Absent =
+   * each helper's built-in effort.
+   */
+  defaultReasoningEffort?: string;
+  /**
+   * Per-helper choices keyed by helper id. Only a hand edit of `config.toml`
+   * creates one; Settings lists them and can clear them. Ids this build does
+   * not know are kept, so saving from an older build does not drop a newer
+   * build's rows.
    */
   helpers: Record<string, DesktopHelperModelChoice>;
 };
@@ -185,7 +148,7 @@ export type HelperModelResolution = {
   verified: boolean;
   /** The helper's saved model, when the catalog does not offer it. */
   unavailableHelperModel?: string;
-  /** The saved Helper default, when the catalog does not offer it. */
+  /** The saved Helper model, when the catalog does not offer it. */
   unavailableDefaultModel?: string;
 };
 
@@ -217,12 +180,12 @@ export function helperChoiceBackend(
 
 /**
  * The one rule every helper call site uses to pick its model:
- * request → helper row → Helper default → Automatic → the backend's current
+ * request → helper row → Helper model → Automatic → the backend's current
  * model, then its first. A rung whose model the catalog does not offer is skipped, so a saved
  * choice never fails the helper; the resolution reports what was skipped.
  *
- * Helper default and Automatic name Codex models, so they apply only when
- * `backend` is Codex. An empty catalog that was never read returns the first
+ * The Helper model, its effort, and Automatic name Codex models, so they
+ * apply only when `backend` is Codex. An empty catalog that was never read returns the first
  * configured rung unverified rather than guessing it away; one that was read
  * and offered nothing returns no model, so no helper invents one.
  */
@@ -245,6 +208,9 @@ export function resolveHelperModel(params: {
       : undefined;
   const isCodex = backend === HELPER_MODEL_DEFAULT_BACKEND;
   const defaultModel = isCodex ? trimmed(params.settings?.defaultModel) : undefined;
+  const defaultEffort = isCodex
+    ? trimmed(params.settings?.defaultReasoningEffort)
+    : undefined;
   const candidates: { model: string; source: HelperModelSource }[] = [];
   const requestedModel = trimmed(params.requestedModel);
   if (requestedModel) candidates.push({ model: requestedModel, source: "requested" });
@@ -259,6 +225,7 @@ export function resolveHelperModel(params: {
   const efforts = [
     trimmed(params.requestedReasoningEffort),
     trimmed(choice?.reasoningEffort),
+    defaultEffort,
     definition.defaultReasoningEffort,
   ];
 

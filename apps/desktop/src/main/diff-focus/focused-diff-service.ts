@@ -172,7 +172,7 @@ export class FocusedDiffService {
     filePath: string | undefined,
     hunks: FocusedDiffHunkSummary[]
   ): Promise<EphemeralObjectResult> {
-    // Diff condensation is deliberately Codex-only: its Default Models row
+    // Diff condensation is deliberately Codex-only: the Helper model setting
     // names a Codex model even when an ACP provider is the launchpad default.
     // An unavailable Codex backend returns the full-diff fallback below.
     const result = await this.objectCaller.generateObject({
