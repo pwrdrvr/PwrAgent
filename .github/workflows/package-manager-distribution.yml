@@ -163,9 +163,30 @@ jobs:
           path: distribution
       - name: Install Microsoft's WinGet client
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
-          Repair-WinGetPackageManager -AllUsers -Latest
+          $ErrorActionPreference = "Stop"
+          # Install complete release packages rather than registering the runner's
+          # provisioned App Installer stub, which can lack its x64 application.
+          $release = gh api repos/microsoft/winget-cli/releases/latest | ConvertFrom-Json
+          if ($LASTEXITCODE -or $release.prerelease -or $release.draft) { throw "Could not resolve stable WinGet release" }
+          $bundleName = "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+          $dependenciesName = "DesktopAppInstaller_Dependencies.zip"
+          foreach ($name in @($bundleName, $dependenciesName)) {
+            $assets = @($release.assets | Where-Object name -eq $name)
+            if ($assets.Count -ne 1 -or $assets[0].digest -notmatch '^sha256:[a-f0-9]{64}$') { throw "Missing WinGet asset or digest: $name" }
+            $asset = $assets[0]
+            $path = Join-Path $env:RUNNER_TEMP $name
+            Invoke-WebRequest $asset.browser_download_url -OutFile $path
+            if ((Get-Item $path).Length -ne $asset.size -or (Get-FileHash $path -Algorithm SHA256).Hash -ne $asset.digest.Substring(7)) { throw "WinGet asset verification failed: $name" }
+          }
+          $dependenciesDir = Join-Path $env:RUNNER_TEMP "winget-dependencies"
+          Expand-Archive (Join-Path $env:RUNNER_TEMP $dependenciesName) -DestinationPath $dependenciesDir
+          $dependencies = @(Get-ChildItem "$dependenciesDir/x64" -File | Where-Object Extension -in @(".appx", ".msix") | ForEach-Object FullName)
+          if ($dependencies.Count -eq 0) { throw "WinGet release has no x64 dependencies" }
+          Add-AppxPackage -Path (Join-Path $env:RUNNER_TEMP $bundleName) -DependencyPath $dependencies -ForceApplicationShutdown
+          Write-Output "Installed official WinGet release $($release.tag_name)"
           Add-Content $env:GITHUB_PATH "$env:LOCALAPPDATA\Microsoft\WindowsApps"
       - name: Validate signed installer, fresh user/machine installs and upgrade
         shell: pwsh
