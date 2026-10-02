@@ -106,6 +106,7 @@ import type {
   CodexServerCapabilities,
 } from "../codex-app-server/client";
 import { CodexAppServerClient } from "../codex-app-server/client";
+import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import { managedCodexRoot } from "../codex-build-channel";
@@ -2699,6 +2700,9 @@ function createKimiAcpRegistry(options?: {
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
   worktreeArchiveService?: WorktreeArchiveService;
+  mcpConnectionService?: NonNullable<
+    ConstructorParameters<typeof DesktopBackendRegistry>[0]
+  >["mcpConnectionService"];
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   threadTitleGenerationService?: NonNullable<
     ConstructorParameters<typeof DesktopBackendRegistry>[0]
@@ -2822,6 +2826,7 @@ function createKimiAcpRegistry(options?: {
     gitWorkspaceHandoffService:
       options?.gitWorkspaceHandoffService as never,
     worktreeArchiveService: options?.worktreeArchiveService,
+    mcpConnectionService: options?.mcpConnectionService,
     acpWorktreeRepositoryResolver: options?.acpWorktreeRepositoryResolver,
     ...(options?.threadTitleGenerationService
       ? { threadTitleGenerationService: options.threadTitleGenerationService }
@@ -19654,6 +19659,166 @@ command = "pnpm grok"
       }, options)).launchpad;
       return { ensure, listConnections, registry };
     }
+
+    function threadRegistry() {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        threads: [{
+          id: "parent-thread",
+          title: "Parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1,
+        }],
+      });
+      const overlayStore = createOverlayStoreMock();
+      const listConnections = vi.fn(async () => [
+        mcpConnection({ id: "datadog" }),
+        mcpConnection({ id: "rovo" }),
+        mcpConnection({ id: "optional", selectForNewThreads: false }),
+        mcpConnection({ id: "parked", enabled: false }),
+        mcpConnection({ id: "unconfigured", configured: false }),
+        mcpConnection({ id: "disconnected", state: "disconnected" }),
+        mcpConnection({ id: "expired", state: "reauthorization_required" }),
+      ]);
+      const bindThread = vi.fn();
+      const registerBridge = vi.fn(async (connectionId: string) => ({
+        server: { name: connectionId, command: "/fixture/mcp-bridge", args: [], env: {} },
+        bindThread,
+        revoke: vi.fn(),
+      }));
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+        mcpConnectionService: { registerBridge, listConnections },
+        createScratchProjectDirectory: async () => "/tmp/pwragent-mcp-defaults",
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      return { registry, codexClient, overlayStore, listConnections, registerBridge, bindThread };
+    }
+
+    it.each(["direct", "messaging", "handoff"] as const)(
+      "selects and registers defaults before a %s thread starts",
+      async (route) => {
+        const { registry, codexClient, overlayStore, registerBridge, bindThread } = threadRegistry();
+        if (route === "handoff") {
+          await registry.publishLocalEvent({
+            backend: "codex",
+            notification: {
+              method: "turn/started",
+              params: { threadId: "parent-thread", turnId: "parent-turn", turn: { id: "parent-turn" } },
+            },
+          });
+          const response = await codexClient.emitRequest({
+            method: "item/tool/call",
+            params: {
+              threadId: "parent-thread", turnId: "parent-turn", callId: "handoff", requestId: "handoff",
+              namespace: "pwragent", tool: "handoff_task",
+              arguments: { task: "Check canary health", title: "Canary", workspaceMode: "none" },
+            },
+          } as AppServerPendingRequestNotification);
+          expect(response).toMatchObject({ success: true });
+        } else if (route === "messaging") {
+          await new DesktopMessagingBackendBridge(registry).startThread({ backend: "codex" });
+        } else {
+          await registry.startThread({ backend: "codex" });
+        }
+
+        expect(registerBridge.mock.calls.slice(0, 2).map(([id]) => id)).toEqual(["datadog", "rovo"]);
+        expect(registerBridge).toHaveBeenCalledTimes(route === "handoff" ? 4 : 2);
+        expect(bindThread).toHaveBeenCalledWith("thread-1");
+        const servers = Object.values(codexClient.lastStartThreadParams?.config?.mcp_servers ?? {});
+        expect(servers).toEqual([
+          expect.objectContaining({ command: "/fixture/mcp-bridge", enabled: true }),
+          expect.objectContaining({ command: "/fixture/mcp-bridge", enabled: true }),
+        ]);
+        await expect(overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+          .resolves.toMatchObject({ mcpConnectionIds: ["datadog", "rovo"] });
+      },
+    );
+
+    it.each([{ ids: [] }, { ids: ["optional"] }])("preserves an explicit selection $ids at thread creation", async ({ ids }) => {
+      const { registry, overlayStore, listConnections, registerBridge } = threadRegistry();
+      await registry.startThread({ backend: "codex", mcpConnectionIds: ids });
+
+      expect(listConnections).not.toHaveBeenCalled();
+      expect(registerBridge.mock.calls.map(([id]) => id)).toEqual(ids);
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" });
+      expect(overlay?.mcpConnectionIds ?? []).toEqual(ids);
+    });
+
+    it("passes the defaults to an ACP session before it starts", async () => {
+      const { listConnections, registerBridge } = threadRegistry();
+      const overlayStore = createOverlayStoreMock();
+      const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({
+        overlayStore,
+        mcpConnectionService: { listConnections, registerBridge },
+      });
+      onTestFinished(() => registry.close());
+
+      const result = await registry.startThread({ backend: acpBackendId });
+
+      expect(registerBridge.mock.calls.map(([id]) => id)).toEqual(["datadog", "rovo"]);
+      expect(acpClient.startSession).toHaveBeenCalledWith(expect.objectContaining({
+        additionalMcpRegistration: expect.objectContaining({
+          servers: [
+            expect.objectContaining({ name: "datadog" }),
+            expect.objectContaining({ name: "rovo" }),
+          ],
+        }),
+      }));
+      await expect(overlayStore.getThreadOverlayState({ backend: acpBackendId, threadId: result.threadId }))
+        .resolves.toMatchObject({ mcpConnectionIds: ["datadog", "rovo"] });
+    });
+
+    it.each(["error", "timeout"] as const)("starts without defaults when their read ends in %s", async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const { registry, listConnections, registerBridge } = threadRegistry();
+        listConnections.mockImplementationOnce(() => failure === "error"
+          ? Promise.reject(new Error("owner unavailable"))
+          : new Promise<McpConnectionStatus[]>(() => undefined));
+        const started = registry.startThread({ backend: "codex" });
+        await vi.waitFor(() => expect(listConnections).toHaveBeenCalled());
+        if (failure === "timeout") await vi.advanceTimersByTimeAsync(2_000);
+
+        await expect(started).resolves.toMatchObject({ threadId: "thread-1" });
+        expect(registerBridge).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("persists the default selection once per new thread", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-mcp-defaults-");
+      const db = StateDb.open(temp.dbPath);
+      const persisted = new SqliteOverlayStore(db);
+      onTestFinished(() => {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      });
+      const { registry, overlayStore } = threadRegistry();
+      // Measure the added persistence through the real store; other creation
+      // writes already exist and remain outside this selection's budget.
+      vi.spyOn(overlayStore, "setThreadMcpConnectionIds")
+        .mockImplementation((request) => persisted.setThreadMcpConnectionIds(request));
+
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.startThread({ backend: "codex" });
+      });
+
+      expectSqliteWriteBudget({
+        scenario: "new-thread-mcp-default-selection",
+        note: "Persist two default MCP ids together once at thread creation, with no writes per connection or streamed event. At 100 new threads/day this adds approximately 1.6 MB/day of WAL and no idle writes.",
+        writes,
+      });
+      await expect(persisted.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+        .resolves.toMatchObject({ mcpConnectionIds: ["datadog", "rovo"] });
+    });
 
     it("seeds a new draft with the defaults a thread could actually use", async () => {
       const { ensure, registry } = registryWith(() => [
