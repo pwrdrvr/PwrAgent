@@ -51,6 +51,9 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
   existing: true,
   get: vi.fn(),
 }));
+const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
+  async (_identity: unknown, work: () => Promise<unknown>) => await work(),
+));
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
@@ -684,6 +687,11 @@ const codexRestartStatus = vi.hoisted(() => ({
   listeners: new Set<(status: unknown) => void>(),
   restart: vi.fn(async () => ({ status: { stopped: false } })),
 }));
+const archiveSweepStatus = vi.hoisted(() => ({
+  listeners: new Set<(status: unknown) => void>(),
+  current: { running: false, archived: 0, deleted: 0, failed: 0 },
+  sweep: vi.fn(async () => undefined),
+}));
 const onEvent = vi.fn((listener: (event: unknown) => void) => {
   registryEventListeners.push(listener);
   return () => {
@@ -1161,11 +1169,18 @@ vi.mock("../app-server/backend-registry", () => {
     rememberCompleteNavigationSnapshot,
     rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
     getCodexAppServerRestartStatus: () => ({ stopped: false }),
+    withThreadLifecycleMutation,
     onCodexAppServerRestartStatusChanged: (listener: (status: unknown) => void) => {
       codexRestartStatus.listeners.add(listener);
       return () => codexRestartStatus.listeners.delete(listener);
     },
     restartCodexAppServer: codexRestartStatus.restart,
+    getThreadArchiveSweepStatus: () => archiveSweepStatus.current,
+    onThreadArchiveSweepStatusChanged: (listener: (status: unknown) => void) => {
+      archiveSweepStatus.listeners.add(listener);
+      return () => archiveSweepStatus.listeners.delete(listener);
+    },
+    sweepInactiveThreads: archiveSweepStatus.sweep,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
   return {
@@ -1258,6 +1273,7 @@ describe("app server ipc", () => {
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
+    withThreadLifecycleMutation.mockClear();
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
     prAutomationSettings.state.budgetPaused = false;
     prAutomationSettings.state.budgetPausedAt = 1_000;
@@ -1648,6 +1664,33 @@ describe("app server ipc", () => {
     await expect(restart?.({ sender: { id: 1 } }))
       .resolves.toEqual({ status: { stopped: false } });
     expect(codexRestartStatus.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("pushes archive sweep status to local windows and sweeps only for them", async () => {
+    const {
+      APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
+      APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+      THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    registerAppServerIpcHandlers();
+    expect(archiveSweepStatus.listeners.size).toBe(1);
+    prAutoDispatchBudgetStatusSend.mockClear();
+    const running = { running: true, startedAt: 1_000, archived: 0, deleted: 0, failed: 0 };
+    for (const listener of archiveSweepStatus.listeners) listener(running);
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenCalledExactlyOnceWith(
+      THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+      running,
+    );
+
+    const read = handlers.get(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
+    expect(() => read?.({ sender: { id: 999 } })).toThrow("remote window");
+    expect(read?.({ sender: { id: 1 } })).toEqual(archiveSweepStatus.current);
+    const run = handlers.get(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
+    await expect(run?.({ sender: { id: 999 } })).rejects.toThrow("remote window");
+    expect(archiveSweepStatus.sweep).not.toHaveBeenCalled();
+    await expect(run?.({ sender: { id: 1 } })).resolves.toEqual(archiveSweepStatus.current);
+    expect(archiveSweepStatus.sweep).toHaveBeenCalledTimes(1);
   });
 
   it("registers main-process PR auto-dispatch handlers", async () => {
@@ -4535,6 +4578,11 @@ describe("app server ipc", () => {
       { archived: true } satisfies AppServerListThreadsRequest,
     );
 
+    expect(listThreads).toHaveBeenCalledWith(expect.objectContaining({
+      archived: true,
+      callerReason: "ipc-list-threads",
+      forceRefresh: true,
+    }));
     expect(getThreadOverlayStates).toHaveBeenCalledWith({
       backend: "codex",
       threadIds: ["thread-archived"],
@@ -4877,6 +4925,9 @@ describe("app server ipc", () => {
       seenAt: undefined,
       seenUpdatedAt: 3000,
     });
+    expect(withThreadLifecycleMutation).toHaveBeenCalledWith(
+      { backend: "acp:grok", threadId: "thread-1" }, expect.any(Function),
+    );
     expect(response).toEqual({
       backend: "acp:grok",
       threadId: "thread-1",

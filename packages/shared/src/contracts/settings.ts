@@ -1,3 +1,4 @@
+import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
@@ -1416,6 +1417,7 @@ export type DesktopSettingsSnapshot = {
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
+    archive?: DesktopThreadArchivePolicy;
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
     effectivePath: string;
   };
@@ -1671,6 +1673,7 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   worktrees?: {
+    archive?: Partial<DesktopThreadArchivePolicy>;
     storage?: DesktopWorktreeStorageLocation;
   };
 };

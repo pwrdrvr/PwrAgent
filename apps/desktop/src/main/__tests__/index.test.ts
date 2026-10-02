@@ -179,6 +179,7 @@ const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
+const startThreadArchiveSweeperMock = vi.fn();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
@@ -625,6 +626,10 @@ const runtimeFederationLeaseCoordinatorMock = {
 };
 
 vi.mock("../app-server/backend-registry", () => ({
+  getExistingDesktopBackendRegistry: vi.fn(() => ({
+    startThreadArchiveSweeper: startThreadArchiveSweeperMock,
+    stopRunningTurnsForShutdown: vi.fn(async () => undefined),
+  })),
   getDesktopBackendRegistry: vi.fn(() => ({
     onEvent: vi.fn(() => () => {}),
     synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
@@ -867,6 +872,7 @@ describe("bootstrapApp", () => {
     listThreadsMock.mockResolvedValue([]);
     refreshProvidersAtStartupMock.mockReset();
     refreshProvidersAtStartupMock.mockResolvedValue(undefined);
+    startThreadArchiveSweeperMock.mockReset();
     resolveCodexCommandMock.mockReset();
     resolveCodexCommandMock.mockResolvedValue({ command: "/cached/codex", source: "config" });
     refreshStartupDiscoveryMock.mockReset();
@@ -1639,6 +1645,18 @@ describe("bootstrapApp", () => {
       skipArchivedMetadataRefresh: true,
     });
     expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+  });
+
+  it("starts the archive sweeper after provider refresh without delaying the first window", async () => {
+    let finishRefresh!: () => void;
+    refreshProvidersAtStartupMock.mockReturnValue(new Promise<void>((resolve) => { finishRefresh = resolve; }));
+    await import("../index");
+    await flushMicrotasks();
+    expect(createMainWindowMock).toHaveBeenCalled();
+    expect(startThreadArchiveSweeperMock).not.toHaveBeenCalled();
+    finishRefresh();
+    await flushMicrotasks();
+    expect(startThreadArchiveSweeperMock).toHaveBeenCalledOnce();
   });
 
   it("waits for a Codex selection without waiting for unrelated startup discovery", async () => {

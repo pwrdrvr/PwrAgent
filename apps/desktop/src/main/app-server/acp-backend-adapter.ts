@@ -262,7 +262,7 @@ export const noLocalAcpAgentDiscovery: LocalAcpDiscovery = async () => [];
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStoreContract, "upsertSession">>;
+  Partial<Pick<AcpSessionStoreContract, "upsertSession" | "deleteSession">>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -292,7 +292,7 @@ export type AcpBackendAdapterOptions = {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   > | null;
-  acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
+  acpRolloutStore?: (Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> & Partial<Pick<AcpRolloutStore, "deleteSession">>) | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   agentToolMcpServer?: AgentToolMcpServerLike;
@@ -817,6 +817,10 @@ export function acpSessionToThreadSummary(
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     archivedAt: session.archivedAt,
+    // A failed prompt has settled; an unknown persisted state is not evidence
+    // that the session is idle.
+    threadStatus: session.status === "active" ? "active"
+      : session.status === "unknown" ? "unknown" : "idle",
     linkedDirectories: session.cwd
       ? [
           {
@@ -1130,7 +1134,7 @@ export class AcpBackendAdapter {
   private readonly acpRolloutStore?: Pick<
     AcpRolloutStore,
     "appendUpdate" | "readReplay" | "readUpdates"
-  >;
+  > & Partial<Pick<AcpRolloutStore, "deleteSession">>;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly agentToolMcpServer?: AgentToolMcpServerLike;
@@ -1432,6 +1436,14 @@ export class AcpBackendAdapter {
     sessionId: string,
   ): AcpSessionMetadata | undefined {
     return this.acpSessionStore?.getSession(backendId, sessionId);
+  }
+
+  deleteStoredSession(backendId: AcpBackendId, sessionId: string): void {
+    if (!this.acpSessionStore?.deleteSession || !this.acpRolloutStore?.deleteSession) {
+      throw new Error("This ACP provider does not support permanent PwrAgent history deletion.");
+    }
+    this.acpRolloutStore.deleteSession(backendId, sessionId);
+    this.acpSessionStore.deleteSession(backendId, sessionId);
   }
 
   upsertSession(session: AcpSessionMetadata): void {

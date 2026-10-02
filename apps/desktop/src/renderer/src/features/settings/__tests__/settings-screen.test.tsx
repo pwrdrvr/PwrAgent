@@ -2435,6 +2435,36 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("refreshes Archived Threads after leaving and reopening the tab", async () => {
+    const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [] as AppServerThreadSummary[] }));
+    render(<SettingsScreen desktopApi={{ listThreads }} settings={createSettingsState()} initialSection="archived" onClose={() => undefined} />);
+    await waitFor(() => expect(listThreads).toHaveBeenCalledExactlyOnceWith({ archived: true }));
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    const thread: AppServerThreadSummary = {
+      id: "swept-thread", title: "Automatically archived thread", titleSource: "explicit", source: "codex", linkedDirectories: [],
+    };
+    listThreads.mockResolvedValue({ backend: "all", fetchedAt: Date.now(), threads: [thread] });
+    fireEvent.click(screen.getByRole("button", { name: "Archived Threads" }));
+    expect(await screen.findByText(thread.title)).toBeInTheDocument();
+    expect(listThreads).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows recovery snapshots and the permanent deletion deadline in Archived Threads", async () => {
+    const startedAt = new Date("2026-10-01T12:00:00Z").getTime();
+    const thread: AppServerThreadSummary = {
+      id: "expiry-details", title: "Archive with snapshot", titleSource: "explicit", source: "codex", linkedDirectories: [],
+      archiveRetentionStartedAt: startedAt,
+      worktreeSnapshots: [createArchivedSnapshot("expiry-details", startedAt)],
+    };
+    const settings = createSettingsState();
+    settings.snapshot!.worktrees.archive = { enabled: true, mode: "count", inactivityDays: 7, keepPerProject: 20, retentionDays: 30 };
+    const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [thread] }));
+    render(<SettingsScreen desktopApi={{ listThreads }} settings={settings} initialSection="archived" onClose={() => undefined} />);
+    expect(await screen.findByText("Archive with snapshot")).toBeInTheDocument();
+    expect(screen.getByText(/1 recovery snapshot/)).toBeInTheDocument();
+    expect(screen.getByText(/Permanent deletion (after|pending since)/)).toHaveTextContent(new Date(startedAt + 30 * 86_400_000).toLocaleString());
+  });
+
   it("lists archived threads and restores one", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-archived",

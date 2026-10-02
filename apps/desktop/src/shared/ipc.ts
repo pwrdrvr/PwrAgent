@@ -105,6 +105,12 @@ export const APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL =
 export const APP_SERVER_RESTART_CODEX_CHANNEL = "app-server:restart-codex";
 export const CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL =
   "app-server:codex-restart-status-changed";
+export const APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL =
+  "app-server:get-thread-archive-sweep-status";
+export const APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL =
+  "app-server:run-thread-archive-sweep";
+export const THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL =
+  "app-server:thread-archive-sweep-status-changed";
 export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
 export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =

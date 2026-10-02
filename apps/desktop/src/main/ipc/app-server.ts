@@ -1,4 +1,5 @@
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
+import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
@@ -133,6 +134,7 @@ import {
   type PrAutoDispatchBudgetStatus,
   type CodexAppServerRestartResult,
   type CodexAppServerRestartStatus,
+  type DesktopThreadArchiveSweepStatus,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
@@ -265,6 +267,9 @@ import {
   APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
   APP_SERVER_RESTART_CODEX_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+  APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
+  APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+  THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
@@ -727,12 +732,12 @@ async function hydrateRetainedThreadOverlayData(
 
   return threads.map((thread) => {
     const overlay = overlaysByBackend.get(thread.source)?.[thread.id];
-    if (!overlay?.worktreeSnapshots?.length) {
-      return thread;
-    }
+    if (!overlay) return thread;
     return {
       ...thread,
-      worktreeSnapshots: overlay.worktreeSnapshots,
+      ...(overlay.worktreeSnapshots?.length ? { worktreeSnapshots: overlay.worktreeSnapshots } : {}),
+      archiveRetentionStartedAt: overlay.archiveRetentionStartedAt,
+      archiveRetentionProtectedReason: archiveCandidateProtectionReason({ thread, overlay }),
     };
   });
 }
@@ -1545,8 +1550,14 @@ class DesktopAppServerService {
       backend,
       archived: request.archived,
       callerReason: "ipc-list-threads",
+      forceRefresh: request.archived === true,
       filter: request.filter,
     });
+    if (request.archived) {
+      await this.getOverlayStore().observeArchivedThreads?.(
+        threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), Date.now(),
+      );
+    }
     const hydratedThreads = await hydrateRetainedThreadOverlayData(
       this.getOverlayStore(),
       threads,
@@ -3725,12 +3736,16 @@ class DesktopAppServerService {
     }
     const backend = request.backend ?? "codex";
 
-    const response = await this.getOverlayStore().markThreadSeen({
+    const markSeen = async () => await this.getOverlayStore().markThreadSeen({
       backend,
       seenAt: request.seenAt,
       seenUpdatedAt: request.seenUpdatedAt,
       threadId: request.threadId,
     });
+    const registry = getExistingDesktopBackendRegistry();
+    const response = registry
+      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, markSeen)
+      : await markSeen();
 
     logDebug("markThreadSeen", {
       backend,
@@ -6573,12 +6588,16 @@ class DesktopAppServerService {
     }
     const backend = request.backend ?? "codex";
 
-    const overlay = await this.getOverlayStore().setThreadPin({
+    const setPin = async () => await this.getOverlayStore().setThreadPin({
       backend,
       threadId: request.threadId,
       pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
+    const registry = getExistingDesktopBackendRegistry();
+    const overlay = registry
+      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, setPin)
+      : await setPin();
 
     logDebug("setThreadPin", {
       backend,
@@ -8221,6 +8240,7 @@ const transcriptPrCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
 let unsubscribeCodexRestartStatus: (() => void) | undefined;
+let unsubscribeThreadArchiveSweepStatus: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
 function invalidateNavigationEvent(event: AgentEvent): void {
@@ -8337,6 +8357,40 @@ export function registerAppServerIpcHandlers(): void {
       isFederationWindowWebContents(event?.sender)
         ? { stopped: false }
         : getDesktopBackendRegistry().getCodexAppServerRestartStatus(),
+  );
+  // The sweeper archives and deletes this machine's threads only.
+  unsubscribeThreadArchiveSweepStatus?.();
+  unsubscribeThreadArchiveSweepStatus =
+    getDesktopBackendRegistry().onThreadArchiveSweepStatusChanged((status) => {
+      for (const webContents of subscribersForChannel(
+        THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+      )) {
+        if (!webContents.isDestroyed()) {
+          webContents.send(THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, status);
+        }
+      }
+    });
+  ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
+    (event): DesktopThreadArchiveSweepStatus => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("A remote window cannot read this machine's archive sweep.");
+      }
+      return getDesktopBackendRegistry().getThreadArchiveSweepStatus();
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+    async (event): Promise<DesktopThreadArchiveSweepStatus> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("A remote window cannot run this machine's archive sweep.");
+      }
+      const registry = getDesktopBackendRegistry();
+      await registry.sweepInactiveThreads();
+      return registry.getThreadArchiveSweepStatus();
+    },
   );
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   ipcMain.handle(
@@ -9431,8 +9485,12 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeNavigationRemoteEvents = undefined;
   unsubscribeCodexRestartStatus?.();
   unsubscribeCodexRestartStatus = undefined;
+  unsubscribeThreadArchiveSweepStatus?.();
+  unsubscribeThreadArchiveSweepStatus = undefined;
   ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

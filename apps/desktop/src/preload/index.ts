@@ -175,6 +175,7 @@ import type {
   PrAutoDispatchBudgetStatus,
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
+  DesktopThreadArchiveSweepStatus,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -662,6 +663,9 @@ import {
   APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
   APP_SERVER_RESTART_CODEX_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+  APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
+  APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+  THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
@@ -1530,6 +1534,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL),
   restartCodex: async (): Promise<CodexAppServerRestartResult> =>
     await ipcRenderer.invoke(APP_SERVER_RESTART_CODEX_CHANNEL),
+  getThreadArchiveSweepStatus: async (): Promise<DesktopThreadArchiveSweepStatus> =>
+    await ipcRenderer.invoke(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL),
+  runThreadArchiveSweep: async (): Promise<DesktopThreadArchiveSweepStatus> =>
+    await ipcRenderer.invoke(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL),
   listBackends: async (
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
@@ -2735,6 +2743,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onThreadArchiveSweepStatusChanged: (
+    callback: (status: DesktopThreadArchiveSweepStatus) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: DesktopThreadArchiveSweepStatus,
+    ) => callback(status);
+    ipcRenderer.on(THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   onGithubPrSamlEnforcement: (

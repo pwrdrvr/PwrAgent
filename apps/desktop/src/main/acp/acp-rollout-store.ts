@@ -184,6 +184,11 @@ export class AcpRolloutStore {
     );
   }
 
+  deleteSession(backendId: AcpBackendId, sessionId: string): void {
+    this.flushSession(backendId, sessionId);
+    fs.rmSync(path.dirname(this.rolloutPath(backendId, sessionId)), { recursive: true, force: true });
+  }
+
   private rolloutPath(backendId: AcpBackendId, sessionId: string): string {
     const rolloutPath = path.join(
       this.rootDir,

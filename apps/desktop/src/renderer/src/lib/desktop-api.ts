@@ -119,6 +119,7 @@ import type {
   PrAutoDispatchBudgetStatus,
   CodexAppServerRestartResult,
   CodexAppServerRestartStatus,
+  DesktopThreadArchiveSweepStatus,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
@@ -854,6 +855,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
   getCodexRestartStatus?: () => Promise<CodexAppServerRestartStatus>;
   restartCodex?: () => Promise<CodexAppServerRestartResult>;
+  getThreadArchiveSweepStatus?: () => Promise<DesktopThreadArchiveSweepStatus>;
+  /** Resolves with the status of the finished sweep, joining a running one. */
+  runThreadArchiveSweep?: () => Promise<DesktopThreadArchiveSweepStatus>;
   analyzeFocusedDiff?: (
     request: FocusedDiffAnalysisRequest
   ) => Promise<FocusedDiffAnalysisResponse>;
@@ -1474,6 +1478,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   onCodexRestartStatusChanged?: (
     callback: (status: CodexAppServerRestartStatus) => void,
+  ) => () => void;
+  onThreadArchiveSweepStatusChanged?: (
+    callback: (status: DesktopThreadArchiveSweepStatus) => void,
   ) => () => void;
   onGithubPrSamlEnforcement?: (
     callback: (event: GithubPrSamlEnforcementEvent) => void,

@@ -16,6 +16,19 @@ describe("AcpRolloutStore", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it("permanently removes only the selected PwrAgent transcript, including buffered updates", () => {
+    const store = new AcpRolloutStore(tempDir);
+    for (const sessionId of ["expired", "retained"]) {
+      store.appendUpdate({ backendId: "acp:kimi", sessionId, receivedAt: 1000,
+        update: { kind: "pwragent_user_prompt", prompt: sessionId, turnId: "turn" } });
+    }
+    store.deleteSession("acp:kimi", "expired");
+    store.deleteSession("acp:kimi", "expired");
+    store.flushAll();
+    expect(fs.existsSync(path.join(tempDir, "acp_kimi", "expired"))).toBe(false);
+    expect(store.readReplay({ backendId: "acp:kimi", sessionId: "retained" }).messages[0]?.text).toBe("retained");
+  });
+
   it("restores Kimi ACP transcript history from append-only JSONL", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:kimi" as AcpBackendId;

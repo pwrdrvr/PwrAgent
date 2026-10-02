@@ -34,6 +34,34 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "archive-retention-acp-delete": {
+    "commits": 1,
+    "note": "One permanent ACP deletion removes one metadata row; no recurring writes.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "archive-retention-delete-batch": {
+    "commits": 1,
+    "note": "One transaction releases 100 overlays after permanent provider deletion.",
+    "observedWalBytes": 41200,
+    "rowsChanged": 100,
+    "statements": 100
+  },
+  "archive-retention-idle-day": {
+    "commits": 0,
+    "note": "24 hourly retention observations and reads after initial discovery: zero commits, 0 MB/day.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "archive-retention-initial-batch": {
+    "commits": 1,
+    "note": "One discovery transaction for 100 existing archives; no per-item commits.",
+    "observedWalBytes": 41200,
+    "rowsChanged": 100,
+    "statements": 100
+  },
   "auto-access-selection": {
     "commits": 2,
     "note": "one operator mode selection and permission audit; no per-review persistence",
@@ -280,6 +308,41 @@
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
+  },
+  "inactive-acp-thread-archive-day": {
+    "commits": 2,
+    "note": "One stale ACP session archive followed by 23 idle hourly sweeps. Two boundary commits per archive (ACP metadata and retention observation); no heartbeat writes.",
+    "observedWalBytes": 28840,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "inactive-thread-archive-restore": {
+    "commits": 2,
+    "note": "One age-eligible conversation archived and restored: two boundary commits for retention observation and restore; subsequent sweep writes nothing.",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "inactive-thread-sweep-dirty": {
+    "commits": 0,
+    "note": "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "inactive-thread-sweep-idle-day": {
+    "commits": 0,
+    "note": "24 hourly sweeps of an unchanged restored thread: read-only, 0 MB/day of SQLite writes.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "inactive-thread-worktree-archive": {
+    "commits": 2,
+    "note": "One successful automatic worktree archive persists a recoverable snapshot at the archive boundary; no heartbeat writes.",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "live-thread-token-usage": {
     "commits": 1,
