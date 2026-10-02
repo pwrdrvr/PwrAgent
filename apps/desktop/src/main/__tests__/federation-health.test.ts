@@ -71,6 +71,47 @@ describe("federation health", () => {
     expect(health.publicUrl).toBeUndefined();
   });
 
+  it("preserves short names for health reads without advertising them in the peer directory", () => {
+    const peers: FederationPeerSummary[] = [
+      {
+        id: "studio",
+        label: "Studio-MBP-M5-Max",
+        shortLabel: "M5 Max",
+        shortLabelSource: "auto",
+        role: "client",
+        status: "connected",
+        capabilities: [],
+      },
+      {
+        id: "build",
+        label: "DESKTOP-BUILD-PC",
+        shortLabel: "Build PC",
+        shortLabelSource: "override",
+        role: "client",
+        status: "connected",
+        capabilities: [],
+      },
+    ];
+    const health = buildFederationHealthStatus({
+      config: { mode: "gateway", publicUrl: "" },
+      peers,
+    });
+
+    expect(health.peers.map((peer) => ({
+      label: peer.label,
+      shortLabel: peer.shortLabel,
+      shortLabelSource: peer.shortLabelSource,
+    }))).toEqual([
+      { label: "Studio-MBP-M5-Max", shortLabel: "M5 Max", shortLabelSource: "auto" },
+      { label: "DESKTOP-BUILD-PC", shortLabel: "Build PC", shortLabelSource: "override" },
+    ]);
+    for (const peer of peers) {
+      const advertised = publicPeerSummary(peer);
+      expect(advertised).not.toHaveProperty("shortLabel");
+      expect(advertised).not.toHaveProperty("shortLabelSource");
+    }
+  });
+
   it("reports a bind failure instead of claiming the configured listener", () => {
     const health = buildFederationHealthStatus({
       config: { mode: "gateway", publicUrl: "" },

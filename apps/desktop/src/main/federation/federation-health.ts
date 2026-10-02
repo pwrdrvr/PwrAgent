@@ -29,7 +29,14 @@ export function buildFederationHealthStatus(params: {
     listenUrl: enabled ? params.listenUrl : undefined,
     publicUrl: publicUrl.length > 0 ? publicUrl : undefined,
     unavailableReason: enabled ? params.unavailableReason : undefined,
-    peers: params.peers.map(publicPeerSummary),
+    // Short names belong to the local health view, not the gossiped directory.
+    peers: params.peers.map((peer) => ({
+      ...publicPeerSummary(peer),
+      ...(peer.shortLabel ? {
+        shortLabel: peer.shortLabel,
+        shortLabelSource: peer.shortLabelSource,
+      } : {}),
+    })),
   };
 }
 
