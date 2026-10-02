@@ -229,7 +229,7 @@ jobs:
           winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "Fresh user install failed" }
           Assert-InstalledVersion $version
-          winget uninstall --name PwrAgent --exact --silent --disable-interactivity
+          winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "User uninstall failed" }
           # Install the actual previous stable version, then exercise local-manifest upgrade.
           $previousManifest = "distribution/previous/manifests/p/PwrDrvr/PwrAgent/$previous"
@@ -239,13 +239,13 @@ jobs:
           winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "Upgrade failed" }
           Assert-InstalledVersion $version
-          winget uninstall --name PwrAgent --exact --silent --disable-interactivity
+          winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "Upgrade uninstall failed" }
           $installDir = "$env:RUNNER_TEMP\pwragent-machine"
           winget install --manifest $currentManifest --scope machine --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "Fresh machine install failed" }
           Assert-InstalledVersion $version
-          winget uninstall --name PwrAgent --exact --silent --disable-interactivity
+          winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "Machine uninstall failed" }
 
   submit:
