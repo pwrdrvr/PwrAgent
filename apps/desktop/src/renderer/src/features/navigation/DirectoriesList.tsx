@@ -1054,13 +1054,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ...(props.pagedNavigation?.resources.get(`directory-pins:${directory.key}`)?.state.page?.entries ?? []),
       ...(props.pagedNavigation?.resources.get(`directory:${directory.key}`)?.state.page?.entries ?? []),
     ];
-    return entries
-      ? entries.some((entry) => entry.placement.kind === "root" && navigationThreadSelectionKey(entry.row.ref) === threadKey)
-      : false;
+    if (entries.some((entry) => entry.placement.kind === "root" && navigationThreadSelectionKey(entry.row.ref) === threadKey)) {
+      return true;
+    }
+    // Presentation also admits an off-page selected root through its exact
+    // query. Its selection directory is authoritative for viewer mounts too.
+    const selected = props.pagedNavigation?.resources.get("selected-viewer-mount")?.state.page
+      ?? props.pagedNavigation?.resources.get("selected-context")?.state.page;
+    const selectedRoot = selected?.entries.find((entry) => entry.placement.kind === "root");
+    return selected?.selectionDirectory?.key === directory.key
+      && Boolean(selectedRoot && navigationThreadSelectionKey(selectedRoot.row.ref) === threadKey);
   };
 
-  // Membership comes from the owner's directory query; compact row metadata
-  // need not enumerate every linked directory. The owner revalidates the move.
+  // Membership comes from the directory query; mounted remote checkout paths
+  // can differ from the viewer's directory, and compact row metadata need not
+  // enumerate every linked directory. The owner revalidates the move.
   const buildDirectoryPinnedKeys = (
     directory: NavigationDirectorySummary,
   ): string[] =>
@@ -1098,7 +1106,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     directory: NavigationDirectorySummary,
     draggedKey: string,
   ): void => {
-    if (!threadsByKey.get(draggedKey)?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)) return;
+    if (!isAdmittedDirectoryRoot(directory, draggedKey)) return;
 
     const draggedThread = threadsByKey.get(draggedKey);
     if (!draggedThread) return;
@@ -1132,8 +1140,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     directory: NavigationDirectorySummary,
     draggedKey: string,
   ): void => {
+    if (!isAdmittedDirectoryRoot(directory, draggedKey)) return;
     const draggedThread = threadsByKey.get(draggedKey);
-    if (!draggedThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)) return;
+    if (!draggedThread) return;
     void (async () => {
       if (!pinnedThreadKeys.includes(draggedKey)) {
         if (!props.onSetThreadPin) return;
