@@ -1081,6 +1081,12 @@ export type DesktopSettingsSnapshot = {
         observedAt: number;
       };
     };
+    /**
+     * Where opt-in Token Miser diagnostic samples are written. The folder
+     * exists only after the first batch, and saved files outlive the switch,
+     * so Settings shows it whether or not capture is on.
+     */
+    tokenMiserDiagnosticsDirectory?: string;
     messaging: {
       disabled: boolean;
       disabledReason?: string;
@@ -1153,6 +1159,7 @@ export type DesktopSettingsSnapshot = {
     tokenMiserFocusedSummariesEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in helper review for ambiguous poll-shaped parent activity. */
     tokenMiserPollingReviewsEnabled?: DesktopSettingsValue<boolean>;
+    tokenMiserDiagnosticsEnabled?: DesktopSettingsValue<boolean>;
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
@@ -1456,6 +1463,7 @@ export type DesktopSettingsConfigPatch = {
     codexToolDiscovery?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
+    tokenMiserDiagnosticsEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
@@ -2155,6 +2163,8 @@ export type OpenPathRequest = {
 export type OpenPathResponse = {
   opened: boolean;
   error?: string;
+  /** Set when nothing exists at the path, so callers need not parse `error`. */
+  missing?: true;
 };
 
 export type ReadMarkdownFileRequest = {

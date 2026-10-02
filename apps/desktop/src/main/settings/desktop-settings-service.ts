@@ -211,6 +211,7 @@ import {
 } from "./desktop-settings-env";
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
+  TOKEN_MISER_DIAGNOSTICS_DIRNAME,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -899,6 +900,10 @@ export class DesktopSettingsService {
                     }
                   : {}),
             },
+        tokenMiserDiagnosticsDirectory: path.join(
+          this.tokenMiserStateDir(),
+          TOKEN_MISER_DIAGNOSTICS_DIRNAME,
+        ),
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,
@@ -1075,6 +1080,10 @@ export class DesktopSettingsService {
         ),
         tokenMiserFocusedSummariesEnabled: this.resolveConfigBoolean(
           config.experimental?.tokenMiserFocusedSummariesEnabled,
+          false,
+        ),
+        tokenMiserDiagnosticsEnabled: this.resolveConfigBoolean(
+          config.experimental?.tokenMiserDiagnosticsEnabled,
           false,
         ),
         tokenMiserPollingReviewsEnabled: this.resolveConfigBoolean(
@@ -2006,6 +2015,11 @@ export class DesktopSettingsService {
 
   resolveTokenMiserFocusedSummariesEnabled(): boolean {
     return this.configStore.read("experimental").tokenMiserFocusedSummariesEnabled
+      ?? false;
+  }
+
+  resolveTokenMiserDiagnosticsEnabled(): boolean {
+    return this.configStore.read("experimental").tokenMiserDiagnosticsEnabled
       ?? false;
   }
 
@@ -3941,17 +3955,17 @@ export class DesktopSettingsService {
    * never tried to activate, which reads as "no claim either way" rather than
    * as a failure.
    */
+  /** The profile's Token Miser state, the registry's `state/token-miser`. */
+  private tokenMiserStateDir(): string {
+    return path.join(path.dirname(this.configPath), "state", "token-miser");
+  }
+
   private async readTokenMiserActivation(): Promise<
     TokenMiserActivationStatus | undefined
   > {
     try {
       const raw = await readFile(
-        path.join(
-          path.dirname(this.configPath),
-          "state",
-          "token-miser",
-          TOKEN_MISER_ACTIVATION_FILENAME,
-        ),
+        path.join(this.tokenMiserStateDir(), TOKEN_MISER_ACTIVATION_FILENAME),
         "utf8",
       );
       const parsed = JSON.parse(raw) as TokenMiserActivationStatus;

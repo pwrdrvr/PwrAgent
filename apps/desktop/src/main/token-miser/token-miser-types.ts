@@ -549,3 +549,5 @@ export type TokenMiserActivationStatus = {
 };
 
 export const TOKEN_MISER_ACTIVATION_FILENAME = "activation.json";
+/** Opt-in diagnostic samples, beside `activation.json` in the Token Miser state dir. */
+export const TOKEN_MISER_DIAGNOSTICS_DIRNAME = "diagnostics";
