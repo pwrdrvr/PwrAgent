@@ -26859,16 +26859,20 @@ export class DesktopBackendRegistry {
         const existing = parentOverlay?.subAgents?.find(
           (subAgent) => subAgent.monitorId === monitorId,
         );
-        let preferredModel =
+        // The worker's own model and effort, or none. A worker can run on a
+        // model its parent does not, so the parent's is never a stand-in:
+        // usage with no known model stays unpriced until the usage path reads
+        // the worker's settings from Codex.
+        const preferredModel =
           nativeThread.model
           ?? existing?.preferredModel
           ?? existing?.monitorUsage?.model
-          ?? existing?.monitorUsage?.cost?.model
-          ?? parent.model;
-        let preferredReasoningEffort =
+          ?? existing?.monitorUsage?.cost?.model;
+        const preferredReasoningEffort =
           nativeThread.reasoningEffort
-          ?? existing?.preferredReasoningEffort
-          ?? parent.reasoningEffort;
+          ?? existing?.preferredReasoningEffort;
+        // Codex reports neither per worker; both follow the account and the
+        // parent's configuration, which the worker inherits.
         let preferredFastMode =
           nativeThread.fastMode
           ?? existing?.preferredFastMode
@@ -26890,17 +26894,10 @@ export class DesktopBackendRegistry {
         );
         if (
           hasPersistedTurnUsage
-          && (
-            !preferredModel
-            || !preferredReasoningEffort
-            || preferredFastMode === undefined
-            || !serviceTier
-          )
+          && (preferredFastMode === undefined || !serviceTier)
           && typeof this.overlayStore.readThreadPricing === "function"
         ) {
           await readParentPricingLines();
-          preferredModel ??= parentPricingSettings?.model;
-          preferredReasoningEffort ??= parentPricingSettings?.reasoningEffort;
           preferredFastMode ??= parentPricingSettings?.fastMode;
           serviceTier ??= parentPricingSettings?.serviceTier;
         }
@@ -27011,10 +27008,12 @@ export class DesktopBackendRegistry {
           || Boolean(usageBackfill)
           || Boolean(agentName && agentName !== existing.agentName)
           || task !== existing.task
-          || Boolean(preferredModel && !existing.preferredModel)
+          // Codex's report replaces whatever the card held, including a
+          // parent's model stored by an earlier build that guessed.
+          || Boolean(preferredModel && preferredModel !== existing.preferredModel)
           || Boolean(
             preferredReasoningEffort
-            && !existing.preferredReasoningEffort,
+            && preferredReasoningEffort !== existing.preferredReasoningEffort,
           )
           || Boolean(
             preferredFastMode !== undefined

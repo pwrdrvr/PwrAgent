@@ -50288,6 +50288,9 @@ script = "printf setup"
           createdAt: now - 40,
           updatedAt: now - 20,
           threadStatus: "idle",
+          // Codex reports the worker's own settings, which are not its parent's.
+          model: "gpt-5.4-mini",
+          reasoningEffort: "low",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
             depth: 1,
@@ -50374,8 +50377,8 @@ script = "printf setup"
       task: "Audit settings discovery calls",
       status: "success",
       outcome: "success",
-      preferredModel: "gpt-5.6-sol",
-      preferredReasoningEffort: "high",
+      preferredModel: "gpt-5.4-mini",
+      preferredReasoningEffort: "low",
       preferredFastMode: false,
       monitorUsage: {
         tokenUsage: {
@@ -50402,7 +50405,8 @@ script = "printf setup"
       source: "monitor",
       scope: "monitor",
       status: "finalized",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
       cachedInputTokens: 2_811_136,
       uncachedInputTokens: 106_640,
       outputTokens: 11_224,
@@ -50411,6 +50415,119 @@ script = "printf setup"
     expect(nativePricing?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("leaves a native worker unpriced rather than price it at its parent's model", async () => {
+    const nativeThreadId = "thread-epicurus";
+    const now = Date.now();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-parent",
+          title: "Investigate the regression",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+        },
+      ],
+      nativeSubAgentThreads: [
+        {
+          id: nativeThreadId,
+          title: "Audit settings discovery calls",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: now - 40,
+          updatedAt: now - 20,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-parent",
+            depth: 1,
+            agentNickname: "Epicurus",
+          },
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadUsageLine({
+      line: {
+        usageLineId: "codex:thread-parent:turn-parent:live-token-usage",
+        backend: "codex",
+        provider: "openai",
+        threadId: "thread-parent",
+        turnId: "turn-parent",
+        source: "live",
+        scope: "turn",
+        status: "finalized",
+        createdAt: 25,
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        fastMode: false,
+        settingsSource: "event",
+        settingsConfidence: "exact",
+        inputTokens: 1_000,
+        cachedInputTokens: 800,
+        uncachedInputTokens: 200,
+        outputTokens: 50,
+        reasoningOutputTokens: 10,
+        totalTokens: 1_060,
+        priceStatus: "priced",
+        currency: "USD",
+        uncachedInputCostMicros: 0,
+        cachedInputCostMicros: 0,
+        outputCostMicros: 0,
+        totalCostMicros: 0,
+      },
+    });
+    await overlayStore.persistThreadUsageActivity({
+      backend: "codex",
+      threadId: nativeThreadId,
+      activity: {
+        type: "activity",
+        id: "live-turn-usage-turn-epicurus",
+        createdAt: 35,
+        summary:
+          "Turn usage: 106,640 uncached in · 2,811,136 cached · 11,224 out (4,269 reasoning)",
+        status: "completed",
+        details: [],
+        turn: {
+          id: "turn-epicurus",
+          status: "completed",
+          completedAt: 35,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await registry.listThreads({ backend: "codex", forceRefresh: true });
+
+    const parentOverlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    // Codex named no model for the worker; the parent's gpt-5.6-sol is not it.
+    expect(parentOverlay?.subAgents?.[0]?.preferredModel).toBeUndefined();
+    expect(parentOverlay?.subAgents?.[0]?.preferredReasoningEffort).toBeUndefined();
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    const nativePricing = pricing.lines.find(
+      (line) => line.sourceItemId === `codex-native:${nativeThreadId}`,
+    );
+    expect(nativePricing).toMatchObject({ threadId: nativeThreadId, scope: "monitor" });
+    expect(nativePricing?.model).toBeUndefined();
+    expect(nativePricing?.priceStatus).not.toBe("priced");
 
     await registry.close();
   });
