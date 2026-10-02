@@ -15394,6 +15394,34 @@ a.button {
   flex: 0 0 auto;
 }
 
+/* Short name row: value, who chose it, and the rename controls, in both
+   the Configuration card and each peer row. Wraps rather than widening. */
+.federation-short-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.federation-short-name__value b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.federation-short-name .settings-pill {
+  align-self: center;
+}
+
+.federation-short-name .federation-short-name__input {
+  width: 14ch;
+}
+
+.federation-short-name__hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* ==== Star Map mission-control surface ==== */
 
 /* Header chrome toggle, cloned from the terminal toggle beside it. */

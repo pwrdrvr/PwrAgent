@@ -4198,3 +4198,97 @@ describe("Cloudflare listener reachability", () => {
     expect(runtime.loopbackListenPort()).toBeUndefined();
   });
 });
+
+describe("federation short names", () => {
+  it("merges the gateway's short-name map, re-sends it onward only, and tells renderers", async () => {
+    const meta = new Map<string, string>([["federation_gateway_instance_id", "gateway_one"]]);
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
+    const db = vi.spyOn(appState, "getAppStateDb").mockReturnValue({
+      getMeta: (key: string) => meta.get(key),
+      setMeta: (key: string, value: string) => {
+        meta.set(key, value);
+      },
+    } as unknown as ReturnType<typeof appState.getAppStateDb>);
+    try {
+      const router = new FederationRouter({ localInstanceId: "hub_one" });
+      const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+        shortNames: { shortLabelFor: (id: string, label: string) => string | undefined };
+      };
+      runtime.router = router;
+      runtime.localInstanceId = "hub_one";
+      const toGateway: FederationProtocolEnvelope[] = [];
+      const toClient: FederationProtocolEnvelope[] = [];
+      router.registerConnection({
+        peerId: "gateway_one",
+        capabilities: ["thread_navigation"],
+        sendEnvelope: (envelope) => toGateway.push(envelope),
+      });
+      router.registerConnection({
+        peerId: "client_one",
+        capabilities: ["thread_navigation"],
+        sendEnvelope: (envelope) => toClient.push(envelope),
+      });
+      const published: AgentEvent[] = [];
+      runtime.setAgentEventPublisher((event) => published.push(event));
+      const snapshot: FederationProtocolEnvelope = {
+        id: "short-names-1",
+        kind: "notification",
+        method: "federation.instanceShortNames",
+        params: {
+          entries: [{
+            instanceId: "client_two",
+            shortLabel: "M5 Max",
+            basis: "Studio-MBP-M5-Max",
+            source: "auto",
+            updatedAt: 2_000,
+          }],
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "hub_one",
+        createdAt: 2_000,
+      };
+
+      await runtime.receiveEnvelope(snapshot, "gateway_one");
+      await runtime.receiveEnvelope({ ...snapshot, id: "short-names-2" }, "gateway_one");
+
+      expect(runtime.shortNames.shortLabelFor("client_two", "Studio-MBP-M5-Max")).toBe("M5 Max");
+      expect(JSON.parse(meta.get("federation_instance_short_names")!)).toHaveLength(1);
+      // The replay changed nothing: one onward send, none back to the source.
+      expect(toGateway).toHaveLength(0);
+      expect(toClient.filter((envelope) =>
+        envelope.kind === "notification" && envelope.method === "federation.instanceShortNames"))
+        .toHaveLength(1);
+      expect(published.filter((event) => event.notification.method === "federation/shortNames/changed"))
+        .toHaveLength(1);
+    } finally {
+      db.mockRestore();
+      initialized.mockRestore();
+    }
+  });
+
+  it("is safe to send to a peer that predates it: an unknown notification routes as handled, with no reply", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "old_peer" });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    const result = await router.routeEnvelope({
+      envelope: {
+        id: "short-names-1",
+        kind: "notification",
+        method: "federation.instanceShortNames",
+        params: { entries: [] },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "old_peer",
+        createdAt: 1,
+      },
+      sourcePeerId: "gateway_one",
+    });
+    expect(result).toEqual({ status: "handled" });
+    expect(replies).toEqual([]);
+  });
+});

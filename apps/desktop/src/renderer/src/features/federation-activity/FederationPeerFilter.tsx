@@ -2,6 +2,7 @@ import type { FederationActivitySeries, FederationHealthStatus } from "@pwragent
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   FederationChipFace,
+  federationChipName,
   federationChipTooltip,
   federationInstanceChips,
   type FederationInstanceChipModel,
@@ -44,7 +45,7 @@ export function FederationPeerFilter(props: {
       const text = federationChipTooltip(chip, minute, "Click to show only this instance");
       return <button type="button" key={chip.instanceId}
         className={`federation-chip${chip.online ? "" : " federation-chip--offline"}`}
-        aria-label={chip.label} aria-pressed={props.selected === chip.instanceId}
+        aria-label={federationChipName(chip)} aria-pressed={props.selected === chip.instanceId}
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         onMouseEnter={(event) => tooltip.show(event.currentTarget, text)}
         onFocus={(event) => tooltip.show(event.currentTarget, text)}

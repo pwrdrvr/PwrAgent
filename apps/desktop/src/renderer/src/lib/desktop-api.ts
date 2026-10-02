@@ -212,6 +212,8 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  SetFederationShortNameRequest,
+  SetFederationShortNameResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   WatchFederatedDirectorySetRequest,
@@ -791,6 +793,9 @@ export type DesktopApi = {
   setCelestialIcon?: (
     request: SetCelestialIconRequest,
   ) => Promise<SetCelestialIconResponse>;
+  setFederationShortName?: (
+    request: SetFederationShortNameRequest,
+  ) => Promise<SetFederationShortNameResponse>;
   setFederationEventSubscriptions?: (
     request: SetFederationEventSubscriptionsRequest,
   ) => Promise<SetFederationEventSubscriptionsResponse>;

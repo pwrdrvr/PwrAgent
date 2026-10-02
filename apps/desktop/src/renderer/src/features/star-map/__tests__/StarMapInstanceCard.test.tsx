@@ -114,6 +114,26 @@ describe("StarMapInstanceCard", () => {
     }
   });
 
+  it("draws the short name, and names actions by it first and the full label after", () => {
+    renderCard({
+      label: "Studio-MBP-M5-Max",
+      shortLabel: "M5 Max",
+      profileName: "dev",
+      onOpen: vi.fn(),
+    });
+
+    expect(document.querySelector(".star-map-instance__machine")?.textContent).toBe("M5 Max");
+    expect(document.querySelector(".star-map-instance__profile")?.textContent).toBe("dev");
+    for (const name of [
+      "Focus M5 Max / dev (Studio-MBP-M5-Max)",
+      "Open remote viewer for M5 Max / dev (Studio-MBP-M5-Max)",
+    ]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+    fireEvent.mouseEnter(document.querySelector(".star-map-instance__label")!);
+    expect(screen.getByRole("tooltip").textContent).toBe("Studio-MBP-M5-Max / dev");
+  });
+
   it("reports load-card state through aria-pressed and flips the label", () => {
     const onToggleLoad = vi.fn();
     renderCard({ onToggleLoad, loadShown: false });

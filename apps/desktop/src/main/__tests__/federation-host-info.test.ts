@@ -57,10 +57,24 @@ describe("federation host info", () => {
     expect(host.memoryBytes).toBeGreaterThan(0);
     expect(host.diskFreeBytes).toBeGreaterThan(0);
     expect(host.machineId).toMatch(/^mach_/);
+    expect(host.cpuModel).toBe(os.cpus()[0]?.model.replace(/\s+/g, " ").trim().slice(0, 120));
     // Two profiles sharing one root — the shared-hardware signal — agree.
     expect((await collectFederationHostInfo({ rootDir })).machineId).toBe(
       host.machineId,
     );
+  });
+
+  it("advertises the guest probe's answer, and omits an unknown one", async () => {
+    const rootDir = makeRoot();
+
+    expect((await collectFederationHostInfo({
+      rootDir,
+      detectVirtualMachine: async () => true,
+    })).virtualMachine).toBe(true);
+    expect("virtualMachine" in await collectFederationHostInfo({
+      rootDir,
+      detectVirtualMachine: async () => undefined,
+    })).toBe(false);
   });
 
   it("samples a live load reading against the PwrAgent root's volume", async () => {
