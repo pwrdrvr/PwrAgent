@@ -16,12 +16,14 @@ export const PACKAGE_ID = "PwrDrvr.PwrAgent";
 export const WINGET_PATH = "manifests/p/PwrDrvr/PwrAgent";
 export const SCHEMA_VERSION = "1.12.0";
 
-export function ghJson(endpoint, optional = false) {
-  const result = spawnSync("gh", ["api", endpoint], { encoding: "utf8" });
+export function ghJson(endpoint, optional = false, projection = null) {
+  const args = ["api", endpoint];
+  if (projection) args.push("--jq", projection);
+  const result = spawnSync("gh", args, { encoding: "utf8" });
   if (result.status !== 0) {
     // An authentication, rate-limit or network failure is never absence.
     if (optional && /HTTP 404/.test(result.stderr)) return null;
-    throw new Error(`GitHub API ${endpoint}: ${result.stderr.trim()}`);
+    throw new Error(`GitHub API ${endpoint}: ${result.error?.message ?? result.stderr.trim()}`);
   }
   return JSON.parse(result.stdout);
 }
@@ -248,12 +250,13 @@ async function main(argv) {
   const hashes = await materializeRelease(release, out, cache);
   let previous = null;
   if (options["--previous-out"]) {
-    const releases = ghJson(`repos/${SOURCE_REPO}/releases?per_page=100`);
+    const releases = ghJson(`repos/${SOURCE_REPO}/releases?per_page=100`, false, "map({tag_name, draft, prerelease})");
     const candidates = releases.filter((item) => !item.draft && !item.prerelease && /^v\d+\.\d+\.\d+$/.test(item.tag_name))
       .filter((item) => compareVersions(item.tag_name.slice(1), version) < 0)
       .sort((a, b) => compareVersions(a.tag_name.slice(1), b.tag_name.slice(1)));
     previous = candidates.at(-1);
     if (!previous) throw new Error("No previous stable release in the latest 100 releases; select an upgrade baseline manually");
+    previous = ghJson(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
     await materializeRelease(previous, resolve(options["--previous-out"]), resolve(cache, "previous"));
   }
   await writeFile(resolve(out, "audit.json"), JSON.stringify({ ...audit, hashes, previousVersion: previous?.tag_name.slice(1) ?? null }, null, 2) + "\n");
