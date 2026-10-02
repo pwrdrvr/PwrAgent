@@ -1,13 +1,21 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary, UsageLimitObservation } from "@pwragent/shared";
 import { ProviderStatusPanel } from "../ProviderStatusPanel";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../../lib/useBackendSummaries";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
+
+const HOUR = 3_600_000;
+
+/** The value cell beside a label in the provider grid. */
+function valueFor(label: string): HTMLElement {
+  return screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement;
+}
 
 const codexBackend: BackendSummary = {
   kind: "codex",
@@ -164,16 +172,61 @@ describe("ProviderStatusPanel", () => {
     expect(screen.getByText("PwrDrvr build")).toBeInTheDocument();
   });
 
-  it("renders account, plan, and rate limits for an available backend", () => {
+  it("renders account, plan, credits, and limits as rows of one grid", () => {
     render(<ProviderStatusPanel backends={[codexBackend]} />);
 
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Available")).toBeInTheDocument();
-    expect(screen.getByText("user@example.com")).toBeInTheDocument();
-    expect(screen.getByText("pro")).toBeInTheDocument();
-    expect(screen.getByText(/Credits: 100/)).toBeInTheDocument();
-    expect(screen.getByText(/5h limit: 85% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Weekly limit: 91% left/)).toBeInTheDocument();
+    expect(valueFor("Account")).toHaveTextContent("user@example.com");
+    // Codex sends the plan id in lowercase.
+    expect(valueFor("Plan")).toHaveTextContent(/^Pro$/);
+    // Credits and limits are label-column rows, not prose under the grid, and
+    // read "% used" as the Usage Activity window does.
+    expect(valueFor("Credits")).toHaveTextContent(/^100$/);
+    expect(valueFor("5h limit")).toHaveTextContent(/^15% used/);
+    expect(valueFor("Weekly limit")).toHaveTextContent(/^9% used/);
+  });
+
+  it("opens Usage Activity from the heading", () => {
+    const openUsageActivity = vi.fn(async () => undefined);
+    render(<ProviderStatusPanel backends={[]} desktopApi={{ openUsageActivity }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Usage Activity" }));
+
+    expect(openUsageActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("projects the Codex weekly pace under its limit from the recorded history", async () => {
+    const now = new Date(2026, 9, 1, 21, 35).getTime();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    // Three and a half days into the week at 53%: 100% about 6.5 hours before the reset.
+    const resetAt = now + 82.42 * HOUR;
+    const weekly = { name: "Weekly limit", windowKey: "secondary" as const, windowMinutes: 10_080, resetAt };
+    const observation: UsageLimitObservation = {
+      observedAt: now, accountKey: "acct", planType: "pro",
+      limits: [{ ...weekly, usedPercent: 53 }],
+    };
+    const readUsageActivity = vi.fn(async () => ({
+      rows: [], readAt: now, rateLimits: [], truncated: false, limitObservation: observation,
+    }));
+    render(
+      <ProviderStatusPanel
+        backends={[{ ...codexBackend, rateLimits: [{ ...weekly, usedPercent: 53 }] }]}
+        desktopApi={{ readUsageActivity }}
+      />,
+    );
+
+    const weeklyValue = valueFor("Weekly limit");
+    expect(await within(weeklyValue).findByText(/On pace to reach 100% .*, 6 h 3\d m before the reset/)).toBeInTheDocument();
+    expect(weeklyValue.querySelector(".backend-status-list__pace")).toHaveClass("is-short");
+    expect(readUsageActivity).toHaveBeenCalledWith({ from: now - 8 * 24 * HOUR, to: now });
+  });
+
+  it("does not read usage history when no backend has Codex limits", () => {
+    const readUsageActivity = vi.fn();
+    render(<ProviderStatusPanel backends={[kimiBackend]} desktopApi={{ readUsageActivity }} />);
+
+    expect(readUsageActivity).not.toHaveBeenCalled();
   });
 
   it("shows the unavailable reason for an offline backend", () => {
@@ -194,9 +247,11 @@ describe("ProviderStatusPanel", () => {
   it("shows Grok subscription and included-credit usage from ACP billing", () => {
     render(<ProviderStatusPanel backends={[grokAcpBackend]} />);
 
-    expect(screen.getByText("Grok account")).toBeInTheDocument();
-    expect(screen.getByText("SuperGrok Heavy")).toBeInTheDocument();
-    expect(screen.getByText(/Included credits: 58% left/)).toBeInTheDocument();
+    // "Grok account" only repeats the provider name; Authentication carries
+    // the sign-in state.
+    expect(screen.queryByText("Grok account")).not.toBeInTheDocument();
+    expect(valueFor("Plan")).toHaveTextContent("SuperGrok Heavy");
+    expect(valueFor("Included credits")).toHaveTextContent(/^43% used/);
   });
 
   it("renders a backend error when status is unavailable", () => {

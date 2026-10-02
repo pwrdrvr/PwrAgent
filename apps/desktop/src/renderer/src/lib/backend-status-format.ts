@@ -65,16 +65,105 @@ export function selectVisibleRateLimits(
     });
 }
 
+/**
+ * Codex reports its plan as a lowercase id (`pro`, `business`); an ACP agent
+ * reports a display name (`X Premium+`). Capitalize only the ids.
+ */
+export function formatBackendPlanType(
+  backend: Pick<BackendSummary, "kind">,
+  planType: string,
+): string {
+  const trimmed = planType.trim();
+  if (backend.kind !== "codex" || !/^[a-z][a-z_-]*$/.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed
+    .split(/[_-]/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/**
+ * A percent as every usage surface prints it: one decimal below 10, so a
+ * fresh window reads 0.6% rather than 1%, and whole numbers above.
+ */
+export const formatUsedPercent = (value: number) => `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}`;
+
+/**
+ * One limit as a label-column row: a figure the value leads with, the rest of
+ * the value, the reset, and the fill for a meter. Reads `% used` like the
+ * Usage Activity window, never `% left`.
+ */
+export type RateLimitRow = {
+  label: string;
+  figure?: string;
+  text?: string;
+  reset?: string;
+  usedPercent?: number;
+};
+
+export function describeRateLimitRow(
+  limit: BackendRateLimitSummary,
+  now: number,
+): RateLimitRow {
+  if (isCreditsRateLimit(limit)) {
+    if (limit.unlimited) {
+      return { label: "Credits", text: "Unlimited" };
+    }
+    if (typeof limit.remaining === "number" && limit.remaining > 0) {
+      return { label: "Credits", figure: formatWholeNumber(limit.remaining) };
+    }
+    return { label: "Credits", ...(limit.hasCredits ? { text: "Available" } : { figure: "0" }) };
+  }
+  const resetText = formatRateLimitResetCompact(limit.resetAt, now);
+  const base = {
+    label: rateLimitDisplayLabel(limit),
+    ...(resetText ? { reset: `resets ${resetText}` } : {}),
+  };
+  if (typeof limit.used === "number" && typeof limit.limit === "number" && limit.limit > 0) {
+    return {
+      ...base,
+      figure: formatWholeNumber(limit.used),
+      text: `of ${formatWholeNumber(limit.limit)} used`,
+      usedPercent: typeof limit.usedPercent === "number"
+        ? limit.usedPercent
+        : (limit.used / limit.limit) * 100,
+    };
+  }
+  if (typeof limit.usedPercent === "number") {
+    return { ...base, figure: `${formatUsedPercent(limit.usedPercent)}%`, text: "used", usedPercent: limit.usedPercent };
+  }
+  if (typeof limit.remaining === "number" && typeof limit.limit === "number" && limit.limit !== 100 && limit.limit > 0) {
+    const used = Math.max(0, limit.limit - limit.remaining);
+    return {
+      ...base,
+      figure: formatWholeNumber(used),
+      text: `of ${formatWholeNumber(limit.limit)} used`,
+      usedPercent: (used / limit.limit) * 100,
+    };
+  }
+  if (typeof limit.remaining === "number") {
+    const used = Math.max(0, Math.min(100, 100 - limit.remaining));
+    return { ...base, figure: `${formatUsedPercent(used)}%`, text: "used", usedPercent: used };
+  }
+  return { ...base, text: "Unavailable" };
+}
+
+function rateLimitDisplayLabel(limit: BackendRateLimitSummary): string {
+  const { label } = splitRateLimitName(limit.name);
+  return isReserveRateLimit(limit)
+    ? "Luna Reserve"
+    : isSparkRateLimit(limit)
+      ? `Spark ${label}`
+      : label;
+}
+
 export function formatRateLimitLine(limit: BackendRateLimitSummary): string {
   if (isCreditsRateLimit(limit)) {
     return formatCreditsLine(limit);
   }
   const { label } = splitRateLimitName(limit.name);
-  const displayLabel = isReserveRateLimit(limit)
-    ? "Luna Reserve"
-    : isSparkRateLimit(limit)
-      ? `Spark ${label}`
-      : label;
+  const displayLabel = rateLimitDisplayLabel(limit);
   const resetText = formatRateLimitReset(limit.resetAt);
   const suffix = resetText ? `, resets ${resetText}` : "";
   if (
@@ -220,4 +309,31 @@ function formatRateLimitReset(resetAt: number | undefined): string | undefined {
     month: "short",
     day: "numeric",
   }).format(date);
+}
+
+/** Today's time, a weekday and hour within the week, else the date. */
+function formatRateLimitResetCompact(
+  resetAt: number | undefined,
+  now: number,
+): string | undefined {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
+    return undefined;
+  }
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  if (date.toDateString() === new Date(now).toDateString()) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+  const sixDaysMs = 6 * 24 * 60 * 60 * 1000;
+  return new Intl.DateTimeFormat(
+    undefined,
+    resetAt >= now && resetAt - now < sixDaysMs
+      ? { weekday: "short", hour: "numeric" }
+      : { month: "short", day: "numeric" },
+  ).format(date);
 }
