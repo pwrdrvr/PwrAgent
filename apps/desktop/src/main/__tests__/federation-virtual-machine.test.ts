@@ -71,4 +71,22 @@ describe("probeVirtualMachine", () => {
     expect(await probeVirtualMachine(probe("win32", {}, bios("Dell Inc.", "XPS 8960")))).toBe(false);
     expect(await probeVirtualMachine(probe("win32", {}, "ERROR: The system was unable to find the key"))).toBeUndefined();
   });
+
+  it("runs the system reg.exe by path, never a search-path lookup", async () => {
+    const commands: string[] = [];
+    const record = (systemRoot?: string): VirtualMachineProbe => ({
+      ...probe("win32"),
+      systemRoot,
+      run: async (command) => {
+        commands.push(command);
+        return "";
+      },
+    });
+    await probeVirtualMachine(record("D:\\Windows"));
+    await probeVirtualMachine(record());
+    expect(commands).toEqual([
+      "D:\\Windows\\System32\\reg.exe",
+      "C:\\Windows\\System32\\reg.exe",
+    ]);
+  });
 });

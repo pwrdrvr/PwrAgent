@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   FEDERATION_SHORT_NAME_KEEP_LENGTH,
   FEDERATION_SHORT_NAME_MAX_LENGTH,
@@ -26,6 +26,15 @@ export function FederationShortNameField(props: {
 }) {
   const [draft, setDraft] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const hintId = useId();
+  const renameRef = useRef<HTMLButtonElement>(null);
+  const editing = useRef(false);
+  // Leaving the editor unmounts the focused input; hand focus back to the
+  // control that opened it rather than dropping it to the page.
+  useEffect(() => {
+    if (draft === undefined && editing.current) renameRef.current?.focus();
+    editing.current = draft !== undefined;
+  }, [draft]);
   const setter = props.desktopApi?.setFederationShortName;
   const normalized = draft === undefined ? undefined : normalizeFederationShortName(draft);
 
@@ -47,6 +56,7 @@ export function FederationShortNameField(props: {
         <input
           className="settings-input federation-short-name__input"
           aria-label={`Short name for ${props.label}`}
+          aria-describedby={hintId}
           value={draft}
           maxLength={FEDERATION_SHORT_NAME_MAX_LENGTH * 2}
           placeholder={props.shortLabel ?? props.label}
@@ -57,6 +67,11 @@ export function FederationShortNameField(props: {
             if (event.key === "Enter" && normalized) {
               event.preventDefault();
               apply(normalized);
+            } else if (event.key === "Escape" && !saving) {
+              // Claimed, so the Settings layer behind does not close too.
+              event.preventDefault();
+              event.stopPropagation();
+              setDraft(undefined);
             }
           }}
         />
@@ -76,7 +91,7 @@ export function FederationShortNameField(props: {
         >
           Cancel
         </button>
-        <span className="federation-short-name__hint">
+        <span className="federation-short-name__hint" id={hintId}>
           {`1 to ${FEDERATION_SHORT_NAME_MAX_LENGTH} characters`}
         </span>
       </span>
@@ -99,6 +114,7 @@ export function FederationShortNameField(props: {
         </span>
       ) : null}
       <button
+        ref={renameRef}
         className="button button--ghost"
         type="button"
         aria-label={`Rename short name for ${props.label}`}

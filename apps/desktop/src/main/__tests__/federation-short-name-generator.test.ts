@@ -66,6 +66,19 @@ describe("federationShortNamesNeedGeneration", () => {
     ])).toBe(true);
   });
 
+  it("does not ask about a clash between reserved names, which no answer can fix", () => {
+    expect(federationShortNamesNeedGeneration([
+      { ...studio, current: "M5 Max" },
+      { label: "Win-PC", profiles: [] },
+      { label: "win-pc", profiles: [] },
+    ])).toBe(false);
+    expect(federationShortNamesNeedGeneration([
+      { ...studio, current: "M5 Max" },
+      { ...windows, override: "MBP-M2-Max" },
+      laptop,
+    ])).toBe(false);
+  });
+
   it("never asks for a federation of short labels", () => {
     expect(federationShortNamesNeedGeneration([laptop, { label: "Linux VM", profiles: [] }])).toBe(false);
   });
@@ -134,6 +147,27 @@ describe("validateFederationShortNameAnswer", () => {
     ]), "invalid_name"],
   ])("rejects the whole answer for %s", (_case, value, reason) => {
     expect(validateFederationShortNameAnswer(value, plan)).toEqual({ ok: false, reason });
+  });
+
+  it("rejects another machine's full label, as an operator rename does", () => {
+    // Overridden: the label is still how the operator knows the machine.
+    expect(validateFederationShortNameAnswer(
+      answer([{ label: "Studio-MBP-M5-Max", shortName: "win-desktop" }]),
+      planFederationShortNames([studio, { label: "Win-Desktop", profiles: [], override: "Gamer" }]),
+    )).toEqual({ ok: false, reason: "name_not_unique" });
+    // Another candidate's label, even while that candidate is renamed.
+    expect(validateFederationShortNameAnswer(
+      answer([
+        { label: "Studio-MBP-M5-Max", shortName: "Win-Desktop" },
+        { label: "Win-Desktop", shortName: "Win PC" },
+      ]),
+      planFederationShortNames([studio, { label: "Win-Desktop", profiles: [] }]),
+    )).toEqual({ ok: false, reason: "name_not_unique" });
+    // A candidate may keep its own label when that is short enough.
+    expect(validateFederationShortNameAnswer(
+      answer([{ label: "Win-Desktop", shortName: "Win-Desktop" }]),
+      planFederationShortNames([{ label: "Win-Desktop", profiles: [] }]),
+    )).toMatchObject({ ok: true });
   });
 
   it("rejects a name longer than the label it shortens", () => {

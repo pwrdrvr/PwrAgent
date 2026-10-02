@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 
 /**
  * Best-effort guest detection for the host facts a federation instance
@@ -23,6 +24,8 @@ const PROBE_TIMEOUT_MS = 2_000;
 
 export type VirtualMachineProbe = {
   platform: NodeJS.Platform;
+  /** `%SystemRoot%` on Windows, where `reg.exe` lives. */
+  systemRoot?: string;
   readFile: (filePath: string) => Promise<string>;
   run: (command: string, args: string[]) => Promise<string>;
 };
@@ -44,7 +47,9 @@ export async function probeVirtualMachine(
         return value === "1" ? true : value === "0" ? false : undefined;
       }
       case "win32": {
-        const bios = await probe.run("reg", [
+        // The system binary by path, never whatever `reg` the search path finds.
+        const reg = path.win32.join(probe.systemRoot ?? "C:\\Windows", "System32", "reg.exe");
+        const bios = await probe.run(reg, [
           "query",
           "HKLM\\HARDWARE\\DESCRIPTION\\System\\BIOS",
         ]);
@@ -85,6 +90,7 @@ async function probeLinux(probe: VirtualMachineProbe): Promise<boolean | undefin
 
 const defaultProbe: VirtualMachineProbe = {
   platform: process.platform,
+  systemRoot: process.env.SystemRoot,
   readFile: async (filePath) => await fs.readFile(filePath, "utf8"),
   run: async (command, args) => await new Promise<string>((resolve, reject) => {
     execFile(

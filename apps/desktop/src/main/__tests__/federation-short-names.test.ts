@@ -43,6 +43,7 @@ function harness(options?: {
     writes: 0,
     published: 0,
     broadcasts: [] as Array<{ entries: FederationInstanceShortName[]; excludePeerId?: string }>,
+    sends: [] as Array<{ peerId: string; entries: FederationInstanceShortName[] }>,
   };
   const plans: FederationShortNamePlan[] = [];
   const coordinator = new FederationShortNameCoordinator({
@@ -59,6 +60,7 @@ function harness(options?: {
       return state.answer(plan);
     },
     broadcast: (entries, excludePeerId) => state.broadcasts.push({ entries, excludePeerId }),
+    sendTo: (peerId, entries) => state.sends.push({ peerId, entries }),
     publishChanged: () => {
       state.published += 1;
     },
@@ -255,6 +257,40 @@ describe("FederationShortNameCoordinator on the gateway", () => {
     expect(h.short("inst_studio")).toBe("M5 Max");
   });
 
+  it("announces its map to the peer that connected, and only to it", async () => {
+    const h = harness();
+    h.coordinator.announce("inst_laptop");
+    // Nothing to say before any name exists.
+    expect(h.state.sends).toEqual([]);
+    await h.settle();
+    const broadcasts = h.state.broadcasts.length;
+    h.coordinator.announce("inst_laptop");
+    expect(h.state.sends).toEqual([{ peerId: "inst_laptop", entries: h.coordinator.entries() }]);
+    expect(h.state.broadcasts).toHaveLength(broadcasts);
+  });
+
+  it("extends a peer's override to the machine's other profiles in one write", async () => {
+    const h = harness();
+    await h.settle();
+    const writes = h.state.writes;
+    const broadcasts = h.state.broadcasts.length;
+    const studio = h.coordinator.entries().find((entry) => entry.instanceId === "inst_studio")!;
+    h.advance(10);
+    // A client renamed one profile while the gateway was out of reach.
+    expect(h.coordinator.apply([{
+      ...studio,
+      shortLabel: "Studio",
+      source: "override",
+      updatedAt: studio.updatedAt + 5,
+    }], "inst_laptop")).toBe(true);
+    expect(h.short("inst_studio")).toBe("Studio");
+    expect(h.short("inst_studio_dev")).toBe("Studio");
+    expect(h.state.writes).toBe(writes + 1);
+    expect(h.state.broadcasts).toHaveLength(broadcasts + 1);
+    // The source learns about the sibling too.
+    expect(h.state.broadcasts.at(-1)?.excludePeerId).toBeUndefined();
+  });
+
   it("tombstones a revoked instance and propagates the removal", async () => {
     const h = harness();
     await h.settle();
@@ -331,7 +367,7 @@ describe("FederationShortNameCoordinator write budget", () => {
       const reconnect = await measureSqliteWrites(async () => {
         for (let index = 0; index < 20; index += 1) {
           await gateway.settle();
-          gateway.coordinator.announce();
+          gateway.coordinator.announce("inst_laptop");
           gateway.coordinator.apply(snapshot, "inst_laptop");
         }
       });

@@ -1323,15 +1323,19 @@ export function FederationSettings(props: FederationSettingsProps) {
                       ))}
                     </select>
                   </span>
-                  <FederationShortNameField
-                    instanceId={peer.id}
-                    label={peer.label}
-                    shortLabel={peer.shortLabel}
-                    source={peer.shortLabelSource}
-                    desktopApi={props.desktopApi}
-                    onChanged={() => void loadHealth()}
-                    onError={setActionError}
-                  />
+                  {/* The short-name map covers live instances with a real
+                      label only, so a rename here could never apply. */}
+                  {peer.status !== "revoked" && !peer.revokedAt && peer.label !== peer.id ? (
+                    <FederationShortNameField
+                      instanceId={peer.id}
+                      label={peer.label}
+                      shortLabel={peer.shortLabel}
+                      source={peer.shortLabelSource}
+                      desktopApi={props.desktopApi}
+                      onChanged={() => void loadHealth()}
+                      onError={setActionError}
+                    />
+                  ) : null}
                   <button
                     className="button button--secondary"
                     type="button"

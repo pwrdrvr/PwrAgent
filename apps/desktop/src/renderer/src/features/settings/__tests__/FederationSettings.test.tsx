@@ -867,6 +867,14 @@ describe("FederationSettings", () => {
           status: "connected",
           capabilities: ["thread_navigation"],
         },
+        {
+          id: "client_gone",
+          label: "Old-Linux-Build-Box",
+          role: "client",
+          status: "revoked",
+          revokedAt: 1,
+          capabilities: [],
+        },
       ],
     };
     const setFederationShortName = vi.fn(async (request: { instanceId: string; shortLabel: string | null }) => {
@@ -889,6 +897,7 @@ describe("FederationSettings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Rename short name for DESKTOP-17ISFOI" }));
     const input = screen.getByLabelText("Short name for DESKTOP-17ISFOI");
     expect(input).toHaveValue("Win PC");
+    expect(input).toHaveAccessibleDescription("1 to 12 characters");
     fireEvent.change(input, { target: { value: "a name far too long" } });
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     fireEvent.change(input, { target: { value: "  Win   VM " } });
@@ -905,6 +914,12 @@ describe("FederationSettings", () => {
     fireEvent.change(screen.getByLabelText("Short name for DESKTOP-17ISFOI"), { target: { value: "M4 Mini" } });
     fireEvent.keyDown(screen.getByLabelText("Short name for DESKTOP-17ISFOI"), { key: "Enter" });
     expect(await screen.findByText("Mac-Mini-M4 already uses that name.")).toBeInTheDocument();
+    // Escape leaves the editor and hands focus back to Rename.
+    fireEvent.keyDown(screen.getByLabelText("Short name for DESKTOP-17ISFOI"), { key: "Escape" });
+    expect(screen.queryByLabelText("Short name for DESKTOP-17ISFOI")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename short name for DESKTOP-17ISFOI" })).toHaveFocus();
+    // A revoked instance is out of the short-name map, so it offers no rename.
+    expect(screen.queryByRole("button", { name: "Rename short name for Old-Linux-Build-Box" })).not.toBeInTheDocument();
     // The local machine's own short name sits in the Configuration card.
     expect(screen.getByRole("button", { name: "Rename short name for Mac-Mini-M4" })).toBeInTheDocument();
   });

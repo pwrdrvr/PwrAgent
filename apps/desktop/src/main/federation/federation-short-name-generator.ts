@@ -51,18 +51,18 @@ export function planFederationShortNames(
  * name (a new machine, or a renamed one), or the current names no longer
  * tell the machines apart (a machine joined whose kept label or override
  * collides with an existing short name). A machine leaving never asks.
+ *
+ * Only a collision the model can fix counts. Two reserved names that clash
+ * (two kept labels differing in case) stay clashing whatever it answers.
  */
 export function federationShortNamesNeedGeneration(
   machines: readonly FederationShortNameMachine[],
 ): boolean {
   const plan = planFederationShortNames(machines);
   if (plan.candidates.some((machine) => !machine.current)) return true;
-  const seen = new Set<string>();
-  for (const name of [
-    ...plan.reserved.map((entry) => entry.name),
-    ...plan.candidates.map((machine) => machine.current!),
-  ]) {
-    const key = federationShortNameKey(name);
+  const seen = new Set(plan.reserved.map((entry) => federationShortNameKey(entry.name)));
+  for (const machine of plan.candidates) {
+    const key = federationShortNameKey(machine.current!);
     if (seen.has(key)) return true;
     seen.add(key);
   }
@@ -214,6 +214,14 @@ export function validateFederationShortNameAnswer(
   const taken = new Map(
     plan.reserved.map((entry) => [federationShortNameKey(entry.name), entry.label]),
   );
+  // A name may not be another machine's full label either, the rule an
+  // operator rename follows: two machines would look alike.
+  const labels = new Map(
+    [...plan.candidates, ...plan.reserved].map((machine) => [
+      federationShortNameKey(machine.label),
+      machine.label,
+    ]),
+  );
   const result = new Map<string, string>();
   for (const entry of names) {
     const record = entry as { label?: unknown; shortName?: unknown } | null;
@@ -232,7 +240,8 @@ export function validateFederationShortNameAnswer(
       return { ok: false, reason: "name_longer_than_label" };
     }
     const key = federationShortNameKey(name);
-    if (taken.has(key)) {
+    const labelOwner = labels.get(key);
+    if (taken.has(key) || (labelOwner !== undefined && labelOwner !== label)) {
       return { ok: false, reason: "name_not_unique" };
     }
     taken.set(key, label);

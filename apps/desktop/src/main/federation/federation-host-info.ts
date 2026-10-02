@@ -61,8 +61,10 @@ export async function collectFederationHostInfo(options?: {
   detectVirtualMachine?: () => Promise<boolean | undefined>;
 }): Promise<FederationHostInfo> {
   const rootDir = options?.rootDir ?? resolvePwragentRoot();
+  // The probe can spawn a process; let it run beside the file reads.
+  const virtualMachinePending = (options?.detectVirtualMachine ?? detectVirtualMachine)()
+    .catch(() => undefined);
   const machineId = await readOrCreateFederationMachineId({ rootDir });
-  const virtualMachine = await (options?.detectVirtualMachine ?? detectVirtualMachine)();
   const cpuModel = os.cpus()[0]?.model?.replace(/\s+/g, " ").trim().slice(0, 120);
   let diskFreeBytes: number | undefined;
   try {
@@ -71,6 +73,7 @@ export async function collectFederationHostInfo(options?: {
   } catch {
     diskFreeBytes = undefined;
   }
+  const virtualMachine = await virtualMachinePending;
   return {
     platform: process.platform,
     osVersion: os.release(),

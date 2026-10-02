@@ -60,6 +60,8 @@ export type FederationShortNameDeps = {
   generate: (plan: FederationShortNamePlan) => Promise<FederationShortNameGenerationResult>;
   /** Send the full map to connected peers, except the one it came from. */
   broadcast: (entries: FederationInstanceShortName[], excludePeerId?: string) => void;
+  /** Send the full map to one connected peer. */
+  sendTo: (peerId: string, entries: FederationInstanceShortName[]) => void;
   /** Tell local renderers that short names changed. */
   publishChanged: () => void;
   log?: (message: string, fields: Record<string, unknown>) => void;
@@ -140,10 +142,14 @@ export class FederationShortNameCoordinator {
     return shortLabel && entry ? { shortLabel, source: entry.source } : undefined;
   }
 
-  /** Every instance broadcasts its copy on connect, as the celestial map does. */
-  announce(excludePeerId?: string): void {
+  /**
+   * Every instance sends its copy to a peer that just connected, as the
+   * celestial map does. Only to that peer: the others already hold the map,
+   * and a reconnect burst would otherwise resend it to everyone per connect.
+   */
+  announce(peerId: string): void {
     const entries = this.entries();
-    if (entries.length > 0) this.deps.broadcast(entries, excludePeerId);
+    if (entries.length > 0) this.deps.sendTo(peerId, entries);
   }
 
   /**
@@ -181,11 +187,20 @@ export class FederationShortNameCoordinator {
       return false;
     }
     this.replace(merged.entries);
+    // The coordinator extends an incoming name to the machine's other
+    // instances in the same commit and broadcast, rather than a second one.
+    const filled = this.disposed || !this.deps.isCoordinator()
+      ? []
+      : this.fillIn(this.machines());
+    const map = this.entryMap();
+    for (const entry of filled) map.set(entry.instanceId, entry);
     this.persist();
     this.deps.publishChanged();
-    this.deps.broadcast(this.entries(), sourcePeerId);
+    // Filled entries are news to the source too.
+    this.deps.broadcast(this.entries(), filled.length > 0 ? undefined : sourcePeerId);
     // A dual hub's clients can join the gateway's view through this path,
-    // and an incoming entry can collide with a local name.
+    // and an incoming entry can collide with a local name. The fill-in
+    // above leaves this pass write-free.
     this.reconcile();
     return true;
   }

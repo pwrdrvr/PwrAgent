@@ -1012,6 +1012,7 @@ export class DesktopFederationRuntime {
     }),
     broadcast: (entries, excludePeerId) =>
       this.broadcastShortNames(entries, excludePeerId),
+    sendTo: (peerId, entries) => this.sendShortNames(peerId, entries),
     publishChanged: () => this.publishShortNamesChanged(),
     log: (message, fields) => log.info(message, fields),
   });
@@ -3737,7 +3738,7 @@ export class DesktopFederationRuntime {
     // Icon assignments are sparse federation control-plane state rather than
     // a live backend event stream. Keep the existing reconnect convergence.
     this.broadcastCelestialIcons();
-    this.shortNames.announce();
+    this.shortNames.announce(gatewayInstanceId);
     this.syncDesiredEventSubscriptions();
     this.replayRelayedEventSubscriptions();
     if (pendingInviteToken) {
@@ -3944,7 +3945,7 @@ export class DesktopFederationRuntime {
     if (isAppStateInitialized()) {
       this.reconcileCelestialAssignments();
       this.shortNames.reconcile();
-      this.shortNames.announce();
+      this.shortNames.announce(connection.peerId);
     }
   }
 
@@ -5121,22 +5122,26 @@ export class DesktopFederationRuntime {
     entries: FederationInstanceShortName[],
     excludePeerId?: string,
   ): void {
-    const router = this.router;
-    if (!router) return;
-    const localInstanceId = this.ensureLocalInstanceId();
-    for (const connection of router.listConnections()) {
+    for (const connection of this.router?.listConnections() ?? []) {
       if (connection.peerId === excludePeerId) continue;
-      connection.sendEnvelope({
-        id: `federation-short-names:${randomUUID()}`,
-        kind: "notification",
-        method: FEDERATION_SHORT_NAMES_METHOD,
-        params: { entries },
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: localInstanceId,
-        targetInstanceId: connection.peerId,
-        createdAt: Date.now(),
-      });
+      this.sendShortNames(connection.peerId, entries);
     }
+  }
+
+  private sendShortNames(
+    peerId: FederationInstanceId,
+    entries: FederationInstanceShortName[],
+  ): void {
+    this.router?.getConnection(peerId)?.sendEnvelope({
+      id: `federation-short-names:${randomUUID()}`,
+      kind: "notification",
+      method: FEDERATION_SHORT_NAMES_METHOD,
+      params: { entries },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.ensureLocalInstanceId(),
+      targetInstanceId: peerId,
+      createdAt: Date.now(),
+    });
   }
 
   private applyShortNames(
