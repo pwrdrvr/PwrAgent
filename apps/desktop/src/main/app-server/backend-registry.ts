@@ -8289,11 +8289,16 @@ type PendingLiveThreadUsageLine = {
   observationSequence: number;
 };
 
-/** A running native worker's latest usage, not yet on its card. */
+/**
+ * A running native worker's latest usage, not yet in sqlite: the card's copy,
+ * and its priced usage lines by id (one per worker turn).
+ */
 type LiveCodexNativeSubAgentUsage = Pick<
   ThreadSubAgentSummary,
   "monitorUsage" | "preferredModel" | "preferredReasoningEffort" | "updatedAt"
->;
+> & {
+  lines: ReadonlyMap<string, ThreadUsageLineRecord>;
+};
 
 function withLiveCodexNativeSubAgentUsage(
   card: ThreadSubAgentSummary,
@@ -8760,11 +8765,12 @@ export class DesktopBackendRegistry {
     Map<string, ThreadSubAgentSummary>
   >();
   /**
-   * Native worker usage by parent thread, then monitor id. Writing it to the
-   * card on every usage notification rewrote the parent's whole overlay each
-   * time; the usage line joins the one-second live usage batch instead, and
-   * the card takes this at the worker's turn end or at close. Reads of the
-   * card go through `mergeLiveTokenMiserSubAgents`, so the rail stays live.
+   * Native worker usage by parent thread, then monitor id. A worker reports
+   * usage once per model response, usually seconds apart, so neither the card
+   * (a rewrite of the parent's whole overlay) nor the usage line is written
+   * per report: both wait here for the worker's turn end or close. Reads go
+   * through `mergeLiveTokenMiserSubAgents` and the live pricing merge, so the
+   * rail and the cost panel stay live.
    */
   private readonly liveCodexNativeSubAgentUsage = new Map<
     string,
@@ -15528,6 +15534,8 @@ export class DesktopBackendRegistry {
       withCompactions,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
+        ...[...(this.liveCodexNativeSubAgentUsage.get(params.threadId)?.values() ?? [])]
+          .flatMap((live) => [...live.lines.values()]),
       ],
     );
     const localIds = new Set(this.resolveCodexLocalModelIdsFn());
@@ -26950,14 +26958,18 @@ export class DesktopBackendRegistry {
           overlay: childOverlay,
           serviceTier,
         });
-        const usageBackfill = existing?.monitorUsage
+        // A running worker's usage can be live in memory, off its card and
+        // out of the pricing table until its turn ends. It is not missing.
+        const liveUsage = this.liveCodexNativeSubAgentUsage.get(parent.id)?.get(monitorId);
+        const knownUsage = existing?.monitorUsage ?? liveUsage?.monitorUsage;
+        const usageBackfill = knownUsage
           ? undefined
           : persistedUsageBackfill;
         const monitorTurnId =
           existing?.monitorTurnId
           ?? persistedUsageBackfill?.monitorTurnId;
         const pricingUsage =
-          existing?.monitorUsage
+          knownUsage
           ?? persistedUsageBackfill?.usage;
         const pricingLine = pricingUsage
           ? buildTaskMonitorUsageLine({
@@ -26974,7 +26986,7 @@ export class DesktopBackendRegistry {
               usage: pricingUsage,
             })
           : undefined;
-        const needsPricingWrite = pricingLine
+        const needsPricingWrite = pricingLine && !liveUsage
           ? usageBackfill
             ? true
             : typeof this.overlayStore.readThreadPricing === "function"
@@ -28984,9 +28996,10 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Moves live worker usage onto the cards: one commit per parent, applied to
-   * each card as stored now, so a status written meanwhile survives. Without a
-   * worker, every parent is written (close).
+   * Moves live worker usage into sqlite: the usage lines in one commit, then
+   * the cards in one commit per parent, each applied to the card as stored
+   * now so a status written meanwhile survives. Without a worker, every
+   * parent is written (close).
    */
   private async persistLiveCodexNativeSubAgentUsage(
     receiverThreadId?: string,
@@ -28997,7 +29010,11 @@ export class DesktopBackendRegistry {
       if (pending.length === 0) {
         continue;
       }
+      const lines = pending.flatMap(([, live]) => [...live.lines.values()]);
       try {
+        if (lines.length > 0 && typeof this.overlayStore.upsertThreadUsageLines === "function") {
+          await this.overlayStore.upsertThreadUsageLines({ lines });
+        }
         const overlay = await this.overlayStore.getThreadOverlayState({
           backend: "codex",
           threadId: parentThreadId,
@@ -29040,6 +29057,10 @@ export class DesktopBackendRegistry {
       }
       if (lives.size === 0) {
         this.liveCodexNativeSubAgentUsage.delete(parentThreadId);
+      }
+      if (lines.length > 0 && !this.closed) {
+        // The store prices what it writes; open panels take its copy.
+        await this.emitThreadPricingUpdated({ backend: "codex", threadId: parentThreadId });
       }
     }
   }
@@ -29150,22 +29171,23 @@ export class DesktopBackendRegistry {
 
     if (typeof this.overlayStore.upsertThreadUsageLines === "function") {
       // Usage notifications arrive once per model response for the life of
-      // the worker. The line joins the parent's one-second batch, which emits
-      // pricing once it commits; the card's copy waits in memory for the
-      // worker's turn end.
+      // the worker. The card's copy and the line both wait in memory for the
+      // worker's turn end; see `liveCodexNativeSubAgentUsage`.
       const lives = this.liveCodexNativeSubAgentUsage.get(parentThreadId)
         ?? new Map<string, LiveCodexNativeSubAgentUsage>();
+      const lines = new Map(lives.get(monitorId)?.lines ?? []);
+      lines.set(line.usageLineId, line);
       lives.set(monitorId, {
         ...settingsForCard,
+        lines,
         monitorUsage: usageSnapshot,
         updatedAt: Date.now(),
       });
       this.liveCodexNativeSubAgentUsage.set(parentThreadId, lives);
       logUnpricedThreadUsageLine(line);
-      this.bufferLiveThreadUsageLine({
+      await this.emitThreadPricingUpdated({
         backend: "codex",
-        line,
-        observationSequence: ++this.liveThreadUsageObservationSequence,
+        threadId: parentThreadId,
       });
     } else {
       await this.overlayStore.upsertThreadSubAgent({

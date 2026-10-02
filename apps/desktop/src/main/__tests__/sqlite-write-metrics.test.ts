@@ -1126,7 +1126,7 @@ describe("sqlite write metrics", () => {
   it.each([
     ["in one burst", 0],
     ["a second or more apart", 1_100],
-  ] as const)("holds native worker usage off the card until the worker's turn ends, updates %s", async (_case, gapMs) => {
+  ] as const)("holds native worker usage in memory until the worker's turn ends, updates %s", async (_case, gapMs) => {
     vi.useFakeTimers();
     const now = Date.now();
     await store.upsertThreadSubAgent({
@@ -1153,6 +1153,10 @@ describe("sqlite write metrics", () => {
         threadId: string,
         persisted: readonly ThreadSubAgentSummary[] | undefined,
       ): ThreadSubAgentSummary[];
+      readThreadPricingWithLiveTokenMiser(params: {
+        backend: "codex";
+        threadId: string;
+      }): Promise<{ lines: ThreadUsageLineRecord[] }>;
     };
     internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
     const usage = (total: number): AgentEvent => ({
@@ -1180,9 +1184,16 @@ describe("sqlite write metrics", () => {
             await vi.advanceTimersByTimeAsync(gapMs);
           }
         }
-        // Before the turn ends the card in sqlite has no usage, and the rail,
-        // which reads through the live merge, shows the latest.
+        // Before the turn ends sqlite has neither the card's usage nor the
+        // line. The rail and the cost panel read through the live merges.
         expect((await storedCard())?.monitorUsage).toBeUndefined();
+        expect((await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" }))
+          .lines.filter((line) => line.threadId === "worker-review")).toEqual([]);
+        expect((await internal.readThreadPricingWithLiveTokenMiser({
+          backend: "codex", threadId: "thread-parent",
+        })).lines.find((line) => line.threadId === "worker-review")).toMatchObject({
+          model: "gpt-5.5", priceStatus: "priced", inputTokens: 20_000,
+        });
         expect(
           internal.mergeLiveTokenMiserSubAgents("thread-parent", [(await storedCard())!])[0],
         ).toMatchObject({
@@ -1205,10 +1216,87 @@ describe("sqlite write metrics", () => {
           ? "native-subagent-usage-spaced"
           : "native-subagent-usage-burst",
         note: gapMs > 0
-          ? "20 native worker usage updates, each in its own one-second window, then the worker's turn end; was 2 commits and an overlay rewrite per update"
-          : "20 native worker usage updates in one one-second window, then the worker's turn end",
+          ? "20 native worker usage updates a second or more apart, then the worker's turn end writes the line and the card; was 2 commits per update"
+          : "20 native worker usage updates in one burst, then the worker's turn end writes the line and the card",
         writes,
       });
+    } finally {
+      vi.useRealTimers();
+      await registry.close();
+    }
+  });
+
+  it("does not backfill a worker whose usage is live", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    // An earlier finished turn of the worker, which discovery can backfill
+    // from when the card has no usage.
+    await store.persistThreadUsageActivity({
+      backend: "codex",
+      threadId: "worker-review",
+      activity: {
+        type: "activity",
+        id: "live-turn-usage-turn-old",
+        createdAt: now - 5_000,
+        summary: "Turn usage: 1,000 uncached in · 0 cached · 50 out (0 reasoning)",
+        status: "completed",
+        details: [],
+        turn: { id: "turn-old", status: "completed", completedAt: now - 5_000 },
+      },
+    });
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: "thread-parent",
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running", agentName: "review_savers",
+        preferredModel: "gpt-5.5", preferredReasoningEffort: "high",
+        monitorTurnId: "turn-review", createdAt: now - 10_000, updatedAt: now - 1_000,
+      },
+    });
+    const parent: AppServerThreadSummary = {
+      id: "thread-parent", source: "codex", title: "Review audit",
+      titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({
+        threads: [parent],
+        nativeSubAgentThreads: [{
+          ...parent, id: "worker-review", title: "Review savers", threadStatus: "active",
+          model: "gpt-5.5", reasoningEffort: "high",
+          codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
+        }],
+      }),
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      codexNativeSubAgentParents: Map<string, string>;
+      emit(event: AgentEvent): Promise<void>;
+    };
+    internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+    try {
+      await internal.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "worker-review",
+            turnId: "turn-worker",
+            tokenUsage: {
+              total: { inputTokens: 3_000, cachedInputTokens: 0, outputTokens: 50 },
+              last: { inputTokens: 3_000, cachedInputTokens: 0, outputTokens: 50 },
+            },
+          },
+        },
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(1_100);
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.listThreads({ backend: "codex", forceRefresh: true });
+      });
+      // The live usage is the worker's; discovery must not write a second,
+      // differently keyed line or card usage beside it.
+      expect(writes.commits).toBe(0);
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" });
+      expect(pricing.lines.filter((line) => line.threadId === "worker-review")).toEqual([]);
     } finally {
       vi.useRealTimers();
       await registry.close();

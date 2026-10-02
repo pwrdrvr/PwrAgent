@@ -470,17 +470,17 @@
   },
   "native-subagent-usage-burst": {
     "commits": 2,
-    "note": "20 native worker usage updates in one one-second window, then the worker's turn end",
+    "note": "20 native worker usage updates in one burst, then the worker's turn end writes the line and the card",
     "observedWalBytes": 82400,
     "rowsChanged": 4,
     "statements": 4
   },
   "native-subagent-usage-spaced": {
-    "commits": 21,
-    "note": "20 native worker usage updates, each in its own one-second window, then the worker's turn end; was 2 commits and an overlay rewrite per update",
-    "observedWalBytes": 1100040,
-    "rowsChanged": 61,
-    "statements": 61
+    "commits": 2,
+    "note": "20 native worker usage updates a second or more apart, then the worker's turn end writes the line and the card; was 2 commits per update",
+    "observedWalBytes": 82400,
+    "rowsChanged": 4,
+    "statements": 4
   },
   "navigation-append-thread-pin": {
     "commits": 1,
