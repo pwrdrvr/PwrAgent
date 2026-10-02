@@ -35272,9 +35272,25 @@ export class DesktopBackendRegistry {
         _meta: null,
       },
     };
-    // Host-owned, once-only consent. Do not route this through ACP's blanket
-    // Full Access permission shortcut or persist an approval for the wrapper.
-    if (this.findHeadlessAutomationTurnForRequest(context.backend, notification)) return false;
+    // This is a host-owned invocation approval, not upstream MCP elicitation.
+    // Full Access already authorizes it; ordinary forms and URL flows still
+    // pass through performServerRequest and remain interactive.
+    const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
+    if (await this.isMcpGatewayFullAccess(context, automation?.executionMode)) {
+      signal.throwIfAborted();
+      backendRegistryLog.info("auto-approving Full Access MCP gateway invocation", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        connectionId: invocation.connectionId,
+        serverName: invocation.serverName,
+        toolName: invocation.toolName,
+      });
+      return true;
+    }
+    // Codex auto_review has no client API for reviewing host-owned dynamic
+    // calls. Keep scoped confirmation until that integration is available.
+    if (automation) return false;
     const key = buildPendingRequestKey({ ...context, requestId });
     return await new Promise<boolean>((resolve, reject) => {
       const finish = (approved: boolean, error?: unknown): void => {
@@ -35298,6 +35314,33 @@ export class DesktopBackendRegistry {
       if (signal.aborted) { aborted(); return; }
       void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
+  }
+
+  private async isMcpGatewayFullAccess(
+    context: AgentToolCallContext,
+    automationMode?: ThreadExecutionMode,
+  ): Promise<boolean> {
+    if (context.backend === "codex") {
+      const activeMode = context.turnId
+        ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId))
+        : undefined;
+      const executionMode = activeMode ?? automationMode
+        ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId);
+      return executionMode === "full-access";
+    }
+    if (isAcpBackendId(context.backend)) {
+      const session = this.acpBackend.getSession(context.backend, context.threadId);
+      const runtimeCapabilities = this.acpBackend.getInstalledAgent(context.backend)?.runtimeCapabilities;
+      // Match ACP permission approvals: a runtime selector is authoritative
+      // over a stale session executionMode value.
+      return acpRuntimeHasExecutionModeSelection({
+        runtime: session?.acpRuntime,
+        runtimeCapabilities,
+      })
+        ? acpRuntimeStateRequiresFullAccess({ runtime: session?.acpRuntime, runtimeCapabilities })
+        : session?.executionMode === "full-access";
+    }
+    return false;
   }
 
   private async isTokenMiserDynamicToolCallEnabled(

@@ -21,12 +21,24 @@ broker. The owner re-reads the thread selection after discovery and before
 invocation, including when another process changed it. The model cannot supply
 another thread identity, endpoint or credential.
 
-Every invocation requests once-only confirmation showing the original
-connection, tool and complete arguments. There is no cached permission for the
-generic wrapper, including in Full Access. Headless automations cannot obtain
-this confirmation and decline the call. Native invocation remains available
-under the backend's own policy; inherited provider MCP servers are not exposed
-through this gateway.
+Full Access approves gateway invocations automatically, including headless
+automations. Codex uses the active turn's applied mode, falling back to the
+automation mode or saved thread mode when no active mode is recorded. ACP uses
+its runtime mode selector when present, otherwise its session execution mode.
+Selection, actor permissions, connection authorization and schema validation
+still apply to every call. No permission is cached for the generic wrapper.
+
+Default and Auto access request once-only confirmation showing the original
+connection, tool and complete arguments. Codex's App Server does not expose an
+API for submitting host-owned dynamic calls to its Auto reviewer. Until that
+integration exists, Auto gateway calls still require human confirmation.
+Headless calls without Full Access decline because they cannot obtain it.
+Native invocation remains available under the backend's own policy; inherited
+provider MCP servers are not exposed through this gateway.
+
+Only the gateway's host-created invocation approval follows this policy.
+Upstream MCP forms, including empty forms, and URL flows remain interactive:
+their shape alone does not distinguish tool approval from a question or login.
 
 Arguments are validated before requesting approval. After approval, the owner
 broker lists the tools again, compares the revision, validates the arguments and

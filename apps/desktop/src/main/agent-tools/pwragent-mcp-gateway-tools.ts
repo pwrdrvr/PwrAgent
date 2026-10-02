@@ -41,7 +41,7 @@ export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, 
   }, {
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name: "call_mcp_tool",
-    description: "Invoke a discovered tool on this thread's selected PwrAgent MCP connections. Use the exact connectionId, toolName, schemaRevision and arguments from search_mcp_tools. The gateway rechecks selection, authorization and schema, then requests approval for this specific operation. A schema change requires another search. Never retry a failed side effect without knowing whether it completed. Native tools remain available independently.",
+    description: "Invoke a discovered tool on this thread's selected PwrAgent MCP connections. Use the exact connectionId, toolName, schemaRevision and arguments from search_mcp_tools. The gateway rechecks selection, authorization and schema. Full Access approves the invocation automatically; Default and Auto access request confirmation for this specific operation. A schema change requires another search. Never retry a failed side effect without knowing whether it completed. Native tools remain available independently.",
     inputSchema: {
       type: "object", additionalProperties: false,
       required: ["connectionId", "toolName", "schemaRevision", "arguments"],

@@ -2,13 +2,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerPendingRequestNotification, AgentEvent } from "@pwragent/shared";
+import type { AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import type { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
+import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import type { McpGatewayInvocation } from "../mcp-connections/mcp-gateway-catalog";
 
 describe("backend MCP gateway dispatch", () => {
   let directory: string;
@@ -18,6 +21,18 @@ describe("backend MCP gateway dispatch", () => {
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let internals: {
     activeTurnKeys: Set<string>;
+    activeCodexTurnModes: Map<string, ThreadExecutionMode>;
+    acpBackend: AcpBackendAdapter;
+    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal): Promise<boolean>;
+    headlessAutomationTurns: Map<string, {
+      agentThreadId: string;
+      backend: "codex";
+      automationRunId: string;
+      executionMode: ThreadExecutionMode;
+      executionThreadId: string;
+      queueEntryId: string;
+      startedAt: number;
+    }>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<{ success: boolean; contentItems: unknown[] }>;
     pendingServerRequests: Map<string, unknown>;
   };
@@ -58,6 +73,101 @@ describe("backend MCP gateway dispatch", () => {
     return event;
   }
 
+  function declineUnexpectedApproval() {
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1",
+        requestId: String(event.notification.params.requestId),
+        response: { action: "decline", content: null, _meta: null },
+      });
+    });
+    return events;
+  }
+
+  it("invokes a selected MCP tool without a prompt in Full Access", async () => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
+    const events = declineUnexpectedApproval();
+    const result = await internals.handleServerRequest("codex", request("call_mcp_tool", args));
+    expect(result.success).toBe(true);
+    expect(events).toEqual([]);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
+  it("uses the active turn's Full Access when the saved mode differs", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    const events = declineUnexpectedApproval();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+    expect(events).toEqual([]);
+  });
+
+  it.each(["default", "auto"] as const)("keeps gateway confirmation for an active %s turn even with a saved Full Access mode", async (mode) => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
+    internals.activeCodexTurnModes.set("thread-1:turn-1", mode);
+    const events = declineUnexpectedApproval();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+  });
+
+  it.each(["full-access", "default", "auto"] as const)("honors %s for a headless automation's gateway call", async (mode) => {
+    internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      agentThreadId: "automation-1", backend: "codex", automationRunId: "run-1",
+      executionMode: mode, executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+    });
+    const events = declineUnexpectedApproval();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(mode === "full-access");
+    expect(events).toEqual([]);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(mode === "full-access" ? 1 : 0);
+  });
+
+  it.each([
+    { mode: "form" as const, requestedSchema: { type: "object" as const, properties: {} } },
+    { mode: "form" as const, requestedSchema: { type: "object" as const, properties: { region: { type: "string" } }, required: ["region"] } },
+    { mode: "url" as const, url: "https://example.com/authorize", elicitationId: "auth-1" },
+  ])("leaves upstream MCP $mode elicitation interactive in Full Access", async (shape) => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
+    const pending = approval();
+    const response = internals.handleServerRequest("codex", {
+      method: "mcpServer/elicitation/request",
+      params: { threadId: "thread-1", turnId: "turn-1", requestId: "upstream-1", serverName: "Fixture", message: "Please confirm or answer", _meta: null, ...shape },
+    });
+    await pending;
+    expect(internals.pendingServerRequests.size).toBe(1);
+    await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: "upstream-1", response: { action: "cancel", content: null, _meta: null } });
+    expect(await response).toEqual({ action: "cancel", content: null, _meta: null });
+  });
+
+  it.each([
+    { executionMode: "full-access" as const, currentModeId: undefined, approved: true },
+    { executionMode: "default" as const, currentModeId: "yolo", approved: true },
+    { executionMode: "full-access" as const, currentModeId: "default", approved: false },
+  ])("uses the applied ACP runtime policy for gateway approval: $executionMode / $currentModeId", async ({ executionMode, currentModeId, approved }) => {
+    const backend = "acp:fixture" as const;
+    vi.spyOn(internals.acpBackend, "getSession").mockReturnValue({
+      backendId: backend, sessionId: "thread-1", title: "Fixture", cwd: directory,
+      createdAt: 1, updatedAt: 1, status: "active", executionMode,
+      ...(currentModeId ? { acpRuntime: { currentModeId, updatedAt: 1 } } : {}),
+    });
+    vi.spyOn(internals.acpBackend, "getInstalledAgent").mockReturnValue(undefined);
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({ backend, threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "decline", content: null, _meta: null } });
+    });
+    expect(await internals.approveGatewayInvocation(
+      { ...args, serverName: "Fixture" },
+      { backend, threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
+      new AbortController().signal,
+    )).toBe(approved);
+    expect(events).toHaveLength(approved ? 0 : 1);
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
   it("requires source-specific approval and deduplicates the same dynamic call", async () => {
     const pending = approval();
     const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));
@@ -83,7 +193,8 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
   });
 
-  it("rejects idle-thread and messaging-policy violations before reading tools", async () => {
+  it.each(["default", "full-access"] as const)("rejects idle-thread and messaging-policy violations in %s before reading tools", async (executionMode) => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode });
     internals.activeTurnKeys.clear();
     expect((await internals.handleServerRequest("codex", request("search_mcp_tools", { query: "lookup" }))).success).toBe(false);
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
@@ -92,7 +203,8 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
-  it("adds no SQLite writes for discovery, approval and invocation", async () => {
+  it.each(["default", "full-access"] as const)("adds no SQLite writes for discovery, approval and invocation in %s", async (executionMode) => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode });
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
     registry.onEvent(async (event) => {
       if (event.notification.method !== "mcpServer/elicitation/request") return;
