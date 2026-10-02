@@ -1,5 +1,6 @@
 import { BrowserWindow, nativeTheme } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
+import type { DesktopAppearanceTheme } from "@pwragent/shared";
 import type {
   QuitBlockerItem,
   QuitBlockerQueueSnapshot,
@@ -96,10 +97,43 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
   },
 };
 
+/** Catppuccin palette (Mocha dark, Latte light). Keep in lockstep with the
+ *  `:root[data-palette="catppuccin"]` blocks in app.css; the border is
+ *  their `--border-subtle` mix resolved to a literal. */
+export const CATPPUCCIN_QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
+  dark: {
+    bg: "#1e1e2e",
+    sidebar: "#181825",
+    surface: "#252536",
+    rowActive: "#342d37",
+    panelHover: "#28293a",
+    border: "rgba(208, 216, 245, 0.1)",
+    textPrimary: "#d0d8f5",
+    textSecondary: "#b9bed4",
+    textMuted: "#a4a9be",
+    accent: "#d99d7a",
+    accentBright: "#e4a47e",
+    buttonText: "#11111b",
+  },
+  light: {
+    bg: "#eff1f5",
+    sidebar: "#e6e9ef",
+    surface: "#f7f8fa",
+    rowActive: "#f1e3de",
+    panelHover: "#e4e7ed",
+    border: "rgba(52, 54, 72, 0.09)",
+    textPrimary: "#343648",
+    textSecondary: "#454756",
+    textMuted: "#545666",
+    accent: "#983801",
+    accentBright: "#8e3401",
+    buttonText: "#eff1f5",
+  },
+};
+
 /** Resolve the active PwrAgent theme (honoring the in-app setting, not just the
  *  OS). "system" falls back to the OS scheme via nativeTheme. */
-function resolveQuitDialogTheme(): "dark" | "light" {
-  const { theme } = readBootstrapAppearance();
+function resolveQuitDialogTheme(theme: DesktopAppearanceTheme): "dark" | "light" {
   if (theme === "light") return "light";
   if (theme === "dark") return "dark";
   return nativeTheme.shouldUseDarkColors ? "dark" : "light";
@@ -157,8 +191,13 @@ export async function showQuitConfirmationDialog(
   const navigationPrefix = `pwragent-quit-confirmation://${token}/`;
   const parent =
     options.parent && !options.parent.isDestroyed() ? options.parent : undefined;
-  const colorScheme = resolveQuitDialogTheme();
-  const palette = QUIT_DIALOG_PALETTES[colorScheme];
+  const appearance = readBootstrapAppearance();
+  const colorScheme = resolveQuitDialogTheme(appearance.theme);
+  const palette = (
+    appearance.palette === "catppuccin"
+      ? CATPPUCCIN_QUIT_DIALOG_PALETTES
+      : QUIT_DIALOG_PALETTES
+  )[colorScheme];
   const items = options.items ?? [];
   const countdownSeconds = resolveQuitCountdownSeconds(
     options.countdownSeconds,

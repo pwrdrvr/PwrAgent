@@ -25,7 +25,9 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
   DESKTOP_UI_LAYOUT_DEFAULTS,
+  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearancePalette,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
 } from "@pwragent/shared";
@@ -62,6 +64,7 @@ import type {
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopTextSize,
   CancelThreadExecutionModeQueueRequest,
@@ -2769,6 +2772,7 @@ const desktopApi = Object.freeze({
   onAppearanceChanged: (
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
+      palette: DesktopAppearancePalette;
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
@@ -2778,6 +2782,7 @@ const desktopApi = Object.freeze({
       _event: Electron.IpcRendererEvent,
       payload: {
         theme: DesktopAppearanceTheme;
+        palette: DesktopAppearancePalette;
         density: DesktopAppearanceDensity;
         sidebarTextSize: DesktopTextSize;
         transcriptTextSize: DesktopTextSize;
@@ -2986,6 +2991,7 @@ const desktopApi = Object.freeze({
 const APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
 function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
+  palette: DesktopAppearancePalette;
   density: "mission-control" | "compact";
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
@@ -2998,6 +3004,11 @@ function readBootstrapAppearance(): {
         raw && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
           ? raw.theme
           : "system";
+      const palette =
+        raw && typeof raw.palette === "string"
+          && isDesktopAppearancePalette(raw.palette)
+          ? raw.palette
+          : DESKTOP_APPEARANCE_PALETTE_DEFAULT;
       const density =
         raw && (raw.density === "mission-control" || raw.density === "compact")
           ? raw.density
@@ -3015,13 +3026,14 @@ function readBootstrapAppearance(): {
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
-      return { theme, density, sidebarTextSize, transcriptTextSize };
+      return { theme, palette, density, sidebarTextSize, transcriptTextSize };
     } catch {
       break;
     }
   }
   return {
     theme: "system",
+    palette: DESKTOP_APPEARANCE_PALETTE_DEFAULT,
     density: "mission-control",
     sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,

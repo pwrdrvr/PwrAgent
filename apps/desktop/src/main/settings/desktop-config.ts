@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -39,12 +40,14 @@ import type {
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   isDesktopAppearanceDensity,
+  isDesktopAppearancePalette,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
   isDesktopCodexProfileModel,
@@ -114,6 +117,7 @@ export type DesktopSettingsConfig = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
+      palette?: DesktopAppearancePalette;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -831,6 +835,18 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["general", "appearance", "theme"] });
     } else {
       set(["general", "appearance", "theme"], patch.general.appearance.theme);
+    }
+  }
+  if (patch.general?.appearance?.palette !== undefined) {
+    if (
+      patch.general.appearance.palette === DESKTOP_APPEARANCE_PALETTE_DEFAULT
+    ) {
+      edits.push({ op: "delete", path: ["general", "appearance", "palette"] });
+    } else {
+      set(
+        ["general", "appearance", "palette"],
+        patch.general.appearance.palette,
+      );
     }
   }
   if (patch.onboarding?.completed !== undefined) {
@@ -1890,6 +1906,7 @@ function normalizeDesktopConfig(
       },
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
+        palette: readAppearancePalette(generalAppearance?.palette),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
@@ -2622,6 +2639,14 @@ function readAppearanceTheme(
   value: TomlScalar | undefined,
 ): DesktopAppearanceTheme | undefined {
   return typeof value === "string" && isDesktopAppearanceTheme(value)
+    ? value
+    : undefined;
+}
+
+function readAppearancePalette(
+  value: TomlScalar | undefined,
+): DesktopAppearancePalette | undefined {
+  return typeof value === "string" && isDesktopAppearancePalette(value)
     ? value
     : undefined;
 }

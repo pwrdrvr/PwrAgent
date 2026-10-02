@@ -1867,6 +1867,7 @@ describe("App", () => {
         },
         appearance: {
           theme: { value: "system", source: "default" },
+          palette: { value: "tangerine", source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },
@@ -2183,6 +2184,7 @@ describe("App", () => {
             configRevision: "fixture",
             appearance: {
               theme: "system" as const,
+              palette: "tangerine" as const,
               density: "mission-control" as const,
               sidebarTextSize: "md" as const,
               transcriptTextSize: "md" as const,
@@ -2214,6 +2216,7 @@ describe("App", () => {
           general: {
             appearance: {
               theme: { value: "system", source: "default" },
+              palette: { value: "tangerine", source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
               transcriptTextSize: { value: "md", source: "default" },
@@ -3203,6 +3206,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3348,6 +3352,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3469,6 +3474,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3577,6 +3583,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3675,6 +3682,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3771,6 +3779,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3915,6 +3924,7 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                palette: { value: "tangerine", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },

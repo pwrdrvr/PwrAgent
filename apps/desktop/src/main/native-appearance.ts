@@ -23,6 +23,14 @@ export const WINDOW_BG_LIGHT = "#fdfcfa";
 export const TITLE_BAR_BG_DARK = "#050505";
 export const TITLE_BAR_BG_LIGHT = "#f7f4ef";
 
+/** Catppuccin palette equivalents: `--bg-app` and `--bg-sidebar` in the
+ *  `:root[data-palette="catppuccin"]` blocks of app.css (Mocha base/mantle
+ *  in dark, Latte base/mantle in light). */
+export const WINDOW_BG_CATPPUCCIN_DARK = "#1e1e2e";
+export const WINDOW_BG_CATPPUCCIN_LIGHT = "#eff1f5";
+export const TITLE_BAR_BG_CATPPUCCIN_DARK = "#181825";
+export const TITLE_BAR_BG_CATPPUCCIN_LIGHT = "#e6e9ef";
+
 // Keep in sync with `--win-titlebar-h` in app.css so the OS caption buttons
 // and the painted menu bar share one line.
 export const TITLE_BAR_OVERLAY_HEIGHT = 40;
@@ -42,9 +50,11 @@ function resolvedNativeTheme(
 export function themedWindowBackgroundColor(
   appearance: BootstrapAppearance,
 ): string {
-  return resolvedNativeTheme(appearance) === "light"
-    ? WINDOW_BG_LIGHT
-    : WINDOW_BG_DARK;
+  const light = resolvedNativeTheme(appearance) === "light";
+  if (appearance.palette === "catppuccin") {
+    return light ? WINDOW_BG_CATPPUCCIN_LIGHT : WINDOW_BG_CATPPUCCIN_DARK;
+  }
+  return light ? WINDOW_BG_LIGHT : WINDOW_BG_DARK;
 }
 
 /**
@@ -58,8 +68,11 @@ export function themedTitleBarOverlay(appearance: BootstrapAppearance): {
   height: number;
 } {
   const light = resolvedNativeTheme(appearance) === "light";
+  const catppuccin = appearance.palette === "catppuccin";
   return {
-    color: light ? TITLE_BAR_BG_LIGHT : TITLE_BAR_BG_DARK,
+    color: catppuccin
+      ? (light ? TITLE_BAR_BG_CATPPUCCIN_LIGHT : TITLE_BAR_BG_CATPPUCCIN_DARK)
+      : (light ? TITLE_BAR_BG_LIGHT : TITLE_BAR_BG_DARK),
     symbolColor: light ? "#3a3a3a" : "#c8ccd4",
     height: TITLE_BAR_OVERLAY_HEIGHT,
   };

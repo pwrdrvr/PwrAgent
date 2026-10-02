@@ -29,7 +29,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
-import type { DesktopAppearanceTheme } from "@pwragent/shared";
+import type {
+  DesktopAppearancePalette,
+  DesktopAppearanceTheme,
+} from "@pwragent/shared";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
@@ -63,6 +66,8 @@ async function launchAuditApp(options?: {
   fixturePath?: string;
   /** Defaults to the harness default (dark). */
   theme?: DesktopAppearanceTheme;
+  /** Defaults to the harness default (tangerine). */
+  palette?: DesktopAppearancePalette;
   /**
    * Seed overlay state into the profile before boot. Prefer this to seeding
    * after launch and reloading — the renderer does not re-poll on a direct
@@ -76,7 +81,9 @@ async function launchAuditApp(options?: {
     fixturePath:
       options?.fixturePath
       ?? path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    ...(options?.theme ? { appearance: { theme: options.theme } } : {}),
+    ...(options?.theme || options?.palette
+      ? { appearance: { theme: options.theme, palette: options.palette } }
+      : {}),
     ...(options?.preLaunchHook
       ? { preLaunchHook: options.preLaunchHook }
       : {}),
@@ -102,6 +109,13 @@ async function launchAuditApp(options?: {
 // fixtures/electron-app.ts). Pinning the literals keeps a
 // nondeterministic third entry from typechecking its way in.
 const AUDIT_THEMES = ["dark", "light"] as const satisfies readonly DesktopAppearanceTheme[];
+
+// Every palette ships in both schemes, so every palette is gated in both.
+// Catppuccin is tuned to sit just above the AA floor on purpose, which
+// makes it the palette most likely to slip under it.
+const AUDIT_PALETTES = ["tangerine", "catppuccin"] as const satisfies readonly DesktopAppearancePalette[];
+const AUDIT_APPEARANCES = AUDIT_PALETTES.flatMap((palette) =>
+  AUDIT_THEMES.map((theme) => ({ palette, theme })));
 
 // Its threads carry linked directories on purpose. A project chip renders
 // through `CopyableThreadChip`, a `role="button" tabIndex={0}` span, and
@@ -351,10 +365,12 @@ async function runAxe(
   }
 }
 
-for (const theme of AUDIT_THEMES) {
-  test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
+for (const { palette, theme } of AUDIT_APPEARANCES) {
+  // Tangerine keeps its original titles so its results stay comparable.
+  const paletteLabel = palette === "tangerine" ? "" : `, ${palette} palette`;
+  test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${paletteLabel})`, () => {
     test("smoke fixture surfaces have no violations", async () => {
-      const app = await launchAuditApp({ theme });
+      const app = await launchAuditApp({ theme, palette });
       try {
         const smokeThread = app.window
           .getByRole("button", { name: /Replay smoke thread/i })
@@ -517,6 +533,7 @@ for (const theme of AUDIT_THEMES) {
     test("sidebar copy-chip fixture surface has no violations", async () => {
       const app = await launchAuditApp({
         theme,
+        palette,
         fixturePath: COPY_CHIP_FIXTURE,
       });
       try {
@@ -543,6 +560,7 @@ for (const theme of AUDIT_THEMES) {
     test("composer autocomplete listbox semantics are valid", async () => {
       const app = await launchAuditApp({
         theme,
+        palette,
         fixturePath: COMPOSER_AUTOCOMPLETE_FIXTURE,
       });
       try {
@@ -609,7 +627,7 @@ for (const theme of AUDIT_THEMES) {
     // does need from the smoke fixture — a thread that exists and opens — is
     // exactly what that fixture guarantees for every other block here.
     test("active sub-agents strip has no violations", async () => {
-      const app = await launchAuditApp({ theme });
+      const app = await launchAuditApp({ theme, palette });
       try {
         seedThreadSubAgents({
           stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
@@ -695,6 +713,7 @@ for (const theme of AUDIT_THEMES) {
       const app = await launchAuditApp({
         fixturePath: DIRECTORIES_FIXTURE,
         theme,
+        palette,
         // Pins are desktop-local overlay state, not `thread/list` data, so no
         // fixture can produce them and the only UI path is a native context
         // menu. Without a pinned lane the directory renders undivided and the
@@ -938,7 +957,7 @@ for (const theme of AUDIT_THEMES) {
     // wrapper. This block is the gate on that, so keep the fixture active
     // and the scan unscoped.
     test("star map fixture surfaces have no violations", async () => {
-      const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
+      const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme, palette });
       try {
         const attentionThread = app.window
           .getByRole("button", { name: /Star map attention thread/i })

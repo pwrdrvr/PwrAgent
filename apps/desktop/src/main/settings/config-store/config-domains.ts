@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopOnboardingCompletedSource,
   DesktopSpendAlertPolicy,
@@ -17,6 +18,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
@@ -46,6 +48,7 @@ type ConfigSection<K extends keyof DesktopSettingsConfig> = Readonly<
 export type NormalizedGeneralConfig = Readonly<{
   appearance: Readonly<{
     theme: DesktopAppearanceTheme;
+    palette: DesktopAppearancePalette;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -244,6 +247,9 @@ export function normalizeConfigDomains(params: {
         theme:
           config.general?.appearance?.theme
           ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+        palette:
+          config.general?.appearance?.palette
+          ?? DESKTOP_APPEARANCE_PALETTE_DEFAULT,
         density:
           config.general?.appearance?.density
           ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,

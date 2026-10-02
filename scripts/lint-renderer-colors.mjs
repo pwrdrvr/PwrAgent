@@ -40,11 +40,14 @@ const targetPath = resolve(
 // Matched against the rule's selector text after whitespace
 // normalization. To add a future theme (e.g. high-contrast), drop its
 // selector here AND add the corresponding `:root[data-theme="..."]`
-// block in app.css.
+// block in app.css. A palette adds `:root[data-palette="..."]` and its
+// light-scheme `:root[data-theme="light"][data-palette="..."]` pair.
 const ALLOWED_TOP_LEVEL_SELECTORS = new Set([
   ":root",
   ':root[data-theme="light"]',
   ':root[data-theme="dark"]',
+  ':root[data-palette="catppuccin"]',
+  ':root[data-theme="light"][data-palette="catppuccin"]',
 ]);
 
 // Selector substrings whose rules are allowed to carry raw color
