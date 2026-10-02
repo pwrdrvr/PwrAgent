@@ -3465,20 +3465,20 @@ describe("SettingsScreen", () => {
     expect(scheduledDialog).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Turn Fast off everywhere" }),
+      screen.getByRole("button", { name: "Use Standard speed everywhere" }),
     );
     const fastConfirmation =
-      await screen.findByText("Turn Fast off everywhere?");
+      await screen.findByText("Use Standard speed everywhere?");
     expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
       "Codex",
     );
     expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
-      "Fast mode",
+      "Fast and Ultrafast",
     );
     expect(
-      screen.queryByRole("button", { name: "Turn Fast off everywhere" }),
+      screen.queryByRole("button", { name: "Use Standard speed everywhere" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Standard speed" }));
     await waitFor(() => {
       expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(1);
     });
@@ -3489,12 +3489,12 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("switch", { name: "Allow Codex Fast mode" }),
+      screen.getByRole("switch", { name: "Allow Codex Fast and Ultrafast" }),
     );
     expect(
-      await screen.findByText("Prohibit Fast for this profile?"),
+      await screen.findByText("Prohibit Fast and Ultrafast for this profile?"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Standard speed" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {

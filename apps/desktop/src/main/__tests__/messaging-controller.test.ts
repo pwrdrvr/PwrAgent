@@ -21895,6 +21895,47 @@ describe("MessagingController", () => {
     );
   });
 
+  it("does not revive a binding's Ultrafast preference after the owner selects Standard", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = { ...navigation.threads[0]!, fastMode: false, model: "gpt-6-astra" };
+    const harness = await createHarness({ navigation });
+    await harness.store.upsertBinding({
+      id: "speed-binding", authorizedActorIds: ["user-1"], backend: "codex",
+      channel: buildTextEvent("continue").channel, createdAt: 1000, updatedAt: 1000,
+      targetKind: "thread", threadId: "thread-1",
+      preferences: { serviceTier: "ultrafast", fastMode: false, updatedAt: 1000 },
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("continue"));
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: undefined, fastMode: false,
+    }));
+  });
+
+  it("cycles advertised Ultrafast through messaging and preserves it for the next turn", async () => {
+    const harness = await createHarness({
+      listBackends: async () => ({ fetchedAt: 1000, backends: [buildBackendSummary({
+        launchpadOptions: {
+          models: [{ id: "gpt-5.3-codex", supportsFast: true, serviceTiers: ["priority", "ultrafast"] }],
+          supportsFastMode: true,
+        },
+      })] }),
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    expect(harness.setThreadModelSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: "ultrafast", fastMode: false,
+    }));
+    await harness.controller.handleInboundEvent(buildTextEvent("please run tests"));
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: "ultrafast", fastMode: false,
+    }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    expect(harness.setThreadModelSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: undefined, fastMode: false,
+    }));
+  });
+
   it("toggles fast mode and applies it to later free-form turns", async () => {
     const harness = await createHarness();
     await bindThread(harness);

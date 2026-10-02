@@ -1,3 +1,4 @@
+import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -9685,6 +9686,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         backend.launchpadOptions?.supportsFastMode ??
         false
       : false;
+  const speedOptions = backend?.kind === "codex"
+    ? codexSpeedOptions(
+        selectedModelOption,
+        filesystemFederationTarget?.scope === "remote"
+          ? backend.codexFastAllowed !== false
+          : props.codexFastAllowed !== false,
+        supportsFast,
+      )
+    : [];
   const selectedServiceTier =
     currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
   const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
@@ -12806,7 +12816,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             />
           ) : null}
 
-          {(props.launchpad || props.thread) && supportsFast ? (
+          {(props.launchpad || props.thread) && speedOptions.includes("ultrafast") ? (
+            <ComposerDropdown
+              id="composer-speed"
+              ariaLabel="Speed"
+              disabled={launchpadSubmitting}
+              value={selectedCodexSpeed(currentSettings ?? {})}
+              options={speedOptions.map((speed) => ({
+                value: speed,
+                label: speed === "ultrafast" ? "Ultrafast" : speed === "fast" ? "Fast" : "Standard",
+              }))}
+              onChange={(value) => {
+                const patch = codexSpeedSettings(value as CodexSpeed);
+                if (props.launchpad) {
+                  handleLaunchpadPatch(patch);
+                  return;
+                }
+                handleThreadModelSettingsPatch(patch);
+              }}
+            />
+          ) : null}
+
+          {(props.launchpad || props.thread) && supportsFast && !speedOptions.includes("ultrafast") ? (
             <button
               type="button"
               className={`composer__toggle tooltip-target${

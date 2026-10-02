@@ -519,6 +519,20 @@ describe("CompactComposer settings menu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("selects Ultrafast from the discovered speed menu", () => {
+    const onSelectSpeed = vi.fn();
+    renderComposer({ settingsMenu: settingsMenu({
+      speeds: ["standard", "fast", "ultrafast"], speed: "fast", onSelectSpeed,
+    }) });
+    openMenu();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Fast mode" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Speed/ }));
+    expect(screen.getByRole("menuitemradio", { name: "Fast" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Ultrafast" }));
+    expect(onSelectSpeed).toHaveBeenCalledWith("ultrafast");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   it("toggles fast mode in place without closing the menu", () => {
     const menu = settingsMenu();
     renderComposer({ fastMode: false, settingsMenu: menu });

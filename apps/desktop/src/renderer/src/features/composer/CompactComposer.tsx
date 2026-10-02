@@ -1,3 +1,4 @@
+import type { CodexSpeed } from "@pwragent/shared";
 import {
   useCallback,
   useEffect,
@@ -78,6 +79,9 @@ export type CompactComposerSettingsMenu = {
   models?: CompactComposerSettingsOption[];
   reasoningEfforts?: string[];
   supportsFastMode?: boolean;
+  speeds?: CodexSpeed[];
+  speed?: CodexSpeed;
+  onSelectSpeed?: (speed: CodexSpeed) => void;
   onSelectExecutionMode?: (mode: ThreadExecutionMode) => void;
   onSelectModel?: (model: string) => void;
   onSelectReasoningEffort?: (effort: string) => void;
@@ -141,7 +145,7 @@ export type CompactComposerProps = {
   threadTitle: string;
 };
 
-type SettingsMenuView = "access" | "model" | "reasoning" | "root";
+type SettingsMenuView = "access" | "model" | "reasoning" | "speed" | "root";
 
 const MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS = 5;
 const MAX_COMPACT_COMPOSER_FILE_ATTACHMENTS = 20;
@@ -153,6 +157,7 @@ const MENU_VIEW_TITLES: Record<
   access: "Access",
   model: "Model",
   reasoning: "Reasoning",
+  speed: "Speed",
 };
 
 /**
@@ -267,6 +272,9 @@ export function CompactComposer(props: CompactComposerProps) {
       : undefined,
     props.reasoningEffort
       ? { danger: false, key: "reasoning", text: props.reasoningEffort }
+      : undefined,
+    settings?.speed === "ultrafast"
+      ? { danger: false, key: "speed", text: "Ultrafast" }
       : undefined,
     accessLabel
       ? {
@@ -618,7 +626,8 @@ export function CompactComposer(props: CompactComposerProps) {
         || settings.loadFailed
         || (settings.reasoningEfforts?.length ?? 0) > 0),
   );
-  const fastSection = Boolean(
+  const speedSection = Boolean(settings?.onSelectSpeed && settings.speeds?.includes("ultrafast"));
+  const fastSection = !speedSection && Boolean(
     settings?.onToggleFastMode && settings.supportsFastMode,
   );
   const accessSection = Boolean(
@@ -626,7 +635,7 @@ export function CompactComposer(props: CompactComposerProps) {
       && (settings.executionModes?.length ?? 0) > 1,
   );
   const hasSettingsRows =
-    modelSection || reasoningSection || fastSection || accessSection;
+    modelSection || reasoningSection || speedSection || fastSection || accessSection;
   const hasMenu = hasSettingsRows || actions.length > 0;
 
   const settingRow = (
@@ -750,6 +759,17 @@ export function CompactComposer(props: CompactComposerProps) {
           : emptySubmenuNotice,
       );
     }
+    if (menuView === "speed") {
+      return submenu(
+        MENU_VIEW_TITLES.speed,
+        (settings?.speeds ?? []).map((speed) => optionRow({
+          checked: speed === settings?.speed,
+          key: speed,
+          label: speed === "ultrafast" ? "Ultrafast" : speed === "fast" ? "Fast" : "Standard",
+          onSelect: () => settings?.onSelectSpeed?.(speed),
+        })),
+      );
+    }
     if (menuView === "access") {
       const modes = settings?.executionModes ?? [];
       return submenu(
@@ -785,6 +805,13 @@ export function CompactComposer(props: CompactComposerProps) {
               "reasoning",
             )
           : null}
+        {speedSection ? settingRow(
+          "Speed",
+          <span className="compact-composer__menu-value">
+            {settings?.speed === "ultrafast" ? "Ultrafast" : settings?.speed === "fast" ? "Fast" : "Standard"}
+          </span>,
+          "speed",
+        ) : null}
         {fastSection ? (
           <button
             aria-checked={Boolean(props.fastMode)}

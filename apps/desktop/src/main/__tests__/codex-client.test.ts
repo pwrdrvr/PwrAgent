@@ -3290,6 +3290,7 @@ describe("CodexAppServerClient", () => {
       reasoningEfforts: [],
       supportsReasoning: false,
       supportsFast: false,
+      serviceTiers: [],
       supportsImage: false,
     }]);
     await client.close();
@@ -3382,6 +3383,24 @@ describe("CodexAppServerClient", () => {
       await client.close();
     },
   );
+
+  it("preserves advertised Ultrafast tiers without inferring them for older catalogs", async () => {
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({
+        id: "gpt-6-astra",
+        serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster responses" }],
+      }),
+      createCodexModel({ id: "gpt-5.6-sol", serviceTiers: [] }),
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const models = await client.listModels();
+    expect(models.find((model) => model.id === "gpt-6-astra")).toMatchObject({
+      serviceTiers: ["ultrafast"], supportsFast: false,
+    });
+    expect(models.find((model) => model.id === "gpt-5.6-sol")?.serviceTiers).toEqual([]);
+    await client.close();
+  });
 
   it("derives Fast support from Codex model service tiers", async () => {
     MockTransport.modelListResult = createModelListResponse([
@@ -13373,6 +13392,8 @@ describe("CodexAppServerClient", () => {
     { fastMode: true, serviceTier: undefined, expectedTier: "priority" },
     { fastMode: false, serviceTier: "priority", expectedTier: null },
     { fastMode: false, serviceTier: "flex", expectedTier: "flex" },
+    { fastMode: false, serviceTier: "ultrafast", expectedTier: "ultrafast" },
+    { fastMode: true, serviceTier: "ultrafast", expectedTier: "ultrafast" },
     { fastMode: undefined, serviceTier: undefined, expectedTier: undefined },
   ])("uses only serviceTier for start, resume, and fork with $fastMode / $serviceTier", async ({
     fastMode,

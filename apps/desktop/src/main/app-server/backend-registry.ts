@@ -5838,6 +5838,7 @@ function dedupeModelOptions(
       current: current?.current || normalizedModel.current,
       supportsReasoning: current?.supportsReasoning || normalizedModel.supportsReasoning,
       supportsFast: current?.supportsFast || normalizedModel.supportsFast,
+      serviceTiers: normalizedModel.serviceTiers ?? current?.serviceTiers,
       supportsSteering: current?.supportsSteering || normalizedModel.supportsSteering,
       defaultReasoningEffort:
         normalizedModel.defaultReasoningEffort ?? current?.defaultReasoningEffort,
@@ -7259,12 +7260,15 @@ function resolveModelSettingsFromOptions(
       serviceTier: settings.serviceTier,
       fastMode: settings.fastMode,
       supportsFast,
+      serviceTiers: selectedModel?.serviceTiers,
     }),
-    fastMode: supportsFast
-      ? settings.fastMode
-      : shouldClearCodexFastTier
-        ? false
-        : undefined,
+    fastMode: backend === "codex" && settings.serviceTier === "ultrafast"
+      ? false
+      : supportsFast
+        ? settings.fastMode
+        : shouldClearCodexFastTier
+          ? false
+          : undefined,
   };
 }
 
@@ -7273,9 +7277,13 @@ function resolveCodexFastModeServiceTier(params: {
   fastMode?: boolean;
   serviceTier?: string;
   supportsFast: boolean;
+  serviceTiers?: string[];
 }): string | undefined {
   if (params.backend !== "codex") {
     return params.serviceTier;
+  }
+  if (params.serviceTier === "ultrafast") {
+    return params.serviceTiers?.includes("ultrafast") ? "ultrafast" : undefined;
   }
   if (params.fastMode === true && params.supportsFast) {
     return "priority";
@@ -21849,7 +21857,11 @@ export class DesktopBackendRegistry {
               : current?.reasoningEffort,
         reasoningEffortsByModel: current?.reasoningEffortsByModel,
         serviceTier:
-          "serviceTier" in params ? params.serviceTier : current?.serviceTier,
+          "serviceTier" in params
+            ? params.serviceTier
+            : "fastMode" in params
+              ? undefined
+              : current?.serviceTier,
         fastMode: "fastMode" in params ? params.fastMode : current?.fastMode,
       },
       "settings-refresh",
@@ -22106,6 +22118,7 @@ export class DesktopBackendRegistry {
           params: {
             threadId,
             fastMode: false,
+            serviceTier: undefined,
           },
         },
       });
@@ -22829,7 +22842,8 @@ export class DesktopBackendRegistry {
 
     const patch = {
       ...request.patch,
-      ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
+      ...("fastMode" in request.patch && !("serviceTier" in request.patch)
+        ? { serviceTier: undefined } : {}),
       // An edit to the selection makes it the operator's. Re-seeding after
       // that would put back a connection they just turned off. A patch that
       // only repeats the current ids is not an edit: the MCP access panel
@@ -22864,7 +22878,7 @@ export class DesktopBackendRegistry {
         backend,
         projectedLaunchpad,
       );
-      if ("fastMode" in patch) {
+      if ("fastMode" in patch && !("serviceTier" in request.patch)) {
         modelSettings.serviceTier = undefined;
       }
       nextLaunchpad = {
@@ -22906,7 +22920,9 @@ export class DesktopBackendRegistry {
     }
     if (request.stickySettingsChanged && "fastMode" in patch) {
       stickyPatch.fastMode = patch.fastMode;
-      stickyPatch.serviceTier = undefined;
+      if (!("serviceTier" in request.patch)) {
+        stickyPatch.serviceTier = undefined;
+      }
     }
     if (request.stickySettingsChanged && "acpRuntime" in patch) {
       stickyPatch.acpRuntime = patch.acpRuntime;
@@ -24751,6 +24767,11 @@ export class DesktopBackendRegistry {
     backend: BackendSummary,
     settings: ModelSettings,
   ): Promise<ModelSettings> {
+    if (backend.kind === "codex") {
+      // The summary can still contain fallback models while discovery is in
+      // flight. Settings resolution must await the shared runtime catalog.
+      return this.resolveModelSettings("codex", settings, "launchpad-defaults");
+    }
     const launchpadOptions =
       backend.launchpadOptions ??
       (await this.getBackendLaunchpadOptions(backend.kind, "launchpad-defaults"));

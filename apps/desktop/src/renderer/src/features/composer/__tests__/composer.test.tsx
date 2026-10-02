@@ -1334,6 +1334,27 @@ describe("Composer", () => {
     await waitFor(() => expect(listBackends).toHaveBeenCalledExactlyOnceWith({ includeUnavailable: true, federationTarget }));
   });
 
+  it.each([true, false])("offers advertised Ultrafast using the owner's policy (%s)", async (allowed) => {
+    const onSetThreadModelSettings = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    render(<Composer skills={[]} codexFastAllowed={!allowed}
+      backends={[{ ...backendSummary("codex", { models: [{
+        id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"],
+      }] }), codexFastAllowed: allowed }]}
+      onSetThreadModelSettings={onSetThreadModelSettings}
+      thread={{ id: "speed-fixture", title: "Remote", titleSource: "explicit", source: "codex",
+        model: "gpt-6-astra", fastMode: true, linkedDirectories: [], inbox: { inInbox: false },
+        federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "speed-fixture", target } },
+      }} />);
+    expect(Boolean(screen.queryByLabelText("Speed"))).toBe(allowed);
+    if (allowed) {
+      chooseDropdownOption("Speed", "Ultrafast");
+      await waitFor(() => expect(onSetThreadModelSettings).toHaveBeenCalledWith({
+        serviceTier: "ultrafast", fastMode: false,
+      }));
+    }
+  });
+
   it.each([true, false])("uses the owner's Fast mode policy (%s), independent of the viewer", (allowed) => {
     const target = { scope: "remote" as const, instanceId: "owner" };
     render(<Composer skills={[]} codexFastAllowed={!allowed}

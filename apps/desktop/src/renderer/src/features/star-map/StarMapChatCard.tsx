@@ -1,3 +1,4 @@
+import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared";
 import {
   memo,
   useCallback,
@@ -1198,7 +1199,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     Partial<
       Pick<
         NavigationThreadSummary,
-        "fastMode" | "model" | "reasoningEffort"
+        "fastMode" | "model" | "reasoningEffort" | "serviceTier"
       >
     >
   >({});
@@ -1207,6 +1208,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const threadModel = optimisticSettings.model ?? selectedConfiguration?.model;
   const threadReasoningEffort =
     optimisticSettings.reasoningEffort ?? selectedConfiguration?.reasoningEffort;
+  const threadServiceTier = "serviceTier" in optimisticSettings
+    ? optimisticSettings.serviceTier : selectedConfiguration?.serviceTier;
   const threadFastMode = optimisticSettings.fastMode ?? selectedConfiguration?.fastMode;
   // Sandbox changes can remain queued after the mutation resolves.
   const threadExecutionMode = selectedConfiguration?.executionMode;
@@ -1246,6 +1249,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     });
   }, [
     selectedConfiguration?.fastMode,
+    selectedConfiguration?.serviceTier,
     selectedConfiguration?.model,
     selectedConfiguration?.reasoningEffort,
   ]);
@@ -1300,7 +1304,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     const setExecutionMode = desktopApi.setThreadExecutionMode;
     const patchModelSettings = (
       patch: Partial<
-        Pick<NavigationThreadSummary, "model" | "reasoningEffort" | "fastMode">
+        Pick<NavigationThreadSummary, "model" | "reasoningEffort" | "fastMode" | "serviceTier">
       >,
     ) => {
       if (!setModelSettings || !composerReadinessRef.current) return;
@@ -1312,6 +1316,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         ...("reasoningEffort" in patch && patch.reasoningEffort !== undefined
           ? { reasoningEffort: patch.reasoningEffort }
           : {}),
+        ...("serviceTier" in patch ? { serviceTier: patch.serviceTier } : {}),
         ...("fastMode" in patch && patch.fastMode !== undefined
           ? { fastMode: patch.fastMode }
           : {}),
@@ -1333,6 +1338,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         ...("reasoningEffort" in patch
           ? { reasoningEffort: patch.reasoningEffort }
           : {}),
+        ...("serviceTier" in patch ? { serviceTier: patch.serviceTier } : {}),
         ...(threadSource === "codex" && "fastMode" in patch
           ? { fastMode: patch.fastMode }
           : {}),
@@ -1383,6 +1389,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       })),
       reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
       supportsFastMode: supportsFast,
+      speeds: threadSource === "codex"
+        ? codexSpeedOptions(currentModelOption, backendSummary?.codexFastAllowed !== false, supportsFast)
+        : undefined,
+      speed: selectedCodexSpeed({ serviceTier: threadServiceTier, fastMode: threadFastMode }),
+      onSelectSpeed: setModelSettings && threadSource === "codex"
+        ? (speed) => patchModelSettings(codexSpeedSettings(speed))
+        : undefined,
       // The gate decides between prompting and applying; the apply half
       // is `applyExecutionMode` above.
       onSelectExecutionMode: setExecutionMode
@@ -1428,6 +1441,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     threadId,
     threadModel,
     threadSource,
+    threadFastMode,
+    threadServiceTier,
   ]);
 
   /**

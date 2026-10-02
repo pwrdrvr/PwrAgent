@@ -19133,6 +19133,54 @@ script = "echo setup"
     await registry.close();
   });
 
+  it.each([true, false])("retains Ultrafast through sticky launchpads and turns only when advertised (%s)", async (available) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{
+        id: "gpt-6-astra", current: true, supportsFast: true,
+        serviceTiers: available ? ["priority", "ultrafast"] : ["priority"],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a", directoryKind: "directory",
+      directoryLabel: "Repo A", directoryPath: "/repo-a",
+    });
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { model: "gpt-6-astra", serviceTier: "ultrafast", fastMode: false },
+      stickySettingsChanged: true,
+    });
+    const expectedTier = available ? "ultrafast" : undefined;
+    expect(updated.launchpad.serviceTier).toBe(expectedTier);
+    expect(updated.defaults.serviceTier).toBe(expectedTier);
+    const next = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-b", directoryKind: "directory",
+      directoryLabel: "Repo B", directoryPath: "/repo-b",
+    });
+    expect(next.launchpad.serviceTier).toBe(expectedTier);
+    await registry.setThreadModelSettings({
+      backend: "codex", threadId: "thread-ultrafast", model: "gpt-6-astra",
+      serviceTier: "ultrafast", fastMode: true,
+    });
+    await registry.startTurn({
+      backend: "codex", threadId: "thread-ultrafast",
+      input: [{ type: "text", text: "Continue" }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({ serviceTier: expectedTier, fastMode: false });
+    await codexClient.emit({ method: "turn/completed", params: {
+      threadId: "thread-ultrafast", turnId: "turn-1",
+      turn: { id: "turn-1", status: "completed", output: [] },
+    } });
+    await registry.setThreadModelSettings({ backend: "codex", threadId: "thread-ultrafast", fastMode: true });
+    await registry.startTurn({
+      backend: "codex", threadId: "thread-ultrafast",
+      input: [{ type: "text", text: "Use Fast" }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({ serviceTier: "priority", fastMode: true });
+    await registry.close();
+  });
+
   it("clears stale Codex Fast serviceTier from launchpad defaults when Fast mode changes", async () => {
     const overlayStore = createOverlayStoreMock({
       launchpadDefaults: {
@@ -23340,6 +23388,7 @@ command = "pnpm dev"
         params: {
           threadId: "thread-fast",
           fastMode: false,
+          serviceTier: undefined,
         },
       },
     });

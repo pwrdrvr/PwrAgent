@@ -5687,6 +5687,8 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
           "supports_reasoning",
         ]) ?? (pickReasoningEfforts(modelRecord)?.length === 0 ? false : undefined),
         supportsFast: pickModelSupportsFast(modelRecord),
+        serviceTiers: pickModelServiceTierIds(modelRecord)
+          ?? pickModelAdditionalSpeedTiers(modelRecord),
         supportsSteering: pickBoolean(modelRecord, [
           "supportsSteering",
           "supports_steering",
@@ -5869,6 +5871,7 @@ function extractGeneratedModelOptions(
           (effort) => effort.reasoningEffort,
         ),
         supportsReasoning: model.supportedReasoningEfforts.length > 0,
+        serviceTiers: serviceTierIds,
         supportsFast:
           serviceTierIds.includes("priority")
           || additionalSpeedTiers.includes("fast"),
@@ -6510,7 +6513,7 @@ function normalizeCodexServiceTier(
   if (normalized === "fast" || normalized === "priority") {
     return "priority";
   }
-  if (normalized === "flex") {
+  if (normalized === "flex" || normalized === "ultrafast") {
     return normalized;
   }
   return undefined;
@@ -6520,6 +6523,9 @@ function resolveCodexServiceTier(params: {
   fastMode?: boolean;
   serviceTier?: string | null;
 }): string | null | undefined {
+  if (params.serviceTier === "ultrafast") {
+    return "ultrafast";
+  }
   if (params.fastMode === true) {
     return "priority";
   }

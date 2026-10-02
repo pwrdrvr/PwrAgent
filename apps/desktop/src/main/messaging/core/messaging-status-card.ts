@@ -1,3 +1,4 @@
+import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared";
 import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
@@ -171,6 +172,12 @@ export function buildBindingStatusIntent(params: {
   const fastMode = supportsFastMode
     ? params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode
     : undefined;
+  const serviceTier = params.threadState.fastMode !== undefined
+    ? params.threadState.serviceTier
+    : params.threadState.serviceTier ?? preferences?.serviceTier ?? defaults?.serviceTier;
+  const supportsUltrafast = params.backendSummary?.kind === "codex"
+    && codexSpeedOptions(modelOption, params.backendSummary.codexFastAllowed !== false).includes("ultrafast");
+  const speed = selectedCodexSpeed({ serviceTier, fastMode });
   const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
   const accountLine = formatBackendAccountLine(params.backendSummary, params.binding);
   const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
@@ -249,7 +256,9 @@ export function buildBindingStatusIntent(params: {
       mentionRequiredLine(params.binding, params.capabilityProfile),
       `Model: ${model}`,
       reasoning ? `Reasoning: ${reasoning}` : undefined,
-      supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
+      serviceTier === "ultrafast" || supportsUltrafast
+        ? `Speed: ${speed}`
+        : supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
       showResponseModeControl
@@ -284,6 +293,7 @@ export function buildBindingStatusIntent(params: {
       capabilityProfile: params.capabilityProfile,
       allowFullAccessEscalation: params.allowFullAccessEscalation,
       fastMode,
+      speed: supportsUltrafast ? speed : undefined,
       handoff: params.handoff,
       permissionsMode,
       permissionsActionLabel,
@@ -585,6 +595,7 @@ function buildStatusActions(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   fastMode: boolean | undefined;
+  speed?: string;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
   permissionsActionLabel: string;
@@ -641,11 +652,11 @@ function buildStatusActions(params: {
           },
         ]
       : []),
-    ...(params.supportsFastMode
+    ...(params.supportsFastMode || params.speed
       ? [
           {
             id: "status:fast",
-            label: params.fastMode ? "Fast: on" : "Fast: off",
+            label: params.speed ? `Speed: ${params.speed}` : params.fastMode ? "Fast: on" : "Fast: off",
             style: "secondary" as const,
             fallbackText: "fast",
             priority: 6,

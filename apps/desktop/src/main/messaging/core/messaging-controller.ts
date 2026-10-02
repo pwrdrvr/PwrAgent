@@ -1,3 +1,4 @@
+import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
@@ -630,7 +631,9 @@ function turnSettingsForThread(
     fastMode: thread?.fastMode ?? binding.preferences?.fastMode,
     model: thread?.model ?? binding.preferences?.model,
     reasoningEffort: thread?.reasoningEffort ?? binding.preferences?.reasoningEffort,
-    serviceTier: thread?.serviceTier ?? binding.preferences?.serviceTier,
+    serviceTier: thread?.fastMode !== undefined
+      ? thread.serviceTier
+      : thread?.serviceTier ?? binding.preferences?.serviceTier,
   };
 }
 
@@ -9163,20 +9166,26 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:fast") {
-      const fastMode = !(
-        nextSession.preferences?.fastMode ??
-        navigation.launchpadDefaults.fastMode ??
-        false
-      );
-      await this.updateNewThreadStickySettings(nextSession, {
-        fastMode,
-      });
+      const backend = await this.resolveNewThreadBackendForSession({
+        launchpadBackend: navigation.launchpadDefaults.backend,
+        session: nextSession,
+      }, event);
+      if (!backend) return;
+      const models = backend.launchpadOptions?.models ?? [];
+      const model = models.find((option) =>
+        option.id === (nextSession.preferences?.model ?? navigation.launchpadDefaults.model)
+      ) ?? defaultBackendModel(models);
+      const speedPatch = codexSpeedSettings(nextCodexSpeed(
+        codexSpeedOptions(model, backend.codexFastAllowed !== false, backend.launchpadOptions?.supportsFastMode),
+        { ...navigation.launchpadDefaults, ...nextSession.preferences },
+      ));
+      await this.updateNewThreadStickySettings(nextSession, speedPatch);
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
           preferences: {
             ...nextSession.preferences,
-            fastMode,
+            ...speedPatch,
             updatedAt: this.now(),
           },
         },
@@ -9935,11 +9944,6 @@ export class MessagingController {
           (model) => model.supportsReasoning,
         ),
       );
-    const supportsFast =
-      Boolean(selectedBackend.launchpadOptions?.supportsFastMode) ||
-      Boolean(
-        selectedBackend.launchpadOptions?.models?.some((model) => model.supportsFast),
-      );
     const supportsPermissionsControls =
       !isAcpBackendId(selectedBackend.kind) ||
       options.executionMode === "full-access";
@@ -10044,11 +10048,13 @@ export class MessagingController {
               },
             ]
           : []),
-        ...(supportsFast
+        ...(options.supportsFast || options.supportsUltrafast
           ? [
               {
                 id: "browse:new:fast",
-                label: options.fastMode ? "Fast: on" : "Fast: off",
+                label: options.supportsUltrafast
+                  ? `Speed: ${selectedCodexSpeed(options)}`
+                  : options.fastMode ? "Fast: on" : "Fast: off",
                 style: "secondary" as const,
                 fallbackText: "fast",
               },
@@ -13686,20 +13692,37 @@ export class MessagingController {
     );
     if (
       summary &&
-      (summary.kind !== "codex" || summary.launchpadOptions?.supportsFastMode === false)
+      summary.kind !== "codex"
     ) {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    const fastMode = !binding.preferences?.fastMode;
-    const updatedBinding = await this.updateBindingPreferences(binding, {
-      fastMode,
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
+    const thread = findThreadForBinding(navigation, binding);
+    const currentSettings = {
+      model: thread?.model ?? binding.preferences?.model,
+      fastMode: thread?.fastMode ?? binding.preferences?.fastMode,
+      serviceTier: thread?.fastMode !== undefined
+        ? thread.serviceTier
+        : thread?.serviceTier ?? binding.preferences?.serviceTier,
+    };
+    const models = summary?.launchpadOptions?.models ?? [];
+    const model = models.find((option) => option.id === currentSettings.model)
+      ?? defaultBackendModel(models);
+    const speeds = codexSpeedOptions(
+      model, summary?.codexFastAllowed !== false, summary?.launchpadOptions?.supportsFastMode ?? true,
+    );
+    if (speeds.length < 2) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+    const speedPatch = codexSpeedSettings(nextCodexSpeed(speeds, currentSettings));
+    const updatedBinding = await this.updateBindingPreferences(binding, speedPatch);
     await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
       federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
-      fastMode,
+      ...speedPatch,
       model: updatedBinding.preferences?.model,
       reasoningEffort: updatedBinding.preferences?.reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
@@ -20854,12 +20877,18 @@ function normalizeNewThreadSessionForBackend(
     delete preferences.fastMode;
   }
 
-  const serviceTiers = backend.launchpadOptions?.serviceTiers ?? [];
+  const serviceTiers = backend.kind === "codex"
+    ? selectedModel?.serviceTiers ?? []
+    : backend.launchpadOptions?.serviceTiers ?? [];
   if (preferences.serviceTier !== undefined) {
     if (serviceTiers.length === 0) {
       delete preferences.serviceTier;
     } else if (!serviceTiers.includes(preferences.serviceTier)) {
-      preferences.serviceTier = serviceTiers[0];
+      if (backend.kind === "codex") {
+        delete preferences.serviceTier;
+      } else {
+        preferences.serviceTier = serviceTiers[0];
+      }
     }
   }
 
@@ -20977,6 +21006,7 @@ type NewThreadOptionsSummary = {
   reasoningEffort?: string;
   serviceTier?: string;
   supportsFast: boolean;
+  supportsUltrafast: boolean;
   supportsModel: boolean;
   supportsReasoning: boolean;
   streamingResponses: boolean;
@@ -21021,7 +21051,9 @@ function newThreadOptionsForSession(
     directoryLaunchpad?.reasoningEffort,
     launchpadDefaults.reasoningEffort,
   ]);
-  const serviceTiers = backend.launchpadOptions?.serviceTiers ?? [];
+  const serviceTiers = backend.kind === "codex"
+    ? modelOption?.serviceTiers ?? []
+    : backend.launchpadOptions?.serviceTiers ?? [];
   const serviceTier = [
     session.preferences?.serviceTier,
     directoryLaunchpad?.serviceTier,
@@ -21083,6 +21115,8 @@ function newThreadOptionsForSession(
     reasoningEffort,
     serviceTier,
     supportsFast,
+    supportsUltrafast: backend.kind === "codex"
+      && codexSpeedOptions(modelOption, backend.codexFastAllowed !== false).includes("ultrafast"),
     supportsModel: models.length > 0,
     supportsReasoning,
     streamingResponses: messagingStreamingResponsesEnabled(
@@ -21155,7 +21189,9 @@ function newThreadPromptGateBody(
     options.supportsReasoning && options.reasoningEffort
       ? `Reasoning: ${options.reasoningEffort}`
       : undefined,
-    options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
+    options.supportsUltrafast
+      ? `Speed: ${selectedCodexSpeed(options)}`
+      : options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
     `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
     showStreaming
       ? `Streaming: ${options.streamingResponses ? "on" : "off"}`
