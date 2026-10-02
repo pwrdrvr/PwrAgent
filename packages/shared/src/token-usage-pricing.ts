@@ -843,6 +843,7 @@ const XAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   // Grok ACP authenticates the signed-in Grok account rather than an API key.
   // Estimate account usage at the standard rate across all context sizes.
   {
+    aliases: ["grok-4.7-build"],
     cachedInputUsdPerMillion: 0.5,
     catalogId: XAI_PRICING_CATALOG_ID,
     catalogVersion: XAI_GROK47_PRICING_CATALOG_VERSION,
