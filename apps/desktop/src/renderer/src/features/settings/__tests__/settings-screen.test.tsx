@@ -2543,6 +2543,70 @@ describe("SettingsScreen", () => {
     expect(within(pwrAgentGroup).queryByText("Restored")).not.toBeInTheDocument();
   });
 
+  it("tells the operator when Archive again keeps the worktree", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [
+        {
+          id: "thread-worktree",
+          title: "Worktree thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+    const restoreThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-worktree",
+      restoredAt: 4_000,
+    }));
+    const archiveThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-worktree",
+      archivedAt: 5_000,
+      cleanup: [
+        {
+          worktreePath: "/worktrees/abc/PwrAgnt",
+          removedWorktree: false,
+          deletedBranch: false,
+          skippedReason: "Worktree has uncommitted changes",
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ archiveThread, listThreads, restoreThread }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Archive Worktree thread again" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Archived. The worktree was not removed (/worktrees/abc/PwrAgnt: Worktree has uncommitted changes).",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+  });
+
   it("keeps a failed restore on its row", async () => {
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,

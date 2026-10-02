@@ -11,6 +11,7 @@ import {
   isToolManagedWorktreePath,
   type AppServerBackendKind,
   type AppServerThreadSummary,
+  type ArchiveThreadCleanupResult,
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
@@ -43,6 +44,8 @@ type ArchivedProjectIdentity = Omit<ArchivedProjectGroup, "threads">;
 type ArchivedRowAction = {
   pending?: "restore" | "archive";
   error?: string;
+  /** A completed action's caveat, such as a worktree the archive kept. */
+  notice?: string;
 };
 
 type OpenThreadTarget = {
@@ -231,7 +234,7 @@ export function ArchivedThreadsSettings(props: {
     pendingRowKeysRef.current.add(threadKey);
     setRowAction(threadKey, { pending: "archive" });
     try {
-      await archiveThreadRequest({
+      const response = await archiveThreadRequest({
         backend: thread.source,
         threadId: thread.id,
       });
@@ -247,7 +250,8 @@ export function ArchivedThreadsSettings(props: {
         next.delete(threadKey);
         return next;
       });
-      setRowAction(threadKey, undefined);
+      const cleanupNotice = describeArchiveCleanup(response.cleanup);
+      setRowAction(threadKey, cleanupNotice ? { notice: cleanupNotice } : undefined);
     } catch (error) {
       setRowAction(threadKey, {
         error: `Archive failed: ${errorMessage(error)}`,
@@ -559,6 +563,11 @@ function ArchivedThreadRow(props: {
             />
           </p>
         ) : null}
+        {props.action?.notice ? (
+          <p className="settings-archive-row__notice" role="status">
+            {props.action.notice}
+          </p>
+        ) : null}
         {props.action?.error ? (
           <p className="settings-archive-row__error" role="alert">
             {props.action.error}
@@ -742,6 +751,11 @@ function highlightMatches(text: string, terms: readonly string[]): ReactNode {
     return text;
   }
   const lowerText = text.toLocaleLowerCase();
+  // Offsets found in the lowercased text index the original only while the
+  // two are the same length; a few characters ("İ") lowercase to two.
+  if (lowerText.length !== text.length) {
+    return text;
+  }
   const ranges: Array<[number, number]> = [];
   for (const term of terms) {
     let index = lowerText.indexOf(term);
@@ -786,6 +800,21 @@ function highlightMatches(text: string, terms: readonly string[]): ReactNode {
 
 function countGroupThreads(groups: ArchivedProjectGroup[]): number {
   return groups.reduce((count, group) => count + group.threads.length, 0);
+}
+
+/** What an archive's worktree cleanup left behind, if anything. */
+function describeArchiveCleanup(
+  cleanup: readonly ArchiveThreadCleanupResult[],
+): string | undefined {
+  const failure = cleanup.find(
+    (item) => !item.removedWorktree || item.error || item.skippedReason,
+  );
+  if (!failure) {
+    return undefined;
+  }
+  const reason = failure.error ?? failure.skippedReason ?? "cleanup was skipped";
+  const location = failure.worktreePath ? `${failure.worktreePath}: ` : "";
+  return `Archived. The worktree was not removed (${location}${reason}).`;
 }
 
 /** The failure without the "Error invoking remote method …" wrapper Electron adds. */

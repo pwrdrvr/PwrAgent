@@ -14491,6 +14491,13 @@ a.button {
   line-height: 1.4;
 }
 
+.settings-archive-row__notice {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .settings-archive-row__side {
   display: flex;
   align-items: center;
