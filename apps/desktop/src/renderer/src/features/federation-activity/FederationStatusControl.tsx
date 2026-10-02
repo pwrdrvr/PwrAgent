@@ -8,7 +8,7 @@ import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";
 import { StarMapIcon } from "../../icons/StarMapIcon";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
-import { FederationInstanceChips, federationInstanceChips } from "./FederationInstanceChips";
+import { federationInstanceChips } from "./FederationInstanceChips";
 import { FederationStarMapPreview } from "./FederationStarMapPreview";
 import { FEDERATION_TRAFFIC_CARD_SECONDS, FederationTrafficCard } from "./FederationTrafficCard";
 import { FEDERATION_CAPTURE_DESCRIPTION, FederationCaptureTag } from "./FederationTrafficCapture";
@@ -51,7 +51,6 @@ export function FederationStatusControl(props: {
   // The runtime clears the deadline once a capture ends, so no clock read here.
   const capturing = Boolean(snapshot?.detailedLoggingUntil);
   const chips = snapshot ? federationInstanceChips(snapshot.health) : [];
-  const online = chips.filter((chip) => chip.online).length;
   const fail = (cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause));
   const openActivity = props.desktopApi?.openFederationActivity
     ? () => { void props.desktopApi!.openFederationActivity!().then(() => setOpen(false)).catch(fail); }
@@ -158,24 +157,14 @@ export function FederationStatusControl(props: {
             </div>
             {snapshot ? (
               <div className="federation-status-control__body">
-                <FederationStarMapPreview chips={chips} onOpen={openStarMap} />
+                <FederationStarMapPreview chips={chips} peerSeries={snapshot.activity.peers}
+                  onOpen={openStarMap} onOpenInstance={openInstance} />
                 {leaseHolder ? <p className="federation-status-control__note">
                   Federation for this profile runs in another PwrAgent window{leaseWhere ? ` (${leaseWhere})` : ""}.
                   Its instances appear here once it stops.
                 </p> : null}
                 {snapshot.health.unavailableReason ? <p className="federation-status-control__note">
                   {snapshot.health.unavailableReason}</p> : null}
-                <section aria-label="Federation instances">
-                  <div className="federation-status-control__section">
-                    <span>Instances</span>
-                    {chips.length ? <span>{online} of {chips.length} connected</span> : null}
-                  </div>
-                  {chips.length ? <FederationInstanceChips chips={chips}
-                    peerSeries={snapshot.activity.peers}
-                    onOpenInstance={openInstance}
-                    onOpenMore={openStarMap} />
-                    : <p className="federation-status-control__note">No other instances yet.</p>}
-                </section>
                 <FederationTrafficCard series={snapshot.activity.physical} onOpen={openActivity} />
                 <FederationConnections health={snapshot.health} collapsible />
               </div>

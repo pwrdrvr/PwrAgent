@@ -29,6 +29,8 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  SetFederationShortNameRequest,
+  SetFederationShortNameResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   WatchFederatedDirectorySetRequest,
@@ -58,6 +60,7 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
+  FEDERATION_SET_SHORT_NAME_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
   FEDERATION_WATCH_DIRECTORY_SET_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
@@ -156,6 +159,7 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_SHORT_NAME_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL);
   ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
@@ -240,6 +244,15 @@ export function registerFederationIpcHandlers(): void {
       }
       return await getDesktopFederationRuntime().setCelestialIcon(request);
     },
+  );
+  ipcMain.handle(
+    FEDERATION_SET_SHORT_NAME_CHANNEL,
+    async (
+      _event,
+      request: SetFederationShortNameRequest,
+    ): Promise<SetFederationShortNameResponse> =>
+      // The runtime validates: it is also reached over federation RPC.
+      await getDesktopFederationRuntime().setFederationShortName(request),
   );
   ipcMain.handle(
     FEDERATION_TAILSCALE_STATUS_CHANNEL,
@@ -514,6 +527,7 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_SHORT_NAME_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL);
   ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);

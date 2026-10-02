@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared";
 import {
+  describeRateLimitRow,
+  formatBackendPlanType,
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../backend-status-format";
@@ -257,5 +259,38 @@ describe("backend status formatting", () => {
         hasCredits: true,
       }),
     ).toBe("Credits: available");
+  });
+
+  it("capitalizes Codex plan ids and leaves an agent's plan name alone", () => {
+    expect(formatBackendPlanType({ kind: "codex" }, "pro")).toBe("Pro");
+    expect(formatBackendPlanType({ kind: "codex" }, "business")).toBe("Business");
+    expect(formatBackendPlanType({ kind: "codex" }, "self_serve_business")).toBe("Self Serve Business");
+    expect(formatBackendPlanType({ kind: "acp:grok" }, "X Premium+")).toBe("X Premium+");
+    expect(formatBackendPlanType({ kind: "acp:grok" }, "pro")).toBe("pro");
+  });
+
+  it("describes a limit as percent used, with a weekday reset within the week", () => {
+    const now = new Date(2026, 9, 1, 21, 35).getTime();
+    const resetAt = new Date(2026, 9, 5, 8).getTime();
+    const row = describeRateLimitRow({ name: "Weekly limit", usedPercent: 53, resetAt }, now);
+    expect(row).toMatchObject({ label: "Weekly limit", figure: "53%", text: "used", usedPercent: 53 });
+    expect(row.reset).toBe(`resets ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric" }).format(resetAt)}`);
+  });
+
+  it("describes individual usage as used of total, and remaining percent as used", () => {
+    const now = new Date(2026, 9, 1, 21, 35).getTime();
+    expect(describeRateLimitRow({ name: "Individual limit", used: 509, limit: 100_000, usedPercent: 0.5 }, now))
+      .toMatchObject({ figure: "509", text: `of ${(100_000).toLocaleString()} used`, usedPercent: 0.5 });
+    expect(describeRateLimitRow({ name: "Included credits", remaining: 58 }, now))
+      .toMatchObject({ label: "Included credits", figure: "42%", usedPercent: 42 });
+  });
+
+  it("describes credits as a balance row without a meter", () => {
+    const now = Date.now();
+    const credits = { name: "Credits", limitId: "credits", windowKey: "credits" as const };
+    expect(describeRateLimitRow({ ...credits, remaining: 63_585, hasCredits: true }, now))
+      .toEqual({ label: "Credits", figure: (63_585).toLocaleString() });
+    expect(describeRateLimitRow({ ...credits, hasCredits: true }, now)).toEqual({ label: "Credits", text: "Available" });
+    expect(describeRateLimitRow({ ...credits, unlimited: true }, now)).toEqual({ label: "Credits", text: "Unlimited" });
   });
 });

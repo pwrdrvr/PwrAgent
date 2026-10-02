@@ -839,6 +839,91 @@ describe("FederationSettings", () => {
     expect(openFederationWindow).not.toHaveBeenCalled();
   });
 
+  it("renames a machine's short name, hands it back to the gateway, and surfaces a refusal", async () => {
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "gateway",
+      status: "listening",
+      instanceId: "gateway_one",
+      localLabel: "Mac-Mini-M4",
+      localShortLabel: "M4 Mini",
+      localShortLabelSource: "auto",
+      peers: [
+        {
+          id: "client_one",
+          label: "DESKTOP-17ISFOI",
+          shortLabel: "Win PC",
+          shortLabelSource: "auto",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+        },
+        {
+          id: "client_two",
+          label: "Studio-MBP-M5-Max",
+          shortLabel: "Studio",
+          shortLabelSource: "override",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+        },
+        {
+          id: "client_gone",
+          label: "Old-Linux-Build-Box",
+          role: "client",
+          status: "revoked",
+          revokedAt: 1,
+          capabilities: [],
+        },
+      ],
+    };
+    const setFederationShortName = vi.fn(async (request: { instanceId: string; shortLabel: string | null }) => {
+      if (request.shortLabel === "M4 Mini") throw new Error("Mac-Mini-M4 already uses that name.");
+      return { entries: [] };
+    });
+    const readFederationHealth = vi.fn(async () => ({ health }));
+    render(
+      <FederationSettings
+        desktopApi={{ readFederationHealth, setFederationShortName }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rename short name for DESKTOP-17ISFOI" }));
+    const input = screen.getByLabelText("Short name for DESKTOP-17ISFOI");
+    expect(input).toHaveValue("Win PC");
+    expect(input).toHaveAccessibleDescription("1 to 12 characters");
+    fireEvent.change(input, { target: { value: "a name far too long" } });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "  Win   VM " } });
+    const reads = readFederationHealth.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(setFederationShortName).toHaveBeenLastCalledWith({ instanceId: "client_one", shortLabel: "Win VM" });
+    await waitFor(() => expect(readFederationHealth.mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(() => expect(screen.queryByLabelText("Short name for DESKTOP-17ISFOI")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Use the automatic short name for Studio-MBP-M5-Max" }));
+    expect(setFederationShortName).toHaveBeenLastCalledWith({ instanceId: "client_two", shortLabel: null });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename short name for DESKTOP-17ISFOI" }));
+    fireEvent.change(screen.getByLabelText("Short name for DESKTOP-17ISFOI"), { target: { value: "M4 Mini" } });
+    fireEvent.keyDown(screen.getByLabelText("Short name for DESKTOP-17ISFOI"), { key: "Enter" });
+    expect(await screen.findByText("Mac-Mini-M4 already uses that name.")).toBeInTheDocument();
+    // Escape leaves the editor and hands focus back to Rename.
+    fireEvent.keyDown(screen.getByLabelText("Short name for DESKTOP-17ISFOI"), { key: "Escape" });
+    expect(screen.queryByLabelText("Short name for DESKTOP-17ISFOI")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename short name for DESKTOP-17ISFOI" })).toHaveFocus();
+    // A revoked instance is out of the short-name map, so it offers no rename.
+    expect(screen.queryByRole("button", { name: "Rename short name for Old-Linux-Build-Box" })).not.toBeInTheDocument();
+    // The local machine's own short name sits in the Configuration card.
+    expect(screen.getByRole("button", { name: "Rename short name for Mac-Mini-M4" })).toBeInTheDocument();
+  });
+
   it("drives the celestial icon pickers: override, reset to auto, pending lock, invalid guard", async () => {
     const health: FederationHealthStatus = {
       enabled: true,

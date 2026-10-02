@@ -112,6 +112,9 @@
   --text-subtle: rgba(247, 243, 235, 0.42);
   --status-ok: #5fa969;
   --status-warning: #d99a3d;
+  /* Warning as text (a figure or sentence), not a dot or a stroke. Light
+     theme overrides it; --status-warning is under 4.5:1 there. */
+  --status-warning-text: var(--status-warning);
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
   /* Usage Activity chart series: the five costliest threads, then the rest. */
@@ -456,6 +459,9 @@
      --status-warning is 4.0:1 on the rail card here. This amber is 5.0:1.
      The other savings tokens follow their base tokens into this theme. */
   --savings-over: #945c00;
+  /* The same amber for any warning read as text: 4.7:1 on the warning chip,
+     where --status-warning is 3.8:1. */
+  --status-warning-text: #945c00;
 
   /* Button text on accent flips: white reads better on the darker
      light-theme accent (vs. near-black on the brighter dark-theme one). */
@@ -11971,6 +11977,20 @@ a.button {
   gap: 8px;
 }
 
+/* Default Models: each line under a helper's pickers names what will run. */
+.settings-default-models__line {
+  display: block;
+}
+
+.settings-default-models__line strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.settings-default-models__line.settings-field__value--warn strong {
+  color: inherit;
+}
+
 .settings-select--chip {
   width: auto;
   min-width: 0;
@@ -11993,6 +12013,15 @@ a.button {
 .settings-select--chip:hover:not(:disabled) {
   border-color: var(--accent-border);
   background-color: var(--bg-panel-hover);
+}
+
+/* A Select (components/Select.tsx) wearing the chip draws its chevron as an
+   element, so the pill drops its painted one and the right padding that
+   made room for it. */
+.select-trigger.settings-select--chip {
+  max-width: min(100%, 320px);
+  padding: 0 10px;
+  background-image: none;
 }
 
 /* =====================================================}
@@ -15363,6 +15392,34 @@ a.button {
 
 .federation-celestial-picker svg {
   flex: 0 0 auto;
+}
+
+/* Short name row: value, who chose it, and the rename controls, in both
+   the Configuration card and each peer row. Wraps rather than widening. */
+.federation-short-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.federation-short-name__value b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.federation-short-name .settings-pill {
+  align-self: center;
+}
+
+.federation-short-name .federation-short-name__input {
+  width: 14ch;
+}
+
+.federation-short-name__hint {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* ==== Star Map mission-control surface ==== */
@@ -29624,25 +29681,49 @@ div.composer-error-row__toggle {
   color: var(--status-warning);
 }
 
-.backend-status-list {
+.provider-status__heading {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-status__heading h3 {
+  margin: 0;
+}
+
+/* One grid for the whole list. Each provider, and the label/value grid inside
+   it, is a subgrid of it, so every provider's values start in the same column
+   instead of each sizing its own label column to its longest label. The first
+   track holds the status dot; the summary row lays the name out beside it. */
+.backend-status-list {
+  display: grid;
+  grid-template-columns: 16px max-content minmax(0, 1fr);
   margin: 12px 0 0;
   padding: 0;
   list-style: none;
 }
 
 .backend-status-list__item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  row-gap: 5px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.backend-status-list__item:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .backend-status-list__summary {
-  display: inline-flex;
+  display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .backend-status-list__dot {
@@ -29657,28 +29738,31 @@ div.composer-error-row__toggle {
   background: var(--danger-text);
 }
 
-.backend-status-list__details {
-  margin: 0;
-  padding-left: 16px;
-  color: var(--text-secondary);
+.backend-status-list__name {
+  min-width: 0;
+  color: var(--text-primary);
   font-size: 13px;
-  line-height: 1.45;
+  font-weight: 600;
 }
 
-.backend-status-list__metadata {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-left: 16px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
+.backend-status-list__state {
+  min-width: 0;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.backend-status-list__state.is-unavailable {
+  color: var(--danger-text);
 }
 
 .backend-status-list__metadata-grid {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 8px;
+  grid-column: 2 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  row-gap: 5px;
   margin: 0;
 }
 
@@ -29687,25 +29771,73 @@ div.composer-error-row__toggle {
 }
 
 .backend-status-list__metadata-grid dt {
+  padding-right: 10px;
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .backend-status-list__metadata-grid dd {
   min-width: 0;
   margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.backend-status-list__limits {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.backend-status-list__figure {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.backend-status-list__reset {
+  color: var(--text-muted);
+}
+
+/* The limit's fill, then where its pace lands: hatched to 100% in warning
+   when that comes before the reset, hatched quietly to the projected level
+   when it does not. */
+.backend-status-list__meter {
+  position: relative;
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--border-subtle);
+}
+
+.backend-status-list__meter i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  background: var(--accent);
+}
+
+.backend-status-list__meter s {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+  background: repeating-linear-gradient(90deg, var(--text-muted) 0 3px, transparent 3px 5px);
+  opacity: 0.6;
+}
+
+.backend-status-list__meter s.is-short {
+  background: repeating-linear-gradient(90deg, var(--status-warning) 0 3px, transparent 3px 5px);
+  opacity: 0.9;
+}
+
+.backend-status-list__pace {
+  margin-top: 4px;
 }
 
 /* Shared subheading inside a rail panel (e.g. "Linked pull requests"). */
@@ -30521,9 +30653,300 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: pointer;
 }
 
-.pricing-panel__usage-action {
-  align-self: flex-start;
-  margin: 8px 0 4px;
+/* The Pricing rail's way into Usage Activity. The whole card is the button,
+   in the rail-summary-card frame, so it reads as a second summary rather than
+   a control. It gets louder only as the week gets tighter: a quiet chart on
+   pace, warning when the pace runs out before the reset, danger at the limit.
+   The chart's line and projection are SVG on a stretched viewBox; its dots
+   and labels are HTML over it so the stretch does not distort them. */
+.usage-pace-card {
+  display: block;
+  width: 100%;
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-overlay-faint);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.usage-pace-card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.usage-pace-card:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.usage-pace-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.usage-pace-card__go {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-bright);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.usage-pace-card__go svg {
+  transition: transform 120ms ease;
+}
+
+.usage-pace-card:hover .usage-pace-card__go svg {
+  transform: translate(1px, -1px);
+}
+
+.usage-pace-card__sub {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.usage-pace-card__figure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.usage-pace-card__figure strong {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.usage-pace-card__figure small {
+  margin-left: 1px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.usage-pace-card__figure > span {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.usage-pace-card__chart {
+  display: block;
+  margin-top: 20px;
+}
+
+.usage-pace-card__spark {
+  position: relative;
+  display: block;
+  height: 70px;
+}
+
+.usage-pace-card__spark svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* The part of the window that has not happened yet. */
+.usage-pace-card__future {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border-subtle) 4px 5px);
+}
+
+/* 100%, at the chart's 6-unit top inset. */
+.usage-pace-card__cap {
+  position: absolute;
+  top: calc(100% * 6 / 70);
+  right: 0;
+  left: 0;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.usage-pace-card__now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border-strong);
+}
+
+.usage-pace-card__reset {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  border-left: 1px solid var(--text-muted);
+}
+
+.usage-pace-card__area {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.usage-pace-card__line,
+.usage-pace-card__projection {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.usage-pace-card__line {
+  stroke: var(--text-primary);
+}
+
+.usage-pace-card__projection {
+  stroke: var(--text-muted);
+  stroke-dasharray: 4 3;
+}
+
+.usage-pace-card.is-short .usage-pace-card__projection {
+  stroke: var(--status-warning);
+}
+
+.usage-pace-card__point,
+.usage-pace-card__hit {
+  position: absolute;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--bg-panel);
+}
+
+.usage-pace-card__point {
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  background: var(--text-primary);
+}
+
+.usage-pace-card__hit {
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: var(--status-warning);
+}
+
+.usage-pace-card__hit::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 1.5px solid var(--status-warning);
+  border-radius: 999px;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .usage-pace-card__hit::after {
+    animation: usage-pace-ping 1.8s ease-out infinite;
+  }
+}
+
+@keyframes usage-pace-ping {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.4);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+/* Above the 100% line, ending at the point it names. Near the window's start
+   it hangs to the right of the point instead. */
+.usage-pace-card__hit-label {
+  position: absolute;
+  top: -17px;
+  padding-right: 2px;
+  transform: translateX(-100%);
+  color: var(--status-warning-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.usage-pace-card__hit-label.is-start {
+  padding: 0 0 0 2px;
+  transform: none;
+}
+
+.usage-pace-card__axis {
+  position: relative;
+  display: block;
+  height: 12px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.usage-pace-card__axis > span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+
+.usage-pace-card__axis > span:first-child {
+  left: 0;
+}
+
+.usage-pace-card__axis > .usage-pace-card__axis-now {
+  transform: translateX(-50%);
+  color: var(--text-secondary);
+}
+
+.usage-pace-card__axis > span:last-child {
+  right: 0;
+}
+
+.usage-pace-card__verdict {
+  margin-top: 8px;
+}
+
+.usage-pace-card__verdict:empty {
+  display: none;
+}
+
+.usage-pace.is-out {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.usage-pace-card__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-pace-card__foot b {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .context-panel__section-action:hover {
@@ -39541,8 +39964,8 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-connections--collapsible summary span { color: var(--text-secondary); }
 .federation-connections--collapsible summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .federation-status-control__title { display: flex; align-items: center; gap: 4px; }
-/* The popover drops from the Star Map button: map preview, instance chips,
-   one minute of traffic, then the socket list folded away. */
+/* The popover drops from the Star Map button: the map preview, whose bodies
+   are the instances, one minute of traffic, then the socket list folded away. */
 .federation-status-control__body { display: flex; flex-direction: column; gap: 12px; padding: 10px 8px 4px; }
 .federation-status-control__status { display: flex; align-items: center; gap: 6px; }
 .federation-status-control__dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 999px; background: var(--text-muted); }
@@ -39551,8 +39974,6 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-status-control__rec { padding: 1px 5px; border: 1px solid var(--accent-border); border-radius: 4px; color: var(--accent-bright); font: 600 9px/1.4 var(--font-mono); letter-spacing: 0.06em; }
 .federation-status-control__note { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .federation-status-control__body .federation-connections { margin: 0; font-size: 12px; }
-.federation-status-control__section { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; color: var(--text-muted); font-size: 11px; }
-.federation-status-control__section > span:first-child { font: 600 9.5px/1.2 var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; }
 .federation-status-control__menu-anchor { position: relative; }
 .federation-status-control__menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 2; display: flex; flex-direction: column; width: 260px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); }
 .federation-status-control__menu-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-primary); font: 500 12px/1.3 var(--font-sans, sans-serif); text-align: left; cursor: pointer; }
@@ -39565,29 +39986,43 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-chip:hover, .federation-chip:focus-visible { border-color: var(--border-strong); background: var(--bg-panel-hover); }
 .federation-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .federation-chip--offline { color: var(--text-secondary); }
-.federation-chip--more { padding: 0 9px; color: var(--text-secondary); font-weight: 500; }
 .federation-chip__label { overflow: hidden; text-overflow: ellipsis; }
 .federation-chip__tag { padding: 1px 4px; border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-muted); font: 550 8.5px/1.3 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; }
 .federation-chip__tag--cloudflare { border-color: var(--accent-border); color: var(--accent-bright); }
 .federation-chip__tag--tailscale, .federation-chip__tag--ts-funnel { border-color: var(--border-strong); color: var(--text-secondary); }
 .federation-chip__offline { width: 6px; height: 6px; border-radius: 999px; background: var(--text-muted); }
 
-/* A static doorway into the Star Map; nothing in it moves. */
-.federation-sky { position: relative; display: block; width: 100%; height: 150px; padding: 0; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 8px; background: radial-gradient(70px 44px at 24% 30%, var(--accent-soft), transparent 70%), radial-gradient(80px 46px at 76% 70%, var(--accent-soft), transparent 70%), var(--bg-panel); color: var(--text-primary); cursor: pointer; }
-.federation-sky:hover, .federation-sky:focus-visible { border-color: var(--border-strong); }
-.federation-sky:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-.federation-sky__orbit { position: absolute; left: 50%; top: 42%; border: 1px solid var(--border-subtle); border-radius: 999px; transform: translate(-50%, -50%); }
-.federation-sky__orbit--inner { width: 38%; height: 34%; }
-.federation-sky__orbit--outer { width: 72%; height: 64%; }
-.federation-sky__sun { position: absolute; left: 50%; top: 42%; width: 14px; height: 14px; border-radius: 999px; background: var(--text-primary); box-shadow: 0 0 0 4px var(--bg-panel), 0 0 0 5px var(--border-strong); transform: translate(-50%, -50%); }
-.federation-sky__body { position: absolute; display: inline-flex; align-items: center; gap: 4px; max-width: 120px; padding: 2px 6px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-panel-elevated); color: var(--text-secondary); font: 550 9.5px/1.2 var(--font-sans, sans-serif); white-space: nowrap; transform: translate(-50%, -50%); }
-.federation-sky__body > span { overflow: hidden; text-overflow: ellipsis; }
+/* A static picture of the Star Map that is also the instance list; nothing
+   in it moves. Each body is a button placed by FederationStarMapPreview's
+   slot table (px from the top, % across), so the sky's height is fixed. */
+.federation-sky { position: relative; width: 100%; height: 172px; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 8px; background: radial-gradient(70px 44px at 24% 30%, var(--accent-soft), transparent 70%), radial-gradient(80px 46px at 76% 70%, var(--accent-soft), transparent 70%), var(--bg-panel); color: var(--text-primary); cursor: pointer; }
+.federation-sky:hover { border-color: var(--border-strong); }
+.federation-sky__orbit { position: absolute; left: 50%; top: 70px; border: 1px solid var(--border-subtle); border-radius: 999px; transform: translate(-50%, -50%); }
+.federation-sky__orbit--inner { width: 72px; height: 34px; }
+.federation-sky__orbit--outer { width: 78%; height: 124px; }
+.federation-sky__sun { position: absolute; left: 50%; top: 70px; width: 14px; height: 14px; border-radius: 999px; background: var(--text-primary); box-shadow: 0 0 0 4px var(--bg-panel), 0 0 0 5px var(--border-strong); transform: translate(-50%, -50%); }
+.federation-sky__body { position: absolute; display: inline-flex; align-items: center; gap: 4px; max-width: min(150px, 39%); height: 20px; margin: 0; padding: 0 6px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-panel-elevated); color: var(--text-secondary); font: 550 9.5px/1.2 var(--font-sans, sans-serif); white-space: nowrap; cursor: pointer; transform: translate(-50%, -50%); }
 .federation-sky__body--online { border-color: var(--accent-border); color: var(--text-primary); }
+.federation-sky__body:hover, .federation-sky__body:focus-visible { z-index: 1; border-color: var(--border-strong); background: var(--bg-panel-hover); color: var(--text-primary); box-shadow: 0 3px 8px var(--shadow-tint-faint); }
+.federation-sky__body--online:hover, .federation-sky__body--online:focus-visible { border-color: var(--accent); }
+.federation-sky__body:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.federation-sky__body--more { padding: 0 8px; font-weight: 500; }
+/* Only the host gives way: the profile is the one thing that tells two
+   profiles on a machine apart, and the tag and dot are a few px. */
+.federation-sky__host { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.federation-sky__profile { flex: none; color: var(--text-primary); font-weight: 700; }
+.federation-sky__profile::before { content: "/"; margin-right: 2px; color: var(--text-muted); font-weight: 450; }
+.federation-sky__body .federation-chip__tag, .federation-sky__body .federation-chip__offline { flex: none; }
+.federation-sky__body .federation-chip__tag { padding: 0 3px; font-size: 8px; }
+.federation-sky__alone { position: absolute; left: 50%; top: 92px; color: var(--text-muted); font-size: 11px; white-space: nowrap; transform: translateX(-50%); }
 .federation-sky__caption { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.federation-sky__label { padding: 3px 8px; border-radius: 6px; background: var(--bg-panel-elevated); color: var(--text-secondary); font-size: 10.5px; }
+.federation-sky__label { min-width: 0; overflow: hidden; padding: 3px 8px; border-radius: 6px; background: var(--bg-panel-elevated); color: var(--text-secondary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .federation-sky__label strong { color: var(--text-primary); font-weight: 650; }
-.federation-sky__cta { padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel-elevated); font: 550 11px/1.2 var(--font-sans, sans-serif); }
-.federation-sky:hover .federation-sky__cta, .federation-sky:focus-visible .federation-sky__cta { border-color: var(--accent); background: var(--accent); color: var(--button-text); }
+.federation-sky__cta { flex: none; margin: 0; padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel-elevated); color: var(--text-primary); font: 550 11px/1.2 var(--font-sans, sans-serif); white-space: nowrap; cursor: pointer; }
+.federation-sky__cta:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+/* Empty sky opens the map too, so pointing at it lights the button; pointing
+   at a body lights only the body. */
+.federation-sky:hover:not(:has(.federation-sky__body:hover)) .federation-sky__cta, .federation-sky__cta:hover, .federation-sky__cta:focus-visible { border-color: var(--accent); background: var(--accent); color: var(--button-text); }
 
 .federation-traffic { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 9px 10px 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); color: var(--text-primary); text-align: left; cursor: pointer; }
 .federation-traffic:hover:not(:disabled), .federation-traffic:focus-visible { border-color: var(--border-strong); background: var(--bg-panel-hover); }
@@ -40013,8 +40448,8 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-limit__meter--cache i { background: var(--text-muted); }
 .usage-pace { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--text-secondary); font-size: 11px; }
 .usage-pace > span { padding: 1px 5px; border-radius: 3px; background: var(--bg-panel-hover); color: var(--text-primary); font: 10px var(--font-mono); }
-.usage-pace.is-short { color: var(--status-warning); font-weight: 600; }
-.usage-pace.is-short > span { background: var(--warning-surface-faint); color: var(--status-warning); }
+.usage-pace.is-short { color: var(--status-warning-text); font-weight: 600; }
+.usage-pace.is-short > span { background: var(--warning-surface-faint); color: var(--status-warning-text); }
 .usage-limit__sub { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-muted); font-size: 10px; }
 .usage-limit__sub strong { color: var(--text-secondary); font-weight: 600; }
 .usage-limit__reset { color: var(--status-warning); }

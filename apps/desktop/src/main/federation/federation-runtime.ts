@@ -213,6 +213,9 @@ import {
   type SetAcpSessionRuntimeOptionRequest,
   type SetCelestialIconRequest,
   type SetCelestialIconResponse,
+  type SetFederationShortNameRequest,
+  type SetFederationShortNameResponse,
+  type FederationInstanceShortName,
   type StarMapArrangementEntry,
   type StarMapIntakeRequest,
   type StarMapIntakeResponse,
@@ -293,6 +296,12 @@ import {
   collectFederationLoadStatus,
 } from "./federation-host-info";
 import { defaultInstanceLabel } from "./federation-instance-label";
+import {
+  FEDERATION_SHORT_NAMES_META_KEY,
+  FederationShortNameCoordinator,
+  type FederationShortNameInstance,
+} from "./federation-short-names";
+import { generateFederationShortNames } from "./federation-short-name-generator";
 import { FederationActivityLedger } from "./federation-activity-ledger";
 import { FederationTransferLedger } from "./federation-transfer-ledger";
 import { lookupFederationArchivedThreads, readFederationPinnedSnapshot } from "./federation-collection-client";
@@ -434,6 +443,12 @@ const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_PEER_DIRECTORY_PAGE_METHOD = "federation.peerDirectoryPage";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
+/**
+ * The short-name map, sent on connect and on change like the celestial map.
+ * A new notification rather than a field on a signed message: a peer that
+ * predates it routes the unknown notification as handled and drops it.
+ */
+const FEDERATION_SHORT_NAMES_METHOD = "federation.instanceShortNames";
 const FEDERATION_STAR_MAP_ARRANGEMENT_METHOD = "federation.starMapArrangement";
 const FEDERATION_EVENT_SUBSCRIPTION_METHOD = "federation.eventSubscription";
 const FEDERATION_EVENT_RELAY_MAX_HOPS = 4;
@@ -978,6 +993,29 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     FederationPeerSummary
   >();
+  /** Short names for every instance; the root gateway generates them. */
+  private readonly shortNames = new FederationShortNameCoordinator({
+    readMeta: () => isAppStateInitialized()
+      ? getAppStateDb().getMeta(FEDERATION_SHORT_NAMES_META_KEY) ?? ""
+      : undefined,
+    writeMeta: (value) => {
+      if (isAppStateInitialized()) {
+        getAppStateDb().setMeta(FEDERATION_SHORT_NAMES_META_KEY, value);
+      }
+    },
+    isCoordinator: () => this.actsAsCelestialCoordinator(),
+    listInstances: () => this.shortNameInstances(),
+    generate: async (plan) => await generateFederationShortNames({
+      plan,
+      generate: async (params) =>
+        await getDesktopBackendRegistry().generateStructuredObject(params),
+    }),
+    broadcast: (entries, excludePeerId) =>
+      this.broadcastShortNames(entries, excludePeerId),
+    sendTo: (peerId, entries) => this.sendShortNames(peerId, entries),
+    publishChanged: () => this.publishShortNamesChanged(),
+    log: (message, fields) => log.info(message, fields),
+  });
   /** Lazily loaded from state.db meta; authoritative copy on the gateway. */
   private celestialAssignments?: Map<
     FederationInstanceId,
@@ -1365,6 +1403,7 @@ export class DesktopFederationRuntime {
   async stop(): Promise<void> {
     this.stopping = true;
     this.parked = false;
+    this.shortNames.dispose();
     await this.cloudflareGateway.stop();
     this.connectionAttempt = undefined;
     for (const peer of this.shutdown.snapshot()) this.shutdown.disconnected(peer.instanceId);
@@ -1535,9 +1574,18 @@ export class DesktopFederationRuntime {
       // Transfer counters attach here and only here — visiblePeers()
       // feeds the gossiped peer directory too, and these numbers
       // describe OUR socket with each peer, not facts about the peer.
+      // Short names resolve here too: every instance reads its own copy
+      // of the map, so they are never gossiped with the directory.
       peers: this.visiblePeers().map((peer) => {
         const transfer = this.transferLedger.snapshot(peer.id);
-        return transfer ? { ...peer, transfer } : peer;
+        const short = this.shortNames.shortNameFor(peer.id, peer.label);
+        return transfer || short
+          ? {
+              ...peer,
+              ...(transfer ? { transfer } : {}),
+              ...(short ? { shortLabel: short.shortLabel, shortLabelSource: short.source } : {}),
+            }
+          : peer;
       }),
       instanceId: this.ensureLocalInstanceId(),
       listenUrl: this.listenUrl,
@@ -1600,6 +1648,11 @@ export class DesktopFederationRuntime {
     // or health read during boot).
     health.localLabel =
       config.instanceLabel || defaultInstanceLabel();
+    const localShort = health.instanceId
+      ? this.shortNames.shortNameFor(health.instanceId, health.localLabel)
+      : undefined;
+    health.localShortLabel = localShort?.shortLabel;
+    health.localShortLabelSource = localShort?.source;
     health.localProfileName = isAppStateInitialized()
       ? getAppStateDb().getMeta("profile_name") || undefined
       : undefined;
@@ -1751,6 +1804,7 @@ export class DesktopFederationRuntime {
     // Free the revoked instance's celestial icon and propagate the removal
     // so it cannot squat one of the five ids forever.
     this.removeCelestialAssignment(peerId, revokedAt);
+    this.shortNames.remove(peerId, revokedAt);
     await this.cleanupRemoteThreadPins(
       peerId,
       request?.pinDisposition ?? "remember",
@@ -2964,6 +3018,7 @@ export class DesktopFederationRuntime {
 
   private async restartNow(): Promise<void> {
     await this.stop();
+    this.shortNames.revive();
     const config = this.readRuntimeConfig();
     this.instanceLabel =
       config.instanceLabel || defaultInstanceLabel();
@@ -3683,6 +3738,7 @@ export class DesktopFederationRuntime {
     // Icon assignments are sparse federation control-plane state rather than
     // a live backend event stream. Keep the existing reconnect convergence.
     this.broadcastCelestialIcons();
+    this.shortNames.announce(gatewayInstanceId);
     this.syncDesiredEventSubscriptions();
     this.replayRelayedEventSubscriptions();
     if (pendingInviteToken) {
@@ -3888,6 +3944,8 @@ export class DesktopFederationRuntime {
     // before app state exists (unit harnesses) skip icon coordination.
     if (isAppStateInitialized()) {
       this.reconcileCelestialAssignments();
+      this.shortNames.reconcile();
+      this.shortNames.announce(connection.peerId);
     }
   }
 
@@ -3977,6 +4035,9 @@ export class DesktopFederationRuntime {
       return;
     }
     if (this.applyCelestialIcons(envelope, sourcePeerId)) {
+      return;
+    }
+    if (this.applyShortNames(envelope, sourcePeerId)) {
       return;
     }
     if (this.applyStarMapArrangement(envelope, sourcePeerId)) {
@@ -4454,6 +4515,12 @@ export class DesktopFederationRuntime {
         "disconnected",
         "Federation peer is no longer advertised by the gateway.",
       );
+    }
+    // A dual hub's clients reach the root gateway's view this way. Same
+    // guard as the connect path: unit harnesses install directories
+    // without app state.
+    if (isAppStateInitialized()) {
+      this.shortNames.reconcile();
     }
     return true;
   }
@@ -5018,6 +5085,123 @@ export class DesktopFederationRuntime {
         params: { entries },
       },
     });
+  }
+
+  /**
+   * Every live instance the short-name map covers: this one, then every
+   * non-revoked peer that advertised a real label (a peer still labelled
+   * with its own id has told us nothing to shorten).
+   */
+  private shortNameInstances(): FederationShortNameInstance[] {
+    const local: FederationShortNameInstance = {
+      id: this.ensureLocalInstanceId(),
+      // restartNow resolves this before any peer can connect.
+      label: this.instanceLabel || defaultInstanceLabel(),
+      profileName: getAppStateDb().getMeta("profile_name") || undefined,
+      host: this.localHostInfo,
+    };
+    return [
+      local,
+      ...this.visiblePeers()
+        .filter((peer) =>
+          peer.status !== "revoked"
+          && !peer.revokedAt
+          && peer.label
+          && peer.label !== peer.id,
+        )
+        .map((peer) => ({
+          id: peer.id,
+          label: peer.label,
+          profileName: peer.profileName,
+          host: peer.host,
+        })),
+    ];
+  }
+
+  private broadcastShortNames(
+    entries: FederationInstanceShortName[],
+    excludePeerId?: string,
+  ): void {
+    for (const connection of this.router?.listConnections() ?? []) {
+      if (connection.peerId === excludePeerId) continue;
+      this.sendShortNames(connection.peerId, entries);
+    }
+  }
+
+  private sendShortNames(
+    peerId: FederationInstanceId,
+    entries: FederationInstanceShortName[],
+  ): void {
+    this.router?.getConnection(peerId)?.sendEnvelope({
+      id: `federation-short-names:${randomUUID()}`,
+      kind: "notification",
+      method: FEDERATION_SHORT_NAMES_METHOD,
+      params: { entries },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.ensureLocalInstanceId(),
+      targetInstanceId: peerId,
+      createdAt: Date.now(),
+    });
+  }
+
+  private applyShortNames(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification"
+      || envelope.method !== FEDERATION_SHORT_NAMES_METHOD
+    ) {
+      return false;
+    }
+    if (!isAppStateInitialized()) return true;
+    const params = (envelope as { params?: { entries?: unknown } }).params;
+    this.shortNames.apply(params?.entries, sourcePeerId);
+    return true;
+  }
+
+  private publishShortNamesChanged(): void {
+    this.publishAgentEvent?.({
+      backend: "codex",
+      notification: {
+        method: "federation/shortNames/changed",
+        params: {},
+      },
+    });
+  }
+
+  /**
+   * Apply an operator short name, or hand the machine back to the gateway
+   * with a null name. The gateway coordinates, as for celestial icons: a
+   * client forwards when it can reach it, and otherwise (or when the
+   * gateway predates the method) writes locally and syncs up on the next
+   * reconnect.
+   */
+  async setFederationShortName(
+    request: SetFederationShortNameRequest,
+  ): Promise<SetFederationShortNameResponse> {
+    if (
+      !isFederationInstanceId(request?.instanceId)
+      || (request.shortLabel !== null && typeof request.shortLabel !== "string")
+    ) {
+      throw new Error("Invalid short name request.");
+    }
+    const gatewayInstanceId = this.actsAsCelestialCoordinator()
+      ? undefined
+      : getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY) || undefined;
+    if (gatewayInstanceId && this.router?.getConnection(gatewayInstanceId)) {
+      try {
+        const response = await this.remoteBackend({
+          scope: "remote",
+          instanceId: gatewayInstanceId,
+        }).setFederationShortName(request);
+        this.shortNames.adopt(response.entries);
+        return { entries: this.shortNames.entries() };
+      } catch (error) {
+        if (!hasFederationErrorCode(error, "method_not_found")) throw error;
+      }
+    }
+    return { entries: this.shortNames.setOverride(request.instanceId, request.shortLabel) };
   }
 
   private publishCelestialIconsChanged(): void {
@@ -6865,6 +7049,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetCelestialIconRequest,
     ): Promise<SetCelestialIconResponse> {
       return await getDesktopFederationRuntime().setCelestialIcon(request);
+    },
+    async setFederationShortName(
+      request: SetFederationShortNameRequest,
+    ): Promise<SetFederationShortNameResponse> {
+      return await getDesktopFederationRuntime().setFederationShortName(request);
     },
     async starMapIntake(
       request: StarMapIntakeRequest,

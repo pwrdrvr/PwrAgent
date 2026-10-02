@@ -63,6 +63,11 @@ function cardRowValue(
 
 // A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
 // to a `ThreadSubAgentSummary.monitorId`.
+/** The value cell beside a limit's label on the AI providers tab. */
+function limitValue(label: string): HTMLElement {
+  return screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement;
+}
+
 function buildMonitorLine(
   overrides: Partial<ThreadUsageLineRecord> = {},
 ): ThreadUsageLineRecord {
@@ -1483,7 +1488,7 @@ describe("ThreadContextPanel", () => {
     expect(cardRowValue(miser, "3 · Revealed to parent")).toBe("$0.39");
     expect(cardRowValue(miser, "Summarized")).toBe("1");
     expect(cardRowValue(miser, "Passed through")).toBe("1");
-    expect(cardRowValue(miser, "Luna evaluations")).toBe("1");
+    expect(cardRowValue(miser, "Output evaluations")).toBe("1");
     expect(cardRowValue(miser, "Parent context avoided")).toBe("54k");
 
     fireEvent.click(
@@ -1534,7 +1539,7 @@ describe("ThreadContextPanel", () => {
     const miser = within(card as HTMLElement);
     expect(miser.getByText("1 decision")).toBeInTheDocument();
     expect(cardRowValue(miser, "Passed through")).toBe("1");
-    expect(cardRowValue(miser, "Luna evaluations")).toBe("0");
+    expect(cardRowValue(miser, "Output evaluations")).toBe("0");
   });
 
   it.each([false, true])("pages visible pricing cards even with hidden orphan gates (%s)", (includeHiddenGates) => {
@@ -3172,7 +3177,7 @@ describe("ThreadContextPanel", () => {
       .not.toBeInTheDocument();
   });
 
-  it("separates reducer decisions from priced Luna evaluations", () => {
+  it("separates reducer decisions from priced output evaluations", () => {
     const accounting = (disposition: "summarized" | "passed_through") => ({
       baselineParentCostMicros: 50_000,
       baselineParentTokens: 10_000,
@@ -3306,7 +3311,7 @@ describe("ThreadContextPanel", () => {
 
     const summary = screen.getByRole("button", { name: /Token Miser/ });
     expect(summary).toHaveTextContent(
-      "3 decisions · 2 Luna evaluations · 2 pass-throughs (1 helper · 1 policy)",
+      "3 decisions · 2 output evaluations · 2 pass-throughs (1 helper · 1 policy)",
     );
     expect(summary).not.toHaveTextContent("2 decisions");
     fireEvent.click(summary);
@@ -3448,7 +3453,7 @@ describe("ThreadContextPanel", () => {
     // The reason there is no savings figure is detail, and detail lives on the
     // counts row, which has a full line to wrap into.
     expect(summary.querySelector(".pricing-token-miser__count")).toHaveTextContent(
-      "3 decisions · 1 Luna evaluation · 3 pass-throughs (1 helper · 2 policy)"
+      "3 decisions · 1 output evaluation · 3 pass-throughs (1 helper · 2 policy)"
         + " · savings not priced yet",
     );
   });
@@ -4471,10 +4476,10 @@ describe("ThreadContextPanel", () => {
   it("shows regular and Spark rate limits together on the AI provider info tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 
-    expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark 5h limit: 100% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+    expect(limitValue("5h limit")).toHaveTextContent(/^7% used/);
+    expect(limitValue("Weekly limit")).toHaveTextContent(/^12% used/);
+    expect(limitValue("Spark 5h limit")).toHaveTextContent(/^0% used/);
+    expect(limitValue("Spark Weekly limit")).toHaveTextContent(/^0% used/);
   });
 
   it("keeps an ordinary Codex thread unchanged when promotion fails", async () => {
@@ -4638,8 +4643,8 @@ describe("ThreadContextPanel", () => {
       ],
     });
 
-    expect(screen.getByText(/Spark 5h limit: 98% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+    expect(limitValue("Spark 5h limit")).toHaveTextContent(/^2% used/);
+    expect(limitValue("Spark Weekly limit")).toHaveTextContent(/^0% used/);
   });
 
   it("renders the Edits tab empty state when no edits accumulated", () => {

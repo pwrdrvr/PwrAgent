@@ -63,7 +63,7 @@ describe("TokenMiserSummaryCard", () => {
     expect(screen.getByText("9 decisions")).toBeInTheDocument();
     expect(rowValue("Summarized")).toBe("7");
     expect(rowValue("Passed through")).toBe("2");
-    expect(rowValue("Luna evaluations")).toBe("6");
+    expect(rowValue("Output evaluations")).toBe("6");
     expect(rowValue("Parent context avoided")).toBe("93k");
   });
 

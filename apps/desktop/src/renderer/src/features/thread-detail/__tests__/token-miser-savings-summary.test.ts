@@ -180,7 +180,7 @@ describe("buildTokenMiserSavingsSummary", () => {
     expect(summary?.helperDecisionCount).toBeUndefined();
   });
 
-  it("counts only Luna's decisions as Luna evaluations", () => {
+  it("counts only the helper's decisions as output evaluations", () => {
     /* Every gate here records who decided, and only one of the two was Luna.
        Counting "not policy" made a gate that recorded nothing look evaluated. */
     const summary = buildTokenMiserSavingsSummary({

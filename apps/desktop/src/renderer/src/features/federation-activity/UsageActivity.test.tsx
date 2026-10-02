@@ -128,7 +128,7 @@ it("keeps the list usable while an analysis runs, and keeps its answer with the 
   render(<UsageActivity desktopApi={{ readUsageActivity, analyzeUsageActivity }} />);
   fireEvent.click(await screen.findByRole("button", { name: "Inspect first thread" }));
   fireEvent.click(screen.getByRole("button", { name: "Analyze turn" }));
-  expect(screen.getByText(/Reading on This instance and asking GPT-6-Luna · 0 s/)).toBeInTheDocument();
+  expect(screen.getByText(/Reading on This instance and asking GPT-6-Luna · 0 s/i)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Analyzing…" })).toBeDisabled();
 
   // Other threads stay open to inspection; only a second analysis waits.

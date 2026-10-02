@@ -172,11 +172,11 @@ export class FocusedDiffService {
     filePath: string | undefined,
     hunks: FocusedDiffHunkSummary[]
   ): Promise<EphemeralObjectResult> {
-    // Diff condensation is deliberately Codex-only. The explicit backend keeps
-    // GPT-5.6 Luna selected even when an ACP provider is the launchpad default;
-    // an unavailable Codex backend returns the full-diff fallback below.
+    // Diff condensation is deliberately Codex-only: its Default Models row
+    // names a Codex model even when an ACP provider is the launchpad default.
+    // An unavailable Codex backend returns the full-diff fallback below.
     const result = await this.objectCaller.generateObject({
-      backend: "codex",
+      helper: "diff_condensation",
       timeoutMs: this.timeoutMs,
       schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
       schemaName: "focused_diff_hunk_decisions",

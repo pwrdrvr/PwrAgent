@@ -5,9 +5,10 @@ import type { DesktopApi } from "./desktop-api";
 /**
  * Live federation health for whole-federation surfaces (the Star Map).
  * Seeds from readFederationHealth and re-reads on every
- * `federation/peerStatus/changed` / `federation/celestialIcons/changed`
- * agent event — peer transitions are the only signal that changes the
- * topology, so a re-read per transition stays cheap.
+ * `federation/peerStatus/changed` / `federation/celestialIcons/changed` /
+ * `federation/shortNames/changed` agent event — peer transitions are the
+ * only signal that changes the topology, so a re-read per transition stays
+ * cheap.
  */
 export function useFederationHealth(params: {
   desktopApi?: DesktopApi;
@@ -45,6 +46,7 @@ export function useFederationHealth(params: {
       if (
         event.notification.method === "federation/peerStatus/changed"
         || event.notification.method === "federation/celestialIcons/changed"
+        || event.notification.method === "federation/shortNames/changed"
       ) {
         refresh();
       }

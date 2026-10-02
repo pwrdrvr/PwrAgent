@@ -438,6 +438,8 @@ import type {
   HandoffInstanceThreadResult,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  SetFederationShortNameRequest,
+  SetFederationShortNameResponse,
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   WatchFederatedDirectorySetRequest,
@@ -716,6 +718,7 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
+  FEDERATION_SET_SHORT_NAME_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
   FEDERATION_WATCH_DIRECTORY_SET_CHANNEL,
   STAR_MAP_COMMAND_CHANNEL,
@@ -1417,6 +1420,10 @@ const desktopApi = Object.freeze({
     request: SetCelestialIconRequest,
   ): Promise<SetCelestialIconResponse> =>
     await ipcRenderer.invoke(FEDERATION_SET_CELESTIAL_ICON_CHANNEL, request),
+  setFederationShortName: async (
+    request: SetFederationShortNameRequest,
+  ): Promise<SetFederationShortNameResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SET_SHORT_NAME_CHANNEL, request),
   setFederationEventSubscriptions: async (
     request: SetFederationEventSubscriptionsRequest,
   ): Promise<SetFederationEventSubscriptionsResponse> =>

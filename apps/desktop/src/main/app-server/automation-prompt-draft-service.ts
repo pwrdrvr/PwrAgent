@@ -33,9 +33,8 @@ export type AutomationPromptDraftResult =
   | { status: "unavailable" | "invalid" | "failed"; reason: string };
 
 /**
- * Provider-agnostic structured one-shot. Supplied by the backend registry so
- * drafting runs on the operator's configured backend (Codex/Grok), not a
- * hardcoded provider.
+ * Structured one-shot supplied by the backend registry. The Automation
+ * prompts row in Settings → Default Models picks its model.
  */
 export type StructuredGenerator = (request: {
   system: string;

@@ -24,6 +24,8 @@ export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";
 export const FEDERATION_SET_CELESTIAL_ICON_CHANNEL =
   "federation:set-celestial-icon";
+export const FEDERATION_SET_SHORT_NAME_CHANNEL =
+  "federation:set-short-name";
 export const FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL =
   "federation:set-event-subscriptions";
 export const FEDERATION_WATCH_DIRECTORY_SET_CHANNEL =

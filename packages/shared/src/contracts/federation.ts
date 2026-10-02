@@ -207,9 +207,17 @@ export type FederationHostInfo = {
   hostname?: string;
   arch?: string;
   cpuCount?: number;
+  /** `os.cpus()[0].model`, e.g. "Apple M5 Max"; absent on older peers. */
+  cpuModel?: string;
   memoryBytes?: number;
   diskFreeBytes?: number;
   machineId?: string;
+  /**
+   * Best-effort guest detection. True when the OS reports a hypervisor;
+   * absent when it could not tell or the peer predates the field — never
+   * read absence as "bare metal".
+   */
+  virtualMachine?: boolean;
 };
 
 /**
@@ -290,6 +298,15 @@ export type FederationPeerSummary = {
   profileName?: string;
   /** Assigned celestial identity icon, when the assignment map knows one. */
   celestialIcon?: CelestialIconId;
+  /**
+   * The federation's short name for this machine, for faces too small for
+   * `label` (see `federation-short-names.ts`). Attached only on health
+   * reads — never advertised in the peer directory, since every instance
+   * resolves it from its own copy of the short-name map.
+   */
+  shortLabel?: string;
+  /** Whether `shortLabel` is the gateway's choice or the operator's. */
+  shortLabelSource?: "auto" | "override";
   /**
    * Operator-written purpose notes for the instance ("Studio Mac — PwrSnap
    * dev + screen recording"). Advertised on handshake and peer-directory
@@ -484,6 +501,9 @@ export type FederationHealthStatus = {
    * {@link formatFederationPeerDisplayLabel}.
    */
   localProfileName?: string;
+  /** This instance's own short name, when the short-name map has one. */
+  localShortLabel?: string;
+  localShortLabelSource?: "auto" | "override";
   /**
    * Another live app instance holding this profile's federation lease.
    * Present when this instance keeps its federation runtime stopped because
@@ -898,25 +918,31 @@ export function isRemoteFederationTarget(
  * two out separately (the star map's instance card stacks them so the card
  * stays narrow) should use this; `formatFederationPeerDisplayLabel` joins
  * the same parts for single-line contexts.
+ *
+ * `shortLabel` passes through when the peer has one, for faces that draw
+ * the short name in place of `label`. Whether the profile shows is still
+ * decided on full labels: two machines that happen to share a short name
+ * are different machines.
  */
 export function formatFederationPeerDisplayLabelParts(
-  peer: { label: string; profileName?: string },
+  peer: { label: string; profileName?: string; shortLabel?: string },
   visiblePeers: readonly {
     label: string;
     profileName?: string;
     revokedAt?: number;
   }[],
-): { label: string; profileName?: string } {
+): { label: string; profileName?: string; shortLabel?: string } {
+  const short = peer.shortLabel ? { shortLabel: peer.shortLabel } : {};
   if (!peer.profileName) {
-    return { label: peer.label };
+    return { label: peer.label, ...short };
   }
   const sameMachinePeers = visiblePeers.filter(
     (candidate) => !candidate.revokedAt && candidate.label === peer.label,
   );
   if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
-    return { label: peer.label };
+    return { label: peer.label, ...short };
   }
-  return { label: peer.label, profileName: peer.profileName };
+  return { label: peer.label, profileName: peer.profileName, ...short };
 }
 
 export function formatFederationPeerDisplayLabel(

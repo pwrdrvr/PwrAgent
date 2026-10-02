@@ -2843,7 +2843,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [health, localInstanceId, peers, props.localInstanceLabel]);
 
   // The instance card stacks machine and profile on separate lines to stay
-  // narrow, so it needs the parts rather than the joined string.
+  // narrow, so it needs the parts rather than the joined string, and it
+  // draws the federation's short name for the machine when there is one.
   const displayLabelPartsById = useMemo(() => {
     const localSummary = {
       id: localInstanceId,
@@ -2851,6 +2852,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         || props.localInstanceLabel?.trim()
         || "This instance",
       profileName: health?.localProfileName,
+      shortLabel: health?.localShortLabel,
     };
     const all = [
       localSummary,
@@ -2858,6 +2860,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         id: peer.id,
         label: peer.label,
         profileName: peer.profileName,
+        shortLabel: peer.shortLabel,
         revokedAt: peer.revokedAt,
       })),
     ];
@@ -2893,7 +2896,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           .filter((candidate) => candidate !== id)
           .map((candidate) => {
             const parts = displayLabelPartsById.get(candidate);
-            return parts?.profileName ?? parts?.label ?? candidate;
+            return parts?.profileName ?? parts?.shortLabel ?? parts?.label ?? candidate;
           });
         labels.set(id, others.join(", "));
       }
@@ -6029,6 +6032,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 label={
                   displayLabelPartsById.get(position.instanceId)?.label
                   ?? entry.label
+                }
+                shortLabel={
+                  displayLabelPartsById.get(position.instanceId)?.shortLabel
                 }
                 profileName={
                   displayLabelPartsById.get(position.instanceId)?.profileName

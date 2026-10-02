@@ -345,7 +345,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
 
     openSavingsSection("Decisions");
     const decisions = savingsSection("Decisions");
-    expect(decisions.getByText("Luna evaluations").nextSibling)
+    expect(decisions.getByText("Output evaluations").nextSibling)
       .toHaveTextContent("26");
     expect(decisions.getByText(/5 policy · 2 helper/)).toBeInTheDocument();
 
@@ -683,7 +683,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(savingsSection("Code Mode").getByRole("button"))
       .toHaveTextContent(/37 calls.*23 gated.*14 direct/);
     // No section body is mounted until one is asked for.
-    expect(screen.queryByText("Luna evaluations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Output evaluations")).not.toBeInTheDocument();
     expect(screen.queryByText("Retrieval cells")).not.toBeInTheDocument();
   });
 

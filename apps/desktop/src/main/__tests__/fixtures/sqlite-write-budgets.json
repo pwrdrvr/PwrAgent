@@ -230,6 +230,20 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federation-short-names-generate": {
+    "commits": 1,
+    "note": "gateway names a federation's machines in one helper turn: one meta commit for the batch. Runs only when a machine joins or is renamed, a few times a year; effectively 0 MB/day",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "federation-short-names-reconnect": {
+    "commits": 0,
+    "note": "20 reconnects that re-send an unchanged short-name map, reconcile, announce and merge: zero commits; 0 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "federation-star-map-bootstrap-page-reads": {
     "commits": 0,
     "note": "1001 arrangement entries including tombstones read in SQL pages; no writes",
