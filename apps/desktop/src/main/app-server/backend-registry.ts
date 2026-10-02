@@ -386,10 +386,12 @@ import {
   MCP_CONNECTION_DISPLAY_NAMES,
   isBuiltInMcpConnectionId,
   readCodexEnvironmentActionRuns,
-  DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
-  DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
+  resolveHelperModel,
+  type DesktopHelperModelSettings,
+  type HelperModelId,
+  type HelperModelResolution,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
@@ -434,7 +436,6 @@ import {
 } from "./acp-backend-adapter";
 import {
   CodexAppServerClient,
-  resolveCodexThreadTitleSettings,
   extractRateLimitSummaries,
   formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
@@ -465,8 +466,6 @@ import {
   handleTaskMonitorDynamicToolCall,
   isTaskMonitorDynamicToolCall,
   normalizePollIntervalSeconds,
-  normalizePreferredMonitorModel,
-  normalizePreferredMonitorReasoningEffort,
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
 import {
@@ -872,8 +871,13 @@ type BackendClient = {
     cwd: string;
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
-  getDefaultHelperModel?(): string;
+  resolveHelperModelSelection?(params: {
+    helper: HelperModelId;
+    model?: string;
+    reasoningEffort?: string;
+  }): Promise<HelperModelResolution>;
   generateStructuredObject?(params: {
+    helper: HelperModelId;
     model?: string;
     reasoningEffort?: string;
     prompt: string;
@@ -891,6 +895,7 @@ type BackendClient = {
    * without it simply has no agent-driven intake path.
    */
   runHelperToolTurn?(params: {
+    helper: HelperModelId;
     model?: string;
     reasoningEffort?: string;
     prompt: string;
@@ -9083,6 +9088,7 @@ export class DesktopBackendRegistry {
     string,
     DesktopProviderModelDefaults
   >;
+  private readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
   private readonly resolveProviderThreadModelMigrationsFn: () => Record<
     string,
     DesktopProviderThreadModelMigration
@@ -9216,6 +9222,7 @@ export class DesktopBackendRegistry {
       string,
       DesktopProviderModelDefaults
     >;
+    resolveHelperModelSettings?: () => DesktopHelperModelSettings;
     resolveProviderThreadModelMigrations?: () => Record<
       string,
       DesktopProviderThreadModelMigration
@@ -9366,6 +9373,9 @@ export class DesktopBackendRegistry {
     this.resolveProviderModelDefaultsFn =
       options?.resolveProviderModelDefaults ??
       (() => settingsService?.resolveProviderModelDefaults() ?? {});
+    this.resolveHelperModelSettingsFn =
+      options?.resolveHelperModelSettings ??
+      (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
     this.resolveProviderThreadModelMigrationsFn =
       options?.resolveProviderThreadModelMigrations ??
       (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
@@ -9570,6 +9580,7 @@ export class DesktopBackendRegistry {
             )
           : undefined,
         clientVersion,
+        readHelperModelSettings: () => this.resolveHelperModelSettingsFn(),
         resolvePwrdrvrTokenMiserActivationNonce: () =>
           this.resolveTokenMiserEnabledFn()
             ? tokenMiserActivationNonce
@@ -15207,15 +15218,32 @@ export class DesktopBackendRegistry {
     const read = (params: AppServerReadThreadRequest) => this.readThread(params);
     if (modelBackend === "codex") {
       if (!this.codexClient.generateStructuredObject) throw new Error("Codex analysis unavailable on this instance.");
-      return await analyzeUsageActivity(request, read, (params) => this.codexClient.generateStructuredObject!(params));
+      return await analyzeUsageActivity(request, read, (params) => this.codexClient.generateStructuredObject!({
+        ...params,
+        helper: "usage_analysis",
+      }));
     }
     // An ACP agent answers in a tool-less session on a process of its own,
     // which it forgets afterwards; see acp-structured-generation.ts.
+    // The effort for the model that runs: the picked one, checked against
+    // its own catalog entry, never a fallback the resolver would choose.
+    const acpSelection = (model: string) => {
+      const entry = this.acpBackend.getLaunchpadOptions(modelBackend)?.models
+        ?.find((candidate) => candidate.id === model);
+      return resolveHelperModel({
+        helper: "usage_analysis",
+        backend: modelBackend,
+        settings: this.resolveHelperModelSettingsFn(),
+        models: entry ? [entry] : [],
+        requestedModel: model,
+      });
+    };
     return await analyzeUsageActivity(request, read, async (params) => await generateAcpStructuredObject({
       backend: modelBackend,
       cwd: await this.resolveAcpHelperWorkspace(),
       run: (prompt) => this.acpBackend.runEphemeralPrompt(modelBackend, prompt),
-      model: params.model, reasoningEffort: params.reasoningEffort, system: params.system, prompt: params.prompt,
+      model: params.model, reasoningEffort: acpSelection(params.model).reasoningEffort,
+      system: params.system, prompt: params.prompt,
       schema: params.schema, isMatch: params.isMatch, turnTimeoutMs: params.turnTimeoutMs,
     }));
   }
@@ -24238,13 +24266,13 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * One-shot structured generation using the operator's configured backend
-   * (launchpad default), unless a caller explicitly requests Codex. Codex runs
-   * an ephemeral helper turn. Backends without a one-shot path (ACP) return
-   * "unavailable" rather than failing.
+   * One-shot structured generation as an ephemeral Codex helper turn. The
+   * helper's Default Models row picks the model, and that model is a Codex
+   * model, so this runs on Codex whenever Codex is available regardless of
+   * the launchpad default; otherwise it returns "unavailable".
    */
   async generateStructuredObject(params: {
-    backend?: "codex";
+    helper: HelperModelId;
     model?: string;
     reasoningEffort?: string;
     system: string;
@@ -24255,12 +24283,8 @@ export class DesktopBackendRegistry {
     /** Model answering budget, separate from the protocol round-trips. */
     turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
-    const defaults = await this.overlayStore.getLaunchpadDefaults();
-    const backend = params.backend === "codex"
-      ? (await this.listBackends({ includeUnavailable: true })).backends.find(
-          (summary) => summary.kind === "codex",
-        )
-      : await this.resolveLaunchpadBackend(defaults.backend);
+    const backend = (await this.listBackends({ includeUnavailable: true }))
+      .backends.find((summary) => summary.kind === "codex");
     const requiredKeys = schemaRequiredKeys(params.schema);
 
     if (
@@ -24269,6 +24293,7 @@ export class DesktopBackendRegistry {
       && this.codexClient.generateStructuredObject
     ) {
       return await this.codexClient.generateStructuredObject({
+        helper: params.helper,
         system: params.system,
         model: params.model,
         reasoningEffort: params.reasoningEffort,
@@ -24285,7 +24310,7 @@ export class DesktopBackendRegistry {
 
     return {
       status: "unavailable",
-      reason: `${params.backend ?? backend?.kind ?? "backend"}_structured_generation_unavailable`,
+      reason: "codex_structured_generation_unavailable",
     };
   }
 
@@ -24336,6 +24361,7 @@ export class DesktopBackendRegistry {
         : {}),
     });
     const result = await this.codexClient.runHelperToolTurn({
+      helper: "star_map_intake",
       model: params.model,
       reasoningEffort: params.reasoningEffort,
       system: params.system,
@@ -29973,7 +29999,7 @@ export class DesktopBackendRegistry {
       system: MONITOR_JOB_HEURISTIC_SYSTEM,
       prompt: buildMonitorJobHeuristicPrompt(evidence),
       schema: MONITOR_JOB_HEURISTIC_SCHEMA,
-      reasoningEffort: "medium",
+      helper: "token_miser_polling_reviews",
       disableExecution: true,
       isMatch: (record) => Boolean(parseMonitorJobHeuristicDecision(record)),
       timeoutMs: 45_000,
@@ -31916,7 +31942,7 @@ export class DesktopBackendRegistry {
       }
 
       if (params.backend === "codex" || isAcpBackendId(params.backend)) {
-        const titleHelperRuntime = this.resolveTitleHelperRuntime(params);
+        const titleHelperRuntime = await this.resolveTitleHelperRuntime(params);
         await this.safePersistTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
@@ -33444,14 +33470,22 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private resolveTitleHelperRuntime(params: {
+  private async resolveTitleHelperRuntime(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): { model?: string; reasoningEffort?: string } {
+  }): Promise<{ model?: string; reasoningEffort?: string }> {
     if (params.backend === "codex") {
-      return resolveCodexThreadTitleSettings(
-        this.codexBackendSummary?.launchpadOptions?.models ?? [],
-      ) ?? {};
+      // The same resolution the title turn makes, so the sub-agent record
+      // never names a model that did not run.
+      const selection = await this.codexClient.resolveHelperModelSelection?.({
+        helper: "thread_titles",
+      });
+      return {
+        ...(selection?.model ? { model: selection.model } : {}),
+        ...(selection?.reasoningEffort
+          ? { reasoningEffort: selection.reasoningEffort }
+          : {}),
+      };
     }
     if (!isAcpBackendId(params.backend)) {
       return {};
@@ -37684,45 +37718,34 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const requestedModel = normalizePreferredMonitorModel(
-      params.preferredModel,
-    );
-    const requestedReasoningEffort =
-      normalizePreferredMonitorReasoningEffort(
-        params.preferredReasoningEffort,
-      );
     const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
     const options = buildLaunchpadOptions("codex", discoveredModels, {
       allowFallbackModels: false,
     });
     const models = options?.models ?? [];
-    const selectedModel =
-      models.find((model) => model.id === requestedModel) ??
-      models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL) ??
-      models.find((model) => model.id === "gpt-5.6-luna") ??
-      models.find((model) => model.id.toLowerCase().includes("mini")) ??
-      models.find((model) => model.current) ??
-      models.find((model) => model.supportsReasoning) ??
-      models[0];
-    if (!selectedModel) {
+    if (models.length === 0) {
       throw new Error(
         "No available Codex models were discovered for task monitor delegation.",
       );
     }
-
-    const preferredModel = selectedModel.id;
-    const reasoningEfforts = options?.reasoningEfforts ?? OPENAI_REASONING_EFFORTS;
-    const preferredReasoningEffort = reasoningEfforts.includes(
-      requestedReasoningEffort,
-    )
-      ? requestedReasoningEffort
-      : reasoningEfforts.includes(DEFAULT_TASK_MONITOR_REASONING_EFFORT)
-        ? DEFAULT_TASK_MONITOR_REASONING_EFFORT
-        : (reasoningEfforts[0] ?? DEFAULT_TASK_MONITOR_REASONING_EFFORT);
+    // The agent's requested model wins when Codex offers it; otherwise the
+    // Task monitors row in Settings → Default Models decides.
+    const selection = resolveHelperModel({
+      helper: "task_monitors",
+      settings: this.resolveHelperModelSettingsFn(),
+      models: models.map((model) => ({
+        ...model,
+        reasoningEfforts: model.reasoningEfforts
+          ?? options?.reasoningEfforts
+          ?? OPENAI_REASONING_EFFORTS,
+      })),
+      requestedModel: params.preferredModel,
+      requestedReasoningEffort: params.preferredReasoningEffort,
+    });
 
     return {
-      preferredModel,
-      preferredReasoningEffort,
+      preferredModel: selection.model ?? models[0].id,
+      preferredReasoningEffort: selection.reasoningEffort ?? "provider-default",
     };
   }
 

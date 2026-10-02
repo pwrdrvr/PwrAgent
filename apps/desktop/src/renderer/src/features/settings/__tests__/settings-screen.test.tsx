@@ -1647,7 +1647,7 @@ describe("SettingsScreen", () => {
     openDiscontinuedDrawer();
     expect(
       screen.getByText(
-        "Send focused-diff hunks to Codex GPT-5.6 Luna to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires.",
+        "Send focused-diff hunks to Codex to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires. AI Providers → Default Models picks the model.",
       ),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
@@ -8749,7 +8749,8 @@ describe("SettingsScreen", () => {
     const subLabels = Array.from(
       nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
     ).map((label) => label.textContent);
-    expect(subLabels).toEqual(["Codex", "Grok", "Gemini CLI"]);
+    // Default Models leads the list; providers follow in their own order.
+    expect(subLabels).toEqual(["Default Models", "Codex", "Grok", "Gemini CLI"]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
     });

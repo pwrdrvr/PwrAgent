@@ -785,7 +785,7 @@ function TokenMiserTurnGroup(props: {
         <span className="pricing-token-miser__count">
           {count.toLocaleString()} {countLabel}
           {hasDecisions
-            ? ` · ${helperDecisionCount.toLocaleString()} Luna ${helperDecisionCount === 1 ? "evaluation" : "evaluations"}`
+            ? ` · ${helperDecisionCount.toLocaleString()} output ${helperDecisionCount === 1 ? "evaluation" : "evaluations"}`
             : policyDecisionCount > 0
               ? ` · ${helperDecisionCount.toLocaleString()} helper · ${policyDecisionCount.toLocaleString()} policy`
             : ""}

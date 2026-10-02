@@ -10,6 +10,8 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
   DesktopFederationMode,
+  DesktopHelperModelChoice,
+  DesktopHelperModelSettings,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
@@ -278,6 +280,7 @@ export type DesktopSettingsConfig = {
       string,
       DesktopProviderThreadModelMigration
     >;
+    helperModels?: DesktopHelperModelSettings;
     codex?: {
       path?: string;
       profile?: string;
@@ -1590,6 +1593,36 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.helperModels !== undefined) {
+    const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
+    if (helperModels.defaultModel) {
+      set(["models", "helper_default_model"], helperModels.defaultModel);
+    } else {
+      edits.push({ op: "delete", path: ["models", "helper_default_model"] });
+    }
+    const entries = Object.entries(helperModels.helpers)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([helper, choice]) => ({
+        helper,
+        ...(choice.backend ? { backend: choice.backend } : {}),
+        ...(choice.model ? { model: choice.model } : {}),
+        ...(choice.reasoningEffort
+          ? { reasoning_effort: choice.reasoningEffort }
+          : {}),
+      }));
+    if (entries.length > 0) {
+      edits.push({
+        op: "setTableArray",
+        path: ["models", "helper_models"],
+        value: entries,
+      });
+    } else {
+      edits.push({
+        op: "deleteTableArray",
+        path: ["models", "helper_models"],
+      });
+    }
+  }
   if (patch.models?.providerThreadMigrations !== undefined) {
     const providerThreadMigrations = normalizeProviderThreadModelMigrations(
       patch.models.providerThreadMigrations,
@@ -2131,6 +2164,10 @@ function normalizeDesktopConfig(
       providerThreadMigrations: readProviderThreadModelMigrations(
         models?.provider_thread_migrations,
       ),
+      helperModels: readHelperModelSettings(
+        models?.helper_default_model,
+        models?.helper_models,
+      ),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
@@ -2439,6 +2476,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const codex = config.models?.codex;
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
+  const helperModels = config.models?.helperModels;
+  const hasHelperModels = Boolean(
+    helperModels
+    && (helperModels.defaultModel || Object.keys(helperModels.helpers).length > 0),
+  );
   if (
     (codex && hasDefinedValue(codex))
     || (providerDefaults && Object.keys(providerDefaults).length > 0)
@@ -2446,8 +2488,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       providerThreadMigrations
       && Object.keys(providerThreadMigrations).length > 0
     )
+    || hasHelperModels
   ) {
     pruned.models = {
+      ...(hasHelperModels ? { helperModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),
@@ -2806,6 +2850,68 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
     return undefined;
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeHelperModelChoice(
+  value: {
+    backend?: unknown;
+    model?: unknown;
+    reasoningEffort?: unknown;
+  },
+): DesktopHelperModelChoice | undefined {
+  const trim = (field: unknown) =>
+    typeof field === "string" && field.trim() ? field.trim() : undefined;
+  const backend = trim(value.backend);
+  const model = trim(value.model);
+  const reasoningEffort = trim(value.reasoningEffort);
+  if (!model && !reasoningEffort) return undefined;
+  return {
+    ...(backend ? { backend } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function normalizeHelperModelSettings(
+  value: DesktopHelperModelSettings,
+): DesktopHelperModelSettings {
+  const defaultModel = value.defaultModel?.trim();
+  const helpers: Record<string, DesktopHelperModelChoice> = {};
+  for (const [helper, choice] of Object.entries(value.helpers)) {
+    const id = helper.trim();
+    const normalized = id ? normalizeHelperModelChoice(choice) : undefined;
+    if (normalized) helpers[id] = normalized;
+  }
+  return { ...(defaultModel ? { defaultModel } : {}), helpers };
+}
+
+/**
+ * `[models] helper_default_model` plus `[[models.helper_models]]` rows. New
+ * keys with no legacy shape: a malformed row is skipped, never the section.
+ */
+function readHelperModelSettings(
+  defaultModelValue: TomlScalar | undefined,
+  rowsValue: TomlScalar | undefined,
+): DesktopHelperModelSettings | undefined {
+  const defaultModel = readString(defaultModelValue);
+  const helpers: Record<string, DesktopHelperModelChoice> = {};
+  if (Array.isArray(rowsValue)) {
+    for (const item of rowsValue) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        continue;
+      }
+      const helper = typeof item.helper === "string" ? item.helper.trim() : "";
+      if (!helper || helpers[helper]) continue;
+      const choice = normalizeHelperModelChoice({
+        backend: item.backend,
+        model: item.model,
+        reasoningEffort: item.reasoning_effort,
+      });
+      if (choice) helpers[helper] = choice;
+    }
+  }
+  if (!defaultModel && Object.keys(helpers).length === 0) return undefined;
+  return { ...(defaultModel ? { defaultModel } : {}), helpers };
 }
 
 function normalizeProviderModelDefaults(

@@ -77,6 +77,7 @@ async function main(): Promise<void> {
     rateLimitsBefore = await client.readRateLimits();
     accountUsageBefore = await readOptionalAccountUsage(client);
     probe = await client.generateStructuredObject({
+      helper: "usage_analysis",
       prompt,
       schema: PROBE_RESPONSE_SCHEMA,
       isMatch: (record) => record.status === "usage capture complete",

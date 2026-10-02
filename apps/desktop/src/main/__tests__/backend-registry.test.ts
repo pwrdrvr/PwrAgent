@@ -28,6 +28,8 @@ import {
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  resolveHelperModel,
+  type HelperModelId,
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -2045,6 +2047,11 @@ class MockBackendClient {
     skills: AppServerSkillSummary[];
   }>> {
     return this.options.skills ?? [];
+  }
+
+  // The real client's rule over this mock's catalog, without a catalog read.
+  async resolveHelperModelSelection(params: { helper: HelperModelId }) {
+    return resolveHelperModel({ helper: params.helper, models: this.options.models ?? [] });
   }
 
   async listModels(diagnostics?: { callerReason?: string; ownerId?: string }) {
@@ -4450,7 +4457,7 @@ describe("DesktopBackendRegistry", () => {
     await discoverCodexBackendForTest(registry);
 
     const result = await registry.generateStructuredObject({
-      backend: "codex",
+      helper: "diff_condensation",
       model: "gpt-5.6-luna",
       system: "Keep behavioral changes visible.",
       prompt: "Classify these diff hunks.",
@@ -4513,7 +4520,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await expect(registry.generateStructuredObject({
-      backend: "codex",
+      helper: "diff_condensation",
       model: "gpt-5.6-luna",
       system: "Keep behavioral changes visible.",
       prompt: "Classify these diff hunks.",
@@ -25786,7 +25793,7 @@ command = "pnpm dev"
       await vi.waitFor(() => expect(generateStructuredObject).toHaveBeenCalledTimes(1));
       await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(expectedSteers));
       expect(generateStructuredObject).toHaveBeenCalledWith(expect.objectContaining({
-        reasoningEffort: "medium",
+        helper: "token_miser_polling_reviews",
         disableExecution: true,
         prompt: expect.stringContaining("inspectBenchmark"),
       }));

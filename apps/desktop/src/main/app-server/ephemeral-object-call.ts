@@ -1,10 +1,13 @@
+import type { HelperModelId } from "@pwragent/shared";
+
 export type EphemeralObjectResult = {
   object: unknown;
   cachedTokens?: number;
 };
 
 export type EphemeralObjectCallRequest = {
-  backend?: "codex";
+  /** Which Settings → Default Models row picks the model. */
+  helper: HelperModelId;
   model?: string;
   schema: Record<string, unknown>;
   schemaName?: string;
@@ -57,7 +60,7 @@ export class EphemeralObjectCaller {
 
     try {
       const response = await client.generateObject({
-        backend: request.backend,
+        helper: request.helper,
         model: request.model,
         schema: request.schema,
         schemaName: request.schemaName,

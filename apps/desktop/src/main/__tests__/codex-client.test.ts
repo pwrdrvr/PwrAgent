@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerNotification, AppServerThreadSummary, AppServerTurnInputItem } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  AppServerThreadSummary,
+  AppServerTurnInputItem,
+  DesktopHelperModelSettings,
+  HelperModelId,
+} from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
@@ -11417,7 +11423,7 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({ command: "codex" });
     await expect(client.generateTitle({
       prompt: "Name this thread", promptVersion: "thread-title-v3", schema: {}, schemaName: "thread_title", timeoutMs: 5_000,
-    })).resolves.toEqual({ status: "unavailable", reason: "codex_title_no_available_model" });
+    })).resolves.toEqual({ status: "unavailable", reason: "codex_helper_no_available_model" });
     expect(MockTransport.instances.at(-1)!.sentMessages.some((message) => JSON.parse(message).method === "thread/start")).toBe(false);
     await client.close();
   });
@@ -11726,6 +11732,7 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     await expect(client.generateStructuredObject({
+      helper: "diff_condensation",
       disableExecution,
       system: "Keep behavioral and uncertain changes visible.",
       prompt: "Classify these serialized diff hunks.",
@@ -11825,6 +11832,7 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     const probePromise = client.generateStructuredObject({
+      helper: "usage_analysis",
       prompt: "Return the requested status object.",
       schema: {
         type: "object",
@@ -11888,7 +11896,11 @@ describe("CodexAppServerClient", () => {
     };
     const probePromise = (kind === "title"
       ? client.generateTitle({ ...params, promptVersion: "thread-title-v3", schemaName: "thread_title" })
-      : client.generateStructuredObject({ ...params, isMatch: (record) => record.status === "complete" })
+      : client.generateStructuredObject({
+        ...params,
+        helper: "automation_prompts",
+        isMatch: (record) => record.status === "complete",
+      })
     ).then((result) => {
       settled = true;
       return result;
@@ -11935,6 +11947,7 @@ describe("CodexAppServerClient", () => {
       }) => Promise<{ success: boolean }>,
     ) {
       return client.runHelperToolTurn({
+        helper: "star_map_intake",
         prompt: "Make a thread in PwrAgent and ask it to make the donuts.",
         system: "You are the PwrAgent Star Map intake.",
         dynamicTools: TOOLS,
@@ -12195,6 +12208,7 @@ describe("CodexAppServerClient", () => {
       turn: { id: "helper-turn", output: [{ type: "text", text: '{"summary":"done"}' }] },
     };
     const result = await client.generateStructuredObject({
+      helper: "token_miser_evaluation",
       model: override,
       prompt: "Summarize",
       schema: { type: "object", properties: { summary: { type: "string" } } },
@@ -12206,6 +12220,99 @@ describe("CodexAppServerClient", () => {
     );
     expect(requests.find((request) => request.method === "thread/start")?.params?.model)
       .toBe(expected);
+    expect(requests.filter((request) => request.method === "model/list")).toHaveLength(1);
+    await client.close();
+  });
+
+  it("runs each helper on its Default Models row and skips a model Codex does not offer", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    let settings: DesktopHelperModelSettings = {
+      defaultModel: "gpt-5.5",
+      helpers: {
+        token_miser_evaluation: { model: "gpt-5.6-luna", reasoningEffort: "high" },
+      },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      readHelperModelSettings: () => settings,
+    });
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({ id: "gpt-6-luna" }),
+      createCodexModel({
+        id: "gpt-5.6-luna",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "medium", description: "Balanced" },
+          { reasoningEffort: "high", description: "Deep" },
+        ],
+      }),
+      createCodexModel({ id: "gpt-5.5" }),
+    ]);
+    await client.listModels();
+    MockTransport.threadStartResult = { thread: { id: "helper" }, instructionSources: [] };
+    MockTransport.turnStartResult = {
+      turn: { id: "helper-turn", output: [{ type: "text", text: '{"summary":"done"}' }] },
+    };
+    const run = async (helper: HelperModelId) => await client.generateStructuredObject({
+      helper,
+      prompt: "Summarize",
+      schema: { type: "object", properties: { summary: { type: "string" } } },
+      isMatch: (record) => typeof record.summary === "string",
+    });
+
+    await expect(run("token_miser_evaluation")).resolves.toMatchObject({
+      status: "ok",
+      model: "gpt-5.6-luna",
+    });
+    await expect(run("diff_condensation")).resolves.toMatchObject({
+      status: "ok",
+      model: "gpt-5.5",
+    });
+    settings = {
+      defaultModel: "gpt-6.1-luna",
+      helpers: { diff_condensation: { model: "gpt-5.6-luna-preview" } },
+    };
+    await expect(run("diff_condensation")).resolves.toMatchObject({
+      status: "ok",
+      model: "gpt-6-luna",
+    });
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: { model?: string; effort?: string };
+      },
+    );
+    expect(requests.filter((request) => request.method === "thread/start")
+      .map((request) => request.params?.model))
+      .toEqual(["gpt-5.6-luna", "gpt-5.5", "gpt-6-luna"]);
+    // The row's "high" survives because gpt-5.6-luna offers it; the others
+    // fall back to the only effort their model offers.
+    expect(requests.filter((request) => request.method === "turn/start")
+      .map((request) => request.params?.effort))
+      .toEqual(["high", "medium", "medium"]);
+    expect(requests.filter((request) => request.method === "model/list")).toHaveLength(1);
+    await client.close();
+  });
+
+  it("reads the helper catalog once, even when it is empty and turns start together", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    MockTransport.modelListResult = createModelListResponse([]);
+    const run = async () => await client.generateStructuredObject({
+      helper: "diff_condensation",
+      prompt: "Summarize",
+      schema: { type: "object", properties: { summary: { type: "string" } } },
+      isMatch: (record) => typeof record.summary === "string",
+    });
+
+    const unavailable = {
+      status: "unavailable",
+      reason: "codex_helper_no_available_model",
+    };
+    await expect(Promise.all([run(), run()])).resolves.toEqual([unavailable, unavailable]);
+    await expect(run()).resolves.toEqual(unavailable);
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string },
+    );
     expect(requests.filter((request) => request.method === "model/list")).toHaveLength(1);
     await client.close();
   });
@@ -12297,9 +12404,9 @@ describe("CodexAppServerClient", () => {
     expect(requests.filter((request) => request.method === "thread/start")
       .map((request) => request.params?.model)).toEqual(["gpt-5.6-luna", "gpt-6-luna"]);
     expect(second).toMatchObject({ model: "gpt-6-luna" });
-    expect(client.getDefaultHelperModel()).toBe("gpt-6-luna");
+    await expect(client.resolveHelperModelSelection({ helper: "thread_titles" }))
+      .resolves.toMatchObject({ model: "gpt-6-luna", source: "automatic" });
     await client.close();
-    expect(client.getDefaultHelperModel()).toBe("gpt-5.6-luna");
   });
 
   it("skips process-wide MCP attestation before Codex 0.144", async () => {

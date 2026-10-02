@@ -133,7 +133,7 @@ describe("FocusedDiffService", () => {
     });
     expect(client.generateObject).toHaveBeenCalledWith(
       expect.objectContaining({
-        backend: "codex",
+        helper: "diff_condensation",
         model: undefined,
         system: expect.stringContaining(
           "Show hunks when they alter logic, data flow, behavior",

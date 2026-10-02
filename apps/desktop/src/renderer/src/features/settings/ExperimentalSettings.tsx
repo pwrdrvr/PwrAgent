@@ -234,7 +234,7 @@ export function ExperimentalSettings(props: {
             disabled={props.saving || !tokenMiserEnabled.value}
             label="Review hidden polling loops"
             switchQualifier="Token Miser"
-            sub="Ask the Token Miser helper model—Luna when available—to review ambiguous repeated tool calls before suggesting a Job Monitor."
+            sub="Ask the Polling reviews model from AI Providers → Default Models to review ambiguous repeated tool calls before suggesting a Job Monitor."
             help="Off by default. Obvious polling is still detected locally. This review sends only bounded timing, tool metadata, redacted Code Mode snippets, and recent assistant updates to the same helper-model selector Token Miser uses; it never includes full tool output. A review that finds productive work leaves the turn alone."
             source={sourceBadge(tokenMiserPollingReviewsEnabled)}
             onChange={props.onTokenMiserPollingReviewsEnabledChange}
@@ -257,7 +257,7 @@ export function ExperimentalSettings(props: {
             <SettingsField
               label="Estimated parent-context savings"
               sub={`${tokenMiserUsage.interceptionCount.toLocaleString()} intercepted results · ${tokenMiserUsage.baselineParentTokens.toLocaleString()} baseline tokens − ${tokenMiserUsage.replacementTokens.toLocaleString()} summary tokens − ${tokenMiserUsage.retrievedTokens.toLocaleString()} retrieved tokens.`}
-              help="This estimate measures tokens kept out of the parent thread after Codex's model-visible output cap. It is separate from the Luna helper's own token cost. Repeated retrievals count each time, so reading everything can make the savings negative."
+              help="This estimate measures tokens kept out of the parent thread after Codex's model-visible output cap. It is separate from the helper model's own token cost. Repeated retrievals count each time, so reading everything can make the savings negative."
               control={
                 <span className="settings-field__value">
                   {tokenMiserUsage.estimatedParentTokensSaved >= 0 ? "Saved " : "Added "}
@@ -350,7 +350,7 @@ export function ExperimentalSettings(props: {
         <SettingsSection
           eyebrow="Experimental"
           title="Diff Condensation"
-          description="Send focused-diff hunks to Codex GPT-5.6 Luna to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires."
+          description="Send focused-diff hunks to Codex to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires. AI Providers → Default Models picks the model."
           chip={condensation.enabled.value ? "On" : "Off"}
           chipKind={condensation.enabled.value ? "ok" : "default"}
         >
@@ -359,7 +359,7 @@ export function ExperimentalSettings(props: {
               checked={condensation.enabled.value}
               disabled={props.saving}
               label="Enable diff condensation"
-              sub="Use Codex GPT-5.6 Luna to hide low-signal diff hunks."
+              sub="Use the Diff condensation model to hide low-signal diff hunks."
               help="Each focused-diff request is sent to Codex, regardless of the launchpad default. If Codex is unavailable, the full diff remains visible."
               source={sourceBadge(condensation.enabled)}
               onChange={(enabled) => {
