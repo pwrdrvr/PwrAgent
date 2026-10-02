@@ -36,6 +36,11 @@ export type AppNoticeToastNotice = {
   skillQuestionsWarning?: boolean;
   /** Optional notice-specific dismissal, including any durable disposition. */
   onDismiss?: () => void;
+  /**
+   * Names the close button when closing does more than hide the notice, as
+   * when it ends a live session. The button itself stays the card's own.
+   */
+  dismissLabel?: string;
   detail?: string;
   /** Interactive controls supplied by an in-window notice producer. */
   body?: ReactNode;
@@ -193,8 +198,8 @@ export function AppNoticeToast(props: {
           <button
             className="app-notice-toast__icon-button"
             type="button"
-            aria-label="Dismiss notice"
-            title="Dismiss notice"
+            aria-label={props.notice.dismissLabel ?? "Dismiss notice"}
+            title={props.notice.dismissLabel ?? "Dismiss notice"}
             onClick={props.notice.onDismiss ?? props.onDismiss}
           >
             <CloseIcon size={13} aria-hidden="true" />

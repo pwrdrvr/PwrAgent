@@ -6,6 +6,8 @@ import type {
   CodexBackgroundTerminal,
 } from "@pwragent/shared";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
+import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
+import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
@@ -538,7 +540,12 @@ import {
 } from "../agent-tools/agent-tool-router";
 import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
-import { buildPwrAgentToolSearchDefinition, withPwrAgentToolDiscovery } from "../agent-tools/pwragent-tool-search";
+import {
+  buildPwrAgentToolSearchDefinition,
+  MESSAGING_EAGER_TOOLS,
+  VOICE_MANAGER_EAGER_TOOLS,
+  withPwrAgentToolDiscovery,
+} from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
@@ -552,9 +559,11 @@ import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manag
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
+  TOKEN_MISER_DIAGNOSTICS_DIRNAME,
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
+import { TokenMiserDiagnostics, type TokenMiserDiagnosticContext } from "../token-miser/token-miser-diagnostics";
 import { TokenMiserService, type TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
@@ -823,6 +832,11 @@ type BackendClient = {
   listBackgroundTerminals?(threadId: string): Promise<ListBackgroundTerminalsResponse>;
   terminateBackgroundTerminal?(threadId: string, processId: string): Promise<boolean>;
   exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
+  startRealtime?: CodexAppServerClient["startRealtime"];
+  stopRealtime?: CodexAppServerClient["stopRealtime"];
+  appendRealtimeText?: CodexAppServerClient["appendRealtimeText"];
+  onRealtimeEvent?: CodexAppServerClient["onRealtimeEvent"];
+  onRealtimeDisconnect?: CodexAppServerClient["onRealtimeDisconnect"];
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
@@ -924,10 +938,7 @@ type BackendClient = {
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
-  refreshThreadTools?(params: {
-    threadId: string;
-    dynamicTools: CodexDynamicToolSpec[];
-  }): Promise<void>;
+  refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
@@ -5838,6 +5849,7 @@ function dedupeModelOptions(
       current: current?.current || normalizedModel.current,
       supportsReasoning: current?.supportsReasoning || normalizedModel.supportsReasoning,
       supportsFast: current?.supportsFast || normalizedModel.supportsFast,
+      serviceTiers: normalizedModel.serviceTiers ?? current?.serviceTiers,
       supportsSteering: current?.supportsSteering || normalizedModel.supportsSteering,
       defaultReasoningEffort:
         normalizedModel.defaultReasoningEffort ?? current?.defaultReasoningEffort,
@@ -7259,12 +7271,15 @@ function resolveModelSettingsFromOptions(
       serviceTier: settings.serviceTier,
       fastMode: settings.fastMode,
       supportsFast,
+      serviceTiers: selectedModel?.serviceTiers,
     }),
-    fastMode: supportsFast
-      ? settings.fastMode
-      : shouldClearCodexFastTier
-        ? false
-        : undefined,
+    fastMode: backend === "codex" && settings.serviceTier === "ultrafast"
+      ? false
+      : supportsFast
+        ? settings.fastMode
+        : shouldClearCodexFastTier
+          ? false
+          : undefined,
   };
 }
 
@@ -7273,9 +7288,13 @@ function resolveCodexFastModeServiceTier(params: {
   fastMode?: boolean;
   serviceTier?: string;
   supportsFast: boolean;
+  serviceTiers?: string[];
 }): string | undefined {
   if (params.backend !== "codex") {
     return params.serviceTier;
+  }
+  if (params.serviceTier === "ultrafast") {
+    return params.serviceTiers?.includes("ultrafast") ? "ultrafast" : undefined;
   }
   if (params.fastMode === true && params.supportsFast) {
     return "priority";
@@ -8124,12 +8143,12 @@ const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 20_000;
 const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 1_800_000;
 
 /**
- * How long opening a new-thread draft waits for the MCP connections that seed
- * it. On a second instance the read crosses the owner broker, whose own
- * timeout is sized for a ten-minute tool call; a wedged owner must cost the
- * draft its defaults, not hold the New thread screen for that long.
+ * How long thread creation or a new-thread draft waits for MCP defaults.
+ * On a second instance the read crosses the owner broker, whose own timeout
+ * is sized for a ten-minute tool call; a wedged owner must cost the thread
+ * its defaults, not block creation for that long.
  */
-const LAUNCHPAD_MCP_SEED_BUDGET_MS = 2_000;
+const MCP_DEFAULTS_READ_BUDGET_MS = 2_000;
 
 /**
  * Match the forward-slashed directory identifiers
@@ -8207,6 +8226,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "upsertThreadSubAgents"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
+    | "getVoiceManagerThread"
   >
 >;
 
@@ -9112,6 +9132,7 @@ export class DesktopBackendRegistry {
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
   private readonly tokenMiserStore?: TokenMiserStore;
+  private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
   private readonly tokenMiserService?: TokenMiserService;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private tokenMiserCodeModeReducerDescriptorPath?: string;
@@ -9622,11 +9643,22 @@ export class DesktopBackendRegistry {
       );
     }
     if (tokenMiserStateDir) {
+      this.tokenMiserDiagnostics = new TokenMiserDiagnostics({
+        filePath: path.join(tokenMiserStateDir, TOKEN_MISER_DIAGNOSTICS_DIRNAME, `${this.runtimeInstanceId}.jsonl`),
+        isEnabled: () => {
+          try {
+            return this.resolveTokenMiserEnabledFn()
+              && ((settingsService ?? getDesktopSettingsService()).resolveTokenMiserDiagnosticsEnabled?.() ?? false);
+          } catch { return false; }
+        },
+        onError: () => backendRegistryLog.warn("Token Miser diagnostic batch could not be saved"),
+      });
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
         {
           stateDb: getAppStateDb(),
           onMetadataUpdated: async (metadata, reason) => {
+            if (reason === "retrieval") this.tokenMiserDiagnostics?.recordRetrieval(metadata);
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
             this.rememberActiveTokenMiserReplayEntry(metadata);
             // A replay-counter write changes nothing the gate card or its usage
@@ -9669,6 +9701,7 @@ export class DesktopBackendRegistry {
         },
       );
       const tokenMiserService = new TokenMiserService({
+        diagnostics: this.tokenMiserDiagnostics,
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
         isFocusedEnabled: () => {
@@ -9892,6 +9925,11 @@ export class DesktopBackendRegistry {
         resolveAutomationInspectionMcpCommand(),
     });
     if (this.configStore) {
+      this.unsubscribers.push(
+        this.configStore.subscribe(["experimental"], () => {
+          this.tokenMiserDiagnostics?.isEnabled();
+        }),
+      );
       this.providerRuntimeFingerprints = readProviderRuntimeFingerprints(
         this.configStore.read("providers"),
       );
@@ -11620,7 +11658,7 @@ export class DesktopBackendRegistry {
         // Negotiate now, without resuming an active thread. Unsupported runtimes
         // must not accept a request which they can never apply.
         await this.withCodexThreadClient(params.threadId, async (client) => {
-          await this.requireCodexAgentRefreshTools(client, current);
+          await this.requireCodexAgentRefreshTools(client, params.threadId, current);
         });
         if (current?.queuedAgentChange && !current.queuedAgentChange.error
           && sameAgent(current.queuedAgentChange.agent)) return current;
@@ -11638,9 +11676,14 @@ export class DesktopBackendRegistry {
     return result;
   }
 
-  private async requireCodexAgentRefreshTools(client: BackendClient, overlay: ThreadOverlayState | undefined) {
+  private async requireCodexAgentRefreshTools(
+    client: BackendClient,
+    threadId: string,
+    overlay: ThreadOverlayState | undefined,
+  ) {
     const tools = await this.buildSupportedCodexDynamicToolsRefresh({
       client,
+      threadId,
       tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
     });
     if (tools === undefined || !client.refreshThreadTools) {
@@ -11664,7 +11707,7 @@ export class DesktopBackendRegistry {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
         await this.withCodexThreadClient(params.threadId, async (client) => {
           const overlay = await this.overlayStore.getThreadOverlayState(params);
-          const dynamicTools = await this.requireCodexAgentRefreshTools(client, overlay);
+          const dynamicTools = await this.requireCodexAgentRefreshTools(client, params.threadId, overlay);
           await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
         });
       }
@@ -15961,10 +16004,14 @@ export class DesktopBackendRegistry {
       parentThreadInstanceId,
       prAutoDispatchEnabled,
       tokenMiserEnabled: tokenMiserOverride,
-      mcpConnectionIds,
+      mcpConnectionIds: requestedMcpConnectionIds,
       mcpProviderServersEnabled,
       ...request
     } = params;
+    // Handoffs and messaging create threads without a launchpad. Apply the
+    // profile defaults here too, while preserving an explicit empty selection.
+    const mcpConnectionIds = requestedMcpConnectionIds
+      ?? await this.resolveNewThreadMcpConnectionIds();
     const modelSettings = await this.resolveModelSettings(backend, request);
     let cwd: string | undefined =
       !request.cwd?.trim()
@@ -17927,6 +17974,7 @@ export class DesktopBackendRegistry {
           const dynamicTools =
             await this.buildSupportedCodexDynamicToolsRefresh({
               client,
+              threadId: params.threadId,
               tokenMiserEnabled: tokenMiserEnabledForThread,
             });
           const pwrdrvrTokenMiser =
@@ -18678,6 +18726,7 @@ export class DesktopBackendRegistry {
         const dynamicTools =
           await this.buildSupportedCodexDynamicToolsRefresh({
             client,
+            threadId: params.threadId,
             tokenMiserEnabled,
           });
         return await client.startReview({
@@ -21849,7 +21898,11 @@ export class DesktopBackendRegistry {
               : current?.reasoningEffort,
         reasoningEffortsByModel: current?.reasoningEffortsByModel,
         serviceTier:
-          "serviceTier" in params ? params.serviceTier : current?.serviceTier,
+          "serviceTier" in params
+            ? params.serviceTier
+            : "fastMode" in params
+              ? undefined
+              : current?.serviceTier,
         fastMode: "fastMode" in params ? params.fastMode : current?.fastMode,
       },
       "settings-refresh",
@@ -22106,6 +22159,7 @@ export class DesktopBackendRegistry {
           params: {
             threadId,
             fastMode: false,
+            serviceTier: undefined,
           },
         },
       });
@@ -22829,7 +22883,8 @@ export class DesktopBackendRegistry {
 
     const patch = {
       ...request.patch,
-      ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
+      ...("fastMode" in request.patch && !("serviceTier" in request.patch)
+        ? { serviceTier: undefined } : {}),
       // An edit to the selection makes it the operator's. Re-seeding after
       // that would put back a connection they just turned off. A patch that
       // only repeats the current ids is not an edit: the MCP access panel
@@ -22864,7 +22919,7 @@ export class DesktopBackendRegistry {
         backend,
         projectedLaunchpad,
       );
-      if ("fastMode" in patch) {
+      if ("fastMode" in patch && !("serviceTier" in request.patch)) {
         modelSettings.serviceTier = undefined;
       }
       nextLaunchpad = {
@@ -22906,7 +22961,9 @@ export class DesktopBackendRegistry {
     }
     if (request.stickySettingsChanged && "fastMode" in patch) {
       stickyPatch.fastMode = patch.fastMode;
-      stickyPatch.serviceTier = undefined;
+      if (!("serviceTier" in request.patch)) {
+        stickyPatch.serviceTier = undefined;
+      }
     }
     if (request.stickySettingsChanged && "acpRuntime" in patch) {
       stickyPatch.acpRuntime = patch.acpRuntime;
@@ -24201,6 +24258,7 @@ export class DesktopBackendRegistry {
         : [],
     );
     // Producers are now closed and previously admitted observations drained.
+    await this.tokenMiserDiagnostics?.close();
     // Preserve active-turn estimates even when another resource failed close.
     try {
       await this.tokenMiserStore?.flushAll();
@@ -24574,6 +24632,7 @@ export class DesktopBackendRegistry {
   private buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
     discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
+    eagerTools?: ReadonlySet<string>,
   ): CodexDynamicToolSpec[] {
     return withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
@@ -24591,17 +24650,44 @@ export class DesktopBackendRegistry {
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
       }),
-    ), discoveryEnabled);
+    ), discoveryEnabled, eagerTools);
   }
 
   private async buildSupportedCodexDynamicToolsRefresh(params: {
     client: BackendClient;
+    threadId: string;
     tokenMiserEnabled: boolean;
   }): Promise<CodexDynamicToolSpec[] | undefined> {
     if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
       return undefined;
     }
-    return this.buildCodexParentDynamicTools(params.tokenMiserEnabled);
+    const discoveryEnabled = this.resolveCodexToolDiscoveryFn();
+    return this.buildCodexParentDynamicTools(
+      params.tokenMiserEnabled,
+      discoveryEnabled,
+      discoveryEnabled
+        ? await this.resolveEagerPwrAgentTools(params.threadId)
+        : undefined,
+    );
+  }
+
+  /**
+   * A thread whose working set is known loads it eagerly instead of behind
+   * tool_search. Resolved on every refresh, so a binding made mid-thread
+   * takes effect at the next turn start.
+   */
+  private async resolveEagerPwrAgentTools(
+    threadId: string,
+  ): Promise<ReadonlySet<string> | undefined> {
+    const voiceManager = this.overlayStore.getVoiceManagerThread?.();
+    if (voiceManager?.backend === "codex" && voiceManager.threadId === threadId) {
+      return VOICE_MANAGER_EAGER_TOOLS;
+    }
+    const bindings = await this.getThreadInspectionMessagingBindings({
+      backend: "codex",
+      threadId,
+    });
+    return bindings?.length ? MESSAGING_EAGER_TOOLS : undefined;
   }
 
   private async buildSupportedCodexTokenMiserConfig(params: {
@@ -24751,6 +24837,11 @@ export class DesktopBackendRegistry {
     backend: BackendSummary,
     settings: ModelSettings,
   ): Promise<ModelSettings> {
+    if (backend.kind === "codex") {
+      // The summary can still contain fallback models while discovery is in
+      // flight. Settings resolution must await the shared runtime catalog.
+      return this.resolveModelSettings("codex", settings, "launchpad-defaults");
+    }
     const launchpadOptions =
       backend.launchpadOptions ??
       (await this.getBackendLaunchpadOptions(backend.kind, "launchpad-defaults"));
@@ -24774,7 +24865,7 @@ export class DesktopBackendRegistry {
    * drafts that already exist.
    *
    * Failing to read the connections, or not reading them within
-   * `LAUNCHPAD_MCP_SEED_BUDGET_MS`, leaves the draft as it is. A missing
+   * `MCP_DEFAULTS_READ_BUDGET_MS`, leaves the draft as it is. A missing
    * default is recoverable from the MCP access panel; a failed or stalled
    * ensure is a New thread screen that will not open.
    */
@@ -24789,31 +24880,8 @@ export class DesktopBackendRegistry {
   > {
     const seeded = existing?.mcpConnectionIdsFromDefaults === true;
     if (existing?.mcpConnectionIds !== undefined && !seeded) return undefined;
-    const service = this.mcpConnectionService;
-    if (!service?.listConnections) return undefined;
-    let ids: string[];
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(
-            `No answer within ${LAUNCHPAD_MCP_SEED_BUDGET_MS} ms.`,
-          )),
-          LAUNCHPAD_MCP_SEED_BUDGET_MS,
-        );
-        timer.unref?.();
-      });
-      ids = mcpConnectionIdsForNewThread(
-        await Promise.race([service.listConnections(), deadline]),
-      );
-    } catch (error) {
-      backendRegistryLog.warn("launchpad_mcp_defaults_unavailable", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    } finally {
-      clearTimeout(timer);
-    }
+    const ids = await this.resolveNewThreadMcpConnectionIds();
+    if (ids === undefined) return undefined;
     if (ids.length === 0) {
       return seeded
         ? { mcpConnectionIds: undefined, mcpConnectionIdsFromDefaults: undefined }
@@ -24823,6 +24891,33 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     return { mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: true };
+  }
+
+  private async resolveNewThreadMcpConnectionIds(): Promise<string[] | undefined> {
+    const service = this.mcpConnectionService;
+    if (!service?.listConnections) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(
+            `No answer within ${MCP_DEFAULTS_READ_BUDGET_MS} ms.`,
+          )),
+          MCP_DEFAULTS_READ_BUDGET_MS,
+        );
+        timer.unref?.();
+      });
+      return mcpConnectionIdsForNewThread(
+        await Promise.race([service.listConnections(), deadline]),
+      );
+    } catch (error) {
+      backendRegistryLog.warn("new_thread_mcp_defaults_unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async resolveLaunchpadDefaults(
@@ -25454,7 +25549,8 @@ export class DesktopBackendRegistry {
 
   private hasActiveCodexWork(): boolean {
     if (
-      this.reservedCodexStartThreadIds.size > 0
+      this.nativeVoiceLeases > 0
+      || this.reservedCodexStartThreadIds.size > 0
       || this.activeCodexTurnModes.size > 0
     ) {
       return true;
@@ -25526,6 +25622,15 @@ export class DesktopBackendRegistry {
                 notification.params.threadId,
               )
             : undefined;
+        if (backend === "codex" && notification.method === "item/completed") {
+          const item = readRecord(notification.params.item);
+          if (item?.type === "agentMessage" && notification.params.turnId) {
+            this.tokenMiserDiagnostics?.recordNarration(
+              notification.params.threadId, notification.params.turnId,
+              item.phase, readOptionalString(item.text) ?? "",
+            );
+          }
+        }
         await this.emitHeadlessAutomationLifecycle(backend, notification);
         await this.emit({
           backend,
@@ -25542,6 +25647,7 @@ export class DesktopBackendRegistry {
             || notification.method === "turn/cancelled"
           )
         ) {
+          this.tokenMiserDiagnostics?.endTurn(notification.params.threadId);
           await this.tokenMiserStore?.flushThread(notification.params.threadId);
           await this.handleCodexTurnTerminalForInvalidIdRecovery(
             notification as Extract<
@@ -30633,7 +30739,8 @@ export class DesktopBackendRegistry {
 
   private hasActiveCodexRuntimeWork(): boolean {
     if (
-      this.reservedCodexStartThreadIds.size > 0
+      this.nativeVoiceLeases > 0
+      || this.reservedCodexStartThreadIds.size > 0
       || this.backendActiveCodexThreadIds.size > 0
       || this.codexBackgroundTerminals.size > 0
       || this.liveCodexToolItemsByThread.size > 0
@@ -30705,6 +30812,87 @@ export class DesktopBackendRegistry {
         this.codexRuntimeRestartPromise = undefined;
       }
     }
+  }
+
+  private nativeVoiceLeases = 0;
+  // Live voice sessions watch their thread's tool calls so the operator sees
+  // what a delegation did. Empty unless a voice session is open.
+  private readonly nativeVoiceToolListeners = new Set<(call: NativeVoiceToolCall) => void>();
+
+  async nativeVoiceCapability(): Promise<NativeVoiceCapability> {
+    const result = await this.codexClient.getInitializeResult();
+    return supportsNativeVoice(result.userAgent)
+      ? { available: true }
+      : { available: false, reason: "Live voice requires Codex 0.159 or newer with experimental WebRTC support. Update the Codex runtime in Settings." };
+  }
+
+  async acquireNativeVoiceBackend(threadId: string): Promise<NativeVoiceBackend> {
+    await this.withCodexEnvironmentRuntimeLock("codex", threadId, async () => {});
+    return await this.serializeCodexAgentChange(threadId, async () => {
+      return await this.withActiveCodexThreadClient(threadId, async (client, mode) => {
+        const capability = await this.nativeVoiceCapability();
+        if (!capability.available) throw new Error(capability.reason);
+        if (!client.startRealtime || !client.stopRealtime || !client.appendRealtimeText
+          || !client.onRealtimeEvent || !client.onRealtimeDisconnect) {
+          throw new Error("This backend does not support live voice.");
+        }
+        // A running coding task already owns the loaded thread and catalog.
+        // An idle thread must be resumed with the current PwrAgent tools before
+        // realtime can delegate to it. This uses the existing admission path.
+        const running = this.threadHasActiveTurn(threadId);
+        const ownsReservation = !this.reservedCodexStartThreadIds.has(threadId);
+        if (ownsReservation) this.reservedCodexStartThreadIds.add(threadId);
+        try {
+          if (!running) {
+            const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+            const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay);
+            const cwd = await this.resolveThreadEnvironmentCwd("codex", threadId, overlay);
+            const settings = await this.resolveModelSettings("codex", {
+              model: overlay?.model,
+              reasoningEffort: overlay?.reasoningEffort,
+              serviceTier: overlay?.serviceTier,
+              fastMode: overlay?.fastMode,
+            });
+            const modeSettings = EXECUTION_MODE_SUMMARIES[mode];
+            await client.refreshThreadTools!({
+              threadId, dynamicTools, ...settings,
+              ...(cwd ? { cwd } : {}),
+              codexEnvironmentRuntime: overlay?.codexEnvironmentRuntime,
+              approvalPolicy: modeSettings.approvalPolicy,
+              approvalsReviewer: modeSettings.approvalsReviewer,
+              sandbox: modeSettings.sandbox,
+              defaultModeRequestUserInput: this.resolveCodexDefaultModeRequestUserInputFn(),
+            });
+          }
+          this.nativeVoiceLeases += 1;
+          let released = false;
+          return {
+            start: client.startRealtime.bind(client),
+            stop: client.stopRealtime.bind(client),
+            text: client.appendRealtimeText.bind(client),
+            onEvent: client.onRealtimeEvent.bind(client),
+            onDisconnect: client.onRealtimeDisconnect.bind(client),
+            onToolCall: (listener) => {
+              this.nativeVoiceToolListeners.add(listener);
+              return () => { this.nativeVoiceToolListeners.delete(listener); };
+            },
+            release: () => {
+              if (released) return;
+              released = true;
+              this.nativeVoiceLeases -= 1;
+              if (this.nativeVoiceLeases === 0) this.maybeDrainCodexInvalidIdRecoveries();
+            },
+          };
+        } finally {
+          if (ownsReservation) this.reservedCodexStartThreadIds.delete(threadId);
+          this.maybeDrainCodexInvalidIdRecoveries();
+          if (ownsReservation && !this.threadHasActiveTurn(threadId)
+            && this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0) {
+            void this.threadTurnQueue.releaseThread({ backend: "codex", threadId, status: "voice_catalog_ready" });
+          }
+        }
+      });
+    });
   }
 
   private async withActiveCodexThreadClient<T>(
@@ -32477,7 +32665,7 @@ export class DesktopBackendRegistry {
    */
   private async resolveTokenMiserParentModel(
     threadId: string,
-  ): Promise<{ model?: string; serviceTier?: string } | undefined> {
+  ): Promise<TokenMiserDiagnosticContext | undefined> {
     for (const record of this.activeReviewSubAgents.values()) {
       if (
         record.mode === "native"
@@ -32486,6 +32674,7 @@ export class DesktopBackendRegistry {
       ) {
         return {
           model: record.model,
+          reasoningEffort: record.reasoningEffort,
           ...(record.serviceTier ? { serviceTier: record.serviceTier } : {}),
         };
       }
@@ -32503,6 +32692,8 @@ export class DesktopBackendRegistry {
     return line
       ? {
           model: line.model,
+          provider: line.provider,
+          reasoningEffort: line.reasoningEffort,
           ...(line.serviceTier ? { serviceTier: line.serviceTier } : {}),
         }
       : undefined;
@@ -33582,7 +33773,11 @@ export class DesktopBackendRegistry {
         ? request.params.callId.trim()
         : "";
     if (!callId) {
-      return await this.performServerRequest(backend, request);
+      return await this.observeNativeVoiceToolCall(
+        backend,
+        request,
+        this.performServerRequest(backend, request),
+      );
     }
     const key = [backend, request.params.threadId, request.params.turnId, callId]
       .join("\u0000");
@@ -33621,7 +33816,29 @@ export class DesktopBackendRegistry {
 
     const promise = this.performServerRequest(backend, request);
     this.acceptedDynamicToolCalls.set(key, { promise, signature });
-    return await promise;
+    return await this.observeNativeVoiceToolCall(backend, request, promise);
+  }
+
+  /** Reports a settled dynamic tool call to open voice sessions; never alters it. */
+  private async observeNativeVoiceToolCall(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+    promise: Promise<unknown>,
+  ): Promise<unknown> {
+    const response = await promise;
+    if (backend === "codex" && request.method === "item/tool/call" && this.nativeVoiceToolListeners.size > 0) {
+      const call: NativeVoiceToolCall = {
+        threadId: request.params.threadId,
+        tool: String(request.params.tool),
+        response,
+      };
+      for (const listener of this.nativeVoiceToolListeners) {
+        try { listener(call); } catch (error) {
+          backendRegistryLog.warn("voice tool-call listener failed", { error: String(error) });
+        }
+      }
+    }
+    return response;
   }
 
   private async performServerRequest(

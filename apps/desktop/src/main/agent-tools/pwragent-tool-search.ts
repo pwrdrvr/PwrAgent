@@ -6,7 +6,7 @@ import type { TokenMiserStore } from "../token-miser/token-miser-store";
 
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
-- Find, read, inspect, rename, pin, archive/close, restore, or change settings on threads; check their status, activity, usage, model, fast mode, or reasoning effort.
+- Find, read, inspect, rename, pin, archive/close, restore, or change settings on threads; check their status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
@@ -17,7 +17,7 @@ Search when the user wants to:
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
 - Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
 - Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
-Use a short query describing the desired action, or an exact tool name. Search separately for unrelated tasks. Returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.
+Use a short query describing the desired action, or exact tool names. Name every tool you need in one query: each exact tool name is always returned. Search separately for unrelated tasks. Otherwise returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.
 In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. If no tools match, retry with a more specific action; do not invent a tool name.`;
 
 // Small domain vocabulary supplies words users use that need not appear in a
@@ -31,6 +31,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   list_federation_instances: "federation machines computers hosts load capacity",
   list_instance_projects: "federation remote machine projects folders",
   create_instance_thread: "federation run work another remote machine computer",
+  list_attention_threads: "attention needs waiting unread running review queue summarize overview",
   get_current_messaging_surface: "telegram discord slack line lark feishu mattermost messaging conversation",
   attach_thread_here: "telegram discord slack line lark feishu mattermost messaging attach topic",
   rename_current_messaging_conversation: "telegram discord slack line lark feishu mattermost rename topic",
@@ -44,25 +45,36 @@ function words(text: string): string[] {
   return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word && !STOP_WORDS.has(word));
 }
 
+function exactToolNames(query: string): string[] {
+  return (query.toLowerCase().match(/[a-z0-9_.]+/g) ?? [])
+    .map((token) => token.replace(/^tools\./, "").replace(/^pwragent(?:__|\.)/, ""));
+}
+
 export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, limit = 3) {
   const terms = [...new Set(words(query))];
-  const exact = query.trim().toLowerCase().replace(/^tools\./, "").replace(/^pwragent(?:__|\.)/, "");
   const tools = catalog.flatMap((spec) =>
     spec.type === "namespace" && spec.name === PWRAGENT_TOOL_NAMESPACE
       ? spec.tools.filter((tool) => tool.name !== "tool_search")
       : []
   );
-  return tools.map((tool) => {
+  // A named tool is a request, not a ranking hint. The 2026-10-01 Voice
+  // manager turn asked for four names with limit 2, got two, then spent six
+  // more searches recovering the rest. The limit caps only ranked matches.
+  const named = [...new Set(exactToolNames(query))]
+    .flatMap((name) => tools.filter((tool) => tool.name === name));
+  const ranked = tools.filter((tool) => !named.includes(tool)).map((tool) => {
     const name = new Set(words(tool.name));
     const aliases = new Set(words(SEARCH_ALIASES[tool.name] ?? ""));
     const description = new Set(words(tool.description));
-    const score = tool.name === exact ? 10_000 : terms.reduce((total, term) =>
+    const score = terms.reduce((total, term) =>
       total + (name.has(term) ? 8 : aliases.has(term) ? 6 : description.has(term) ? 1 : 0), 0);
     return { tool, score };
   }).filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
-    .slice(0, Math.min(5, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 3)))
-    .map(({ tool }) => ({
+    .map(({ tool }) => tool);
+  const bounded = Math.min(5, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 3));
+  return [...named, ...ranked].slice(0, Math.max(bounded, named.length))
+    .map((tool) => ({
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: tool.name,
       codeModeName: `${PWRAGENT_TOOL_NAMESPACE}__${tool.name}`,
@@ -109,15 +121,56 @@ export function buildPwrAgentToolSearchDefinition(
   };
 }
 
+/**
+ * Tools a thread with a known working set loads eagerly when discovery is on.
+ * Deferring them cost the Voice manager seven searches, about two minutes,
+ * before its first useful call on 2026-10-01. Everything else stays behind
+ * tool_search, so keep these short: each one is sent on every turn.
+ */
+export const VOICE_MANAGER_EAGER_TOOLS: ReadonlySet<string> = new Set([
+  // Matches the tools VOICE_MANAGER_AGENT_INSTRUCTIONS names; a test holds them together.
+  "read_operator_focus",
+  "search_threads",
+  "send_message_to_thread",
+  "steer_thread",
+  "stop_thread",
+  "list_attention_threads",
+  "list_federation_instances",
+  "list_instance_projects",
+  "create_instance_thread",
+  "get_thread_status",
+  "read_thread",
+]);
+
+/** Messaging surface tools plus the most-called PwrAgent tools in the default profile's logs. */
+export const MESSAGING_EAGER_TOOLS: ReadonlySet<string> = new Set([
+  "get_current_messaging_surface",
+  "attach_thread_here",
+  "handoff_task",
+  "read_thread",
+  "get_thread_status",
+  "check_thread_pull_request_status",
+  "attach_thread_pull_request",
+  "watch_thread_pull_request",
+]);
+
 /** Only parent Codex catalogs opt in; MCP and restricted helper catalogs stay unchanged. */
-export function withPwrAgentToolDiscovery(catalog: DynamicToolSpec[], enabled: boolean): DynamicToolSpec[] {
+export function withPwrAgentToolDiscovery(
+  catalog: DynamicToolSpec[],
+  enabled: boolean,
+  eagerTools: ReadonlySet<string> = new Set(),
+): DynamicToolSpec[] {
   if (!enabled) return catalog;
   const bootstrap = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]).buildDynamicToolSpecs()[0];
   return catalog.map((spec) => {
     if (spec.type !== "namespace" || spec.name !== PWRAGENT_TOOL_NAMESPACE || bootstrap.type !== "namespace") return spec;
     return {
       ...spec,
-      tools: [...bootstrap.tools, ...spec.tools.filter((tool) => tool.name !== "tool_search").map((tool) => ({ ...tool, deferLoading: true }))],
+      tools: [
+        ...bootstrap.tools,
+        ...spec.tools.filter((tool) => tool.name !== "tool_search")
+          .map((tool) => ({ ...tool, deferLoading: !eagerTools.has(tool.name) })),
+      ],
     };
   });
 }

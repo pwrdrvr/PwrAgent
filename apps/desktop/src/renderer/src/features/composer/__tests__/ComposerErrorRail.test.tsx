@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerErrorRail, type ComposerErrorEntry } from "../ComposerErrorRail";
+import { turnFailureAcknowledgements, turnFailureScopeKey } from "../../notifications/turn-failure-acknowledgements";
 import {
   cleanComposerErrorMessage,
   summarizeComposerError,
@@ -52,6 +53,21 @@ describe("ComposerErrorRail", () => {
       <ComposerErrorRail entries={[entry({ message: undefined })]} />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("broadcasts inline dismissal of a linked turn failure", () => {
+    const scope = turnFailureScopeKey("codex", "rail-failure-fixture");
+    turnFailureAcknowledgements.report(scope, "rail-failed-turn", "Capacity");
+    const acknowledged = vi.fn();
+    const unsubscribe = turnFailureAcknowledgements.subscribeDismissals(acknowledged);
+    try {
+      render(<ComposerErrorRail failureScope={scope} entries={[entry({ message: "Capacity" })]} />);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(acknowledged).toHaveBeenCalledExactlyOnceWith("rail-failed-turn");
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("dismisses one error without hiding another", () => {

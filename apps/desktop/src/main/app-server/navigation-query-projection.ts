@@ -709,7 +709,7 @@ function buildModelInventory(threads: readonly NavigationThreadSummary[]): Navig
     const key = JSON.stringify([thread.source, model, thread.modelMigrationRevision]);
     const group = groups.get(key) ?? { backend: thread.source, model, modelMigrationRevision: thread.modelMigrationRevision, threadCount: 0, fastThreadCount: 0 };
     group.threadCount += 1;
-    if (thread.fastMode === true) group.fastThreadCount += 1;
+    if (thread.fastMode === true || thread.serviceTier === "ultrafast") group.fastThreadCount += 1;
     groups.set(key, group);
   }
   return [...groups].sort(([left], [right]) => left.localeCompare(right)).map(([, group]) => group);

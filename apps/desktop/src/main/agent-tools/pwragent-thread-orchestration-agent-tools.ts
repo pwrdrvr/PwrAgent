@@ -325,7 +325,7 @@ function inputSchemaForOperation(
           model: {
             type: "string",
             description:
-              "Exact model ID for the selected backend (Grok: `grok-4.5`).",
+              "Exact model ID for the selected backend. list_instance_projects lists each backend's model IDs.",
           },
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },

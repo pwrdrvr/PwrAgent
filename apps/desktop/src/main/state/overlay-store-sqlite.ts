@@ -596,6 +596,7 @@ const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
  * it needs no write budget: this is not a per-turn or per-event write.
  */
 const STAR_MAP_MANAGER_THREAD_META_KEY = "star_map_manager_thread";
+const VOICE_MANAGER_THREAD_META_KEY = "voice_manager_thread";
 const LEGACY_HANDOFF_AGENT_INSTRUCTIONS =
   "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.";
 
@@ -7052,12 +7053,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     for (const row of rows) {
       try {
         const thread = JSON.parse(row.payload) as ThreadOverlayState;
-        if (thread.backend !== "codex" || thread.fastMode !== true) {
+        if (thread.backend !== "codex"
+          || (thread.fastMode !== true && thread.serviceTier !== "ultrafast")) {
           continue;
         }
         this.putThread(row.thread_id, {
           ...thread,
           fastMode: false,
+          serviceTier: undefined,
         });
         updatedThreadIds.push(thread.threadId);
         threadCount += 1;
@@ -7069,12 +7072,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const launchpads = await this.listDirectoryLaunchpads();
     let launchpadCount = 0;
     for (const launchpad of launchpads) {
-      if (launchpad.backend !== "codex" || launchpad.fastMode !== true) {
+      if (launchpad.backend !== "codex"
+        || (launchpad.fastMode !== true && launchpad.serviceTier !== "ultrafast")) {
         continue;
       }
       await this.upsertDirectoryLaunchpad({
-        ...launchpad,
-        fastMode: false,
+        ...applyNavigationLaunchpadProviderSettingsPatch(launchpad, {
+          fastMode: false,
+          serviceTier: undefined,
+        }),
         updatedAt: Date.now(),
       });
       launchpadCount += 1;
@@ -7252,7 +7258,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   getStarMapManagerThread():
     | { backend: string; threadId: string }
     | undefined {
-    const raw = this.stateDb.getMeta(STAR_MAP_MANAGER_THREAD_META_KEY);
+    return this.readManagerThreadMeta(STAR_MAP_MANAGER_THREAD_META_KEY);
+  }
+
+  setStarMapManagerThread(thread: { backend: string; threadId: string }): void {
+    this.writeManagerThreadMeta(STAR_MAP_MANAGER_THREAD_META_KEY, thread);
+  }
+
+  /** The remembered Voice manager thread director voice talks through. */
+  getVoiceManagerThread():
+    | { backend: string; threadId: string }
+    | undefined {
+    return this.readManagerThreadMeta(VOICE_MANAGER_THREAD_META_KEY);
+  }
+
+  setVoiceManagerThread(thread: { backend: string; threadId: string }): void {
+    this.writeManagerThreadMeta(VOICE_MANAGER_THREAD_META_KEY, thread);
+  }
+
+  private readManagerThreadMeta(
+    key: string,
+  ): { backend: string; threadId: string } | undefined {
+    const raw = this.stateDb.getMeta(key);
     if (!raw) return undefined;
     try {
       const parsed = JSON.parse(raw) as { backend?: unknown; threadId?: unknown };
@@ -7271,9 +7298,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }
   }
 
-  setStarMapManagerThread(thread: { backend: string; threadId: string }): void {
+  private writeManagerThreadMeta(
+    key: string,
+    thread: { backend: string; threadId: string },
+  ): void {
     this.stateDb.setMeta(
-      STAR_MAP_MANAGER_THREAD_META_KEY,
+      key,
       JSON.stringify({ backend: thread.backend, threadId: thread.threadId }),
     );
   }

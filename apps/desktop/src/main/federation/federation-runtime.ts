@@ -1008,7 +1008,10 @@ export class DesktopFederationRuntime {
     generate: async (plan) => await generateFederationShortNames({
       plan,
       generate: async (params) =>
-        await getDesktopBackendRegistry().generateStructuredObject(params),
+        await getDesktopBackendRegistry().generateStructuredObject({
+          ...params,
+          helper: "federation_instance_names",
+        }),
     }),
     broadcast: (entries, excludePeerId) =>
       this.broadcastShortNames(entries, excludePeerId),

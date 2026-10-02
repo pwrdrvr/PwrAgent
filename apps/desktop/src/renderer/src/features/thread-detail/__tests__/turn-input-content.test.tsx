@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TurnInputContent } from "../TurnInputContent";
@@ -43,5 +43,24 @@ describe("correspondence navigation", () => {
     }} />);
     expect(screen.getByText("From thread")).toBeInTheDocument();
     expect(screen.getByText("Source thread")).toBeInTheDocument();
+  });
+});
+
+describe("queued message images", () => {
+  it("pages between the message's images in one lightbox", () => {
+    render(<TurnInputContent input={[
+      { type: "text", text: "Two screenshots" },
+      { type: "image", url: "data:image/png;base64,QQ==", name: "first.png" },
+      { type: "image", url: "data:image/png;base64,Qg==", name: "second.png" },
+    ]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand transcript image 3/ }));
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByText("Image 2 of 2")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Next image" }))
+      .toHaveAttribute("aria-disabled", "true");
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
   });
 });

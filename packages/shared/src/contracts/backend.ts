@@ -187,6 +187,8 @@ export type BackendModelOption = {
   reasoningEfforts?: string[];
   supportsReasoning?: boolean;
   supportsFast?: boolean;
+  /** Additional service tiers advertised by this model's runtime catalog. */
+  serviceTiers?: string[];
   supportsSteering?: boolean;
   /**
    * Whether this model accepts image input. `undefined` means "assume

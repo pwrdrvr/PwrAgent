@@ -145,12 +145,35 @@ describe("launchpad connection card bounds", () => {
     expect(ring).toBeGreaterThan(0);
 
     const body = ruleBody(".composer__attachments");
-    const padding = body.match(/\n\s*padding:\s*(\d+)px\s+(\d+)px\s+0\s+0;/);
+    const padding = body.match(
+      /\n\s*padding:\s*(\d+)px\s+(\d+)px\s+0\s+(\d+)px;/,
+    );
     expect(padding).not.toBeNull();
-    const [padTop, padRight] = [Number(padding![1]), Number(padding![2])];
+    const [padTop, padRight, padLeft] = [
+      Number(padding![1]),
+      Number(padding![2]),
+      Number(padding![3]),
+    ];
     expect(padTop).toBeGreaterThanOrEqual(-pxDeclaration(remove, "top") + ring);
     expect(padRight).toBeGreaterThanOrEqual(-pxDeclaration(remove, "right") + ring);
     expect(pxDeclaration(body, "margin-top")).toBe(-padTop);
+
+    // The thumbnail's own ring overhangs the first column on the left, where
+    // nothing else does. With no left pad the scroller cut it flat, which is
+    // what returning focus from the lightbox put on screen every time.
+    const openFocus = firstCssRuleBody(".composer__attachment-open:focus-visible");
+    const openRing =
+      pxDeclaration(openFocus, "outline")
+      + pxDeclaration(openFocus, "outline-offset");
+    expect(openRing).toBeGreaterThan(0);
+    expect(padLeft).toBeGreaterThanOrEqual(openRing);
+    // The box moves left by exactly its pad so the thumbnails stay on the
+    // composer column, and the right margin hands the same amount back: the
+    // strip is centred by `.composer > *`, which centres the margin box, so a
+    // left margin alone moves it by half and lands the thumbnails 2px right
+    // of the Reply box.
+    expect(pxDeclaration(body, "margin-left")).toBe(-padLeft);
+    expect(pxDeclaration(body, "margin-right")).toBe(padLeft);
 
     // The fixed half of the cap is two rows through the border box, so it
     // moves with the top padding. It was derived at 232px once and clipped

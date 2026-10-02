@@ -20,6 +20,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { diagnosticExcerpt, TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
 
 describe("DesktopBackendRegistry Token Miser ledger", () => {
   let directory: string;
@@ -47,6 +48,52 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await registry.close();
     stateDb.close();
     rmSync(directory, { force: true, recursive: true });
+  });
+
+  it("captures protocol commentary, excludes final answers, and seals terminal turns without writing", async () => {
+    await registry.close();
+    let notify!: (notification: AgentEvent["notification"]) => Promise<void>;
+    registry = new DesktopBackendRegistry({
+      codexClient: {
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
+        onNotification: (callback: typeof notify) => { notify = callback; return () => {}; },
+        onPendingRequest: () => () => {},
+      } as never,
+      overlayStore: store,
+    });
+    const file = path.join(directory, "diagnostics", "instance.jsonl");
+    const capture = new TokenMiserDiagnostics({ filePath: file, isEnabled: () => true, sampleEvery: 1 });
+    Object.assign(registry, { tokenMiserDiagnostics: capture });
+    const entry = { ...metadata(randomUUID(), "helper"), disposition: "summarized" as const };
+    capture.recordGate({ metadata: entry, before: diagnosticExcerpt("original", 100), delivered: diagnosticExcerpt("summary", 100), summary: entry.summary });
+    for (const phase of ["commentary", "final"] as const) {
+      await notify({ method: "item/completed", params: {
+        threadId: entry.threadId, turnId: entry.turnId,
+        item: { type: "agentMessage", id: phase, text: phase === "commentary" ? "Need exact files" : "Private final answer", phase },
+      } });
+    }
+    await notify({ method: "turn/completed", params: {
+      threadId: entry.threadId, turnId: entry.turnId, turn: { id: entry.turnId, status: "completed", output: [] },
+    } });
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    await registry.close();
+    const text = await fs.readFile(file, "utf8");
+    expect(text).toContain("Need exact files");
+    expect(text).not.toContain("Private final answer");
+    expect(JSON.parse(text.trim()).window.reason).toBe("turn_end");
+  });
+
+  it("drains late diagnostic observations after their producers close", async () => {
+    const file = path.join(directory, "diagnostics", "shutdown.jsonl");
+    const capture = new TokenMiserDiagnostics({ filePath: file, isEnabled: () => true });
+    Object.assign(registry, { tokenMiserDiagnostics: capture });
+    const internals = registry as unknown as { codexClient: { close(): Promise<void> } };
+    vi.spyOn(internals.codexClient, "close").mockImplementation(async () => {
+      const entry = { ...metadata(randomUUID(), "helper"), disposition: "summarized" as const };
+      capture.recordGate({ metadata: entry, before: diagnosticExcerpt("late original", 100), delivered: diagnosticExcerpt("summary", 100), summary: entry.summary });
+    });
+    await registry.close();
+    expect(await fs.readFile(file, "utf8")).toContain("late original");
   });
 
   it("attributes focused inference once to its requesting thread, including discarded answers, and subtracts it from savings", async () => {

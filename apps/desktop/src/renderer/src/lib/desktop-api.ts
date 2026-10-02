@@ -1,3 +1,4 @@
+import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -547,7 +548,7 @@ import type {
   AppUpdateStatus,
 } from "../../../shared/app-metadata";
 
-export type DesktopApi = {
+export type DesktopApi = Partial<NativeVoiceApi> & {
   replayFixtureActive?: boolean;
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;

@@ -83,6 +83,8 @@
     "rowsChanged": 49,
     "statements": 45
   },
+  "codex-ultrafast-profile-reset": {"commits": 3, "note": "one explicit profile reset of one Ultrafast thread, one launchpad and sticky defaults", "observedWalBytes": 16480, "rowsChanged": 13, "statements": 8},
+  "codex-ultrafast-selection": {"commits": 1, "note": "one persisted thread speed selection; no extra writes per turn or streamed event", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "completed-questionnaire-transcript": {
     "commits": 1,
     "note": "persist one completed questionnaire transcript summary",
@@ -558,6 +560,13 @@
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
+  },
+  "new-thread-mcp-default-selection": {
+    "commits": 1,
+    "note": "Persist two default MCP ids together once at thread creation, with no writes per connection or streamed event. At 100 new threads/day this adds approximately 1.6 MB/day of WAL and no idle writes.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
   },
   "owner-pr-candidate-bootstrap": {
     "commits": 1,

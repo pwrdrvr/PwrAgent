@@ -1483,6 +1483,33 @@ describe("DesktopSettingsService", () => {
     expect(reopened.resolveTokenMiserPollingReviewsEnabled()).toBe(true);
   });
 
+  it("defaults diagnostic capture off and persists their toggle", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(service.resolveTokenMiserDiagnosticsEnabled()).toBe(false);
+    const projection = await service.readSettingsProjection();
+    expect(projection.experimental.tokenMiserDiagnosticsEnabled)
+      .toEqual({ value: false, source: "default" });
+    // The same folder the registry's collector writes, shown even while off.
+    expect(projection.runtime.tokenMiserDiagnosticsDirectory).toBe(
+      path.join(path.dirname(configPath), "state", "token-miser", "diagnostics"),
+    );
+    await service.writeConfigPatchTargeted({
+      experimental: { tokenMiserDiagnosticsEnabled: true },
+    });
+    expect(service.resolveTokenMiserDiagnosticsEnabled()).toBe(true);
+    const reopened = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(reopened.resolveTokenMiserDiagnosticsEnabled()).toBe(true);
+  });
+
   it("defaults Token Miser unavailable with inherited thread use on", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

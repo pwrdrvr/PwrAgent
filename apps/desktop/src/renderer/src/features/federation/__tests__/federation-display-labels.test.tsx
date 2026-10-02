@@ -55,4 +55,23 @@ describe("federation machine names", () => {
     </FederationDisplayLabelsProvider>);
     expect(screen.getByLabelText("Runs on Laptop (Studio-MBP-M5-Max)")).toHaveTextContent("Laptop");
   });
+
+  it("uses the remote viewer owner's short name while retaining its offline state and default choice", () => {
+    const onRetarget = vi.fn();
+    render(<LaunchpadMachineChip control={{
+      local: { label: "Studio-MBP-M5-Max", shortLabel: "M5 Max", instanceId: "max", remote: true, availability: "offline" },
+      targets: buildFederationThreadTargets(health).filter((target) => target.instanceId !== "max"),
+      localHasProject: true, planRetarget: async () => undefined,
+    }} onRetarget={onRetarget} />);
+    const chip = screen.getByRole("button", { name: "Machine" });
+    expect(chip).toHaveTextContent("M5 Max");
+    expect(chip).toHaveAttribute("aria-description", "Studio-MBP-M5-Max is offline");
+    expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--offline");
+    fireEvent.click(chip);
+    const owner = screen.getByRole("option", { name: /M5 Max/ });
+    expect(owner).toHaveTextContent("This window");
+    expect(owner).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(owner);
+    expect(onRetarget).not.toHaveBeenCalled();
+  });
 });

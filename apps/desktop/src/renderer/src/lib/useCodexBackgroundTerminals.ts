@@ -14,8 +14,15 @@ export function useCodexBackgroundTerminals(params: {
   thread?: NavigationThreadSummary;
   suspended?: boolean;
   retainedRemoteThreadKeys?: ReadonlySet<string>;
+  /**
+   * A supported read that no item or turn event raced. Codex's list names
+   * every command still running for the thread at that moment.
+   */
+  onAuthoritativeList?: (threadKey: string, itemIds: ReadonlySet<string>) => void;
 }) {
   const { desktopApi, suspended } = params;
+  const onAuthoritativeListRef = useRef(params.onAuthoritativeList);
+  onAuthoritativeListRef.current = params.onAuthoritativeList;
   const threadKey = params.thread ? threadSummaryIdentityKey(params.thread) : undefined;
   const threadRef = useRef(params.thread);
   threadRef.current = params.thread;
@@ -86,6 +93,12 @@ export function useCodexBackgroundTerminals(params: {
             else delete next[threadKey];
             return next;
           });
+          if (response.supported) {
+            onAuthoritativeListRef.current?.(
+              threadKey,
+              new Set(response.terminals.map((terminal) => terminal.itemId)),
+            );
+          }
           setError(undefined);
         } while (dirty && supported && !cancelled);
       } catch (failure) {

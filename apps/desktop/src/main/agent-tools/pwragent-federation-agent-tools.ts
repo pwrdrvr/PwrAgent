@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   CreateInstanceThreadToolArgs,
   FederationSearchScope,
+  ListAttentionThreadsToolArgs,
   ListFederationInstancesToolArgs,
   ListInstanceProjectsToolArgs,
   PushInstanceFileToolArgs,
@@ -103,9 +104,11 @@ function descriptionForOperation(
     case "list_federation_instances":
       return "List the local instance and known PwrAgent peers. Results include identity, purpose, status, capabilities, and host facts. Use this before you route work to a machine. Profiles with the same machineId share one host. Do not add their CPU, memory, or disk capacity. Host facts come from the last connection. Set includeLoad=true for current load, available memory, free disk, and sample time. A peer can omit load if it does not reply in time. Load is per machineId. Count it once. Use query instead of paging when possible. Cursor tokens expire after about one minute. A local-only result is valid when Federation is disabled. Only local or connected instances can accept work.";
     case "list_instance_projects":
-      return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread.";
+      return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread. The result also lists the instance's available backends with exact model IDs. Pass those to create_instance_thread when the user names a provider or model.";
     case "create_instance_thread":
       return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider other than the target launchpad's configured provider. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
+    case "list_attention_threads":
+      return "List the threads that need the operator's attention on this instance and every connected peer. It is the Attention queue each machine's sidebar shows. Each row says whether a turn is running, the thread is unread, or it is waiting on the operator's input. Use it to answer what needs attention, what is running, or what is waiting. Pass instanceId for one machine. Follow up with get_thread_status or read_thread for detail. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "search_federation_threads":
       return "Search thread metadata on local and connected PwrAgent instances. Use scope=all, local, or remote to select the search area. Pass instanceId to select one instance. Scope and instanceId both apply when you set both. Filters apply before the result limit. Results include owner data, threadLink, and peer failures. Use search_threads for local transcript or advanced searches. Return threadLink verbatim. Keep instanceId for later remote calls.";
   }
@@ -206,7 +209,11 @@ function inputSchemaForOperation(
             description:
               "Provider backend override, for example `codex` or `acp:grok`. Omit to inherit the target launchpad backend.",
           },
-          model: { type: "string" },
+          model: {
+            type: "string",
+            description:
+              "Exact model ID from the backends list_instance_projects returns for this instance. Omit to inherit the launchpad model.",
+          },
           reasoningEffort: { type: "string" },
           executionMode: { type: "string" },
           fastMode: { type: "boolean" },
@@ -231,6 +238,24 @@ function inputSchemaForOperation(
             enum: INSTANCE_THREAD_GROUPING_MODES,
             description:
               "Use subthread for child work that must remain nested across instances. The default none keeps independent intake separate.",
+          },
+        },
+      };
+    case "list_attention_threads":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          instanceId: {
+            type: "string",
+            description:
+              "Optional instance id from list_federation_instances. Omit to read this instance and every connected peer.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            description: "Maximum rows per instance. Defaults to 25.",
           },
         },
       };
@@ -301,6 +326,7 @@ function normalizeArgsForOperation(
   | ListInstanceProjectsToolArgs
   | CreateInstanceThreadToolArgs
   | SearchFederationThreadsToolArgs
+  | ListAttentionThreadsToolArgs
   | undefined {
   switch (operation) {
     case "handoff_instance_thread": {
@@ -329,6 +355,8 @@ function normalizeArgsForOperation(
       return normalizeCreateInstanceThreadArgs(args);
     case "search_federation_threads":
       return normalizeSearchFederationThreadsArgs(args);
+    case "list_attention_threads":
+      return normalizeListAttentionThreadsArgs(args);
   }
 }
 
@@ -346,9 +374,32 @@ function invalidArgumentsMessageForOperation(
       return "list_instance_projects requires a non-empty instanceId string.";
     case "create_instance_thread":
       return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known backend, workMode, and groupingMode values.";
+    case "list_attention_threads":
+      return "list_attention_threads accepts an optional non-empty instanceId and an integer limit between 1 and 100.";
     case "search_federation_threads":
       return "search_federation_threads requires a non-empty query string; scope must be all, local, or remote; backend and filters must be valid; limit must be an integer between 1 and 200.";
   }
+}
+
+function normalizeListAttentionThreadsArgs(
+  args: Record<string, unknown>,
+): ListAttentionThreadsToolArgs | undefined {
+  if (Object.keys(args).some((key) => key !== "instanceId" && key !== "limit")) {
+    return undefined;
+  }
+  const instanceId = args.instanceId === undefined ? undefined : readTrimmedString(args.instanceId);
+  if (args.instanceId !== undefined && !instanceId) {
+    return undefined;
+  }
+  const limit = args.limit;
+  if (limit !== undefined
+    && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    return undefined;
+  }
+  return {
+    ...(instanceId ? { instanceId } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
 }
 
 function normalizeListFederationInstancesArgs(

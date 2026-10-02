@@ -1,5 +1,9 @@
-import type { DesktopSettingsSnapshot, DesktopTokenMiserUsage } from "@pwragent/shared";
-import { useEffect, useState } from "react";
+import {
+  formatFilesystemPath,
+  type DesktopSettingsSnapshot,
+  type DesktopTokenMiserUsage,
+} from "@pwragent/shared";
+import { useEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   ManagedRuntimeProgressStrip,
@@ -45,6 +49,60 @@ const DEFAULT_TOKEN_MISER_DEFAULT_ENABLED = {
   source: "default" as const,
 };
 
+/**
+ * Where diagnostic samples land, shown whether or not capture is on: the
+ * operator turned capture on to read these files, and saved files outlive
+ * the switch. The folder is created by the first batch write, so opening it
+ * earlier is the expected miss, not an error.
+ */
+function TokenMiserDiagnosticsFolder(props: {
+  directory: string;
+  openPath?: DesktopApi["openPath"];
+}) {
+  const [note, setNote] = useState<string>();
+  const opening = useRef(false);
+  const openPath = props.openPath;
+
+  const open = async () => {
+    if (!openPath || opening.current) return;
+    opening.current = true;
+    try {
+      const response = await openPath({ path: props.directory });
+      setNote(response.opened
+        ? undefined
+        : response.missing
+          ? "No samples saved yet."
+          : response.error ?? "The folder could not be opened.");
+    } catch (caught) {
+      setNote(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      opening.current = false;
+    }
+  };
+
+  return (
+    <div className="settings-folder-line">
+      <span className="settings-folder-line__path">
+        {formatFilesystemPath(props.directory)}
+      </span>
+      <span className="settings-folder-line__actions">
+        <span className="settings-folder-line__note" role="status">
+          {note}
+        </span>
+        {openPath ? (
+          <button
+            type="button"
+            className="button button--ghost settings-folder-line__action"
+            onClick={() => void open()}
+          >
+            Open folder
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
 export function ExperimentalSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
@@ -55,6 +113,7 @@ export function ExperimentalSettings(props: {
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserDiagnosticsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserPollingReviewsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
@@ -83,6 +142,11 @@ export function ExperimentalSettings(props: {
   const tokenMiserFocusedSummariesEnabled =
     props.snapshot.experimental.tokenMiserFocusedSummariesEnabled ??
     { value: false, source: "default" as const };
+  const tokenMiserDiagnosticsEnabled =
+    props.snapshot.experimental.tokenMiserDiagnosticsEnabled ??
+    { value: false, source: "default" as const };
+  const tokenMiserDiagnosticsDirectory =
+    props.snapshot.runtime.tokenMiserDiagnosticsDirectory;
   const tokenMiserPollingReviewsEnabled =
     props.snapshot.experimental.tokenMiserPollingReviewsEnabled ??
     { value: false, source: "default" as const };
@@ -238,6 +302,24 @@ export function ExperimentalSettings(props: {
             help="Off by default. Obvious polling is still detected locally. This review sends only bounded timing, tool metadata, redacted Code Mode snippets, and recent assistant updates to the same helper-model selector Token Miser uses; it never includes full tool output. A review that finds productive work leaves the turn alone."
             source={sourceBadge(tokenMiserPollingReviewsEnabled)}
             onChange={props.onTokenMiserPollingReviewsEnabledChange}
+          />
+          <ToggleField
+            checked={tokenMiserDiagnosticsEnabled.value}
+            disabled={props.saving || !tokenMiserEnabled.value}
+            label="Capture diagnostic samples"
+            switchQualifier="Token Miser"
+            sub="Save local samples of tool output, summaries, retrievals, and suspected retry bursts for offline review."
+            help="Off by default. Samples can include tool output and intermediate assistant commentary, which may contain sensitive data. Final answers are never saved. Files stay on this machine, at most 24 files of 8 MB. Turning this off discards samples not yet written; saved files remain until you delete them."
+            source={sourceBadge(tokenMiserDiagnosticsEnabled)}
+            actions={
+              tokenMiserDiagnosticsDirectory ? (
+                <TokenMiserDiagnosticsFolder
+                  directory={tokenMiserDiagnosticsDirectory}
+                  openPath={props.desktopApi?.openPath}
+                />
+              ) : undefined
+            }
+            onChange={props.onTokenMiserDiagnosticsEnabledChange}
           />
           {tokenMiserInert ? (
             <SettingsField
