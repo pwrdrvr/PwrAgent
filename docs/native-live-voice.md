@@ -163,6 +163,10 @@ Each dynamic tool call that the voice session's thread makes becomes a receipt.
 A receipt names the tool, the target thread and machine when the result names
 them, and the outcome. Main observes the calls at the registry's dynamic tool
 chokepoint after each call settles. It reports only what the tool returned.
+In a narrow panel a receipt wraps rather than shrinking its target. The
+tool, machine, and outcome keep their width, so the target is the one item that
+would otherwise be squeezed to an ellipsis. It ellipsizes only when it is wider
+than a line by itself.
 
 ## Protocol and trust boundary
 
