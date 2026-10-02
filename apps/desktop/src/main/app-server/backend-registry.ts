@@ -121,6 +121,7 @@ import {
   normalizeRenamedTitleSource,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
+  shortSubAgentThreadId,
   threadSeenWatermark,
   type AgentEvent,
   type ArchiveWorktreeRequest,
@@ -3150,7 +3151,7 @@ function groupCodexNativeSubAgents(params: {
 }
 
 function shortCodexNativeAgentId(threadId: string): string {
-  return threadId.length > 8 ? threadId.slice(0, 8) : threadId;
+  return shortSubAgentThreadId(threadId);
 }
 
 function truncateSubAgentText(value: string, maxLength: number): string {
@@ -3589,33 +3590,27 @@ function codexNativeSubAgentTask(params: {
     : undefined;
   return promptTitle
     ? truncateSubAgentText(promptTitle, 120)
-    : `Codex subagent ${shortCodexNativeAgentId(params.threadId)}`;
+    : codexNativeSubAgentPlaceholderTask(params.threadId);
 }
 
-function codexNativeSubAgentMessage(params: {
-  agentMessage?: string;
-  agentState?: string;
-  tool: string;
-}): string {
-  if (params.agentMessage) {
-    return truncateSubAgentText(params.agentMessage, 360);
-  }
-  switch (params.tool) {
-    case "spawnAgent":
-      return "Spawned by Codex native spawnAgent.";
-    case "sendInput":
-      return "Sent input to Codex native subagent.";
-    case "resumeAgent":
-      return "Resumed Codex native subagent.";
-    case "wait":
-      return params.agentState
-        ? `Observed Codex native subagent state: ${params.agentState}.`
-        : "Waited on Codex native subagent.";
-    case "closeAgent":
-      return "Closed Codex native subagent.";
-    default:
-      return `Observed Codex native ${params.tool} call.`;
-  }
+/**
+ * What a worker is called before anything better is known. A path-based
+ * worker reports no prompt, so every card starts here; discovery replaces it
+ * with the worker thread's title.
+ */
+function codexNativeSubAgentPlaceholderTask(threadId: string): string {
+  return `Codex sub-agent ${shortCodexNativeAgentId(threadId)}`;
+}
+
+function isCodexNativeSubAgentPlaceholderTask(
+  task: string,
+  threadId: string,
+): boolean {
+  return (
+    task === codexNativeSubAgentPlaceholderTask(threadId)
+    // Cards persisted before the placeholder took the id's random tail.
+    || task === `Codex subagent ${threadId.slice(0, 8)}`
+  );
 }
 
 function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
@@ -26942,6 +26937,18 @@ export class DesktopBackendRegistry {
         const agentName =
           nativeThread.codexNativeSubAgent?.agentNickname
           ?? existing?.agentName;
+        // A fallback title says nothing the placeholder does not.
+        const discoveredTitle = nativeThread.titleSource === "fallback"
+          ? undefined
+          : nativeThread.title?.trim();
+        const task =
+          existing
+          && !(
+            discoveredTitle
+            && isCodexNativeSubAgentPlaceholderTask(existing.task, nativeThread.id)
+          )
+            ? existing.task
+            : discoveredTitle || existing?.task || nativeThread.title;
         const completedAt =
           status === "success"
             ? existing?.completedAt
@@ -26953,6 +26960,7 @@ export class DesktopBackendRegistry {
           !existing
           || Boolean(usageBackfill)
           || Boolean(agentName && agentName !== existing.agentName)
+          || task !== existing.task
           || Boolean(preferredModel && !existing.preferredModel)
           || Boolean(
             preferredReasoningEffort
@@ -26973,9 +26981,7 @@ export class DesktopBackendRegistry {
         try {
           const subAgent: ThreadSubAgentSummary = {
             monitorId,
-            task:
-              existing?.task
-              ?? nativeThread.title,
+            task,
             status,
             createdAt:
               existing?.createdAt
@@ -26994,11 +27000,9 @@ export class DesktopBackendRegistry {
               existing?.ownerRegistrySessionId ?? this.registrySessionId,
             backend: "codex",
             monitorThreadId: nativeThread.id,
-            lastMessage:
-              existing?.lastMessage
-              ?? (status === "success"
-                ? "Codex native sub-agent completed."
-                : "Discovered from Codex native thread metadata."),
+            ...(existing?.lastMessage
+              ? { lastMessage: existing.lastMessage }
+              : {}),
             ...(agentName ? { agentName } : {}),
             ...(preferredModel ? { preferredModel } : {}),
             ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
@@ -29250,19 +29254,12 @@ export class DesktopBackendRegistry {
       return;
     }
     const outcome = codexNativeSubAgentOutcome(status);
-    const nextLastMessage = codexNativeSubAgentMessage({
-      agentMessage: agentState.message,
-      agentState: agentState.status,
-      tool: params.call.tool,
-    });
-    const lastMessage =
-      existing &&
-      codexNativeSubAgentIsTerminal(existing.status) &&
-      existing.status === status &&
-      !agentState.message &&
-      existing.lastMessage
-        ? existing.lastMessage
-        : nextLastMessage;
+    // Only the worker's own words. The lifecycle event itself is already the
+    // card's status, and narrating it ("Observed … state: completed.") put
+    // implementation detail where the worker's message belongs.
+    const lastMessage = agentState.message
+      ? truncateSubAgentText(agentState.message, 360)
+      : existing?.lastMessage;
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task:
@@ -29301,7 +29298,7 @@ export class DesktopBackendRegistry {
         : existing?.preferredFastMode !== undefined
           ? { preferredFastMode: existing.preferredFastMode }
           : {}),
-      lastMessage,
+      ...(lastMessage ? { lastMessage } : {}),
       ...(outcome
         ? { outcome }
         : existing?.outcome
@@ -29514,7 +29511,7 @@ export class DesktopBackendRegistry {
     const now = Date.now();
     const lastMessage = replay.lastAssistantMessage
       ? truncateSubAgentText(replay.lastAssistantMessage, 360)
-      : "Codex native sub-agent completed.";
+      : existing.lastMessage;
     await this.overlayStore.upsertThreadSubAgent({
       backend: "codex",
       threadId: params.parentThreadId,
@@ -29523,7 +29520,7 @@ export class DesktopBackendRegistry {
         status: "success",
         outcome: "success",
         completedAt: existing.completedAt ?? now,
-        lastMessage,
+        ...(lastMessage ? { lastMessage } : {}),
         ...(replay.agentName ? { agentName: replay.agentName } : {}),
         updatedAt: now,
       },

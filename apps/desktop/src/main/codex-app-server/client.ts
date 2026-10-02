@@ -30,6 +30,7 @@ import {
   resolveHelperModel,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
+  shortSubAgentThreadId,
   type DesktopHelperModelSettings,
   type HelperModelId,
   type HelperModelResolution,
@@ -4505,6 +4506,9 @@ function summarizeActivityItems(
   let toolCalls = 0;
   let spawnedAgents = 0;
   let waitedAgents = 0;
+  let startedAgents = 0;
+  let finishedAgents = 0;
+  let interruptedAgents = 0;
   let failedCollabCalls = 0;
   let status: AppServerThreadActivityStatus | undefined;
 
@@ -4694,7 +4698,16 @@ function summarizeActivityItems(
     if (normalizedItemType === "collabagenttoolcall") {
       const receiverThreadIds = readStringArray(item.receiverThreadIds);
       const tool = pickString(item, ["tool"]) ?? "collabAgent";
-      if (tool === "spawnAgent" && itemStatus !== "failed") {
+      const activityKind = pickString(item, ["activityKind"]);
+      if (activityKind === "started") {
+        startedAgents += 1;
+      } else if (activityKind === "completed") {
+        finishedAgents += 1;
+      } else if (activityKind === "interrupted") {
+        interruptedAgents += 1;
+      } else if (activityKind) {
+        // Message delivery between agents; the row says so, the summary does not.
+      } else if (tool === "spawnAgent" && itemStatus !== "failed") {
         spawnedAgents += receiverThreadIds.length || 1;
       } else if (tool === "wait") {
         waitedAgents += receiverThreadIds.length;
@@ -4703,10 +4716,16 @@ function summarizeActivityItems(
         failedCollabCalls += 1;
       }
 
-      const label = formatCollabAgentToolLabel({ tool, receiverThreadIds, status: itemStatus });
+      const agents = collabAgentDetails(item, receiverThreadIds);
+      const label = activityKind
+        ? formatSubAgentActivityLabel({ agents, kind: activityKind })
+        : formatCollabAgentToolLabel({ agents, tool, receiverThreadIds, status: itemStatus });
       const commandDetail = buildCollabAgentCommandDetail({
         item,
         label,
+        operation: activityKind
+          ? subAgentActivityOperation(activityKind)
+          : collabAgentOperation(tool),
         receiverThreadIds,
         tool,
       });
@@ -4804,6 +4823,15 @@ function summarizeActivityItems(
   if (waitedAgents > 0) {
     summaryParts.push(`Waited on ${waitedAgents} agent${waitedAgents === 1 ? "" : "s"}`);
   }
+  if (startedAgents > 0) {
+    summaryParts.push(`Started ${startedAgents} agent${startedAgents === 1 ? "" : "s"}`);
+  }
+  if (finishedAgents > 0) {
+    summaryParts.push(`${finishedAgents} finished`);
+  }
+  if (interruptedAgents > 0) {
+    summaryParts.push(`${interruptedAgents} interrupted`);
+  }
   if (failedCollabCalls > 0) {
     summaryParts.push(
       `${failedCollabCalls} collaboration tool${failedCollabCalls === 1 ? "" : "s"} failed`
@@ -4834,7 +4862,61 @@ function readStringArray(value: unknown): string[] {
     : [];
 }
 
+/**
+ * Names one worker for a transcript row. Replay merges rows that share a
+ * label, so two workers must never get the same one: prefer the worker's
+ * name, then the random tail of its id.
+ */
+function subAgentTargetLabel(
+  agent: { name?: string; threadId: string } | undefined,
+): string {
+  if (agent?.name) {
+    return agent.name;
+  }
+  return `agent ${shortSubAgentThreadId(agent?.threadId ?? "")}`;
+}
+
+function formatSubAgentActivityLabel(params: {
+  agents: Array<{ name?: string; threadId: string }>;
+  kind: string;
+}): string {
+  const target = subAgentTargetLabel(params.agents[0]);
+  switch (params.kind) {
+    case "started":
+      return `Started ${target}`;
+    case "interacted":
+      return `Sent input to ${target}`;
+    case "interrupted":
+      return `Interrupted ${target}`;
+    case "completed":
+      // A name is the worker's own spelling; only the fallback is ours.
+      return params.agents[0]?.name
+        ? `${target} finished`
+        : `Agent ${shortSubAgentThreadId(params.agents[0]?.threadId ?? "")} finished`;
+    default:
+      return `Observed ${target}`;
+  }
+}
+
+function subAgentActivityOperation(
+  kind: string,
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
+  switch (kind) {
+    case "started":
+      return "spawn";
+    case "interacted":
+      return "send_input";
+    case "interrupted":
+      return "interrupt";
+    case "completed":
+      return "complete";
+    default:
+      return "unknown";
+  }
+}
+
 function formatCollabAgentToolLabel(params: {
+  agents: Array<{ name?: string; threadId: string }>;
   tool: string;
   receiverThreadIds: string[];
   status: AppServerThreadActivityStatus | undefined;
@@ -4842,7 +4924,7 @@ function formatCollabAgentToolLabel(params: {
   const targetCount = params.receiverThreadIds.length;
   const targetLabel =
     targetCount === 1
-      ? `agent ${shortAgentId(params.receiverThreadIds[0] ?? "")}`
+      ? subAgentTargetLabel(params.agents[0])
       : targetCount > 1
         ? `${targetCount} agents`
         : "agent";
@@ -4884,6 +4966,7 @@ function formatCollabAgentToolLabel(params: {
 function buildCollabAgentCommandDetail(params: {
   item: Record<string, unknown>;
   label: string;
+  operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"];
   receiverThreadIds: string[];
   tool: string;
 }): AppServerThreadCommandDetail {
@@ -4914,7 +4997,7 @@ function buildCollabAgentCommandDetail(params: {
     subAgent: {
       backend: "codex",
       origin: "codex-native",
-      operation: collabAgentOperation(params.tool),
+      operation: params.operation,
       agents: collabAgentDetails(params.item, params.receiverThreadIds),
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -4925,7 +5008,7 @@ function buildCollabAgentCommandDetail(params: {
 
 function collabAgentOperation(
   tool: string,
-): "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown" {
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
   switch (tool) {
     case "spawnAgent":
       return "spawn";
@@ -5025,7 +5108,7 @@ function indentCollabAgentMessage(message: string): string {
 }
 
 function shortAgentId(agentId: string): string {
-  return agentId.length > 8 ? agentId.slice(0, 8) : agentId;
+  return shortSubAgentThreadId(agentId);
 }
 
 function truncateActivityText(text: string, maxLength: number): string {

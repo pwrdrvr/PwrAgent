@@ -785,7 +785,19 @@ export type AppServerThreadCommandDetail = {
 export type AppServerThreadSubAgentCallDetail = {
   backend: AppServerBackendKind;
   origin: "codex-native" | "pwragent";
-  operation: "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown";
+  /**
+   * `complete` and `interrupt` come from Codex `subAgentActivity` reports: the
+   * worker finished or was interrupted on its own, which no tool call did.
+   */
+  operation:
+    | "spawn"
+    | "wait"
+    | "send_input"
+    | "resume"
+    | "close"
+    | "complete"
+    | "interrupt"
+    | "unknown";
   agents: Array<{
     threadId: string;
     name?: string;

@@ -33221,8 +33221,9 @@ command = "pnpm dev"
       expect(overlay?.subAgents?.[0]).toMatchObject({
         agentName: "Huygens",
         status: "running",
-        lastMessage: "Spawned by Codex native spawnAgent.",
       });
+      // The card's status already says it was spawned; no narration.
+      expect(overlay?.subAgents?.[0]?.lastMessage).toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(15_000);
       expect(codexClient.readThreadCalls).toEqual([
@@ -50137,6 +50138,102 @@ script = "printf setup"
     expect(nativePricing?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("replaces a native worker's placeholder task with its discovered title", async () => {
+    // Path-based workers report no prompt, so their cards start as a
+    // placeholder. Three started together share a UUIDv7 prefix, which is how
+    // the rail ended up with three cards of the same title.
+    const now = Date.now();
+    const workers = [
+      {
+        id: "019dde61-c9d6-70d2-9023-28669e27a63b",
+        task: "Codex sub-agent 9e27a63b",
+        title: "Review the SQLite write budgets",
+      },
+      {
+        id: "019dde61-ca10-7aa1-8a2b-4f1e2d3c4b5a",
+        // Spelling persisted before the placeholder used the random tail.
+        task: "Codex subagent 019dde61",
+        title: "Measure WAL growth",
+      },
+      {
+        id: "019dde61-ca44-7bb3-9c3d-5a6b7c8d9e0f",
+        // Derived from a real prompt: never overwritten.
+        task: "Verify the docs links",
+        title: "Something else entirely",
+      },
+    ];
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-parent",
+          title: "Audit the release checklist",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+        },
+      ],
+      nativeSubAgentThreads: workers.map((worker) => ({
+        id: worker.id,
+        title: worker.title,
+        titleSource: "explicit" as const,
+        linkedDirectories: [],
+        source: "codex" as const,
+        createdAt: now - 40,
+        updatedAt: now - 20,
+        threadStatus: "idle" as const,
+        codexNativeSubAgent: {
+          parentThreadId: "thread-parent",
+          depth: 1,
+        },
+      })),
+    });
+    const overlayStore = createOverlayStoreMock();
+    for (const worker of workers) {
+      await overlayStore.upsertThreadSubAgent({
+        backend: "codex",
+        threadId: "thread-parent",
+        subAgent: {
+          monitorId: `codex-native:${worker.id}`,
+          monitorThreadId: worker.id,
+          backend: "codex",
+          task: worker.task,
+          status: "success",
+          outcome: "success",
+          createdAt: now - 40,
+          updatedAt: now - 20,
+          completedAt: now - 20,
+        },
+      });
+    }
+    const upsertThreadSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await registry.listThreads({ backend: "codex", forceRefresh: true });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    const tasks = Object.fromEntries(
+      (overlay?.subAgents ?? []).map((card) => [card.monitorThreadId, card.task]),
+    );
+    expect(tasks).toEqual({
+      [workers[0]!.id]: "Review the SQLite write budgets",
+      [workers[1]!.id]: "Measure WAL growth",
+      [workers[2]!.id]: "Verify the docs links",
+    });
+    // Once per corrected card; the second pass finds nothing to write.
+    expect(upsertThreadSubAgent).toHaveBeenCalledTimes(2);
 
     await registry.close();
   });

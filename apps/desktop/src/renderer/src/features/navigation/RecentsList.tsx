@@ -389,6 +389,7 @@ export function RecentsList(props: RecentsListProps) {
     const children = trays.subtree(key);
     const subthreadCount = getSubthreadDisclosureCount(thread, children.length);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+    const tray = renderSubthreads(thread);
     return (
       <div key={key} className="thread-group">
         <ThreadRow
@@ -426,7 +427,14 @@ export function RecentsList(props: RecentsListProps) {
           onSetThreadPin={props.onSetThreadPin}
           onUnbindMessagingBinding={props.onUnbindMessagingBinding}
         />
-        {renderSubthreads(thread)}
+        {/* `.thread-group` carries no role, so the tray would sit straight
+            inside the `role="list"` below, and a list owns only listitem.
+            The Directories lens wraps its trays the same way. */}
+        {tray ? (
+          <div className="thread-group__subthreads-slot" role="listitem">
+            {tray}
+          </div>
+        ) : null}
       </div>
     );
   };

@@ -8519,6 +8519,7 @@ describe("CodexAppServerClient", () => {
       expect(details).toEqual([
         expect.objectContaining({
           id: "started-review",
+          label: "Started review_savers",
           command: expect.objectContaining({ subAgent: expect.objectContaining({
             origin: "codex-native", operation: "spawn",
             agents: [{ threadId: "worker-review", name: "review_savers", status: "running" }],
@@ -8526,11 +8527,66 @@ describe("CodexAppServerClient", () => {
         }),
         expect.objectContaining({
           id: "completed-review",
+          // A completion report is not a wait: nothing waited on the worker.
+          label: "review_savers finished",
           command: expect.objectContaining({ subAgent: expect.objectContaining({
-            operation: "wait",
+            operation: "complete",
             agents: [{ threadId: "worker-review", name: "review_savers", status: "completed" }],
           }) }),
         }),
+      ]);
+      expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
+        summary: "Started 1 agent, 1 finished",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps a row per worker when parallel workers share a UUIDv7 prefix", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    // UUIDv7 leads with a millisecond timestamp, so workers started together
+    // share their first 8 characters. Replay merges rows by label; labels
+    // built from that prefix collapsed three workers into one.
+    const workers = [
+      { id: "019dde61-c9d6-70d2-9023-28669e27a63b", path: "/root/review_savers" },
+      { id: "019dde61-ca10-7aa1-8a2b-4f1e2d3c4b5a" },
+      { id: "019dde61-ca44-7bb3-9c3d-5a6b7c8d9e0f" },
+    ];
+    MockTransport.readThreadResultByThreadId.set("thread-parallel-activity", {
+      thread: {
+        turns: [{
+          id: "turn-parallel",
+          status: "completed",
+          items: [
+            ...workers.map((worker, index) => ({
+              type: "subAgentActivity", id: `started-${index}`, kind: "started",
+              agentThreadId: worker.id, agentPath: worker.path ?? "",
+            })),
+            ...workers.map((worker, index) => ({
+              type: "subAgentActivity", id: `completed-${index}`, kind: "completed",
+              agentThreadId: worker.id, agentPath: worker.path ?? "",
+            })),
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const replay = await client.readThread({ threadId: "thread-parallel-activity" });
+      const activity = replay.entries.find((entry) => entry.type === "activity");
+      expect(activity).toMatchObject({ summary: "Started 3 agents, 3 finished" });
+      expect(
+        activity?.type === "activity"
+          ? activity.details.map((detail) => detail.label)
+          : [],
+      ).toEqual([
+        "Started review_savers",
+        "Started agent 2d3c4b5a",
+        "Started agent 7c8d9e0f",
+        "review_savers finished",
+        "Agent 2d3c4b5a finished",
+        "Agent 7c8d9e0f finished",
       ]);
     } finally {
       await client.close();
@@ -8639,10 +8695,10 @@ describe("CodexAppServerClient", () => {
           expect.objectContaining({
             id: "collab-spawn-1",
             kind: "command",
-            label: "Spawned agent 019e5630",
+            label: "Spawned agent 997c235a",
             status: "completed",
             command: expect.objectContaining({
-              displayCommand: "spawnAgent 019e5630",
+              displayCommand: "spawnAgent 997c235a",
               output: expect.stringContaining("Prompt: You are the correctness reviewer."),
             }),
           }),
@@ -8659,11 +8715,11 @@ describe("CodexAppServerClient", () => {
           expect.objectContaining({
             id: "collab-wait-1",
             kind: "command",
-            label: "Waited on agent 019e5630",
+            label: "Waited on agent 997c235a",
             status: "completed",
             command: expect.objectContaining({
-              displayCommand: "wait 019e5630",
-              output: expect.stringContaining("019e5630: completed"),
+              displayCommand: "wait 997c235a",
+              output: expect.stringContaining("997c235a: completed"),
             }),
           }),
         ],

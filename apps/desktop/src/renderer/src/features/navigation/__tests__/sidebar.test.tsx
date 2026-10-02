@@ -1502,6 +1502,14 @@ describe("Sidebar", () => {
 
     expect(container.querySelectorAll(".native-subagents__list")).toHaveLength(1);
     expect(container.querySelectorAll(".native-subagents__agent")).toHaveLength(3);
+    // A list holds only list items; status lines sit beside it.
+    const workerList = screen.getByRole("list", {
+      name: "Native Codex sub-agents for Coordinate the launch",
+    });
+    expect(within(workerList).getAllByRole("listitem")).toHaveLength(3);
+    expect(workerList.querySelector("p")).toBeNull();
+    // The rows from the navigation summary are already drawn.
+    expect(screen.queryByText("Loading sub-agents…")).not.toBeInTheDocument();
     expect(container.querySelectorAll(".native-subagents__status")).toHaveLength(1);
     expect(screen.getByLabelText("Working")).toBeInTheDocument();
     expect(screen.queryByLabelText("Idle")).not.toBeInTheDocument();

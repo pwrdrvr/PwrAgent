@@ -1,4 +1,7 @@
-import { buildTokenUsageActivityEntry } from "@pwragent/shared";
+import {
+  buildTokenUsageActivityEntry,
+  shortSubAgentThreadId,
+} from "@pwragent/shared";
 export { buildTokenUsageActivityEntry, buildTurnUsageActivityEntryFromLine } from "@pwragent/shared";
 import {
   formatSearchCommandActionLabel,
@@ -487,6 +490,7 @@ function buildLiveToolLabel(
 
   if (itemType === "collabagenttoolcall") {
     return formatCollabAgentToolLabel({
+      agents: collabAgentDetails(item, readStringArray(item.receiverThreadIds)),
       receiverThreadIds: readStringArray(item.receiverThreadIds),
       status,
       tool: toolName,
@@ -521,7 +525,23 @@ function buildLiveToolLabel(
   return formatLiveToolName(toolName, status);
 }
 
+/**
+ * Names one worker for a transcript row. Replay merges rows that share a
+ * label, so two workers must never get the same one: prefer the worker's
+ * name, then the random tail of its id. Keep in step with the main-process
+ * summarizer so a live row and its replayed copy read the same.
+ */
+function subAgentTargetLabel(
+  agent: { name?: string; threadId: string } | undefined,
+): string {
+  if (agent?.name) {
+    return agent.name;
+  }
+  return `agent ${shortAgentId(agent?.threadId ?? "")}`;
+}
+
 function formatCollabAgentToolLabel(params: {
+  agents: Array<{ name?: string; threadId: string }>;
   tool: string;
   receiverThreadIds: string[];
   status: AppServerThreadActivityDetail["status"];
@@ -529,7 +549,7 @@ function formatCollabAgentToolLabel(params: {
   const targetCount = params.receiverThreadIds.length;
   const targetLabel =
     targetCount === 1
-      ? `agent ${shortAgentId(params.receiverThreadIds[0] ?? "")}`
+      ? subAgentTargetLabel(params.agents[0])
       : targetCount > 1
         ? `${targetCount} agents`
         : "agent";
@@ -609,7 +629,7 @@ function buildCollabAgentCommandDetail(
 
 function collabAgentOperation(
   tool: string,
-): "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown" {
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
   switch (tool) {
     case "spawnAgent":
       return "spawn";
@@ -716,7 +736,7 @@ function indentCollabAgentMessage(message: string): string {
 }
 
 function shortAgentId(agentId: string): string {
-  return agentId.length > 8 ? agentId.slice(0, 8) : agentId;
+  return shortSubAgentThreadId(agentId);
 }
 
 function truncateActivityText(text: string, maxLength: number): string {

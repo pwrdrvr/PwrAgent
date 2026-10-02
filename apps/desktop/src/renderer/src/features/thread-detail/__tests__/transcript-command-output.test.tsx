@@ -101,15 +101,30 @@ describe("TranscriptCommandOutput", () => {
       />,
     );
 
-    expect(screen.getByText("Codex native agent")).toBeInTheDocument();
-    expect(screen.getByText("Waited on agent")).toBeInTheDocument();
-    expect(screen.getByText("Kieregaard")).toBeInTheDocument();
-    expect(screen.getByText("gpt-5.6-sol")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning: high")).toBeInTheDocument();
-    expect(screen.getByText("Fast mode: on")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Waited on agent Codex sub-agent" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Kieregaard")).toHaveAttribute(
+      "title",
+      "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
+    );
+    expect(screen.getByText("gpt-5.6-sol · high · Fast")).toBeInTheDocument();
+    // A wait observes the worker, so its state is shown, in words.
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.queryByText("running")).not.toBeInTheDocument();
+    expect(screen.getByText("Implementing the replacement.")).toBeInTheDocument();
     expect(screen.queryByText("$ wait 019fb3d1")).not.toBeInTheDocument();
+    // The row above names the event and the activity header owns Copy.
+    expect(screen.queryByText("Codex native agent")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy activity" })).not.toBeInTheDocument();
+    expect(screen.queryByText("019fb3d1-28e0-7a30-b964-e93d7a1f3435")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show raw details" }));
+    expect(screen.getByText("The agent is still working.")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open transcript for Kieregaard" }),
+    );
 
     expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
       backend: "codex",
@@ -145,6 +160,7 @@ describe("TranscriptCommandOutput", () => {
                 {
                   threadId: "monitor-thread-1",
                   name: "Build monitor",
+                  status: "running",
                 },
               ],
             },
@@ -153,7 +169,11 @@ describe("TranscriptCommandOutput", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+    // A spawn's agent state is a snapshot that goes stale; it is not shown.
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open transcript for Build monitor" }),
+    );
 
     expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
       backend: "acp:gemini",

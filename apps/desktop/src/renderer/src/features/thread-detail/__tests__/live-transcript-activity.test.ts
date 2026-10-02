@@ -199,10 +199,10 @@ describe("buildLiveToolDetails", () => {
       {
         id: "collab-spawn-1",
         kind: "command",
-        label: "Spawning agent 019e5630",
+        label: "Spawning agent 997c235a",
         status: "in_progress",
         command: expect.objectContaining({
-          displayCommand: "spawnAgent 019e5630",
+          displayCommand: "spawnAgent 997c235a",
           output: expect.stringContaining("Prompt: You are the correctness reviewer."),
           subAgent: expect.objectContaining({
             backend: "codex",

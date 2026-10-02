@@ -2,6 +2,22 @@ import type { ThreadSubAgentSummary } from "./contracts/navigation";
 
 export type SubAgentLens = "harness" | "token-miser" | "pwragent";
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A short handle for a sub-agent's thread id, for labels that have no name.
+ * Codex thread ids are UUIDv7: the leading characters are a millisecond
+ * timestamp that changes only every ~65 seconds, so workers started together
+ * share an 8-character prefix. The trailing characters are random.
+ */
+export function shortSubAgentThreadId(threadId: string): string {
+  if (UUID_PATTERN.test(threadId)) {
+    return threadId.slice(-8);
+  }
+  return threadId.length > 8 ? threadId.slice(0, 8) : threadId;
+}
+
 export function isCodexNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
   return subAgent.monitorId.startsWith("codex-native:");
 }
@@ -43,7 +59,7 @@ export function subAgentOriginLabel(
     return "PwrAgent Token Miser gate";
   }
   if (isCodexNativeSubAgent(subAgent)) {
-    return "Codex native spawnAgent";
+    return "Codex";
   }
   if (subAgent.monitorId.startsWith("review:")) {
     return "PwrAgent code review";
