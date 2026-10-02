@@ -55,6 +55,7 @@ export function ExperimentalSettings(props: {
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserDiagnosticsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserPollingReviewsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
@@ -82,6 +83,9 @@ export function ExperimentalSettings(props: {
     DEFAULT_TOKEN_MISER_ENABLED;
   const tokenMiserFocusedSummariesEnabled =
     props.snapshot.experimental.tokenMiserFocusedSummariesEnabled ??
+    { value: false, source: "default" as const };
+  const tokenMiserDiagnosticsEnabled =
+    props.snapshot.experimental.tokenMiserDiagnosticsEnabled ??
     { value: false, source: "default" as const };
   const tokenMiserPollingReviewsEnabled =
     props.snapshot.experimental.tokenMiserPollingReviewsEnabled ??
@@ -238,6 +242,16 @@ export function ExperimentalSettings(props: {
             help="Off by default. Obvious polling is still detected locally. This review sends only bounded timing, tool metadata, redacted Code Mode snippets, and recent assistant updates to the same helper-model selector Token Miser uses; it never includes full tool output. A review that finds productive work leaves the turn alone."
             source={sourceBadge(tokenMiserPollingReviewsEnabled)}
             onChange={props.onTokenMiserPollingReviewsEnabledChange}
+          />
+          <ToggleField
+            checked={tokenMiserDiagnosticsEnabled.value}
+            disabled={props.saving || !tokenMiserEnabled.value}
+            label="Capture diagnostic samples"
+            switchQualifier="Token Miser"
+            sub="Save local samples of tool output, summaries, retrievals, and suspected retry bursts for analysis."
+            help="Off by default. Tool content and intermediate assistant commentary may contain sensitive data. Final answers are excluded. Samples use bounded rotating files and batched writes; turning this off discards unwritten samples."
+            source={sourceBadge(tokenMiserDiagnosticsEnabled)}
+            onChange={props.onTokenMiserDiagnosticsEnabledChange}
           />
           {tokenMiserInert ? (
             <SettingsField

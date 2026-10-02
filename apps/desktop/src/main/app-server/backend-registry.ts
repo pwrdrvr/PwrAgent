@@ -555,6 +555,7 @@ import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
+import { TokenMiserDiagnostics, type TokenMiserDiagnosticContext } from "../token-miser/token-miser-diagnostics";
 import { TokenMiserService, type TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
@@ -9112,6 +9113,7 @@ export class DesktopBackendRegistry {
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
   private readonly tokenMiserStore?: TokenMiserStore;
+  private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
   private readonly tokenMiserService?: TokenMiserService;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private tokenMiserCodeModeReducerDescriptorPath?: string;
@@ -9622,11 +9624,22 @@ export class DesktopBackendRegistry {
       );
     }
     if (tokenMiserStateDir) {
+      this.tokenMiserDiagnostics = new TokenMiserDiagnostics({
+        filePath: path.join(tokenMiserStateDir, "diagnostics", `${this.runtimeInstanceId}.jsonl`),
+        isEnabled: () => {
+          try {
+            return this.resolveTokenMiserEnabledFn()
+              && ((settingsService ?? getDesktopSettingsService()).resolveTokenMiserDiagnosticsEnabled?.() ?? false);
+          } catch { return false; }
+        },
+        onError: () => backendRegistryLog.warn("Token Miser diagnostic batch could not be saved"),
+      });
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
         {
           stateDb: getAppStateDb(),
           onMetadataUpdated: async (metadata, reason) => {
+            if (reason === "retrieval") this.tokenMiserDiagnostics?.recordRetrieval(metadata);
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
             this.rememberActiveTokenMiserReplayEntry(metadata);
             // A replay-counter write changes nothing the gate card or its usage
@@ -9669,6 +9682,7 @@ export class DesktopBackendRegistry {
         },
       );
       const tokenMiserService = new TokenMiserService({
+        diagnostics: this.tokenMiserDiagnostics,
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
         isFocusedEnabled: () => {
@@ -9892,6 +9906,11 @@ export class DesktopBackendRegistry {
         resolveAutomationInspectionMcpCommand(),
     });
     if (this.configStore) {
+      this.unsubscribers.push(
+        this.configStore.subscribe(["experimental"], () => {
+          this.tokenMiserDiagnostics?.isEnabled();
+        }),
+      );
       this.providerRuntimeFingerprints = readProviderRuntimeFingerprints(
         this.configStore.read("providers"),
       );
@@ -24201,6 +24220,7 @@ export class DesktopBackendRegistry {
         : [],
     );
     // Producers are now closed and previously admitted observations drained.
+    await this.tokenMiserDiagnostics?.close();
     // Preserve active-turn estimates even when another resource failed close.
     try {
       await this.tokenMiserStore?.flushAll();
@@ -25526,6 +25546,15 @@ export class DesktopBackendRegistry {
                 notification.params.threadId,
               )
             : undefined;
+        if (backend === "codex" && notification.method === "item/completed") {
+          const item = readRecord(notification.params.item);
+          if (item?.type === "agentMessage" && notification.params.turnId) {
+            this.tokenMiserDiagnostics?.recordNarration(
+              notification.params.threadId, notification.params.turnId,
+              item.phase, readOptionalString(item.text) ?? "",
+            );
+          }
+        }
         await this.emitHeadlessAutomationLifecycle(backend, notification);
         await this.emit({
           backend,
@@ -25542,6 +25571,7 @@ export class DesktopBackendRegistry {
             || notification.method === "turn/cancelled"
           )
         ) {
+          this.tokenMiserDiagnostics?.endTurn(notification.params.threadId);
           await this.tokenMiserStore?.flushThread(notification.params.threadId);
           await this.handleCodexTurnTerminalForInvalidIdRecovery(
             notification as Extract<
@@ -32477,7 +32507,7 @@ export class DesktopBackendRegistry {
    */
   private async resolveTokenMiserParentModel(
     threadId: string,
-  ): Promise<{ model?: string; serviceTier?: string } | undefined> {
+  ): Promise<TokenMiserDiagnosticContext | undefined> {
     for (const record of this.activeReviewSubAgents.values()) {
       if (
         record.mode === "native"
@@ -32486,6 +32516,7 @@ export class DesktopBackendRegistry {
       ) {
         return {
           model: record.model,
+          reasoningEffort: record.reasoningEffort,
           ...(record.serviceTier ? { serviceTier: record.serviceTier } : {}),
         };
       }
@@ -32503,6 +32534,8 @@ export class DesktopBackendRegistry {
     return line
       ? {
           model: line.model,
+          provider: line.provider,
+          reasoningEffort: line.reasoningEffort,
           ...(line.serviceTier ? { serviceTier: line.serviceTier } : {}),
         }
       : undefined;

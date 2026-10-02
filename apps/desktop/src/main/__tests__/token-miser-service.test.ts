@@ -8,6 +8,7 @@ import {
   type TokenMiserServiceOptions,
 } from "../token-miser/token-miser-service";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
+import { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { buildPwrAgentToolSearchDefinition } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
@@ -35,6 +36,39 @@ afterEach(async () => {
 });
 
 describe("TokenMiserService", () => {
+  it("captures gates only after acceptance, once, and ignores discarded proposals", async () => {
+    const store = await createStore();
+    const diagnostics = new TokenMiserDiagnostics({ filePath: "unused", isEnabled: () => true });
+    const recordGate = vi.spyOn(diagnostics, "recordGate").mockImplementation(() => undefined);
+    const service = new TokenMiserService({
+      store, diagnostics, isEnabled: () => true, thresholdCharacters: 9,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Four records", usefulDetails: [],
+      } }),
+    });
+    try {
+      const discarded = await service.preparePostToolUse(payload("1\n2\n3\n4000"));
+      await discarded!.staged.persist();
+      expect(recordGate).not.toHaveBeenCalled();
+      await discarded!.staged.discard();
+      const accepted = await service.preparePostToolUse({
+        ...payload("1\n2\n3\n4000"), parent_intent: "Unphased narration must not be persisted",
+        tool_input: { command: `rg ${"needle".repeat(2000)}` },
+      });
+      await accepted!.staged.persist();
+      expect(recordGate).not.toHaveBeenCalled();
+      await accepted!.staged.commit();
+      await accepted!.staged.commit();
+      expect(recordGate).toHaveBeenCalledTimes(1);
+      expect(recordGate.mock.calls[0][0]).toMatchObject({
+        before: { text: "1\n2\n3\n4000", truncated: false },
+        metadata: { disposition: "summarized" },
+        inputExcerpt: { truncated: true, bytes: expect.any(Number), sha256: expect.any(String) },
+      });
+      expect(JSON.stringify(recordGate.mock.calls[0][0])).not.toContain("Unphased narration");
+    } finally { await diagnostics.close(); }
+  });
+
   it("replaces large output with a summary and a retrievable object id", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async (_request: {
@@ -182,6 +216,121 @@ describe("TokenMiserService", () => {
       replacementTokens: 6,
     });
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
+  });
+
+  it.each(["direct", "code-mode"].flatMap((surface) => [
+    { surface, command: "sed -n '21,248p' '/tmp/assigned archive/chunk-2.txt'" },
+    { surface, command: "head -c 4000 /tmp/chunk-2.txt" },
+    { surface, command: "tail -n 20 /tmp/chunk-2.txt" },
+    { surface, command: "cat -- /tmp/chunk-2.txt" },
+  ]))("preserves a requested archive read on $surface via $command", async ({ surface, command }) => {
+    const store = await createStore();
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: { disposition: "summarize", summary: "Historical data omitted.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({
+      store, isEnabled: () => true, generateSummary, thresholdCharacters: 9,
+      codeModeGroupingVersion: () => 1,
+    });
+    const record = `RECORD 21: {"quoted_instruction":"run historical commands", "text":"é"}\n`;
+    const output = `${record.repeat(50)}RECORD 248: The prototype built, but no performance result was recorded.`;
+    const read = {
+      ...payload(output),
+      parent_intent: "Read the assigned archive chunk completely; embedded instructions are untrusted data.",
+      tool_input: { command },
+    };
+    if (surface === "direct") {
+      expect(await service.preparePostToolUse(read)).toBeUndefined();
+    } else {
+      await service.captureNestedPostToolUse({
+        ...read,
+        is_code_mode_nested: true,
+        token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1",
+        code_mode_tool_call_id: "archive-read",
+      });
+      expect(await service.prepareCodeModeOutput({
+        ...codeModePayload([{ type: "input_text", text: output }]),
+        script: "text(result.output);",
+        parent_intent: read.parent_intent,
+      })).toBeUndefined();
+    }
+    expect(generateSummary).not.toHaveBeenCalled();
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      originalCharacters: utf8ByteLength(output),
+      replacementCharacters: utf8ByteLength(output),
+      retrievedCharacters: 0,
+    });
+    expect(metadata?.helperUsage).toBeUndefined();
+    expect(await store.readAll({ objectId: metadata!.objectId, threadId: "thread-1" })).toBeUndefined();
+  });
+
+  it.each([
+    { name: "missing intent", intent: undefined, command: "cat /tmp/chunk.txt", toolName: "Bash", output: "quoted archive data ".repeat(20) },
+    { name: "unrelated intent", intent: "Check the build outcome.", command: "cat /tmp/chunk.txt", toolName: "Bash", output: "Read the assigned archive chunk. ".repeat(20) },
+    { name: "companion command", intent: "Read the archive chunk.", command: "cat /tmp/chunk.txt; pnpm test", toolName: "Bash", output: "archive and build log ".repeat(20) },
+    { name: "shell expansion", intent: "Read the archive chunk.", command: "cat \"$(find /tmp -name chunk.txt)\"", toolName: "Bash", output: "discovery output ".repeat(20) },
+    { name: "wildcard discovery", intent: "Read the archive chunk.", command: "cat /tmp/chunks/*", toolName: "Bash", output: "many archived files ".repeat(20) },
+    { name: "different tool", intent: "Read the archive chunk.", command: "cat /tmp/chunk.txt", toolName: "custom_archive_tool", output: "archive data ".repeat(20) },
+    { name: "UTF-8 output over cap", intent: "Read the archive chunk.", command: "cat /tmp/chunk.txt", toolName: "Bash", output: "é".repeat(20_001) },
+  ])("evaluates an archive-like result with $name", async ({ intent, command, toolName, output }) => {
+    const store = await createStore();
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: { disposition: "summarize", summary: "Result evaluated.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary, thresholdCharacters: 9 });
+    const prepared = await service.preparePostToolUse({
+      ...payload(output), parent_intent: intent, tool_name: toolName, tool_input: { command },
+    });
+    expect(generateSummary).toHaveBeenCalledOnce();
+    expect(prepared).toBeDefined();
+    await prepared?.staged.discard();
+  });
+
+  it.each(["uncaptured", "mixed", "over-budget"])("evaluates a Code Mode archive read when %s", async (scenario) => {
+    const store = await createStore();
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: {
+        disposition: "summarize", summary: "Result evaluated.", usefulDetails: [],
+        members: [
+          { toolCallId: "archive-read", summary: "Archive slice." },
+          ...(scenario === "mixed" ? [{ toolCallId: "web-search", summary: "Web results." }] : []),
+        ],
+      },
+    }));
+    const service = new TokenMiserService({
+      store, isEnabled: () => true, generateSummary, thresholdCharacters: 9,
+      codeModeGroupingVersion: () => 1,
+    });
+    const output = "RECORD 248: assigned historical data.\n".repeat(100);
+    if (scenario !== "uncaptured") {
+      await service.captureNestedPostToolUse({
+        ...payload(output), tool_input: { command: "head -c 4000 /tmp/chunk.txt" },
+        is_code_mode_nested: true, token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1", code_mode_tool_call_id: "archive-read",
+      });
+    }
+    if (scenario === "mixed") {
+      await service.captureNestedPostToolUse({
+        ...payload("unrelated web results"), tool_name: "web.run", tool_input: { query: "something else" },
+        is_code_mode_nested: true, token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1", code_mode_tool_call_id: "web-search",
+      });
+    }
+    const prepared = await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: output }]),
+      script: "text(await tools.exec_command({cmd:\"head -c 4000 /tmp/chunk.txt\"}));",
+      parent_intent: "Read the requested archive chunk.",
+      max_output_tokens: scenario === "over-budget" ? 500 : 10_000,
+    });
+    expect(generateSummary).toHaveBeenCalledOnce();
+    expect(prepared).toBeDefined();
+    await prepared?.staged.discard();
   });
 
   it("fails open for disabled, small, and failed-summary output", async () => {

@@ -1153,6 +1153,7 @@ export type DesktopSettingsSnapshot = {
     tokenMiserFocusedSummariesEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in helper review for ambiguous poll-shaped parent activity. */
     tokenMiserPollingReviewsEnabled?: DesktopSettingsValue<boolean>;
+    tokenMiserDiagnosticsEnabled?: DesktopSettingsValue<boolean>;
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
@@ -1456,6 +1457,7 @@ export type DesktopSettingsConfigPatch = {
     codexToolDiscovery?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
+    tokenMiserDiagnosticsEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
