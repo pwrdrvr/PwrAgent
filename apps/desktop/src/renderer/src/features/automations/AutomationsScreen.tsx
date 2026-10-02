@@ -3,6 +3,7 @@ import type { NavigationDirectoryView as NavigationDirectorySummary } from "../.
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -54,14 +55,45 @@ type AutomationsScreenProps = {
   directories?: NavigationDirectorySummary[];
 };
 
+type EditorMode =
+  | { automation: AutomationDetail; kind: "edit" }
+  | { kind: "create" };
+
 export function AutomationsScreen(props: AutomationsScreenProps) {
   const automations = useAutomations(props.desktopApi);
-  const [editorMode, setEditorMode] = useState<
-    | { automation: AutomationDetail; kind: "edit" }
-    | { kind: "create" }
-    | undefined
-  >();
+  // The screen is a two-level stack: the list, and one editor pushed over it.
+  // The editor used to open as a panel above the table on the same page, with
+  // the breadcrumb and heading unchanged, so the only exit on screen was
+  // "Exit Automations" — which leaves the whole screen.
+  const [editorMode, setEditorMode] = useState<EditorMode>();
   const [saving, setSaving] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // The list's scroll position while the editor is open, so going back lands
+  // on the row the operator left from.
+  const listScrollTopRef = useRef(0);
+  const editorOpen = editorMode !== undefined;
+  const openEditor = (mode: EditorMode): void => {
+    if (!editorMode) {
+      listScrollTopRef.current = contentRef.current?.scrollTop ?? 0;
+    }
+    setEditorMode(mode);
+  };
+  const closeEditor = (): void => setEditorMode(undefined);
+  const editorKey = editorMode
+    ? editorMode.kind === "edit"
+      ? `edit:${editorMode.automation.id}`
+      : "create"
+    : undefined;
+  // Each level opens at its own scroll position. Edit on a row lower in the
+  // table opened the editor at the top of the scroll, out of view, so the
+  // click looked like it did nothing.
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    content.scrollTop = editorKey ? 0 : listScrollTopRef.current;
+  }, [editorKey]);
+  const editorTitle =
+    editorMode?.kind === "edit" ? editorMode.automation.name : "New Automation";
   const automationExpansion = useExpandedIds();
   const threadsByKey = useMemo(
     () =>
@@ -82,7 +114,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
       } else {
         await automations.updateAutomation(submission.request);
       }
-      setEditorMode(undefined);
+      closeEditor();
       await props.onRefreshNavigation?.();
     } finally {
       setSaving(false);
@@ -121,7 +153,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
         <button
           className="settings-nav__new"
           type="button"
-          onClick={() => setEditorMode({ kind: "create" })}
+          onClick={() => openEditor({ kind: "create" })}
         >
           <span aria-hidden="true" className="settings-nav__new-plus">+</span>{" "}
           New Automation
@@ -131,6 +163,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
           aria-current="page"
           className="settings-nav__button is-active"
           type="button"
+          onClick={closeEditor}
         >
           All Automations
         </button>
@@ -143,7 +176,33 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             <span aria-hidden="true" className="settings-titlebar__separator">
               ›
             </span>
-            <span className="settings-titlebar__current">All Automations</span>
+            {/* The same crumb markup Settings uses for its sub-screens
+                (Settings › AI Providers › Codex). */}
+            {editorOpen ? (
+              <>
+                <button
+                  className="settings-titlebar__crumb"
+                  type="button"
+                  onClick={closeEditor}
+                >
+                  All Automations
+                </button>
+                <span
+                  aria-hidden="true"
+                  className="settings-titlebar__separator"
+                >
+                  ›
+                </span>
+                <span
+                  className="settings-titlebar__current"
+                  title={editorTitle}
+                >
+                  {editorTitle}
+                </span>
+              </>
+            ) : (
+              <span className="settings-titlebar__current">All Automations</span>
+            )}
           </div>
           <div className="settings-titlebar__spacer" />
           <MessagingStatusBar
@@ -153,17 +212,34 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
           />
         </header>
 
-        <div className="automations-content">
+        <div className="automations-content" ref={contentRef}>
           <div className="automations-toolbar">
             <div>
-              <p className="eyebrow">Serial Agent queues</p>
-              <h2>Automations</h2>
+              {editorMode ? (
+                <>
+                  <p className="eyebrow">
+                    {editorMode.kind === "edit" ? "Edit automation" : "New automation"}
+                  </p>
+                  {/* The saved name, not the Name field: a heading that
+                      retyped itself on every keystroke would read as a
+                      second input. */}
+                  <h2>{editorTitle}</h2>
+                </>
+              ) : (
+                <>
+                  <p className="eyebrow">Serial Agent queues</p>
+                  <h2>Automations</h2>
+                </>
+              )}
             </div>
           </div>
 
           {editorMode ? (
             <div className="automations-editor-panel">
               <AutomationEditor
+                // A fresh form per automation: New Automation over an open
+                // edit must not keep the edited automation's fields.
+                key={editorKey}
                 desktopApi={props.desktopApi}
                 directories={props.directories}
                 mode={
@@ -173,7 +249,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                 }
                 saving={saving}
                 threads={props.threads}
-                onCancel={() => setEditorMode(undefined)}
+                onCancel={closeEditor}
                 onPromoteThread={promoteThreadToAgent}
                 onSubmit={submitEditor}
               />
@@ -186,7 +262,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             </p>
           ) : null}
 
-          {automations.loading ? (
+          {editorOpen ? null : automations.loading ? (
             <p className="settings-empty">Loading automations...</p>
           ) : automations.automations.length === 0 ? (
             <p className="settings-empty">No automations configured.</p>
@@ -217,7 +293,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                       });
                       await props.onRefreshNavigation?.();
                     }}
-                    onEdit={() => setEditorMode({ automation, kind: "edit" })}
+                    onEdit={() => openEditor({ automation, kind: "edit" })}
                     onExpand={() => automationExpansion.toggle(automation.id)}
                     onPauseResume={async () => {
                       if (automation.status === "paused") {

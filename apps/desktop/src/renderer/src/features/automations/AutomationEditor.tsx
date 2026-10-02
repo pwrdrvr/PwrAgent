@@ -280,9 +280,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const canDeferAgent = props.mode.kind === "create";
   const canDraftPrompt = Boolean(props.desktopApi?.draftAutomationPrompt);
   const errorRef = useRef<HTMLParagraphElement>(null);
+  // The error lives in the actions bar. On the Automations screen that bar is
+  // pinned to the pane's bottom edge, so it is already on screen and "nearest"
+  // leaves the scroll alone; "center" scrolled the form to the bar's resting
+  // place at the end, away from the field being edited. In the thread rail the
+  // bar is the form's last row, and "nearest" brings it just into view.
   useEffect(() => {
     if (validationError && typeof errorRef.current?.scrollIntoView === "function") {
-      errorRef.current.scrollIntoView({ block: "center" });
+      errorRef.current.scrollIntoView({ block: "nearest" });
     }
   }, [validationError]);
   const [triggerKind, setTriggerKind] = useState<TriggerFormKind>(
@@ -3196,22 +3201,23 @@ export function AutomationEditor(props: AutomationEditorProps) {
         </AutomationStage>
       </div>
 
-      <label className="automation-checkbox">
-        <input
-          checked={enabled}
-          type="checkbox"
-          onChange={(event) => setEnabled(event.currentTarget.checked)}
-        />
-        <span>Enabled</span>
-      </label>
-
-      {validationError ? (
-        <p className="automation-editor__error" ref={errorRef} role="alert">
-          {validationError}
-        </p>
-      ) : null}
-
+      {/* One bar for everything that decides what Save does: Enabled, the
+          validation error, and the buttons. The Automations screen pins it to
+          the bottom of its pane, so a long form never hides how to finish. */}
       <div className="automation-editor__actions">
+        {validationError ? (
+          <p className="automation-editor__error" ref={errorRef} role="alert">
+            {validationError}
+          </p>
+        ) : null}
+        <label className="automation-checkbox">
+          <input
+            checked={enabled}
+            type="checkbox"
+            onChange={(event) => setEnabled(event.currentTarget.checked)}
+          />
+          <span>Enabled</span>
+        </label>
         <button className="button button--ghost" type="button" onClick={props.onCancel}>
           Cancel
         </button>
