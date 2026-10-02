@@ -499,10 +499,10 @@ describe("star map card menu acts on the selection", () => {
     openCardMenu("t0");
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 threads" }));
 
-    const alert = await screen.findByRole("alert");
+    const notice = await screen.findByText(/peer is offline/);
     // How much of the action survived is the operator's next question, and
     // the reason alone cannot answer it.
-    expect(alert.textContent).toContain(
+    expect(notice.textContent).toContain(
       "Could not archive 1 of 3 threads: peer is offline",
     );
     // One card refusing must not cancel the two that would have gone.

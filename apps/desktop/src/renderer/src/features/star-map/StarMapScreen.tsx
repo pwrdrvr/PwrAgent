@@ -38,6 +38,10 @@ import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProj
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
+import {
+  AppNoticeToast,
+  type AppNoticeToastNotice,
+} from "../notifications/AppNoticeToast";
 import { SearchIcon } from "../../icons";
 import {
   formatPrimaryAccel,
@@ -3039,6 +3043,34 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const [cardError, setCardError] = useState<string | undefined>(undefined);
+  // A navigation failure keeps reporting itself until it clears, so closing
+  // its notice hides that one failure; a different one shows again.
+  const [dismissedNavigationError, setDismissedNavigationError] = useState<string>();
+  const navigationErrorText = localFeed.error ?? remoteGeometryErrorText;
+  const retryNavigation = (): void => {
+    if (localFeed.error) void localFeed.refresh();
+    else if (remoteGeometryError) {
+      void remote.refreshInstance(remoteGeometryError[0]).catch(() => undefined);
+    }
+  };
+  const mapErrorNotice: AppNoticeToastNotice | undefined = cardError
+    ? {
+        id: "star-map-card-error",
+        autoDismiss: false,
+        tone: "error",
+        title: "Star Map action failed",
+        message: cardError,
+      }
+    : navigationErrorText && navigationErrorText !== dismissedNavigationError
+      ? {
+          id: "star-map-navigation-error",
+          autoDismiss: false,
+          tone: "error",
+          title: "Star Map navigation failed",
+          message: navigationErrorText,
+          actions: [{ label: "Retry", onClick: retryNavigation }],
+        }
+      : undefined;
 
   /**
    * The manager: one long-lived thread that can read this map through the
@@ -3056,7 +3088,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     onDemandThread: setManagerDemand,
     onRefreshLocalThreads: props.onRefreshLocalThreads,
     // Reported through the map's one error banner rather than a second one:
-    // `.star-map__card-error` is absolutely positioned at a fixed spot, so
+    // `.star-map__notice` is absolutely positioned at a fixed spot, so
     // two of them occupy the same box and the later sibling hides the other.
     onError: setCardError,
   });
@@ -6592,21 +6624,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
-      {cardError || localFeed.error || remoteGeometryErrorText ? (
-        <p className="star-map__card-error" role="alert">
-          {cardError ?? localFeed.error ?? remoteGeometryErrorText}
-          <button
-            type="button"
-            aria-label={cardError ? "Dismiss error" : "Retry navigation"}
-            onClick={() => {
+      {mapErrorNotice ? (
+        <div className="star-map__notice">
+          <AppNoticeToast
+            desktopApi={props.desktopApi}
+            notice={mapErrorNotice}
+            onDismiss={() => {
               if (cardError) setCardError(undefined);
-              else if (localFeed.error) void localFeed.refresh();
-              else if (remoteGeometryError) void remote.refreshInstance(remoteGeometryError[0]).catch(() => undefined);
+              else setDismissedNavigationError(navigationErrorText);
             }}
-          >
-            {cardError ? "×" : "Retry"}
-          </button>
-        </p>
+          />
+        </div>
       ) : null}
       {/* The map's whole top band: chrome on the left, filter chips in the
           middle, and a right-hand slot for map actions. One grid row, so

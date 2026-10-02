@@ -44,7 +44,7 @@ export function useStarMapManager(params: {
   onRefreshLocalThreads?: () => void;
   /**
    * Where a failure is shown. The map already owns one error banner, and
-   * `.star-map__card-error` is absolutely positioned, so a second one would
+   * `.star-map__notice` is absolutely positioned, so a second one would
    * sit in the same box as the first.
    */
   onError: (message: string) => void;

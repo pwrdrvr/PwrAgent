@@ -49,29 +49,37 @@ has finished talking and wrong for work still running — a real download is
 minutes.
 
 So: while a check the operator asked for is working, this component renders
-its own card (progress track, byte meter, Cancel) outside the notice stack,
-with no countdown. Only when the check settles does the outcome go to the
-stack, through `showNotice`, where the countdown is correct. Don't move the
-in-flight card into a notice.
+its own `AppNoticeToast` as a child of the stack, with `autoDismiss: false`
+and the library's `progress` bar, so it carries no countdown. Only when the
+check settles does the outcome go to the stack's transient list, through
+`showNotice`, where the countdown is correct. Don't route the in-flight card
+through `showNotice`: the reducer would treat it as a durable notice and page
+it with the others.
 
-## One card layout for checking, downloading, and ready
+The banner draws no chrome of its own. Title, dot, Copy, close, the bar and
+the footer buttons are the notice library's; the banner passes parameters
+and callbacks. Restart is the library's primary action, not a bespoke solid
+button.
 
-The live card and the offer card are one layout. Every phase is the full
-stack width. The rows run eyebrow and message, then the track, then the
-meter, then the action row. Nothing sits beside the track. In
-v1.1.0-beta.3 the live card put Cancel and Release notes in a column beside
-the content, whose 236px `min-width` then overflowed under Cancel. The card
-was also 266px, 420px and 303px wide across one check.
+## One card for checking, downloading, and ready
 
-In the action row, `Release notes` leads, the buttons trail, and **the
-dismissing button is last**: Cancel on the live card, Dismiss on the offer,
-with Restart before it. That last slot is a safety rule, not a style
-choice. The stack is bottom-anchored, so both cards' rows cover the same
-pixels. A download can finish between the operator aiming at Cancel and
-clicking. Whatever replaces Cancel under the pointer must be Dismiss.
-Putting Restart there installs the update the click was meant to stop.
-`update-check.spec.ts` measures this, and the review is
-`Update Banner Phases UX Review` in the PwrAgent Claude Design project.
+The live card and the offer are one `AppNoticeToast` instance whose notice
+changes: `app-update-progress` through every phase of the check, then
+`app-update-ready:<version>`. Through a download, closing the card **is**
+Cancel (`dismissLabel: "Cancel update download"`); before there is a download
+it only stops watching. On the offer, closing dismisses it.
+
+That shared close is a safety rule, not a style choice. A download can finish
+between the operator aiming at Cancel and clicking. The stack holds a card
+at its old size while the pointer stays on the stack when the card's notice
+changes (`AppNoticeToast.tsx`), so the click lands on the same card's close,
+which by then dismisses the offer. Restart lives in the footer and never sits
+under that pointer. Release notes trails both footers, after Restart on the
+offer, so it keeps its slot too. In v1.1.0-beta.3 the live card was 266px,
+420px and 303px wide across one check; checking and downloading now share
+the notice's minimum width. `update-check.spec.ts` measures all of this, and
+the review is `Update Banner Phases UX Review` in the PwrAgent Claude Design
+project.
 
 ## Cancel is offered from `available`, so main must be ready by then
 
@@ -141,8 +149,8 @@ from `releaseNotesUrl` in
 |---|---|
 | Settings → Updates, all four slot tiles | `Release notes` under each tile |
 | Settings → Updates, the status line and `Downloaded version:` | `Release notes` inline, scoped to the version that line names |
-| Banner live card (`available` / `downloading`) | `Release notes` leading the action row, Cancel trailing |
-| Banner offer card (`downloaded`) | `Release notes` leading the action row, Restart then Dismiss trailing |
+| Banner live card (`available` / `downloading`) | `Release notes` as a notice action |
+| Banner offer card (`downloaded`) | `Release notes` as a notice action, after Restart |
 | Settled-check notice (`no-update` / `canceled`) | `Release notes` as a notice action |
 | Settings → About, Build → Version | `Release notes` beside the version |
 | Settings → About, Changelog | `Open release notes` beside `Open changelog` |
@@ -179,11 +187,11 @@ Five things about that are load-bearing:
   `.settings-release-slots__cell` wrapping the two. All four slots get a
   link, not just the selected one: picking a slot rewrites which build
   PwrAgent installs, so reading the notes has to be possible without picking.
-- **The notice is the one surface that does not render the component.**
-  `AppNoticeToastNotice.actions` owns its own button markup, so the outcome
-  notice carries the link as an action and shares `openReleaseNotes` instead.
-  Adding a second way to open a release page is what that export exists to
-  prevent.
+- **The notices do not render the component.** The banner's cards and the
+  outcome notice are all `AppNoticeToast`s, and `AppNoticeToastNotice.actions`
+  owns its own button markup, so they carry the link as an action and share
+  `openReleaseNotes` instead. Adding a second way to open a release page is
+  what that export exists to prevent.
 
 Two surfaces deliberately carry NO link: the `checking` card, which has no
 version yet, and the `skipped` / `error` outcomes, which name none.

@@ -103,6 +103,11 @@ function contains(outer: Box, point: { x: number; y: number }): boolean {
     && point.y <= outer.y + outer.height;
 }
 
+/** The live card, through every phase of one check. */
+const LIVE_CARD = ".app-notice-toast[data-notice-id='app-update-progress']";
+/** The sticky offer that replaces it in the same card. */
+const OFFER_CARD = ".app-notice-toast[data-notice-id^='app-update-ready:']";
+
 test("a menu check reports itself live and ends on an actionable offer", async () => {
   const app = await launchElectronApp({
     env: FAKE_UPDATE_ENV,
@@ -112,24 +117,22 @@ test("a menu check reports itself live and ends on an actionable offer", async (
   try {
     const { window } = app;
     // Nothing before the ask: startup and periodic checks stay silent.
-    await expect(window.locator(".app-update-banner")).toHaveCount(0);
+    await expect(window.locator(LIVE_CARD)).toHaveCount(0);
+    await expect(window.locator(OFFER_CARD)).toHaveCount(0);
 
     await checkForUpdates(app.electronApp);
 
-    const card = window.locator(".app-update-banner--progress");
+    const card = window.locator(LIVE_CARD);
     await expect(card).toContainText("Checking for updates");
     await expect(card.locator("[role='progressbar']")).toBeVisible();
     const checkingWidth = (await box(card)).width;
-    // The card reports work in flight, so it is its own surface and NOT a
-    // notice in the stack, which would drain a 9-second countdown toward a
-    // dismissal while the check it reports is still running.
-    await expect(
-      window.locator(".app-notice-toast", { hasText: "Checking for updates" }),
-    ).toHaveCount(0);
+    // The card reports work in flight, so nothing on it drains a 9-second
+    // countdown toward a dismissal while the check is still running.
+    await expect(card.locator(".app-notice-toast__timer")).toHaveCount(0);
 
     await expect(card).toContainText("Downloading update", { timeout: 15_000 });
     await expect(card).toContainText(`PwrAgent v${FAKE_VERSION}`);
-    await expect(card.locator(".app-update-banner__meter")).toContainText(
+    await expect(card.locator(".app-notice-toast__meter")).toContainText(
       "MB of",
     );
     await expect(card.locator("[role='progressbar']")).toHaveAttribute(
@@ -137,61 +140,65 @@ test("a menu check reports itself live and ends on an actionable offer", async (
       /\d+/,
     );
 
-    // The actions sit in a row under the bar. v1.1.0-beta.3 put them in a
-    // column beside it, and at the 420px stack width Cancel landed on top of
-    // both the bar and the message.
-    const cancel = await box(card.getByRole("button", { name: "Cancel" }));
+    // Cancel is the card's own close, in the title row, clear of the text and
+    // the bar. Release notes sits in the footer, under the bar.
+    const cancel = await box(
+      card.getByRole("button", { name: "Cancel update download" }),
+    );
     const track = await box(card.locator("[role='progressbar']"));
-    const message = await box(card.locator(".app-update-banner__message"));
+    const message = await box(card.locator(".app-notice-toast__message"));
+    const notes = await box(card.getByRole("button", { name: "Release notes" }));
     expect(track.width, "the bar has width to cover").toBeGreaterThan(0);
-    expect(cancel.y, "Cancel starts below the bar").toBeGreaterThanOrEqual(
+    expect(overlaps(cancel, message), "Cancel clears the message").toBe(false);
+    expect(overlaps(cancel, track), "Cancel clears the bar").toBe(false);
+    expect(notes.y, "Release notes starts below the bar").toBeGreaterThanOrEqual(
       track.y + track.height,
     );
-    expect(overlaps(cancel, message), "Cancel clears the message").toBe(false);
     const downloadingWidth = (await box(card)).width;
+    // One check, one card width: the checking and downloading cards were
+    // 266px and 420px when each sized to its own content.
+    expect(Math.round(checkingWidth)).toBe(Math.round(downloadingWidth));
 
-    // And it ends on the one thing there is to do about it.
-    const offer = window.locator(
-      ".app-update-banner:not(.app-update-banner--progress)",
-    );
+    // The operator reaches for Cancel as the download finishes. The offer
+    // takes the live card's place in the same card, held at its size while
+    // the pointer is on it, so the click lands on that card's close, which
+    // now dismisses the offer and leaves the update uninstalled. It must
+    // never land on Restart.
+    const aim = {
+      x: cancel.x + cancel.width / 2,
+      y: cancel.y + cancel.height / 2,
+    };
+    await window.mouse.move(aim.x, aim.y);
+
+    const offer = window.locator(OFFER_CARD);
     await expect(offer).toContainText(
       `Restart to update to v${FAKE_VERSION}.`,
       { timeout: 30_000 },
     );
     await expect(
-      window.getByRole("button", { name: "Restart" }),
+      window.getByRole("button", { name: "Restart", exact: true }),
     ).toBeVisible();
-    await expect(window.locator(".app-update-banner--progress")).toHaveCount(0);
-    // Measured at rest: the offer rises 8px into place as it enters.
-    await offer.evaluate((element) =>
-      Promise.all(
-        element.getAnimations().map((animation) => animation.finished),
-      ).then(() => undefined)
-    );
+    await expect(window.locator(LIVE_CARD)).toHaveCount(0);
 
-    // One check, one card width: the checking, downloading and offer cards
-    // were 266px, 420px and 303px when each sized to its own content.
-    const offerWidth = (await box(offer)).width;
-    expect(Math.round(checkingWidth)).toBe(Math.round(downloadingWidth));
-    expect(Math.round(offerWidth)).toBe(Math.round(downloadingWidth));
-
-    // The stack is bottom-anchored, so the offer's action row covers the
-    // live card's. A click aimed at Cancel as the download finishes must
-    // land on Dismiss, which leaves the update uninstalled, never on Restart.
     const dismiss = await box(
-      offer.getByRole("button", { name: "Dismiss update notification" }),
+      offer.getByRole("button", { name: "Dismiss notice" }),
     );
-    const restart = await box(offer.getByRole("button", { name: "Restart" }));
-    const aim = {
-      x: cancel.x + cancel.width / 2,
-      y: cancel.y + cancel.height / 2,
-    };
+    const restart = await box(
+      offer.getByRole("button", { name: "Restart", exact: true }),
+    );
+    expect(dismiss, "the close did not move under the pointer").toEqual(cancel);
     expect(contains(dismiss, aim), "Cancel's centre lands on Dismiss").toBe(
       true,
     );
-    expect(overlaps(restart, cancel), "Restart clears Cancel's slot").toBe(
-      false,
+    expect(contains(restart, aim), "Restart clears Cancel's slot").toBe(false);
+    // Release notes trails both footers, so it holds its slot as well.
+    const offerNotes = await box(
+      offer.getByRole("button", { name: "Release notes" }),
     );
+    expect(
+      contains(offerNotes, { x: notes.x + notes.width / 2, y: notes.y + notes.height / 2 }),
+      "Release notes keeps its slot",
+    ).toBe(true);
   } finally {
     await app.close();
   }
@@ -207,10 +214,10 @@ test("Cancel stops the download and says so without crying failure", async () =>
     const { window } = app;
     await checkForUpdates(app.electronApp);
 
-    const card = window.locator(".app-update-banner--progress");
+    const card = window.locator(LIVE_CARD);
     await expect(card).toContainText("Downloading update", { timeout: 15_000 });
 
-    await card.getByRole("button", { name: "Cancel" }).click();
+    await card.getByRole("button", { name: "Cancel update download" }).click();
 
     // Addressed by id: the stack can hold other notices at the same time — a
     // runner with no agent installed carries a durable backend warning for
@@ -242,7 +249,7 @@ test("Cancel stops the download and says so without crying failure", async () =>
 });
 
 for (const theme of ["dark", "light"] as const) {
-  test(`restart controls use aligned solid primary CTAs in ${theme} mode`, async () => {
+  test(`the restart offer and Settings' solid restart CTA in ${theme} mode`, async () => {
     const testInfo = test.info();
     const app = await launchElectronApp({
       env: { ...FAKE_UPDATE_ENV, PWRAGENT_DEV_FAKE_UPDATE_STEP_MS: "10" },
@@ -252,7 +259,9 @@ for (const theme of ["dark", "light"] as const) {
     try {
       const { window } = app;
       await checkForUpdates(app.electronApp);
-      const banner = window.locator(".app-update-banner:not(.app-update-banner--progress)");
+      // The offer is a notice, so its Restart is the notice library's
+      // primary action and the library owns how it looks.
+      const banner = window.locator(OFFER_CARD);
       const bannerRestart = banner.getByRole("button", { name: "Restart", exact: true });
       await expect(bannerRestart).toBeVisible();
       const background = theme === "dark" ? "rgb(255, 138, 31)" : "rgb(183, 76, 0)";
@@ -268,7 +277,6 @@ for (const theme of ["dark", "light"] as const) {
         await window.mouse.move(0, 0);
         await expect(button).toHaveCSS("background-color", background);
       };
-      await assertPrimary(bannerRestart);
       await banner.screenshot({ path: testInfo.outputPath(`restart-banner-${theme}.png`) });
 
       await window.getByRole("button", { name: "Open settings" }).click();

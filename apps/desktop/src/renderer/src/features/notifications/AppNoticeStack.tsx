@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
-import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";
+import {
+  AppNoticeHoverRegion,
+  AppNoticeToast,
+  type AppNoticeToastNotice,
+} from "./AppNoticeToast";
 import { useToastStackPlacement } from "./toast-stack-placement";
 
 export function AppNoticeStack(props: {
@@ -17,6 +21,9 @@ export function AppNoticeStack(props: {
   }[];
 }) {
   const [activeId, setActiveId] = useState<string>();
+  // Holds a card at the size of the notice it replaced until the pointer
+  // leaves the stack, not just the card (AppNoticeToast.tsx).
+  const [hovered, setHovered] = useState(false);
   const lastActiveIndexRef = useRef(0);
   const stackRef = useRef<HTMLDivElement>(null);
   const placement = useToastStackPlacement(stackRef);
@@ -62,7 +69,10 @@ export function AppNoticeStack(props: {
       className="app-toast-stack"
       data-placement={placement}
       aria-live="polite"
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
     >
+      <AppNoticeHoverRegion.Provider value={hovered}>
       {props.transientNotices?.map(({ notice, onDismiss }) =>
         notice ? (
           <AppNoticeToast
@@ -115,6 +125,7 @@ export function AppNoticeStack(props: {
         }}
       />
       {props.children}
+      </AppNoticeHoverRegion.Provider>
     </div>
   );
 }

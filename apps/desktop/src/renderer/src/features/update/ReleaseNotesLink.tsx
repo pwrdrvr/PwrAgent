@@ -1,12 +1,11 @@
 // "Release notes" — the one control that takes a version out to its
 // published GitHub release page.
 //
-// Every update surface renders it (the banner's live and offer cards, the
-// settled outcome notice, Settings -> Updates' slot matrix and
-// status line, Settings -> About) and they share this component rather than
-// each writing their own control, for the same reason they share
-// `updateProgressCopy`: the wording and the behavior must not drift. Only
-// the skin differs, which is what `className` is for.
+// Every update surface outside a notice renders it (Settings -> Updates'
+// slot matrix and status line, Settings -> About) and they share this
+// component rather than each writing their own control, for the same reason
+// they share `updateProgressCopy`: the wording and the behavior must not
+// drift. Only the skin differs, which is what `className` is for.
 //
 // It is a BUTTON, not an anchor. Unlike PwrSnap — which this was ported from
 // and which installs no navigation guard — PwrAgent's
@@ -38,10 +37,11 @@ import { openExternalUrl } from "../../lib/open-external-url";
 /**
  * Hand a composed release-notes URL to the OS browser.
  *
- * Exported because the settled-check outcome does not render this component:
- * it rides on `AppNoticeToastNotice.actions`, which owns its own button
- * markup. Sharing this call is what keeps that path from becoming a second
- * opinion about how a release page opens.
+ * Exported because the banner's cards and the settled-check outcome do not
+ * render this component: they are notices, and the link rides on
+ * `AppNoticeToastNotice.actions`, which owns its own button markup. Sharing
+ * this call is what keeps that path from becoming a second opinion about how
+ * a release page opens.
  *
  * A named seam over `openExternalUrl`, not a second implementation of it.
  * The rail's PR chips already open a GitHub page this way; two copies of

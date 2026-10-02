@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { federationTargetsEqual } from "../../lib/federated-thread-events";
+import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
+
+/** Every notice id this producer can emit, as prefixes for the host's sweep. */
+export const CODEX_CONFIG_WARNING_NOTICE_ID_PREFIXES = [
+  "codex-config-warning:",
+] as const;
 
 type ConfigWarningNotice = {
   id: string;
@@ -49,12 +55,15 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
   };
 }
 
-export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
+export function CodexConfigWarningNotice(props: {
+  desktopApi?: DesktopApi;
+  onNoticeChanged: (notice: AppNoticeToastNotice | undefined) => void;
+}) {
   const [notice, setNotice] = useState<ConfigWarningNotice | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
   const [trusting, setTrusting] = useState(false);
   const [trustError, setTrustError] = useState<string | null>(null);
-  const desktopApi = props.desktopApi;
+  const { desktopApi, onNoticeChanged } = props;
   const federationTargetInstanceId = readRendererFederationTarget()?.instanceId;
 
   useEffect(() => {
@@ -111,12 +120,10 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
     return label ? `Trust ${label}` : "Trust Project";
   }, [notice?.trustedProjectPath]);
 
-  if (!notice) {
-    return null;
-  }
-
-  const trustProject = async (): Promise<void> => {
-    if (!notice.trustedProjectPath || !desktopApi?.trustCodexProject) {
+  const trustProject = useCallback(async (
+    warning: ConfigWarningNotice,
+  ): Promise<void> => {
+    if (!warning.trustedProjectPath || !desktopApi?.trustCodexProject) {
       setTrustError("Project trust is not available in this build.");
       return;
     }
@@ -133,56 +140,53 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
               } as const,
             }
           : {}),
-        projectPath: notice.trustedProjectPath,
-        ...(notice.configPath ? { configPath: notice.configPath } : {}),
+        projectPath: warning.trustedProjectPath,
+        ...(warning.configPath ? { configPath: warning.configPath } : {}),
       });
-      setDismissedIds((current) => new Set(current).add(notice.id));
+      setDismissedIds((current) => new Set(current).add(warning.id));
       setNotice(null);
     } catch (error) {
       setTrustError(error instanceof Error ? error.message : String(error));
       setTrusting(false);
     }
-  };
+  }, [desktopApi, federationTargetInstanceId]);
 
-  const dismiss = (): void => {
-    setDismissedIds((current) => new Set(current).add(notice.id));
-    setNotice(null);
-  };
+  const appNotice = useMemo((): AppNoticeToastNotice | undefined => {
+    if (!notice) {
+      return undefined;
+    }
+    return {
+      id: `${CODEX_CONFIG_WARNING_NOTICE_ID_PREFIXES[0]}${notice.id}`,
+      autoDismiss: false,
+      tone: "warning",
+      title: "Codex config warning",
+      message: notice.summary,
+      ...(notice.details ? { detail: notice.details } : {}),
+      ...(trustError
+        ? { status: { label: trustError, state: "error" as const } }
+        : {}),
+      ...(notice.trustedProjectPath
+        ? {
+            actions: [{
+              label: trusting ? "Trusting..." : actionLabel,
+              onClick: () => {
+                void trustProject(notice);
+              },
+              tone: "primary" as const,
+              disabled: trusting,
+            }],
+          }
+        : {}),
+      onDismiss: () => {
+        setDismissedIds((current) => new Set(current).add(notice.id));
+        setNotice(null);
+      },
+    };
+  }, [actionLabel, notice, trustError, trustProject, trusting]);
 
-  return (
-    <aside className="codex-config-warning-banner" role="alert">
-      <div className="codex-config-warning-banner__content">
-        <p className="codex-config-warning-banner__eyebrow">Codex config warning</p>
-        <p className="codex-config-warning-banner__message">{notice.summary}</p>
-        {notice.details ? (
-          <p className="codex-config-warning-banner__detail">{notice.details}</p>
-        ) : null}
-        {trustError ? (
-          <p className="codex-config-warning-banner__error">{trustError}</p>
-        ) : null}
-      </div>
-      <div className="codex-config-warning-banner__actions">
-        {notice.trustedProjectPath ? (
-          <button
-            className="button button--primary"
-            type="button"
-            disabled={trusting}
-            onClick={() => {
-              void trustProject();
-            }}
-          >
-            {trusting ? "Trusting..." : actionLabel}
-          </button>
-        ) : null}
-        <button
-          className="button button--ghost"
-          type="button"
-          disabled={trusting}
-          onClick={dismiss}
-        >
-          Dismiss
-        </button>
-      </div>
-    </aside>
-  );
+  useEffect(() => {
+    onNoticeChanged(appNotice);
+  }, [appNotice, onNoticeChanged]);
+
+  return null;
 }
