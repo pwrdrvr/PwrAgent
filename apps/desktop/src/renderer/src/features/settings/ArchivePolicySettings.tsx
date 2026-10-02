@@ -58,9 +58,9 @@ export function ArchivePolicySettings(props: {
       {policy.retentionDays > 0
         ? <SettingsField label="Keep archives for days" sub="Measured from archival; cleanup runs hourly and retries failures."
           control={number("retentionDays", "Keep archives for days")} />
-        : <p className="settings-section__description">Archived threads and their recovery snapshots are kept until you choose an automatic deletion period.</p>}
-      {policy.retentionDays > 0 ? <p className="settings-section__description">Protected or restored threads do not expire. Existing archives without a recorded archive date start their retention period when first discovered. For ACP providers, deletion removes PwrAgent’s stored conversation; the provider may retain its own history.</p> : null}
-      {error ? <p className="settings-archive-banner__text" role="alert">{error}</p> : null}
+        : <p className="settings-panel__hint">Archived threads and their recovery snapshots are kept until you choose an automatic deletion period.</p>}
+      {policy.retentionDays > 0 ? <p className="settings-panel__hint">Protected or restored threads do not expire. Existing archives without a recorded archive date start their retention period when first discovered. For ACP providers, deletion removes PwrAgent’s stored conversation; the provider may retain its own history.</p> : null}
+      {error ? <p className="settings-panel__hint" role="alert">{error}</p> : null}
     </SettingsSection>
   );
 }
