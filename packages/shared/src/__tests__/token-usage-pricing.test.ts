@@ -730,6 +730,32 @@ describe("token usage pricing", () => {
     ).toBeUndefined();
   });
 
+  it("prices the Grok 4.7 naming helper build alias at the standard rate", () => {
+    const usage = {
+      at: Date.UTC(2026, 9, 1),
+      cachedInputTokens: 1_200,
+      outputTokens: 338,
+      reasoningOutputTokens: 327,
+      uncachedInputTokens: 1_700,
+    };
+    const cost = estimateTokenUsageCost({ ...usage, model: "grok-4.7-build" });
+
+    expect(cost).toEqual({
+      ...estimateTokenUsageCost({ ...usage, model: "grok-4.7" }),
+      model: "grok-4.7-build",
+    });
+    expect(cost).toMatchObject({
+      provider: "xai",
+      rateId: "xai:2026-09-21:grok-4.7:standard",
+      totalCostMicros: 6_028,
+    });
+    expect(estimateTokenUsageCost({
+      ...usage,
+      at: Date.UTC(2026, 8, 20, 23, 59, 59),
+      model: "grok-4.7-build",
+    })).toBeUndefined();
+  });
+
   it.each([
     { model: "grok-4.7", displayModel: "Grok 4.7", multiplier: 1 },
     { model: "grok-4.7-build-fast", displayModel: "Grok 4.7 Fast", multiplier: 2 },

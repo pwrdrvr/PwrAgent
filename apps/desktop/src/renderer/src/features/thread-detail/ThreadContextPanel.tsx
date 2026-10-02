@@ -1,3 +1,4 @@
+import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { SubAgentLens } from "@pwragent/shared";
 import { useThreadDisplayResource } from "../../lib/useThreadDisplayResource";
 import {
@@ -155,6 +156,7 @@ type ThreadContextPanelProps = {
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
+  backgroundTerminals?: BackgroundTerminalsViewProps;
   actionRuns?: CodexEnvironmentActionRun[];
   actionRunsDock?: ActionRunsDock;
   actionRunsEnvironmentName?: string;
@@ -659,21 +661,26 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   function renderTab(tab: ContextTab) {
     const isActive = tab.id === activeTab;
     const TabIcon = tab.Icon;
+    const commandCount = tab.id === "actions" ? props.backgroundTerminals?.terminals?.length ?? 0 : 0;
+    const label = commandCount
+      ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
+      : tab.label;
     return (
       <button
         key={tab.id}
         id={`context-rail-tab-${tab.id}`}
-        aria-label={tab.label}
+        aria-label={label}
         aria-selected={isActive && open}
         aria-controls={open ? "context-rail-panel" : undefined}
         className={`context-rail__tab${isActive ? " is-active" : ""}`}
         role="tab"
         tabIndex={isActive ? 0 : -1}
-        title={tab.label}
+        title={label}
         type="button"
         onClick={() => selectTab(tab.id)}
       >
         <TabIcon size={18} aria-hidden="true" />
+        {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
       </button>
     );
   }
@@ -761,6 +768,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         return (
           <PricingPanel
             desktopApi={props.desktopApi}
+            backends={props.backends}
             thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
@@ -811,6 +819,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <ActionRunsPanel
+            {...props.backgroundTerminals}
             dock={props.actionRunsDock ?? "above"}
             environmentName={props.actionRunsEnvironmentName}
             onDockChange={changeActionRunsDock}
@@ -872,6 +881,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <ProviderStatusPanel
             backends={props.backends}
             backendError={props.backendError}
+            desktopApi={props.desktopApi}
           />
         );
     }

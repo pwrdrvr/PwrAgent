@@ -1,4 +1,10 @@
 import type { NativeVoiceApi } from "../../../shared/native-voice";
+import type {
+  ListBackgroundTerminalsRequest,
+  ListBackgroundTerminalsResponse,
+  TerminateBackgroundTerminalRequest,
+  TerminateBackgroundTerminalResponse,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
@@ -999,6 +1005,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   runCodexEnvironmentAction?: (
     request: RunCodexEnvironmentActionRequest,
   ) => Promise<RunCodexEnvironmentActionResponse>;
+  listBackgroundTerminals?: (request: ListBackgroundTerminalsRequest) => Promise<ListBackgroundTerminalsResponse>;
+  terminateBackgroundTerminal?: (request: TerminateBackgroundTerminalRequest) => Promise<TerminateBackgroundTerminalResponse>;
   stopCodexEnvironmentAction?: (
     request: StopCodexEnvironmentActionRequest,
   ) => Promise<StopCodexEnvironmentActionResponse>;

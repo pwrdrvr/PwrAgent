@@ -247,6 +247,7 @@ type SidebarProps = {
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
   onSelectPendingLaunchpad?: (creation: PendingLaunchpadCreation) => void;
   thinkingThreadKeys?: Record<string, boolean>;
+  agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
@@ -2509,6 +2510,7 @@ export function Sidebar(props: SidebarProps) {
               selectedDirectoryKeys={selectedDirectoryKeys}
               selectedThreadKeys={selectedThreadKeys}
               thinkingThreadKeys={props.thinkingThreadKeys}
+              agentCommandThreadKeys={props.agentCommandThreadKeys}
               threads={renderedThreads}
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={hoverReleasedListHandlers.openLaunchpad}
@@ -2588,6 +2590,7 @@ export function Sidebar(props: SidebarProps) {
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={selectedThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
+                agentCommandThreadKeys={props.agentCommandThreadKeys}
                 threads={renderedThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}

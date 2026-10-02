@@ -296,6 +296,99 @@ describe("App", () => {
     }).__pwragentFederationTarget;
   });
 
+  it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const reader = {
+      id: "document-reader",
+      title: "Document reader",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      updatedAt: 2_000,
+    };
+    const repair = { ...reader, id: "ci-repair", title: "CI repair", updatedAt: 1_000 };
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:document-reader", "codex:ci-repair"],
+      threads: [{ ...reader }, { ...repair }],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    }));
+    const readMarkdownFile = vi.fn(async () => ({
+      path: "/repo/report.md",
+      content: "# Stable report\n\nKeep this paragraph selected.",
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        listSkills: async () => ({ backend: "codex", fetchedAt: Date.now(), data: [] }),
+        getNavigationSnapshot,
+        readMarkdownFile,
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+        readThread: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threadId: reader.id,
+          replay: {
+            entries: [{ type: "message", id: "report-link", role: "assistant", text: "Read [report](/repo/report.md)." }],
+            messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+      }),
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "report" }));
+    await screen.findByRole("heading", { name: "Stable report" });
+    const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
+    const paragraph = within(dialog).getByText("Keep this paragraph selected.");
+    const text = paragraph.firstChild!;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const scroll = dialog.querySelector<HTMLElement>(".markdown-document-modal__body")!;
+    scroll.scrollTop = 640;
+
+    for (const status of ["queued", "cancelled", "queued", "cancelled"] as const) {
+      const readsBefore = getNavigationSnapshot.mock.calls.length;
+      await act(async () => {
+        for (const listener of listeners) listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: repair.id,
+              queueEntryId: "ci-auto-fix",
+              origin: "automation",
+              status,
+              displayText: "Repair CI checks",
+            },
+          },
+        });
+      });
+      await waitFor(() => expect(getNavigationSnapshot.mock.calls.length).toBeGreaterThan(readsBefore));
+      await flushReactUpdates();
+      expect(paragraph).toBeInTheDocument();
+      expect(selection.anchorNode).toBe(text);
+      expect(selection.toString()).toBe("Keep this paragraph selected.");
+      expect(scroll.scrollTop).toBe(640);
+      expect(readMarkdownFile).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Loading document...")).not.toBeInTheDocument();
+    }
+    selection.removeAllRanges();
+  });
+
   it("shows the thread shell without starting backends while the startup settings read is pending", async () => {
     const listBackends = vi.fn(async () => ({
       fetchedAt: Date.now(),

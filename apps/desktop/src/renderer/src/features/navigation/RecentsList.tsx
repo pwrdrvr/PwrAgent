@@ -56,6 +56,7 @@ type RecentsListProps = {
   selectedThreadKey?: string;
   selectedThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
+  agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   /**
    * Threads still starting. Each renders where its thread will land: under
@@ -254,6 +255,7 @@ export function RecentsList(props: RecentsListProps) {
               selectedThreadKey={props.selectedThreadKey}
               selectedThreadKeys={props.selectedThreadKeys}
               thinkingThreadKeys={props.thinkingThreadKeys}
+              agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
               onDragOverThread={(event) => {
                 event.preventDefault();
@@ -404,6 +406,7 @@ export function RecentsList(props: RecentsListProps) {
           subthreadCount={subthreadCount}
           subthreadsCollapsed={subthreadsCollapsed}
           thinkingThreadKeys={props.thinkingThreadKeys}
+          agentCommandThreadKeys={props.agentCommandThreadKeys}
           thread={thread}
           onToggleSubthreads={
             subthreadCount > 0

@@ -62,6 +62,7 @@ import {
 import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { useMarkdownFileSource } from "./useMarkdownFileSource";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -271,6 +272,356 @@ type MarkdownViewerTarget = LocalFileTarget & {
 
 type SkillActionTarget = AppServerSkillSummary & LocalFileTarget;
 
+type MarkdownRenderState = {
+  props: ThreadMarkdownProps;
+  markdownText: string;
+  sourceMarkdownText: string;
+  editorApplication?: EditorApplication;
+  skillsByPath: Map<string, AppServerSkillSummary & { path: string }>;
+  skillsByToken: Map<string, AppServerSkillSummary & { path: string }>;
+  sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
+  openLocalFileInEditor: (target: LocalFileTarget) => boolean;
+  openLocalFileLink: (event: MouseEvent<HTMLAnchorElement>, href: string, label: string) => void;
+  openSkillMarkdownInEditor: (skill: SkillActionTarget) => void;
+  viewSkillMarkdown: (skill: SkillActionTarget) => void;
+};
+
+const MarkdownRenderContext = createContext<MarkdownRenderState | undefined>(undefined);
+
+// Component types must outlive snapshot updates. Recreating them replaces the
+// document's DOM, clearing selections and closing nested document viewers.
+const markdownComponents: Components = {
+  a: function MarkdownAnchor(anchorProps) {
+    const {
+      props,
+      markdownText,
+      editorApplication,
+      skillsByPath,
+      sharedSkillNames,
+      openSkillMarkdownInEditor,
+      viewSkillMarkdown,
+      openLocalFileLink,
+      openLocalFileInEditor,
+    } = useContext(MarkdownRenderContext)!;
+    // Navigation membership affects these links, not the parsed document.
+    // Subscribe in the leaf so unchanged Markdown is not parsed again.
+    const threadLinks = useThreadLinks();
+    const pullRequestLinks = usePullRequestLinks();
+    const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
+    const localTarget = localFileTargetFromHref(href);
+    const isLocalMarkdownFile = Boolean(
+      localTarget && isMarkdownFilePath(localTarget.path)
+    );
+    const skillPath = localTarget?.path;
+    const label = extractTextContent(anchorProps.children).trim();
+    const linkedImage = findMarkdownLinkedImagePart(props.imageParts, localTarget);
+    const source = sourceForNode(markdownText, anchorProps.node);
+    const linkedChildren = (
+      <MarkdownLinkContext.Provider value={true}>
+        {anchorProps.children}
+      </MarkdownLinkContext.Provider>
+    );
+
+    if (isImplicitBareAutolink({ href, label, source })) {
+      return <>{anchorProps.children}</>;
+    }
+
+    const instanceId = parseInstanceReferenceUrl(href);
+    if (instanceId) {
+      return <InstanceChip instanceId={instanceId} label={label} />;
+    }
+
+    if (isThreadUrl(href)) {
+      const threadLink = resolveThreadHref(
+        href,
+        threadLinks,
+        props.threadLinkSource,
+      );
+      if (threadLink && threadLinks) {
+        return (
+          <ThreadChip
+            fallbackLabel={label}
+            link={threadLink}
+            onOpen={threadLinks.show}
+          />
+        );
+      }
+
+      // The link names a thread this profile does not have, or renders on a
+      // surface with no navigation (Activity, Changelog, file viewer). Show
+      // the author's text rather than an anchor that goes nowhere — and
+      // never let `pwragent:` reach the external-open path below.
+      return <>{anchorProps.children}</>;
+    }
+
+    const pullRequestNumber = parsePullRequestNumberHref(href);
+    if (pullRequestNumber) {
+      return (
+        <PullRequestNumberLinkChip number={pullRequestNumber}>
+          {linkedChildren}
+        </PullRequestNumberLinkChip>
+      );
+    }
+
+    const pullRequest = resolvePullRequestHref(href, pullRequestLinks);
+    if (pullRequest) {
+      return <PullRequestLinkChip pr={pullRequest} />;
+    }
+
+    if (linkedImage && props.onOpenImage) {
+      return (
+        <a
+          className="transcript-message__link"
+          href={linkedImage.url}
+          onClick={(event) => {
+            event.preventDefault();
+            props.onOpenImage?.(linkedImage);
+          }}
+          title="Open image in PwrAgent"
+        >
+          {linkedChildren}
+        </a>
+      );
+    }
+
+    if (label.startsWith("@") && localTarget) {
+      // Composer directory-reference chip (`[@label](~/path)`) —
+      // render it back as a chip in the transcript, mirroring how
+      // `[$name](path)` skill links become SkillChips.
+      return (
+        <span
+          className="chip directory-chip tooltip-target"
+          data-tooltip={tildifyPath(localTarget.path)}
+          tabIndex={0}
+        >
+          <FolderIcon size={13} aria-hidden="true" />
+          <span className="skill-chip__label">{label}</span>
+        </span>
+      );
+    }
+
+    if (
+      skillPath &&
+      (
+        isSkillMarkdownPath(skillPath)
+        || skillsByPath.has(skillPath)
+        || label.startsWith("$")
+      )
+    ) {
+      const skill = skillsByPath.get(skillPath) ?? {
+        name: skillNameFromPath(skillPath, label),
+        path: skillPath,
+      };
+      const chipLabel = label.toLowerCase() === "skill.md"
+        ? skillNameFromPath(skillPath, label)
+        : label;
+
+      return (
+        <SkillChip
+          editorName={editorApplication?.name}
+          label={chipLabel || undefined}
+          onOpenInEditor={editorApplication && props.desktopApi?.openApplication
+            ? openSkillMarkdownInEditor
+            : undefined}
+          onViewMarkdown={props.desktopApi?.readMarkdownFile
+            ? viewSkillMarkdown
+            : undefined}
+          showOrigin={isSharedSkillName(sharedSkillNames, skill.name)}
+          skill={skill}
+          target={localTarget}
+          transcript={true}
+        />
+      );
+    }
+
+    if (!href) {
+      return <>{anchorProps.children}</>;
+    }
+
+    const link = (
+      <a
+        className="transcript-message__link"
+        href={href || undefined}
+        onClick={(event) => {
+          openLocalFileLink(event, href, label);
+        }}
+        rel="noopener noreferrer"
+        target="_blank"
+        title={isLocalMarkdownFile && localTarget
+          ? tildifyPath(localTarget.path)
+          : href || undefined}
+      >
+        {linkedChildren}
+      </a>
+    );
+
+    if (isLocalMarkdownFile && localTarget) {
+      return (
+        <span className="thread-markdown__file-link">
+          {link}
+          {editorApplication && props.desktopApi?.openApplication ? (
+            <button
+              type="button"
+              className="thread-markdown__editor-link"
+              aria-label={openFileInEditorLabel(
+                label || fileNameFromPath(localTarget.path),
+                editorApplication.name,
+              )}
+              title={openFileInEditorTitle(editorApplication.name)}
+              onClick={(event) => {
+                event.stopPropagation();
+                openLocalFileInEditor(localTarget);
+              }}
+            >
+              <AppIcon
+                application={editorApplication}
+                className="thread-markdown__editor-link-icon"
+                size={13}
+              />
+            </button>
+          ) : null}
+        </span>
+      );
+    }
+
+    return link;
+  },
+  blockquote: function MarkdownBlockquote(blockquoteProps) {
+    const { props, sourceMarkdownText } = useContext(MarkdownRenderContext)!;
+    const copyText = normalizeBlockquoteCopyText(
+      sourceForNode(sourceMarkdownText, blockquoteProps.node) ??
+        extractTextContent(blockquoteProps.children)
+    );
+
+    return (
+      <blockquote
+        className="transcript-message__blockquote"
+        aria-label="Quoted text"
+        tabIndex={0}
+      >
+        {copyText ? (
+          <TranscriptCopyButton
+            className="transcript-copy-button--section"
+            copiedLabel="Copied quote"
+            desktopApi={props.desktopApi}
+            label="Copy quote"
+            text={copyText}
+          />
+        ) : null}
+        {blockquoteProps.children}
+      </blockquote>
+    );
+  },
+  code: function MarkdownCode(codeProps) {
+    const {
+      props,
+      skillsByToken,
+      editorApplication,
+      openSkillMarkdownInEditor,
+      viewSkillMarkdown,
+    } = useContext(MarkdownRenderContext)!;
+    const skill = skillsByToken.get(extractTextContent(codeProps.children));
+    return (
+      <TranscriptCode
+        className={codeProps.className}
+        desktopApi={props.desktopApi}
+        editorName={editorApplication?.name}
+        onOpenSkillInEditor={editorApplication && props.desktopApi?.openApplication
+          ? openSkillMarkdownInEditor
+          : undefined}
+        onViewSkillMarkdown={props.desktopApi?.readMarkdownFile
+          ? viewSkillMarkdown
+          : undefined}
+        skill={skill}
+      >
+        {codeProps.children}
+      </TranscriptCode>
+    );
+  },
+  h1(headingProps) {
+    return <h1 className="transcript-message__heading">{headingProps.children}</h1>;
+  },
+  h2(headingProps) {
+    return <h2 className="transcript-message__heading">{headingProps.children}</h2>;
+  },
+  h3(headingProps) {
+    return <h3 className="transcript-message__heading">{headingProps.children}</h3>;
+  },
+  h4(headingProps) {
+    return <h4 className="transcript-message__heading">{headingProps.children}</h4>;
+  },
+  h5(headingProps) {
+    return <h5 className="transcript-message__heading">{headingProps.children}</h5>;
+  },
+  h6(headingProps) {
+    return <h6 className="transcript-message__heading">{headingProps.children}</h6>;
+  },
+  hr() {
+    return <hr className="transcript-message__rule" />;
+  },
+  img(imageProps) {
+    const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
+    const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
+    const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
+
+    return (
+      <span className="thread-markdown__image-literal">
+        {`![${altText}](${src}${title})`}
+      </span>
+    );
+  },
+  ol(listProps) {
+    return <ol className="transcript-message__list">{listProps.children}</ol>;
+  },
+  p(paragraphProps) {
+    return (
+      <p className="transcript-message__paragraph">
+        {paragraphProps.children}
+      </p>
+    );
+  },
+  pre: MarkdownPre,
+  table(tableProps) {
+    return (
+      <div className="thread-markdown__table-scroll" tabIndex={0}>
+        <table className="thread-markdown__table">{tableProps.children}</table>
+      </div>
+    );
+  },
+  tbody(tableBodyProps) {
+    return <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>;
+  },
+  td(tableCellProps) {
+    return (
+      <td
+        className="thread-markdown__td"
+        data-col-kind={dataColKind(tableCellProps.node)}
+      >
+        {tableCellProps.children}
+      </td>
+    );
+  },
+  th(tableHeaderCellProps) {
+    return (
+      <th
+        className="thread-markdown__th"
+        data-col-kind={dataColKind(tableHeaderCellProps.node)}
+      >
+        {tableHeaderCellProps.children}
+      </th>
+    );
+  },
+  thead(tableHeadProps) {
+    return <thead className="thread-markdown__thead">{tableHeadProps.children}</thead>;
+  },
+  tr(tableRowProps) {
+    return <tr className="thread-markdown__tr">{tableRowProps.children}</tr>;
+  },
+  ul(listProps) {
+    return <ul className="transcript-message__list">{listProps.children}</ul>;
+  },
+};
+
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
@@ -404,335 +755,31 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     [openLocalFileInEditor]
   );
 
-  const components = useMemo<Components>(
-    () => ({
-      a: function MarkdownAnchor(anchorProps) {
-        // Navigation membership affects these links, not the parsed document.
-        // Subscribe in the leaf so unchanged Markdown is not parsed again.
-        const threadLinks = useThreadLinks();
-        const pullRequestLinks = usePullRequestLinks();
-        const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
-        const localTarget = localFileTargetFromHref(href);
-        const isLocalMarkdownFile = Boolean(
-          localTarget && isMarkdownFilePath(localTarget.path)
-        );
-        const skillPath = localTarget?.path;
-        const label = extractTextContent(anchorProps.children).trim();
-        const linkedImage = findMarkdownLinkedImagePart(props.imageParts, localTarget);
-        const source = sourceForNode(markdownText, anchorProps.node);
-        const linkedChildren = (
-          <MarkdownLinkContext.Provider value={true}>
-            {anchorProps.children}
-          </MarkdownLinkContext.Provider>
-        );
-
-        if (isImplicitBareAutolink({ href, label, source })) {
-          return <>{anchorProps.children}</>;
-        }
-
-        const instanceId = parseInstanceReferenceUrl(href);
-        if (instanceId) {
-          return <InstanceChip instanceId={instanceId} label={label} />;
-        }
-
-        if (isThreadUrl(href)) {
-          const threadLink = resolveThreadHref(
-            href,
-            threadLinks,
-            props.threadLinkSource,
-          );
-          if (threadLink && threadLinks) {
-            return (
-              <ThreadChip
-                fallbackLabel={label}
-                link={threadLink}
-                onOpen={threadLinks.show}
-              />
-            );
-          }
-
-          // The link names a thread this profile does not have, or renders on a
-          // surface with no navigation (Activity, Changelog, file viewer). Show
-          // the author's text rather than an anchor that goes nowhere — and
-          // never let `pwragent:` reach the external-open path below.
-          return <>{anchorProps.children}</>;
-        }
-
-        const pullRequestNumber = parsePullRequestNumberHref(href);
-        if (pullRequestNumber) {
-          return (
-            <PullRequestNumberLinkChip number={pullRequestNumber}>
-              {linkedChildren}
-            </PullRequestNumberLinkChip>
-          );
-        }
-
-        const pullRequest = resolvePullRequestHref(href, pullRequestLinks);
-        if (pullRequest) {
-          return <PullRequestLinkChip pr={pullRequest} />;
-        }
-
-        if (linkedImage && props.onOpenImage) {
-          return (
-            <a
-              className="transcript-message__link"
-              href={linkedImage.url}
-              onClick={(event) => {
-                event.preventDefault();
-                props.onOpenImage?.(linkedImage);
-              }}
-              title="Open image in PwrAgent"
-            >
-              {linkedChildren}
-            </a>
-          );
-        }
-
-        if (label.startsWith("@") && localTarget) {
-          // Composer directory-reference chip (`[@label](~/path)`) —
-          // render it back as a chip in the transcript, mirroring how
-          // `[$name](path)` skill links become SkillChips.
-          return (
-            <span
-              className="chip directory-chip tooltip-target"
-              data-tooltip={tildifyPath(localTarget.path)}
-              tabIndex={0}
-            >
-              <FolderIcon size={13} aria-hidden="true" />
-              <span className="skill-chip__label">{label}</span>
-            </span>
-          );
-        }
-
-        if (
-          skillPath &&
-          (
-            isSkillMarkdownPath(skillPath)
-            || skillsByPath.has(skillPath)
-            || label.startsWith("$")
-          )
-        ) {
-          const skill = skillsByPath.get(skillPath) ?? {
-            name: skillNameFromPath(skillPath, label),
-            path: skillPath,
-          };
-          const chipLabel = label.toLowerCase() === "skill.md"
-            ? skillNameFromPath(skillPath, label)
-            : label;
-
-          return (
-            <SkillChip
-              editorName={editorApplication?.name}
-              label={chipLabel || undefined}
-              onOpenInEditor={editorApplication && props.desktopApi?.openApplication
-                ? openSkillMarkdownInEditor
-                : undefined}
-              onViewMarkdown={props.desktopApi?.readMarkdownFile
-                ? viewSkillMarkdown
-                : undefined}
-              showOrigin={isSharedSkillName(sharedSkillNames, skill.name)}
-              skill={skill}
-              target={localTarget}
-              transcript={true}
-            />
-          );
-        }
-
-        if (!href) {
-          return <>{anchorProps.children}</>;
-        }
-
-        const link = (
-          <a
-            className="transcript-message__link"
-            href={href || undefined}
-            onClick={(event) => {
-              openLocalFileLink(event, href, label);
-            }}
-            rel="noopener noreferrer"
-            target="_blank"
-            title={isLocalMarkdownFile && localTarget
-              ? tildifyPath(localTarget.path)
-              : href || undefined}
-          >
-            {linkedChildren}
-          </a>
-        );
-
-        if (isLocalMarkdownFile && localTarget) {
-          return (
-            <span className="thread-markdown__file-link">
-              {link}
-              {editorApplication && props.desktopApi?.openApplication ? (
-                <button
-                  type="button"
-                  className="thread-markdown__editor-link"
-                  aria-label={openFileInEditorLabel(
-                    label || fileNameFromPath(localTarget.path),
-                    editorApplication.name,
-                  )}
-                  title={openFileInEditorTitle(editorApplication.name)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    openLocalFileInEditor(localTarget);
-                  }}
-                >
-                  <AppIcon
-                    application={editorApplication}
-                    className="thread-markdown__editor-link-icon"
-                    size={13}
-                  />
-                </button>
-              ) : null}
-            </span>
-          );
-        }
-
-        return link;
-      },
-      blockquote(blockquoteProps) {
-        const copyText = normalizeBlockquoteCopyText(
-          sourceForNode(sourceMarkdownText, blockquoteProps.node) ??
-            extractTextContent(blockquoteProps.children)
-        );
-
-        return (
-          <blockquote
-            className="transcript-message__blockquote"
-            aria-label="Quoted text"
-            tabIndex={0}
-          >
-            {copyText ? (
-              <TranscriptCopyButton
-                className="transcript-copy-button--section"
-                copiedLabel="Copied quote"
-                desktopApi={props.desktopApi}
-                label="Copy quote"
-                text={copyText}
-              />
-            ) : null}
-            {blockquoteProps.children}
-          </blockquote>
-        );
-      },
-      code(codeProps) {
-        const skill = skillsByToken.get(extractTextContent(codeProps.children));
-        return (
-          <TranscriptCode
-            className={codeProps.className}
-            desktopApi={props.desktopApi}
-            editorName={editorApplication?.name}
-            onOpenSkillInEditor={editorApplication && props.desktopApi?.openApplication
-              ? openSkillMarkdownInEditor
-              : undefined}
-            onViewSkillMarkdown={props.desktopApi?.readMarkdownFile
-              ? viewSkillMarkdown
-              : undefined}
-            skill={skill}
-          >
-            {codeProps.children}
-          </TranscriptCode>
-        );
-      },
-      h1(headingProps) {
-        return <h1 className="transcript-message__heading">{headingProps.children}</h1>;
-      },
-      h2(headingProps) {
-        return <h2 className="transcript-message__heading">{headingProps.children}</h2>;
-      },
-      h3(headingProps) {
-        return <h3 className="transcript-message__heading">{headingProps.children}</h3>;
-      },
-      h4(headingProps) {
-        return <h4 className="transcript-message__heading">{headingProps.children}</h4>;
-      },
-      h5(headingProps) {
-        return <h5 className="transcript-message__heading">{headingProps.children}</h5>;
-      },
-      h6(headingProps) {
-        return <h6 className="transcript-message__heading">{headingProps.children}</h6>;
-      },
-      hr() {
-        return <hr className="transcript-message__rule" />;
-      },
-      img(imageProps) {
-        const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
-        const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
-        const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
-
-        return (
-          <span className="thread-markdown__image-literal">
-            {`![${altText}](${src}${title})`}
-          </span>
-        );
-      },
-      ol(listProps) {
-        return <ol className="transcript-message__list">{listProps.children}</ol>;
-      },
-      p(paragraphProps) {
-        return (
-          <p className="transcript-message__paragraph">
-            {paragraphProps.children}
-          </p>
-        );
-      },
-      pre: MarkdownPre,
-      table(tableProps) {
-        return (
-          <div className="thread-markdown__table-scroll" tabIndex={0}>
-            <table className="thread-markdown__table">{tableProps.children}</table>
-          </div>
-        );
-      },
-      tbody(tableBodyProps) {
-        return <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>;
-      },
-      td(tableCellProps) {
-        return (
-          <td
-            className="thread-markdown__td"
-            data-col-kind={dataColKind(tableCellProps.node)}
-          >
-            {tableCellProps.children}
-          </td>
-        );
-      },
-      th(tableHeaderCellProps) {
-        return (
-          <th
-            className="thread-markdown__th"
-            data-col-kind={dataColKind(tableHeaderCellProps.node)}
-          >
-            {tableHeaderCellProps.children}
-          </th>
-        );
-      },
-      thead(tableHeadProps) {
-        return <thead className="thread-markdown__thead">{tableHeadProps.children}</thead>;
-      },
-      tr(tableRowProps) {
-        return <tr className="thread-markdown__tr">{tableRowProps.children}</tr>;
-      },
-      ul(listProps) {
-        return <ul className="transcript-message__list">{listProps.children}</ul>;
-      },
-    }),
-    [
-      editorApplication,
-      markdownText,
-      openLocalFileInEditor,
-      openLocalFileLink,
-      openSkillMarkdownInEditor,
-      props.desktopApi,
-      props.imageParts,
-      props.onOpenImage,
-      props.threadLinkSource,
-      sourceMarkdownText,
-      skillsByPath,
-      skillsByToken,
-      viewSkillMarkdown,
-    ]
-  );
+  const renderState = useMemo<MarkdownRenderState>(() => ({
+    props,
+    markdownText,
+    sourceMarkdownText,
+    editorApplication,
+    skillsByPath,
+    skillsByToken,
+    sharedSkillNames,
+    openLocalFileInEditor,
+    openLocalFileLink,
+    openSkillMarkdownInEditor,
+    viewSkillMarkdown,
+  }), [
+    props,
+    markdownText,
+    sourceMarkdownText,
+    editorApplication,
+    skillsByPath,
+    skillsByToken,
+    sharedSkillNames,
+    openLocalFileInEditor,
+    openLocalFileLink,
+    openSkillMarkdownInEditor,
+    viewSkillMarkdown,
+  ]);
 
   return (
     <div
@@ -745,23 +792,25 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         .join(" ")}
       onCopy={copySelectedPullRequestLinks}
     >
-      <MarkdownCodeApiContext.Provider value={props.desktopApi}>
-        <ReactMarkdown
-          components={components}
-          rehypePlugins={mathRuntime?.rehypePlugins}
-          remarkPlugins={[
-            ...(mathRuntime?.remarkPlugins ?? []),
-            remarkBreaks,
-            // Single tildes are common in home paths and approximate values.
-            [remarkGfm, { singleTilde: false }],
-            remarkPullRequestReferences,
-            remarkTableProfile,
-          ]}
-          urlTransform={normalizeMarkdownUrl}
-        >
-          {markdownText}
-        </ReactMarkdown>
-      </MarkdownCodeApiContext.Provider>
+      <MarkdownRenderContext.Provider value={renderState}>
+        <MarkdownCodeApiContext.Provider value={props.desktopApi}>
+          <ReactMarkdown
+            components={markdownComponents}
+            rehypePlugins={mathRuntime?.rehypePlugins}
+            remarkPlugins={[
+              ...(mathRuntime?.remarkPlugins ?? []),
+              remarkBreaks,
+              // Single tildes are common in home paths and approximate values.
+              [remarkGfm, { singleTilde: false }],
+              remarkPullRequestReferences,
+              remarkTableProfile,
+            ]}
+            urlTransform={normalizeMarkdownUrl}
+          >
+            {markdownText}
+          </ReactMarkdown>
+        </MarkdownCodeApiContext.Provider>
+      </MarkdownRenderContext.Provider>
       {markdownViewerTarget ? (
         <MarkdownDocumentModal
           applications={props.applications}
@@ -806,12 +855,13 @@ function MarkdownDocumentModal(props: {
     | { status: "loaded"; content: string }
     | { status: "error"; error: string }
   >({ status: "loading" });
+  const readMarkdownFile = props.desktopApi?.readMarkdownFile;
+  const { thread, federationTarget } = useMarkdownFileSource(props.fileViewerContext);
 
   useEffect(() => {
     let cancelled = false;
     setLoadState({ status: "loading" });
 
-    const readMarkdownFile = props.desktopApi?.readMarkdownFile;
     if (!readMarkdownFile) {
       setLoadState({
         status: "error",
@@ -824,8 +874,8 @@ function MarkdownDocumentModal(props: {
 
     void readMarkdownFile({
       path: props.target.path,
-      thread: props.fileViewerContext?.thread,
-      federationTarget: props.fileViewerContext?.federationTarget,
+      thread,
+      federationTarget,
     })
       .then((response) => {
         if (cancelled) return;
@@ -850,7 +900,7 @@ function MarkdownDocumentModal(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.desktopApi, props.target.path, props.fileViewerContext]);
+  }, [readMarkdownFile, props.target.path, thread, federationTarget]);
 
   if (typeof document === "undefined") {
     return null;

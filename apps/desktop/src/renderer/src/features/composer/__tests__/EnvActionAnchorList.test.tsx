@@ -107,7 +107,7 @@ describe("EnvActionAnchorList", () => {
       />,
     );
     expect(screen.getByLabelText("Env action running")).toBeInTheDocument();
-    expect(screen.getByText(/pid 4242/)).toBeInTheDocument();
+    expect(screen.getByText(/PID 4242/)).toBeInTheDocument();
   });
 
   it("renders one anchor per fresh run when multiple are alive on the same thread", () => {
@@ -138,8 +138,8 @@ describe("EnvActionAnchorList", () => {
     );
     // Two separate anchors with their own running labels.
     expect(screen.getAllByLabelText("Env action running")).toHaveLength(2);
-    expect(screen.getByText(/pid 1001/)).toBeInTheDocument();
-    expect(screen.getByText(/pid 1002/)).toBeInTheDocument();
+    expect(screen.getByText(/PID 1001/)).toBeInTheDocument();
+    expect(screen.getByText(/PID 1002/)).toBeInTheDocument();
   });
 
   it("filters out zombies while keeping fresh siblings visible", () => {
@@ -163,8 +163,8 @@ describe("EnvActionAnchorList", () => {
       />,
     );
     expect(screen.getAllByLabelText("Env action running")).toHaveLength(1);
-    expect(screen.queryByText(/pid 9999/)).toBeNull();
-    expect(screen.getByText(/pid 7777/)).toBeInTheDocument();
+    expect(screen.queryByText(/PID 9999/)).toBeNull();
+    expect(screen.getByText(/PID 7777/)).toBeInTheDocument();
   });
 
   it("hides a run after Dismiss is clicked", () => {

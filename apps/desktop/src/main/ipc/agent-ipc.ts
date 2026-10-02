@@ -1,3 +1,13 @@
+import type {
+  ListBackgroundTerminalsRequest,
+  ListBackgroundTerminalsResponse,
+  TerminateBackgroundTerminalRequest,
+  TerminateBackgroundTerminalResponse,
+} from "@pwragent/shared";
+import {
+  AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL,
+  AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
+} from "../../shared/ipc";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { stageQueuedFileInputs } from "../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
@@ -1293,6 +1303,23 @@ export function registerAgentIpcHandlers(): void {
       return await registry.runCodexEnvironmentAction(request);
     },
   );
+
+  ipcMain.removeHandler(AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL);
+  ipcMain.handle(AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL, async (_event, request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> => {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteBackend(request.federationTarget)
+        .listBackgroundTerminals(stripFederationTarget(request));
+    }
+    return await registry.listBackgroundTerminals(request);
+  });
+  ipcMain.removeHandler(AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL);
+  ipcMain.handle(AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL, async (_event, request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> => {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteBackend(request.federationTarget)
+        .terminateBackgroundTerminal(stripFederationTarget(request));
+    }
+    return await registry.terminateBackgroundTerminal(request);
+  });
 
   ipcMain.removeHandler(AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL);
   ipcMain.handle(

@@ -222,6 +222,25 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("keeps warning text readable where --status-warning is not", () => {
+    // Usage pace warnings are sentences and figures. The dot-and-stroke
+    // amber fails AA in the light theme, so text reads its own token.
+    const resolve = (theme: Record<string, string>, name: string): string => {
+      const alias = theme[name]?.match(/^var\(--([a-z0-9-]+)\)$/)?.[1];
+      return alias ? resolve(theme, alias) : theme[name];
+    };
+    for (const [themeName, theme] of Object.entries({ dark: tokens, light: { ...tokens, ...lightTokens } })) {
+      for (const surface of ["bg-app", "bg-panel", "bg-panel-elevated"]) {
+        expect(
+          contrastRatio(resolve(theme, "status-warning-text"), resolve(theme, surface)),
+          `${themeName}: status-warning-text on ${surface}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    expect(extractRuleBody(css, ".usage-pace.is-short")).toContain("var(--status-warning-text)");
+    expect(extractRuleBody(css, ".usage-pace-card__hit-label")).toContain("var(--status-warning-text)");
+  });
+
   it("keeps light terminal ANSI white readable on a light canvas", () => {
     expect(lightTokens).toMatchObject({
       "terminal-bg": "#ffffff",
