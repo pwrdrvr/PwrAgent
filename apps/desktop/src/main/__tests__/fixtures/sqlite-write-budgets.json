@@ -447,6 +447,13 @@
     "rowsChanged": 4,
     "statements": 4
   },
+  "native-subagent-model-repair": {
+    "commits": 2,
+    "note": "One worker's model-less usage line filled in place and its card given the model, once; repeated discovery writes nothing. At 100 legacy workers, approximately 7 MB once, then nothing.",
+    "observedWalBytes": 70040,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "native-subagent-pricing-repair": {
     "commits": 1,
     "note": "one missing native child pricing row repaired from its existing parent sub-agent card",

@@ -1226,6 +1226,142 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  describe("held native worker usage", () => {
+    const seedRunningWorker = async () => {
+      const now = Date.now();
+      await store.upsertThreadSubAgent({
+        backend: "codex", threadId: "thread-parent",
+        subAgent: {
+          monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+          backend: "codex", task: "Review savers", status: "running", agentName: "review_savers",
+          monitorTurnId: "turn-review", createdAt: now - 10_000, updatedAt: now - 1_000,
+        },
+      });
+    };
+    const workerUsage = (total: number): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "worker-review",
+          turnId: "turn-worker",
+          tokenUsage: {
+            total: { inputTokens: total, cachedInputTokens: 0, outputTokens: 50 },
+            last: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 50 },
+          },
+        },
+      },
+    } as AgentEvent);
+    const createRegistry = (settings?: { model?: string }) => {
+      const codexClient = Object.assign(createStubBackendClient() as object, {
+        readThreadModelSettings: async () => settings,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient: codexClient as never,
+        overlayStore: store as never,
+      });
+      const internal = registry as unknown as {
+        codexNativeSubAgentParents: Map<string, string>;
+        emit(event: AgentEvent): Promise<void>;
+        readThreadPricingWithLiveTokenMiser(params: {
+          backend: "codex";
+          threadId: string;
+        }): Promise<{ lines: ThreadUsageLineRecord[] }>;
+      };
+      internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+      return { registry, internal };
+    };
+    const storedWorkerLine = async () =>
+      (await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" }))
+        .lines.find((line) => line.threadId === "worker-review");
+
+    it("writes usage that arrives after the worker's turn ended", async () => {
+      await seedRunningWorker();
+      const { registry, internal } = createRegistry({ model: "gpt-5.5" });
+      try {
+        await internal.emit(workerUsage(1_000));
+        await internal.emit(buildTurnCompletedEvent("worker-review", "turn-worker"));
+        expect(await storedWorkerLine()).toMatchObject({ inputTokens: 1_000 });
+        // No later boundary will come for this report.
+        await internal.emit(workerUsage(2_000));
+        expect(await storedWorkerLine()).toMatchObject({ inputTokens: 2_000 });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("serves a running worker's held line to its own pricing read", async () => {
+      await seedRunningWorker();
+      const { registry, internal } = createRegistry({ model: "gpt-5.5" });
+      try {
+        await internal.emit(workerUsage(1_000));
+        expect(await storedWorkerLine()).toBeUndefined();
+        expect((await internal.readThreadPricingWithLiveTokenMiser({
+          backend: "codex", threadId: "worker-review",
+        })).lines.find((line) => line.scope === "monitor")).toMatchObject({
+          threadId: "worker-review", inputTokens: 1_000,
+        });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("writes held usage at close", async () => {
+      await seedRunningWorker();
+      const { registry, internal } = createRegistry({ model: "gpt-5.5" });
+      await internal.emit(workerUsage(1_000));
+      expect(await storedWorkerLine()).toBeUndefined();
+      await registry.close();
+      expect(await storedWorkerLine()).toMatchObject({ inputTokens: 1_000, model: "gpt-5.5" });
+      expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" }))
+        ?.subAgents?.[0]?.monitorUsage).toBeDefined();
+    });
+
+    it("repairs a model-less worker line once when discovery names the model", async () => {
+      await seedRunningWorker();
+      // Codex named no model while the worker ran, so its line was unpriced.
+      const first = createRegistry(undefined);
+      await first.internal.emit(workerUsage(1_000));
+      await first.registry.close();
+      expect(await storedWorkerLine()).toMatchObject({ priceStatus: "unpriced" });
+      expect((await storedWorkerLine())?.model).toBeUndefined();
+
+      const now = Date.now();
+      const parent: AppServerThreadSummary = {
+        id: "thread-parent", source: "codex", title: "Review audit",
+        titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+      };
+      const registry = new DesktopBackendRegistry({
+        codexClient: createStubBackendClient({
+          threads: [parent],
+          nativeSubAgentThreads: [{
+            ...parent, id: "worker-review", title: "Review savers", threadStatus: "active",
+            model: "gpt-5.5", reasoningEffort: "high",
+            codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
+          }],
+        }),
+        overlayStore: store as never,
+      });
+      try {
+        const { writes } = await measureSqliteWrites(async () => {
+          await registry.listThreads({ backend: "codex", forceRefresh: true });
+        });
+        expect(await storedWorkerLine()).toMatchObject({ model: "gpt-5.5", priceStatus: "priced" });
+        expectSqliteWriteBudget({
+          scenario: "native-subagent-model-repair",
+          note: "One worker's model-less usage line filled in place and its card given the model, once; repeated discovery writes nothing. At 100 legacy workers, approximately 7 MB once, then nothing.",
+          writes,
+        });
+        const repeated = await measureSqliteWrites(async () => {
+          await registry.listThreads({ backend: "codex", forceRefresh: true });
+        });
+        expect(repeated.writes.commits).toBe(0);
+      } finally {
+        await registry.close();
+      }
+    });
+  });
+
   it("does not backfill a worker whose usage is live", async () => {
     vi.useFakeTimers();
     const now = Date.now();

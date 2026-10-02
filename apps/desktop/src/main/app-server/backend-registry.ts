@@ -15534,8 +15534,12 @@ export class DesktopBackendRegistry {
       withCompactions,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
-        ...[...(this.liveCodexNativeSubAgentUsage.get(params.threadId)?.values() ?? [])]
-          .flatMap((live) => [...live.lines.values()]),
+        // Held worker lines, for the parent's ledger and the worker's own.
+        ...[...this.liveCodexNativeSubAgentUsage.values()]
+          .flatMap((lives) => [...lives.values()])
+          .flatMap((live) => [...live.lines.values()])
+          .filter((line) =>
+            line.parentThreadId === params.threadId || line.threadId === params.threadId),
       ],
     );
     const localIds = new Set(this.resolveCodexLocalModelIdsFn());
@@ -26674,7 +26678,7 @@ export class DesktopBackendRegistry {
     overlays: Record<string, ThreadOverlayState | undefined>,
   ): Promise<void> {
     for (const parent of threads) {
-      let probed = false;
+      const probes: Promise<void>[] = [];
       for (const card of overlays[parent.id]?.subAgents ?? []) {
         if (
           !card.monitorId.startsWith("codex-native:")
@@ -26692,10 +26696,12 @@ export class DesktopBackendRegistry {
           receiverThreadId: card.monitorThreadId,
           delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
         });
-        await this.reconcileCodexNativeSubAgent(card.monitorThreadId);
-        probed = true;
+        // Each probe replaces only its own card, so they run together rather
+        // than holding the snapshot for one round trip per worker.
+        probes.push(this.reconcileCodexNativeSubAgent(card.monitorThreadId));
       }
-      if (probed) {
+      if (probes.length > 0) {
+        await Promise.all(probes);
         overlays[parent.id] = await this.overlayStore.getThreadOverlayState({
           backend: "codex",
           threadId: parent.id,
@@ -29185,10 +29191,20 @@ export class DesktopBackendRegistry {
       });
       this.liveCodexNativeSubAgentUsage.set(parentThreadId, lives);
       logUnpricedThreadUsageLine(line);
-      await this.emitThreadPricingUpdated({
-        backend: "codex",
-        threadId: parentThreadId,
-      });
+      // Codex can report usage after the turn it belongs to has ended. That
+      // boundary has passed, and the worker may never run again.
+      const completedTurn = this.recentlyCompletedThreadUsageTurns.get(
+        ["codex", event.notification.params.threadId].join(":"),
+      );
+      const reportedTurnId = readOptionalString(notificationParams, ["turnId", "turn_id"]);
+      if (completedTurn && (!reportedTurnId || reportedTurnId === completedTurn.turnId)) {
+        await this.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
+      } else {
+        await this.emitThreadPricingUpdated({
+          backend: "codex",
+          threadId: parentThreadId,
+        });
+      }
     } else {
       await this.overlayStore.upsertThreadSubAgent({
         backend: "codex",
