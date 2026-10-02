@@ -17,7 +17,7 @@ type SweeperDeps = {
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
   isBusy: (candidate: ThreadArchiveCandidate) => boolean;
   canArchive: (candidates: ThreadArchiveCandidate[]) => Promise<boolean>;
-  archive: (candidate: ThreadArchiveCandidate) => Promise<unknown>;
+  archive: (candidate: ThreadArchiveCandidate, family: ThreadArchiveCandidate[]) => Promise<unknown>;
   workspaceIsSafe?: (cwd: string, signal: AbortSignal) => Promise<boolean>;
   onError: (error: unknown, threadId?: string) => void;
 };
@@ -152,7 +152,7 @@ export class ThreadArchiveSweeper {
         if (!safe || this.abort.signal.aborted) continue;
         if (!refreshed.every((item) => !this.deps.isBusy(item)) || !await this.deps.canArchive(refreshed)) continue;
         if (this.abort.signal.aborted) return;
-        await this.deps.archive(refreshed[0]!);
+        await this.deps.archive(refreshed[0]!, refreshed);
       } catch (error) {
         if (!this.abort.signal.aborted) this.deps.onError(error, candidate.thread.id);
       }

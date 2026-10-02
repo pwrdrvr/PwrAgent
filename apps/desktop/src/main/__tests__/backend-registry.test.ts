@@ -50246,11 +50246,11 @@ script = "printf setup"
     });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
-    const archive = vi.spyOn(registry, "archiveThread");
+    const archive = vi.spyOn(client, "archiveThread");
     const nativeDiscovery = vi.spyOn(client, "listNativeSubAgentThreads");
     try {
       await registry.sweepInactiveThreads();
-      expect(archive).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: thread.id });
+      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
       expect(nativeDiscovery).toHaveBeenCalledWith({ all: true }, { callerReason: "auto-archive" });
       client.setThreads([]);
       expect(await registry.listThreads({ backend: "codex", archived: true, forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining(thread)]));
@@ -50399,6 +50399,142 @@ script = "printf setup"
       await registry.sweepInactiveThreads();
       expect(readThreadSummary).toHaveBeenCalledTimes(2);
       expect(archive).not.toHaveBeenCalled();
+    } finally { await registry.close(); }
+  });
+
+  it.each(["pin", "view", "provider activity"])("cancels automatic archive after %s during cleanup discovery", async (protection) => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const overlay: ThreadOverlayState = { backend: "codex", threadId: thread.id, extraLinkedDirectories: [] };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock({ overlays: { "codex:stale-thread": overlay } }) });
+    let release!: () => void;
+    let started!: () => void;
+    const cleanupBlocked = new Promise<void>((resolve) => { release = resolve; });
+    const cleanupStarted = new Promise<void>((resolve) => { started = resolve; });
+    const listThreads = registry.listThreads.bind(registry);
+    vi.spyOn(registry, "listThreads").mockImplementation(async (params) => {
+      if (params?.callerReason === "archive-cleanup" && params.archived) {
+        started();
+        await cleanupBlocked;
+      }
+      return await listThreads(params);
+    });
+    const archive = vi.spyOn(client, "archiveThread");
+    let mutation: Promise<void> | undefined;
+    try {
+      const sweep = registry.sweepInactiveThreads();
+      await cleanupStarted;
+      if (protection === "provider activity") {
+        thread.updatedAt = Date.now();
+      } else {
+        mutation = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => {
+          if (protection === "pin") overlay.pinnedRank = "a";
+          else overlay.lastSeenAt = Date.now();
+        });
+      }
+      release();
+      await sweep;
+      await mutation;
+      expect(archive).not.toHaveBeenCalled();
+    } finally { release(); await registry.close(); }
+  });
+
+  it("cancels automatic archive when a pin arrives during final provider admission", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    let pin: Promise<void> | undefined;
+    client.readThreadSummary.mockImplementation(async () => {
+      if (client.readThreadSummary.mock.calls.length === 3) {
+        pin = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => {});
+      }
+      return thread;
+    });
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.sweepInactiveThreads();
+      await pin;
+      expect(pin).toBeDefined();
+      expect(archive).not.toHaveBeenCalled();
+    } finally { await registry.close(); }
+  });
+
+  it("rechecks ACP activity after archive cleanup discovery", async () => {
+    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
+    const sessions: AcpSessionMetadata[] = [
+      { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
+    ];
+    const { registry } = createKimiAcpRegistry({ sessions });
+    const listThreads = registry.listThreads.bind(registry);
+    vi.spyOn(registry, "listThreads").mockImplementation(async (params) => {
+      const result = await listThreads(params);
+      if (params?.callerReason === "archive-cleanup") {
+        sessions[0]!.status = "active";
+        sessions[0]!.updatedAt = Date.now();
+      }
+      return result;
+    });
+    try {
+      await registry.sweepInactiveThreads();
+      expect(sessions[0]!.archivedAt).toBeUndefined();
+      expect(sessions[0]!.status).toBe("active");
+    } finally { await registry.close(); }
+  });
+
+  it("serializes operator mutations behind an automatic archive already sent to the provider", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    let release!: () => void;
+    let started!: () => void;
+    const providerBlocked = new Promise<void>((resolve) => { release = resolve; });
+    const providerStarted = new Promise<void>((resolve) => { started = resolve; });
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+      archiveThread: vi.fn(async () => { started(); await providerBlocked; return { threadId: thread.id }; }),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    try {
+      const sweep = registry.sweepInactiveThreads();
+      await providerStarted;
+      let mutated = false;
+      const mutation = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => { mutated = true; });
+      await Promise.resolve();
+      expect(mutated).toBe(false);
+      release();
+      await sweep;
+      await mutation;
+      expect(mutated).toBe(true);
+    } finally { release(); await registry.close(); }
+  });
+
+  it("keeps nested lifecycle operations usable and protects their thread from housekeeping", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const identity = { backend: "codex" as const, threadId: thread.id };
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.withThreadLifecycleMutation(identity, async () => {
+        await registry.withThreadHandoff(thread.id, async () => {
+          await registry.sweepInactiveThreads();
+          expect(archive).not.toHaveBeenCalled();
+        });
+      });
+      await registry.sweepInactiveThreads();
+      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
     } finally { await registry.close(); }
   });
 

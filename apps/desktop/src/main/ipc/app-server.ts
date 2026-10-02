@@ -3726,12 +3726,16 @@ class DesktopAppServerService {
     }
     const backend = request.backend ?? "codex";
 
-    const response = await this.getOverlayStore().markThreadSeen({
+    const markSeen = async () => await this.getOverlayStore().markThreadSeen({
       backend,
       seenAt: request.seenAt,
       seenUpdatedAt: request.seenUpdatedAt,
       threadId: request.threadId,
     });
+    const registry = getExistingDesktopBackendRegistry();
+    const response = registry
+      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, markSeen)
+      : await markSeen();
 
     logDebug("markThreadSeen", {
       backend,
@@ -6574,12 +6578,16 @@ class DesktopAppServerService {
     }
     const backend = request.backend ?? "codex";
 
-    const overlay = await this.getOverlayStore().setThreadPin({
+    const setPin = async () => await this.getOverlayStore().setThreadPin({
       backend,
       threadId: request.threadId,
       pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
+    const registry = getExistingDesktopBackendRegistry();
+    const overlay = registry
+      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, setPin)
+      : await setPin();
 
     logDebug("setThreadPin", {
       backend,

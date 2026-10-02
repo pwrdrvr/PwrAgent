@@ -51,6 +51,9 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
   existing: true,
   get: vi.fn(),
 }));
+const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
+  async (_identity: unknown, work: () => Promise<unknown>) => await work(),
+));
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
@@ -1161,6 +1164,7 @@ vi.mock("../app-server/backend-registry", () => {
     rememberCompleteNavigationSnapshot,
     rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
     getCodexAppServerRestartStatus: () => ({ stopped: false }),
+    withThreadLifecycleMutation,
     onCodexAppServerRestartStatusChanged: (listener: (status: unknown) => void) => {
       codexRestartStatus.listeners.add(listener);
       return () => codexRestartStatus.listeners.delete(listener);
@@ -1258,6 +1262,7 @@ describe("app server ipc", () => {
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
+    withThreadLifecycleMutation.mockClear();
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
     prAutomationSettings.state.budgetPaused = false;
     prAutomationSettings.state.budgetPausedAt = 1_000;
@@ -4882,6 +4887,9 @@ describe("app server ipc", () => {
       seenAt: undefined,
       seenUpdatedAt: 3000,
     });
+    expect(withThreadLifecycleMutation).toHaveBeenCalledWith(
+      { backend: "acp:grok", threadId: "thread-1" }, expect.any(Function),
+    );
     expect(response).toEqual({
       backend: "acp:grok",
       threadId: "thread-1",
