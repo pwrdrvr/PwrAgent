@@ -185,7 +185,7 @@ jobs:
           Expand-Archive (Join-Path $env:RUNNER_TEMP $dependenciesName) -DestinationPath $dependenciesDir
           $dependencies = @(Get-ChildItem "$dependenciesDir/x64" -File | Where-Object Extension -in @(".appx", ".msix") | ForEach-Object FullName)
           if ($dependencies.Count -eq 0) { throw "WinGet release has no x64 dependencies" }
-          Add-AppxPackage -Path (Join-Path $env:RUNNER_TEMP $bundleName) -DependencyPath $dependencies -ForceApplicationShutdown
+          Add-AppxPackage -Path (Join-Path $env:RUNNER_TEMP $bundleName) -DependencyPath $dependencies -ForceApplicationShutdown -StubPackageOption InstallFull
           Write-Output "Installed official WinGet release $($release.tag_name)"
           Add-Content $env:GITHUB_PATH "$env:LOCALAPPDATA\Microsoft\WindowsApps"
       - name: Validate signed installer, fresh user/machine installs and upgrade
