@@ -188,14 +188,17 @@ export function HelperModelSettings(props: {
     ? models.some((model) => model.id === savedModel)
     : true;
   const runningModel = models.find((model) => model.id === resolution?.model);
-  const efforts = runningModel?.supportsReasoning === false
+  // Undefined means the catalog names no efforts, and the resolver then runs
+  // the saved one as is, so only a listed set can rule an effort out.
+  const advertisedEfforts = runningModel?.supportsReasoning === false
     ? []
     : runningModel?.reasoningEfforts
-      ?? (codex.kind === "ready" ? codex.reasoningEfforts : undefined)
-      ?? [];
-  const effortOffered = savedEffort && codex.kind === "ready" && runningModel
-    ? efforts.includes(savedEffort)
-    : true;
+      ?? (codex.kind === "ready" ? codex.reasoningEfforts : undefined);
+  const efforts = advertisedEfforts ?? [];
+  const effortOffered =
+    savedEffort && codex.kind === "ready" && runningModel && advertisedEfforts
+      ? advertisedEfforts.includes(savedEffort)
+      : true;
 
   const lines: ReactNode[] = [];
   if (codex.kind === "loading") {
@@ -299,9 +302,9 @@ export function HelperModelSettings(props: {
                     ...(savedEffort && !efforts.includes(savedEffort)
                       ? [{
                           value: savedEffort,
-                          label: codex.kind === "ready"
-                            ? `${savedEffort} (not offered)`
-                            : savedEffort,
+                          label: effortOffered
+                            ? savedEffort
+                            : `${savedEffort} (not offered)`,
                         }]
                       : []),
                     ...efforts.map((effort) => ({ value: effort, label: effort })),

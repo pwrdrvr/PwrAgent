@@ -98,6 +98,23 @@ describe("HelperModelSettings", () => {
       .toEqual(["Per helper", "low", "medium"]);
   });
 
+  it("does not call a saved effort unavailable when the model lists no efforts", () => {
+    renderRow(
+      { defaultReasoningEffort: "high", helpers: {} },
+      [{
+        ...codex,
+        launchpadOptions: {
+          models: [{ id: "gpt-6-luna", label: "GPT-6-Luna", supportsReasoning: true }],
+        },
+      } as unknown as BackendSummary],
+    );
+
+    expect(screen.getByRole("combobox", { name: "Helper reasoning" }))
+      .toHaveTextContent(/^high$/);
+    expect(screen.queryByText(/not offer/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Runs ,/)).toHaveTextContent("Runs GPT-6-Luna, high.");
+  });
+
   it("keeps a saved model Codex does not offer and names what runs instead", () => {
     renderRow({ defaultModel: "gpt-6.1-luna", helpers: {} });
 
