@@ -5536,3 +5536,52 @@ Implementation notes remain in a readable bubble.`;
     });
   });
 });
+
+describe("TranscriptList agent commands line", () => {
+  const entries = [{ type: "message" as const, id: "message-1", role: "assistant" as const, text: "The dev server is up." }];
+
+  it("says which command is still running and links to Actions", () => {
+    const onShowAgentCommands = vi.fn();
+    render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        agentCommandsStatus={{ count: 1, command: "pnpm dev" }}
+        onShowAgentCommands={onShowAgentCommands}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />,
+    );
+    const line = screen.getByText("pnpm dev").closest(".transcript-list__agent-commands");
+    expect(line).toHaveTextContent("pnpm dev is still running");
+    // The turn is over: no scanner and no live region.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.querySelector(".thinking-scanner")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(onShowAgentCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts commands when it cannot name one", () => {
+    const { rerender } = render(
+      <TranscriptList entries={entries} loading={false} loadingMore={false}
+        agentCommandsStatus={{ count: 1 }} threadId="thread-1" onLoadOlder={async () => undefined} />,
+    );
+    expect(screen.getByText("An agent command is still running")).toBeInTheDocument();
+    rerender(
+      <TranscriptList entries={entries} loading={false} loadingMore={false}
+        agentCommandsStatus={{ count: 2 }} threadId="thread-1" onLoadOlder={async () => undefined} />,
+    );
+    expect(screen.getByText("2 agent commands are still running")).toBeInTheDocument();
+  });
+
+  it("yields to the thinking line while a turn runs", () => {
+    render(
+      <TranscriptList entries={entries} loading={false} loadingMore={false}
+        pendingStatusText="Thinking" agentCommandsStatus={{ count: 1, command: "pnpm dev" }}
+        threadId="thread-1" onLoadOlder={async () => undefined} />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Thinking");
+    expect(screen.queryByText("pnpm dev")).toBeNull();
+  });
+});

@@ -1,3 +1,9 @@
+import type {
+  ListBackgroundTerminalsRequest,
+  ListBackgroundTerminalsResponse,
+  TerminateBackgroundTerminalRequest,
+  TerminateBackgroundTerminalResponse,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "./federation-file-pull";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
@@ -6664,6 +6670,12 @@ function localBackendOperations(): FederationBackendOperations {
       request: RunCodexEnvironmentActionRequest,
     ): Promise<RunCodexEnvironmentActionResponse> {
       return await getDesktopBackendRegistry().runCodexEnvironmentAction(request);
+    },
+    async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
+      return await getDesktopBackendRegistry().listBackgroundTerminals(request);
+    },
+    async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
+      return await getDesktopBackendRegistry().terminateBackgroundTerminal(request);
     },
     async stopCodexEnvironmentAction(
       request: StopCodexEnvironmentActionRequest,

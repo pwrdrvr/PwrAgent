@@ -248,6 +248,16 @@ describe("federation backend bridge", () => {
     expect(request.mock.calls).toHaveLength(2);
   });
 
+  it("lists no agent commands on older owners and explains a Stop", async () => {
+    const request = vi.fn(async () => { throw Object.assign(new Error("No handler"), { code: "method_not_found" }); });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await expect(client.listBackgroundTerminals({ backend: "codex", threadId: "thread" }))
+      .resolves.toEqual({ supported: false, terminals: [] });
+    await expect(client.terminateBackgroundTerminal({ backend: "codex", threadId: "thread", processId: "session-1" }))
+      .rejects.toThrow("Update PwrAgent on the owning instance");
+    expect(request.mock.calls).toHaveLength(2);
+  });
+
   it("gates explicit review modes before sending them to an old Federation owner", async () => {
     const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
@@ -3771,6 +3781,8 @@ describe("federation backend bridge", () => {
           executionTarget: "local" as const,
         },
       })),
+      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [] })),
+      terminateBackgroundTerminal: vi.fn(async () => ({ terminated: true })),
       stopCodexEnvironmentAction: vi.fn(),
       setCodexThreadEnvironment: vi.fn(),
       refreshThreadPullRequests: vi.fn(),
@@ -4061,6 +4073,20 @@ describe("federation backend bridge", () => {
         },
       },
     ]);
+    for (const [method, params] of [
+      [FEDERATION_BACKEND_METHODS.listBackgroundTerminals, { backend: "codex", threadId: "thread-1" }],
+      [FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal, { backend: "codex", threadId: "thread-1", processId: "session-27" }],
+    ] as const) {
+      await router.routeEnvelope({ sourcePeerId: "gateway_one", envelope: {
+        id: method, kind: "request", method, params, protocolVersion: 1,
+        sourceInstanceId: "gateway_one", targetInstanceId: "client_one", createdAt: 1_300,
+      } });
+    }
+    expect(backend.listBackgroundTerminals).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" });
+    expect(backend.terminateBackgroundTerminal).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", processId: "session-27" });
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.listBackgroundTerminals]).toBe("thread_detail");
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal]).toBe("turn_control");
+
   });
 
   it("requires environment_actions for remote environment mutations", async () => {
@@ -4133,6 +4159,8 @@ describe("federation backend bridge", () => {
         retainThreadBranchDrift: vi.fn(),
         submitServerRequest: vi.fn(),
         runCodexEnvironmentAction: vi.fn(),
+        listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [] })),
+        terminateBackgroundTerminal: vi.fn(async () => ({ terminated: true })),
         stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
         refreshThreadPullRequests: vi.fn(),

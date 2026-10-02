@@ -205,6 +205,8 @@ export const CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL =
   "codex-environment:setup-progress";
 export const AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL =
   "agent:run-codex-environment-action";
+export const AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL = "agent:list-background-terminals";
+export const AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL = "agent:terminate-background-terminal";
 export const AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL =
   "agent:stop-codex-environment-action";
 export const AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL =

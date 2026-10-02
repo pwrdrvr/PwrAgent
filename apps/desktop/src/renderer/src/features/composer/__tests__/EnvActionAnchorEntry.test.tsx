@@ -65,7 +65,7 @@ describe("EnvActionAnchorEntry", () => {
         screen.getByRole("button", { name: "Terminate now" }),
       ).toBeInTheDocument();
       // The pid meta and the command echo land in the same anchor.
-      expect(screen.getByText(/pid 12345/)).toBeInTheDocument();
+      expect(screen.getByText(/PID 12345/)).toBeInTheDocument();
       expect(screen.getByText(/running for 0s/)).toBeInTheDocument();
       expect(screen.queryByText(/750ms/)).toBeNull();
       expect(screen.getByText(/\$ pnpm test/)).toBeInTheDocument();
