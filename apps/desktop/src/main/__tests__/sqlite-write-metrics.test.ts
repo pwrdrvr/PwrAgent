@@ -7,6 +7,7 @@ import type {
   AppServerThreadSummary,
   StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
+  ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
@@ -1118,6 +1119,98 @@ describe("sqlite write metrics", () => {
         writes,
       });
     } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([
+    ["in one burst", 0],
+    ["a second or more apart", 1_100],
+  ] as const)("holds native worker usage off the card until the worker's turn ends, updates %s", async (_case, gapMs) => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: "thread-parent",
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running", agentName: "review_savers",
+        monitorTurnId: "turn-review", createdAt: now - 10_000, updatedAt: now - 1_000,
+      },
+    });
+    // A path-based worker's card names no model; the first update reads it
+    // from Codex. That is a protocol call and must not add a commit.
+    const codexClient = Object.assign(createStubBackendClient() as object, {
+      readThreadModelSettings: async () => ({ model: "gpt-5.5", reasoningEffort: "high" }),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: codexClient as never,
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      codexNativeSubAgentParents: Map<string, string>;
+      emit(event: AgentEvent): Promise<void>;
+      mergeLiveTokenMiserSubAgents(
+        threadId: string,
+        persisted: readonly ThreadSubAgentSummary[] | undefined,
+      ): ThreadSubAgentSummary[];
+    };
+    internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+    const usage = (total: number): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "worker-review",
+          turnId: "turn-worker",
+          tokenUsage: {
+            total: { inputTokens: total, cachedInputTokens: 0, outputTokens: 50 },
+            last: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 50 },
+          },
+        },
+      },
+    } as AgentEvent);
+    const storedCard = async () => (await store.getThreadOverlayState({
+      backend: "codex", threadId: "thread-parent",
+    }))?.subAgents?.[0];
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 1; index <= 20; index += 1) {
+          await internal.emit(usage(index * 1_000));
+          if (gapMs > 0) {
+            await vi.advanceTimersByTimeAsync(gapMs);
+          }
+        }
+        // Before the turn ends the card in sqlite has no usage, and the rail,
+        // which reads through the live merge, shows the latest.
+        expect((await storedCard())?.monitorUsage).toBeUndefined();
+        expect(
+          internal.mergeLiveTokenMiserSubAgents("thread-parent", [(await storedCard())!])[0],
+        ).toMatchObject({
+          preferredModel: "gpt-5.5",
+          monitorUsage: { tokenUsage: expect.objectContaining({ inputTokens: 20_000 }) },
+        });
+        await internal.emit(buildTurnCompletedEvent("worker-review", "turn-worker"));
+      });
+      expect(await storedCard()).toMatchObject({
+        status: "running",
+        preferredModel: "gpt-5.5",
+        monitorUsage: { tokenUsage: expect.objectContaining({ inputTokens: 20_000 }) },
+      });
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" });
+      expect(pricing.lines.find((line) => line.threadId === "worker-review")).toMatchObject({
+        model: "gpt-5.5", priceStatus: "priced",
+      });
+      expectSqliteWriteBudget({
+        scenario: gapMs > 0
+          ? "native-subagent-usage-spaced"
+          : "native-subagent-usage-burst",
+        note: gapMs > 0
+          ? "20 native worker usage updates, each in its own one-second window, then the worker's turn end; was 2 commits and an overlay rewrite per update"
+          : "20 native worker usage updates in one one-second window, then the worker's turn end",
+        writes,
+      });
+    } finally {
+      vi.useRealTimers();
       await registry.close();
     }
   });

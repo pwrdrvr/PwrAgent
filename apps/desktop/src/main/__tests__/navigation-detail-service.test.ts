@@ -225,6 +225,7 @@ describe("NavigationDetailService", () => {
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
       hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
       liveTokenMiserSubAgents: new Map([[selected.id, liveAgents]]),
+      liveCodexNativeSubAgentUsage: new Map(),
       mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);

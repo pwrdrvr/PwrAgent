@@ -317,6 +317,7 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
     getActiveTurnForThread: () => ({ turnId: parent.turnId }),
     liveTokenMiserUsageLines: new Map([["fixture", new Map(gates.map((gate) => [gate.usageLineId, gate]))]]),
     liveTokenMiserSubAgents: new Map([["fixture", new Map(agents.map((agent) => [agent.monitorId, agent]))]]),
+    liveCodexNativeSubAgentUsage: new Map(),
   }) as DesktopBackendRegistry;
   const display = { resource: "pricing" as const, limit: 20, deferPricingGates };
   const first = await registry.readThread({ threadId: "fixture", display });
