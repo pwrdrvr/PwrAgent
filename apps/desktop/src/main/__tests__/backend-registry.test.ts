@@ -50270,6 +50270,8 @@ script = "printf setup"
     await git(repo, ["init", "-b", "main"]);
     await git(repo, ["config", "user.name", "Test User"]);
     await git(repo, ["config", "user.email", "test@example.com"]);
+    await git(repo, ["config", "core.autocrlf", "false"]);
+    await git(repo, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repo, "file.txt"), "base\n");
     await git(repo, ["add", "."]);
     await git(repo, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
