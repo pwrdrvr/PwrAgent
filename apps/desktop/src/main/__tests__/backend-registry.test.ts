@@ -128,7 +128,7 @@ import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
-import type { AcpSessionMetadata } from "../acp/acp-session-store";
+import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -50313,6 +50313,69 @@ script = "printf setup"
       expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("local work\n");
       await registry.sweepInactiveThreads();
       expect(await stat(worktree)).toBeDefined();
+    } finally {
+      await registry.close();
+      db.close();
+      if (metricsEnv === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = metricsEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("auto archives stale idle ACP sessions and keeps active, unknown and recent sessions", async () => {
+    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
+    const sessions: AcpSessionMetadata[] = [
+      { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
+      { backendId: "acp:kimi", sessionId: "old-active", title: "Old active", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "active" },
+      { backendId: "acp:kimi", sessionId: "old-unknown", title: "Old unknown", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "unknown" },
+      { backendId: "acp:kimi", sessionId: "recent", title: "Recent", createdAt: staleAt, updatedAt: Date.now(), executionMode: "default", status: "idle" },
+    ];
+    const { registry } = createKimiAcpRegistry({ sessions });
+    try {
+      await registry.sweepInactiveThreads();
+      expect(sessions.filter((session) => session.archivedAt).map((session) => session.sessionId)).toEqual(["old-idle"]);
+    } finally { await registry.close(); }
+  });
+
+  it("rejects auto archive when an ACP session becomes active during admission", async () => {
+    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
+    const sessions: AcpSessionMetadata[] = [
+      { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
+    ];
+    const overlayStore = createOverlayStoreMock();
+    const { registry } = createKimiAcpRegistry({ sessions, overlayStore });
+    const getOverlay = overlayStore.getThreadOverlayState.bind(overlayStore);
+    let reads = 0;
+    vi.spyOn(overlayStore, "getThreadOverlayState").mockImplementation(async (identity) => {
+      if (++reads === 2) sessions[0]!.status = "active";
+      return await getOverlay(identity);
+    });
+    try {
+      await registry.sweepInactiveThreads();
+      expect(sessions[0]!.archivedAt).toBeUndefined();
+    } finally { await registry.close(); }
+  });
+
+  it("budgets automatic ACP archive once and keeps subsequent hourly sweeps read-only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-archive-budget-"));
+    const metricsEnv = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const db = StateDb.open(path.join(root, "state.db"));
+    const sessionStore = new AcpSessionStore(db);
+    const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
+    sessionStore.upsertSession({ backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: new SqliteOverlayStore(db), messagingStore: null,
+      acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord()]),
+      acpSessionStore: sessionStore,
+    });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let hour = 0; hour < 24; hour++) await registry.sweepInactiveThreads();
+      });
+      expect(sessionStore.getSession("acp:kimi", "old-idle")?.archivedAt).toEqual(expect.any(Number));
+      expectSqliteWriteBudget({ scenario: "inactive-acp-thread-archive-day", note: "One stale ACP session archive followed by 23 idle hourly sweeps. One boundary commit per archive; no heartbeat writes.", writes });
     } finally {
       await registry.close();
       db.close();

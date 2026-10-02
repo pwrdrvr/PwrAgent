@@ -817,6 +817,10 @@ export function acpSessionToThreadSummary(
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     archivedAt: session.archivedAt,
+    // A failed prompt has settled; an unknown persisted state is not evidence
+    // that the session is idle.
+    threadStatus: session.status === "active" ? "active"
+      : session.status === "unknown" ? "unknown" : "idle",
     linkedDirectories: session.cwd
       ? [
           {

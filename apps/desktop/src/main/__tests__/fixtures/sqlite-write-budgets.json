@@ -265,6 +265,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "inactive-acp-thread-archive-day": {
+    "commits": 1,
+    "note": "One stale ACP session archive followed by 23 idle hourly sweeps. One boundary commit per archive; no heartbeat writes.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "inactive-thread-archive-restore": {
     "commits": 1,
     "note": "One stale conversational thread archived and restored; subsequent sweep writes nothing. Boundary cost, never an hourly heartbeat.",
