@@ -2943,6 +2943,13 @@ function DesktopAppShell(props: {
     pendingStatusText: session.pendingStatusText,
     runningTurnUsageText: session.runningTurnUsageText,
     threadBusy: session.threadBusy,
+    agentCommandsStatus: session.agentCommandsStatus,
+    backgroundTerminals: {
+      terminals: session.backgroundTerminals,
+      error: session.backgroundTerminalsError,
+      stopping: session.stoppingBackgroundTerminal,
+      onStop: session.stopBackgroundTerminal,
+    },
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
@@ -3269,6 +3276,7 @@ function DesktopAppShell(props: {
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
+          agentCommandThreadKeys={session.agentCommandThreadKeys}
           threads={navigation.threads}
           automationsActive={mainView === "automations"}
           threadSearchActive={mainView === "search"}

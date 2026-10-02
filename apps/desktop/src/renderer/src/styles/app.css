@@ -5442,6 +5442,28 @@ a.button {
   fill: currentColor;
 }
 
+/* A command that outlived its turn (a dev server, a watcher). Quiet on
+   purpose: the turn is done, so this is a pointer to the Actions rail, not
+   a second activity indicator. */
+.thread-row__agent-command {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  height: 15px;
+  padding: 0 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  /* Like the status indicator: hoverable through the header's pointer
+     transparency so its native `title` explains the mark. */
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 .thread-row__title,
 .directory-group__title,
 .context-list__label {
@@ -25058,6 +25080,141 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 10px;
 }
 
+.actions-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.actions-panel__body .env-action-runs--sidebar {
+  flex: none;
+  overflow-y: visible;
+}
+
+/* Agent commands and Environment are groups inside one Actions panel, not
+   peers of its title. The label borrows the `.composer__queued-label` idiom
+   and carries no rule, so the panel keeps a single heading. */
+.actions-panel__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 12px 0 14px;
+}
+
+.actions-panel__group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.actions-panel__group-title h4 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.actions-panel__group-count {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions-panel__group-error {
+  padding: 8px 12px 0 14px;
+}
+
+.actions-panel__group .env-action-runs--sidebar {
+  padding-top: 8px;
+}
+
+.agent-command-run__command {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-command-run__meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-command-run__directory {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* The dot alone carries the warning hue. `--status-warning` is a fill
+   token: as 11px label text it measures 4.4:1 on the light theme's
+   elevated surface, so the "Stopping" word stays in the label color. */
+.agent-command-run--stopping .status-dot--active {
+  background: var(--status-warning);
+}
+
+/* 40px puts the body under the title column: summary padding, chevron,
+   gap, status dot, gap (8px each). */
+.agent-command-run__body {
+  display: grid;
+  gap: 10px;
+  padding: 2px 10px 10px 40px;
+}
+
+.agent-command-run__facts {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 5px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.agent-command-run__facts dt {
+  color: var(--text-muted);
+}
+
+.agent-command-run__facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.agent-command-run__path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.agent-command-run__output {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-command-run__output-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.agent-command-run__output-scope {
+  font-size: 10.5px;
+}
+
 .env-action-runs--composer {
   display: flex;
   flex-direction: column;
@@ -25696,6 +25853,54 @@ div.composer-error-row__toggle {
   content: "/";
   margin-right: 14px;
   color: var(--border-strong);
+}
+
+/* The turn is over and a command it started is still running. A static
+   glyph instead of the scanner: nothing here is the agent working. */
+.transcript-list__agent-commands {
+  gap: 8px;
+}
+
+.transcript-list__agent-commands-glyph {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.transcript-list__agent-commands-command {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.transcript-list__agent-commands-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.transcript-list__agent-commands-link:hover {
+  text-decoration: underline;
+}
+
+.transcript-list__agent-commands-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .transcript-request {
@@ -27212,6 +27417,12 @@ div.composer-error-row__toggle {
     border-color 140ms ease,
     background 140ms ease,
     color 140ms ease;
+}
+
+.context-rail__activity {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 
 .context-rail__tab:hover,

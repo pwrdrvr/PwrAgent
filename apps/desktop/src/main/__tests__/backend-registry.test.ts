@@ -23773,6 +23773,60 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("recovers background terminals into quit protection and stops only their Codex sessions", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const terminal = { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project", osPid: 456 };
+    const listBackgroundTerminals = vi.fn()
+      .mockResolvedValueOnce({ supported: true, terminals: [terminal] })
+      .mockResolvedValue({ supported: true, terminals: [] });
+    const terminateBackgroundTerminal = vi.fn(async () => true);
+    Object.assign(codexClient, { listBackgroundTerminals, terminateBackgroundTerminal });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    expect(await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" }))
+      .toEqual({ supported: true, terminals: [terminal] });
+    expect(registry.getInProgressThreadSnapshotForQuit().threadIds).toEqual(["codex:thread-1"]);
+    expect(await registry.terminateBackgroundTerminal({ backend: "codex", threadId: "thread-1", processId: "session-1" }))
+      .toEqual({ terminated: true });
+    expect(terminateBackgroundTerminal).toHaveBeenCalledWith("thread-1", "session-1");
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+    expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    await registry.close();
+  });
+
+  it("reports a Stop as done when the follow-up list read fails", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const terminal = { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project" };
+    const listBackgroundTerminals = vi.fn()
+      .mockResolvedValueOnce({ supported: true, terminals: [terminal] })
+      .mockRejectedValue(new Error("thread/backgroundTerminals/list timed out"));
+    const terminateBackgroundTerminal = vi.fn(async () => true);
+    Object.assign(codexClient, { listBackgroundTerminals, terminateBackgroundTerminal });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+    expect(await registry.terminateBackgroundTerminal({ backend: "codex", threadId: "thread-1", processId: "session-1" }))
+      .toEqual({ terminated: true });
+    expect(listBackgroundTerminals).toHaveBeenCalledTimes(2);
+    await registry.close();
+  });
+
+  it("does not restore a completed background terminal from an earlier registry read", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const terminal = { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project" };
+    let resolveRead!: (response: { supported: boolean; terminals: typeof terminal[] }) => void;
+    const listBackgroundTerminals = vi.fn(() => new Promise((resolve) => { resolveRead = resolve; }));
+    Object.assign(codexClient, { listBackgroundTerminals });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const read = registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+    await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
+    await codexClient.emit({ method: "item/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", item: { id: "command-1", type: "commandExecution", status: "completed" },
+    } });
+    resolveRead({ supported: true, terminals: [terminal] });
+    await read;
+    expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    await registry.close();
+  });
+
   it("keeps a running Codex command in the quit snapshot after its turn ends", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/read"] },
@@ -50533,6 +50587,30 @@ script = "printf setup"
           expect(archive).not.toHaveBeenCalled();
         });
       });
+      await registry.sweepInactiveThreads();
+      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
+    } finally { await registry.close(); }
+  });
+
+  it("keeps an inactive thread with a live background terminal out of automatic archival", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    let running = true;
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: running
+        ? [{ itemId: "item-1", processId: "session-1", command: "long-running command", cwd: "/repo" }] : [] })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: thread.id });
+      await registry.sweepInactiveThreads();
+      expect(archive).not.toHaveBeenCalled();
+      running = false;
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: thread.id });
       await registry.sweepInactiveThreads();
       expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
     } finally { await registry.close(); }

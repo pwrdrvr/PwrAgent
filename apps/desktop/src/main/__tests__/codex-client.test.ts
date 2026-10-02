@@ -93,6 +93,8 @@ function createModelListResponse(models: Model[]): ModelListResponse {
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
+  static backgroundTerminalPages = new Map<string, unknown>();
+  static backgroundTerminalError: { code: number; message: string } | undefined;
   static serverVersion = "1.0.0";
   static requireLoadedThreads = false;
   static codexHome = "/Users/fixture-user/.codex";
@@ -286,6 +288,21 @@ class MockTransport implements JsonRpcTransport {
           result,
         })
       );
+      return;
+    }
+
+    if (payload.method === "thread/backgroundTerminals/list") {
+      this.messageHandler(JSON.stringify({
+        jsonrpc: "2.0", id: payload.id,
+        ...(MockTransport.backgroundTerminalError
+          ? { error: MockTransport.backgroundTerminalError }
+          : { result: MockTransport.backgroundTerminalPages.get(String(payload.params?.cursor ?? ""))
+            ?? { data: [], nextCursor: null } }),
+      }));
+      return;
+    }
+    if (payload.method === "thread/backgroundTerminals/terminate") {
+      this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: { terminated: true } }));
       return;
     }
 
@@ -1388,6 +1405,48 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("lists and terminates background terminals through Codex session handles", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    MockTransport.backgroundTerminalPages.set("", {
+      data: [{ itemId: "command-1", processId: "session-27", command: "pnpm dev", cwd: "/fixture/project",
+        osPid: 123, cpuPercent: 1.2, rssKb: 8192 }], nextCursor: "page-2",
+    });
+    MockTransport.backgroundTerminalPages.set("page-2", {
+      data: [{ itemId: "command-2", processId: "session-28", command: "pnpm watch", cwd: "/fixture/project",
+        osPid: null, cpuPercent: null, rssKb: null }], nextCursor: null,
+    });
+    expect(await client.listBackgroundTerminals("thread-1")).toEqual({
+      supported: true,
+      terminals: [
+        { itemId: "command-1", processId: "session-27", command: "pnpm dev", cwd: "/fixture/project",
+          osPid: 123, cpuPercent: 1.2, memoryKb: 8192 },
+        { itemId: "command-2", processId: "session-28", command: "pnpm watch", cwd: "/fixture/project" },
+      ],
+    });
+    expect(await client.terminateBackgroundTerminal("thread-1", "session-27")).toBe(true);
+    const messages = MockTransport.instances.at(-1)!.sentMessages.map((text) => JSON.parse(text));
+    expect(messages).toContainEqual(expect.objectContaining({
+      method: "thread/backgroundTerminals/terminate", params: { threadId: "thread-1", processId: "session-27" },
+    }));
+    expect(messages.some((message) => message.method === "turn/interrupt")).toBe(false);
+    await client.close();
+  });
+
+  it("reports unsupported terminal listing without hiding other protocol errors", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    MockTransport.backgroundTerminalError = { code: -32601, message: "Method not found" };
+    expect(await client.listBackgroundTerminals("thread-1")).toEqual({ supported: false, terminals: [] });
+    MockTransport.backgroundTerminalError = { code: -32600, message: "thread not found: thread-1" };
+    expect(await client.listBackgroundTerminals("thread-1")).toEqual({ supported: true, terminals: [] });
+    MockTransport.backgroundTerminalError = { code: -32000, message: "thread not loaded" };
+    expect(await client.listBackgroundTerminals("thread-1")).toEqual({ supported: true, terminals: [] });
+    MockTransport.backgroundTerminalError = { code: -32000, message: "permission denied" };
+    await expect(client.listBackgroundTerminals("thread-1")).rejects.toThrow("permission denied");
+    await client.close();
+  });
+
   it("exports handoff bytes through the protocol-provided path without opening private storage", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
@@ -1724,6 +1783,8 @@ describe("CodexAppServerClient", () => {
   });
 
   beforeEach(() => {
+    MockTransport.backgroundTerminalPages.clear();
+    MockTransport.backgroundTerminalError = undefined;
     codexClientLogError.mockClear();
     codexClientLogInfo.mockClear();
     codexClientLogWarn.mockClear();
