@@ -96,52 +96,61 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
           </span>
         ) : null}
       </button>
-      {expanded ? (
+      {/* Status lines sit beside the list, not in it: a list holds only list
+          items. The rows already drawn from the navigation summary stay up
+          while the detail read refreshes them, so "Loading" is only for a
+          group that has nothing to show yet. */}
+      {expanded && detail.state?.error ? (
+        <p className="native-subagents__status-line" role="alert">{detail.state.error}</p>
+      ) : null}
+      {expanded && nativeSubAgents.length === 0 && detail.state?.readiness !== "ready" ? (
+        <p className="native-subagents__status-line">Loading sub-agents…</p>
+      ) : null}
+      {expanded && nativeSubAgents.length > 0 ? (
         <div
           className="native-subagents__list"
           role="list"
           aria-label={`Native Codex sub-agents for ${props.thread.title}`}
         >
-          {detail.state?.error ? <p role="alert">{detail.state.error}</p> : null}
-          {detail.state?.readiness !== "ready" ? <p>Loading sub-agents…</p> : null}
           {nativeSubAgents.map((subAgent) => {
             const label = subAgent.agentNickname ?? subAgent.title;
             return (
-              <button
-                key={subAgent.threadId}
-                aria-label={`Open transcript for ${label}`}
-                className="native-subagents__agent"
-                disabled={!openSubAgentTranscriptWindow}
-                title={subAgent.title}
-                type="button"
-                onClick={() => {
-                  if (!openSubAgentTranscriptWindow) {
-                    return;
-                  }
-                  void openSubAgentTranscriptWindow({
-                    backend: "codex",
-                    federationTarget:
-                      props.thread.federation?.ref.target
-                      ?? readRendererFederationTarget(),
-                    threadId: subAgent.threadId,
-                    title: label,
-                  });
-                }}
-              >
-                {subAgent.threadStatus === "active" ? (
-                  <span
-                    aria-label="Working"
-                    className="native-subagents__status"
-                    role="img"
-                  />
-                ) : null}
-                <span className="native-subagents__agent-label">{label}</span>
-                {subAgent.agentRole ? (
-                  <span className="native-subagents__agent-role">
-                    {subAgent.agentRole}
-                  </span>
-                ) : null}
-              </button>
+              <div key={subAgent.threadId} role="listitem">
+                <button
+                  aria-label={`Open transcript for ${label}`}
+                  className="native-subagents__agent"
+                  disabled={!openSubAgentTranscriptWindow}
+                  title={subAgent.title}
+                  type="button"
+                  onClick={() => {
+                    if (!openSubAgentTranscriptWindow) {
+                      return;
+                    }
+                    void openSubAgentTranscriptWindow({
+                      backend: "codex",
+                      federationTarget:
+                        props.thread.federation?.ref.target
+                        ?? readRendererFederationTarget(),
+                      threadId: subAgent.threadId,
+                      title: label,
+                    });
+                  }}
+                >
+                  {subAgent.threadStatus === "active" ? (
+                    <span
+                      aria-label="Working"
+                      className="native-subagents__status"
+                      role="img"
+                    />
+                  ) : null}
+                  <span className="native-subagents__agent-label">{label}</span>
+                  {subAgent.agentRole ? (
+                    <span className="native-subagents__agent-role">
+                      {subAgent.agentRole}
+                    </span>
+                  ) : null}
+                </button>
+              </div>
             );
           })}
         </div>

@@ -17,6 +17,8 @@ import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
+  buildSubAgentActivityDetail,
+  readCodexNativeSubAgentName,
   estimateTokenUsageCost,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
@@ -27,10 +29,14 @@ import {
   navigationQueryEventRequiresRefresh,
   normalizeCodexAsyncQuestions,
   parseCodexTurnErrorMessage,
+  readSubAgentActivity,
   resolveOpenAiPricingServiceTier,
   resolveHelperModel,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
+  shortSubAgentThreadId,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
   type DesktopHelperModelSettings,
   type HelperModelId,
   type HelperModelResolution,
@@ -3435,8 +3441,13 @@ function stripShellWrapper(command: string | undefined): string | undefined {
   return collapsed || undefined;
 }
 
+/**
+ * Same separator as the live summary (`summarizeLiveActivity`), so a header
+ * does not change when the turn is read back. Not a comma: "Edited 2 files,
+ * +10, -3" already has commas inside it.
+ */
 function formatActivitySummary(parts: string[]): string {
-  return parts.join(", ");
+  return parts.join(" · ");
 }
 
 function formatElapsedMs(elapsedMs: number): string {
@@ -3942,6 +3953,7 @@ function isActivityItemType(itemType: string | undefined): boolean {
     normalized === "mcptoolcall" ||
     normalized === "dynamictoolcall" ||
     normalized === "collabagenttoolcall" ||
+    normalized === "subagentactivity" ||
     normalized === "websearch" ||
     normalized === "imageview" ||
     normalized === "imagegeneration"
@@ -4510,6 +4522,19 @@ function summarizeActivityItems(
   let status: AppServerThreadActivityStatus | undefined;
 
   for (const item of items) {
+    // Path-based worker reports. The renderer's live transcript builds the
+    // same row from the same shared builder, so the two merge by id.
+    const subAgentActivity = readSubAgentActivity(item);
+    if (subAgentActivity) {
+      status ??= "completed";
+      pushActivityDetail(
+        details,
+        detailsByLabel,
+        buildSubAgentActivityDetail(subAgentActivity),
+      );
+      continue;
+    }
+
     const itemId =
       pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
     const itemStatus = normalizeActivityStatus(pickString(item, ["status"]));
@@ -4703,10 +4728,12 @@ function summarizeActivityItems(
         failedCollabCalls += 1;
       }
 
-      const label = formatCollabAgentToolLabel({ tool, receiverThreadIds, status: itemStatus });
+      const agents = collabAgentDetails(item, receiverThreadIds);
+      const label = formatCollabAgentToolLabel({ agents, tool, receiverThreadIds, status: itemStatus });
       const commandDetail = buildCollabAgentCommandDetail({
         item,
         label,
+        operation: collabAgentOperation(tool),
         receiverThreadIds,
         tool,
       });
@@ -4804,6 +4831,7 @@ function summarizeActivityItems(
   if (waitedAgents > 0) {
     summaryParts.push(`Waited on ${waitedAgents} agent${waitedAgents === 1 ? "" : "s"}`);
   }
+  summaryParts.push(...subAgentActivitySummaryParts(details));
   if (failedCollabCalls > 0) {
     summaryParts.push(
       `${failedCollabCalls} collaboration tool${failedCollabCalls === 1 ? "" : "s"} failed`
@@ -4835,6 +4863,7 @@ function readStringArray(value: unknown): string[] {
 }
 
 function formatCollabAgentToolLabel(params: {
+  agents: Array<{ name?: string; threadId: string }>;
   tool: string;
   receiverThreadIds: string[];
   status: AppServerThreadActivityStatus | undefined;
@@ -4842,7 +4871,7 @@ function formatCollabAgentToolLabel(params: {
   const targetCount = params.receiverThreadIds.length;
   const targetLabel =
     targetCount === 1
-      ? `agent ${shortAgentId(params.receiverThreadIds[0] ?? "")}`
+      ? subAgentTargetLabel(params.agents[0])
       : targetCount > 1
         ? `${targetCount} agents`
         : "agent";
@@ -4884,6 +4913,7 @@ function formatCollabAgentToolLabel(params: {
 function buildCollabAgentCommandDetail(params: {
   item: Record<string, unknown>;
   label: string;
+  operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"];
   receiverThreadIds: string[];
   tool: string;
 }): AppServerThreadCommandDetail {
@@ -4914,7 +4944,7 @@ function buildCollabAgentCommandDetail(params: {
     subAgent: {
       backend: "codex",
       origin: "codex-native",
-      operation: collabAgentOperation(params.tool),
+      operation: params.operation,
       agents: collabAgentDetails(params.item, params.receiverThreadIds),
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -4925,7 +4955,7 @@ function buildCollabAgentCommandDetail(params: {
 
 function collabAgentOperation(
   tool: string,
-): "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown" {
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
   switch (tool) {
     case "spawnAgent":
       return "spawn";
@@ -4958,9 +4988,7 @@ function collabAgentDetails(
       .map(asRecord)
       .find((value) => pickString(value ?? {}, ["threadId", "thread_id", "id"]) === threadId);
     const receiverThread = asRecord(receiver?.thread) ?? receiver;
-    const name =
-      readCollabAgentName(state) ??
-      readCollabAgentName(receiverThread);
+    const name = readCodexNativeSubAgentName(state, receiverThread);
     const status = pickString(state ?? {}, ["status", "state"]);
     const message = pickString(state ?? {}, ["message", "output", "summary"]);
     return {
@@ -4970,26 +4998,6 @@ function collabAgentDetails(
       ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
     };
   });
-}
-
-function readCollabAgentName(
-  value: Record<string, unknown> | null | undefined,
-): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const direct = pickString(value, ["agentNickname", "agent_nickname", "nickname"]);
-  if (direct) {
-    return direct.replace(/^@+/, "");
-  }
-  const source = asRecord(value.source);
-  const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.sub_agent);
-  const spawn =
-    asRecord(subAgent?.thread_spawn) ??
-    asRecord(subAgent?.threadSpawn) ??
-    asRecord(source?.thread_spawn) ??
-    asRecord(source?.threadSpawn);
-  return pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
 }
 
 function formatCollabAgentStates(
@@ -5025,7 +5033,7 @@ function indentCollabAgentMessage(message: string): string {
 }
 
 function shortAgentId(agentId: string): string {
-  return agentId.length > 8 ? agentId.slice(0, 8) : agentId;
+  return shortSubAgentThreadId(agentId);
 }
 
 function truncateActivityText(text: string, maxLength: number): string {
@@ -5359,7 +5367,7 @@ export function extractThreadReplayFromReadResult(
     extractConversationMessages(value),
     entries,
   );
-  const agentName = extractCodexNativeAgentName(value);
+  const agentName = readCodexNativeSubAgentName(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
 
@@ -5388,25 +5396,6 @@ export function extractThreadReplayFromReadResult(
   };
 }
 
-function extractCodexNativeAgentName(value: unknown): string | undefined {
-  const record = asRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  const thread = asRecord(record.thread) ?? asRecord(record.session) ?? record;
-  const direct = pickString(thread, ["agentNickname", "agent_nickname", "nickname"]);
-  if (direct) {
-    return direct.replace(/^@+/, "");
-  }
-  const source = asRecord(thread.source) ?? asRecord(record.source);
-  const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.sub_agent);
-  const spawn =
-    asRecord(subAgent?.thread_spawn) ??
-    asRecord(subAgent?.threadSpawn) ??
-    asRecord(source?.thread_spawn) ??
-    asRecord(source?.threadSpawn);
-  return pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
-}
 
 function extractThreadIdFromValue(value: unknown): string | undefined {
   const record = asRecord(value);
@@ -6120,6 +6109,10 @@ function readCodexNativeSubAgent(
   }
 
   const depth = pickNumber(spawn ?? {}, ["depth"]);
+  const agentPath =
+    pickString(record, ["agentPath", "agent_path"]) ??
+    pickString(sessionRecord ?? {}, ["agentPath", "agent_path"]) ??
+    pickString(spawn ?? {}, ["agentPath", "agent_path"]);
   const agentNickname =
     pickString(record, ["agentNickname", "agent_nickname"]) ??
     pickString(sessionRecord ?? {}, ["agentNickname", "agent_nickname"]) ??
@@ -6132,6 +6125,7 @@ function readCodexNativeSubAgent(
   return {
     parentThreadId,
     ...(depth !== undefined ? { depth } : {}),
+    ...(agentPath ? { agentPath } : {}),
     ...(agentNickname ? { agentNickname } : {}),
     ...(agentRole ? { agentRole } : {}),
   };
@@ -6295,6 +6289,7 @@ function buildThreadDiscoveryPayloads(
   cursor?: string,
   limit = 50,
   sourceKinds?: CodexThreadListParams["sourceKinds"],
+  ancestorThreadId?: string,
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
@@ -6304,7 +6299,13 @@ function buildThreadDiscoveryPayloads(
     sortKey: "updated_at",
     sourceKinds: sourceKinds ?? ["cli", "vscode"],
     useStateDbOnly: true,
+    ...(ancestorThreadId ? { ancestorThreadId } : {}),
   };
+
+  // A scoped recovery must never fall back to the global worker collection.
+  if (ancestorThreadId) {
+    return [{ ...baseParams, searchTerm }];
+  }
 
   return [
     {
@@ -7406,6 +7407,7 @@ async function requestThreadListPages(params: {
   requestTimeoutMs: number;
   deadlineAt?: number;
   sourceKinds?: CodexThreadListParams["sourceKinds"];
+  ancestorThreadId?: string;
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
   const seenCursors = new Set<string>();
@@ -7434,6 +7436,7 @@ async function requestThreadListPages(params: {
         cursor,
         requestedLimit,
         params.sourceKinds,
+        params.ancestorThreadId,
       ),
       timeoutMs: params.requestTimeoutMs,
       deadlineAt: params.deadlineAt,
@@ -8888,6 +8891,7 @@ export class CodexAppServerClient {
    * the shorter display horizon after grouping nested workers.
    */
   async listNativeSubAgentThreads(params?: {
+    ancestorThreadId?: string;
     filter?: string;
     limit?: number;
     /** Housekeeping needs every descendant before archiving a parent. */
@@ -8912,7 +8916,8 @@ export class CodexAppServerClient {
       maxPages: params?.all ? undefined : 1,
       requireComplete: params?.all,
       requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      sourceKinds: ["subAgentThreadSpawn"],
+      sourceKinds: ["subAgent", "subAgentThreadSpawn"],
+      ancestorThreadId: params?.ancestorThreadId,
     });
 
     return await this.enrichThreads(
@@ -9581,6 +9586,30 @@ export class CodexAppServerClient {
     }
 
     return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
+  }
+
+  /**
+   * The model and effort Codex reports for a thread: its configured settings
+   * while loaded, otherwise the latest persisted ones. Turns are not read.
+   */
+  async readThreadModelSettings(params: {
+    threadId: string;
+  }): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
+    await this.ensureInitialized();
+    const result = await this.connection.request(
+      "thread/read",
+      buildThreadReadPayload({ threadId: params.threadId }),
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.id !== params.threadId) {
+      return undefined;
+    }
+    const model = pickString(thread, ["model"]);
+    const reasoningEffort = pickString(thread, ["reasoningEffort", "reasoning_effort"]);
+    return model || reasoningEffort
+      ? { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}) }
+      : undefined;
   }
 
   /** Export bytes through Codex; never open or parse its private storage. */

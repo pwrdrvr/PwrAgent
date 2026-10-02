@@ -3,8 +3,9 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadSubAgentCallDetail,
 } from "@pwragent/shared";
-import { copyText } from "../../lib/copy-text";
+import { shortSubAgentThreadId } from "@pwragent/shared";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 
 type TranscriptSubAgentCallProps = {
@@ -13,9 +14,14 @@ type TranscriptSubAgentCallProps = {
 };
 
 /**
- * A delegated-agent lifecycle item. This deliberately does not resemble a
- * terminal command: a wait means observing a child agent, not executing
- * `$ wait` in a shell.
+ * The body of a delegated-agent lifecycle row. This deliberately does not
+ * resemble a terminal command: a wait means observing a child agent, not
+ * executing `$ wait` in a shell.
+ *
+ * The row above it already names the event, the worker, and the event's
+ * status, and the activity header already has Copy. This body adds only what
+ * the row cannot: which worker, on what model, in what state, and the way into
+ * its transcript.
  */
 export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
   const [showOutput, setShowOutput] = useState(false);
@@ -27,94 +33,91 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
   }
 
   const origin = call.origin === "codex-native"
-    ? "Codex native agent"
+    ? "Codex sub-agent"
     : "PwrAgent sub-agent";
   const operation = operationLabel(call.operation);
-  const status = lifecycleStatus(props.detail.status);
   const output = props.detail.command?.output;
+  const settings = [
+    call.model,
+    call.reasoningEffort,
+    call.fastMode ? "Fast" : undefined,
+  ].filter((value): value is string => Boolean(value));
+  // A spawn or an input carries the worker's state as of that moment, which
+  // goes stale the instant the worker moves on. Only an observation of the
+  // worker states something the operator can trust.
+  const reportsAgentState =
+    call.operation === "wait"
+    || call.operation === "complete"
+    || call.operation === "interrupt"
+    || call.operation === "close";
 
   return (
     <section className="transcript-subagent" aria-label={`${operation} ${origin}`}>
-      <header className="transcript-subagent__head">
-        <div>
-          <p className="transcript-subagent__origin">{origin}</p>
-          <h4>{operation}</h4>
-        </div>
-        {status ? <span className="transcript-subagent__status">{status}</span> : null}
-      </header>
-
-      <p className="transcript-subagent__settings">
-        {call.model ? <span>Model: <code>{call.model}</code></span> : null}
-        {call.reasoningEffort ? <span>Reasoning: {call.reasoningEffort}</span> : null}
-        {call.fastMode !== undefined ? <span>Fast mode: {call.fastMode ? "on" : "off"}</span> : null}
-      </p>
-
-      <div className="transcript-subagent__agents">
+      <ul className="transcript-subagent__agents">
         {call.agents.map((agent) => {
-          const agentLabel = agent.name ?? `Agent ${shortAgentId(agent.threadId)}`;
+          const agentLabel = agent.name ?? `Agent ${shortSubAgentThreadId(agent.threadId)}`;
+          const state = reportsAgentState && agent.status
+            ? agentStatePresentation(agent.status)
+            : undefined;
           return (
-            <article className="transcript-subagent__agent" key={agent.threadId}>
-              <div className="transcript-subagent__agent-head">
-                <div>
-                  <p className="transcript-subagent__agent-name">{agentLabel}</p>
-                  <p className="transcript-subagent__agent-id">{agent.threadId}</p>
-                </div>
-                {agent.status ? (
-                  <span className="transcript-subagent__agent-status">{agent.status}</span>
+            <li className="transcript-subagent__agent" key={agent.threadId}>
+              <div className="transcript-subagent__agent-line">
+                <span className="transcript-subagent__agent-name" title={agent.threadId}>
+                  {agentLabel}
+                </span>
+                {settings.length > 0 ? (
+                  <span className="transcript-subagent__settings">
+                    {settings.join(" · ")}
+                  </span>
+                ) : null}
+                {state ? (
+                  <RailStatusChip alert={state.tone === "error"} tone={state.tone}>
+                    {state.label}
+                  </RailStatusChip>
+                ) : null}
+                {openSubAgentTranscriptWindow ? (
+                  <button
+                    aria-label={`Open transcript for ${agentLabel}`}
+                    className="button button--ghost transcript-subagent__action"
+                    type="button"
+                    onClick={() => {
+                      void openSubAgentTranscriptWindow({
+                        backend: call.backend,
+                        ...(props.threadLinkSource
+                          ? {
+                              federationTarget: {
+                                scope: "remote" as const,
+                                instanceId: props.threadLinkSource.instanceId,
+                              },
+                            }
+                          : {}),
+                        threadId: agent.threadId,
+                        title: agentLabel,
+                      });
+                    }}
+                  >
+                    Open transcript
+                  </button>
                 ) : null}
               </div>
               {agent.message ? <p className="transcript-subagent__message">{agent.message}</p> : null}
-              {openSubAgentTranscriptWindow ? (
-                <button
-                  className="button button--ghost transcript-subagent__action"
-                  type="button"
-                  onClick={() => {
-                    void openSubAgentTranscriptWindow({
-                      backend: call.backend,
-                      ...(props.threadLinkSource
-                        ? {
-                            federationTarget: {
-                              scope: "remote" as const,
-                              instanceId: props.threadLinkSource.instanceId,
-                            },
-                          }
-                        : {}),
-                      threadId: agent.threadId,
-                      title: agentLabel,
-                    });
-                  }}
-                >
-                  Open transcript
-                </button>
-              ) : null}
-            </article>
+            </li>
           );
         })}
-      </div>
+      </ul>
 
-      <div className="transcript-subagent__actions">
+      {output ? (
         <button
-          className="button button--ghost transcript-subagent__action"
+          className="transcript-subagent__raw-toggle"
           type="button"
+          aria-expanded={showOutput}
           onClick={() => {
-            void copyText(props.detail.command?.displayCommand ?? operation);
+            setShowOutput((current) => !current);
           }}
         >
-          Copy activity
+          {showOutput ? "Hide raw details" : "Show raw details"}
         </button>
-        {output ? (
-          <button
-            className="button button--ghost transcript-subagent__action"
-            type="button"
-            aria-expanded={showOutput}
-            onClick={() => {
-              setShowOutput((current) => !current);
-            }}
-          >
-            {showOutput ? "Hide raw details" : "Show raw details"}
-          </button>
-        ) : null}
-      </div>
+      ) : null}
       {showOutput && output ? (
         <pre className="transcript-subagent__output"><code>{output}</code></pre>
       ) : null}
@@ -134,26 +137,38 @@ function operationLabel(operation: AppServerThreadSubAgentCallDetail["operation"
       return "Resumed agent";
     case "close":
       return "Closed agent";
+    case "complete":
+      return "Agent finished";
+    case "interrupt":
+      return "Interrupted agent";
     default:
       return "Agent activity";
   }
 }
 
-function lifecycleStatus(status: AppServerThreadActivityDetail["status"]): string | undefined {
+/**
+ * Codex reports a worker's state as a protocol enum. Say it the way the
+ * Sub-agents rail does, never as the raw value.
+ */
+function agentStatePresentation(
+  status: string,
+): { label: string; tone: RailChipTone } {
   switch (status) {
-    case "in_progress":
-      return "Running";
+    case "pendingInit":
+      return { label: "Starting", tone: "neutral" };
+    case "running":
+      return { label: "Running", tone: "active" };
     case "completed":
-      return "Completed";
-    case "failed":
-      return "Failed";
-    case "cancelled":
-      return "Cancelled";
+      return { label: "Completed", tone: "ok" };
+    case "interrupted":
+      return { label: "Interrupted", tone: "warning" };
+    case "errored":
+      return { label: "Failed", tone: "error" };
+    case "shutdown":
+      return { label: "Closed", tone: "neutral" };
+    case "notFound":
+      return { label: "Not found", tone: "warning" };
     default:
-      return undefined;
+      return { label: status, tone: "neutral" };
   }
-}
-
-function shortAgentId(threadId: string): string {
-  return threadId.length > 8 ? threadId.slice(0, 8) : threadId;
 }

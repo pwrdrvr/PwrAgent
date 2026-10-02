@@ -1,4 +1,13 @@
-import { buildTokenUsageActivityEntry } from "@pwragent/shared";
+import {
+  buildSubAgentActivityDetail,
+  buildTokenUsageActivityEntry,
+  isSubAgentActivityDetail,
+  readCodexNativeSubAgentName,
+  readSubAgentActivity,
+  shortSubAgentThreadId,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
+} from "@pwragent/shared";
 export { buildTokenUsageActivityEntry, buildTurnUsageActivityEntryFromLine } from "@pwragent/shared";
 import {
   formatSearchCommandActionLabel,
@@ -487,6 +496,7 @@ function buildLiveToolLabel(
 
   if (itemType === "collabagenttoolcall") {
     return formatCollabAgentToolLabel({
+      agents: collabAgentDetails(item, readStringArray(item.receiverThreadIds)),
       receiverThreadIds: readStringArray(item.receiverThreadIds),
       status,
       tool: toolName,
@@ -522,6 +532,7 @@ function buildLiveToolLabel(
 }
 
 function formatCollabAgentToolLabel(params: {
+  agents: Array<{ name?: string; threadId: string }>;
   tool: string;
   receiverThreadIds: string[];
   status: AppServerThreadActivityDetail["status"];
@@ -529,7 +540,7 @@ function formatCollabAgentToolLabel(params: {
   const targetCount = params.receiverThreadIds.length;
   const targetLabel =
     targetCount === 1
-      ? `agent ${shortAgentId(params.receiverThreadIds[0] ?? "")}`
+      ? subAgentTargetLabel(params.agents[0])
       : targetCount > 1
         ? `${targetCount} agents`
         : "agent";
@@ -609,7 +620,7 @@ function buildCollabAgentCommandDetail(
 
 function collabAgentOperation(
   tool: string,
-): "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown" {
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
   switch (tool) {
     case "spawnAgent":
       return "spawn";
@@ -647,7 +658,7 @@ function collabAgentDetails(
             readString(value, "id")) === threadId,
       );
     const receiverThread = readRecord(receiver?.thread) ?? receiver;
-    const name = readCollabAgentName(state) ?? readCollabAgentName(receiverThread);
+    const name = readCodexNativeSubAgentName(state, receiverThread);
     const status = readString(state, "status") ?? readString(state, "state");
     const message =
       readString(state, "message") ??
@@ -660,27 +671,6 @@ function collabAgentDetails(
       ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
     };
   });
-}
-
-function readCollabAgentName(value: Record<string, unknown> | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const direct =
-    readString(value, "agentNickname") ??
-    readString(value, "agent_nickname") ??
-    readString(value, "nickname");
-  if (direct) {
-    return direct.replace(/^@+/, "");
-  }
-  const source = readRecord(value.source);
-  const subAgent = readRecord(source?.subAgent) ?? readRecord(source?.sub_agent);
-  const spawn =
-    readRecord(subAgent?.thread_spawn) ??
-    readRecord(subAgent?.threadSpawn) ??
-    readRecord(source?.thread_spawn) ??
-    readRecord(source?.threadSpawn);
-  return readString(spawn, "agentNickname") ?? readString(spawn, "agent_nickname");
 }
 
 function formatCollabAgentStates(
@@ -716,7 +706,7 @@ function indentCollabAgentMessage(message: string): string {
 }
 
 function shortAgentId(agentId: string): string {
-  return agentId.length > 8 ? agentId.slice(0, 8) : agentId;
+  return shortSubAgentThreadId(agentId);
 }
 
 function truncateActivityText(text: string, maxLength: number): string {
@@ -737,6 +727,14 @@ export function buildLiveToolDetails(
       markdown: data && readString(data, "detail"),
       status: normalizeItemStatus(data?.status),
     }];
+  }
+
+  // A path-based worker report. Built by the same shared function as the
+  // main-process replay, so this row and its replayed copy are identical and
+  // merge by id when the turn is read back.
+  if (itemType === "subagentactivity") {
+    const report = readSubAgentActivity(item);
+    return report ? [buildSubAgentActivityDetail(report)] : [];
   }
 
   if (
@@ -882,10 +880,16 @@ function commandSummaryName(label: string): string | undefined {
 }
 
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
-  const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
+  // Worker reports summarize in the replay's words, not as tool names, so the
+  // header reads the same before and after the turn is read back.
+  const subAgentActivityParts = subAgentActivitySummaryParts(details);
+  const primaryDetails = details.filter(
+    (detail) => !detail.id.includes("-source-") && !isSubAgentActivityDetail(detail),
+  );
   const directDetail = primaryDetails.length === 1 ? primaryDetails[0] : undefined;
   if (
     details.length === 1
+    && subAgentActivityParts.length === 0
     && directDetail?.command
     && (
       directDetail.kind === "read"
@@ -914,6 +918,7 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   } else if (commandLabels.length > 1) {
     parts.push(`Used ${commandLabels.length} tools`);
   }
+  parts.push(...subAgentActivityParts);
 
   return parts.join(" · ") || "Activity";
 }

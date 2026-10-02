@@ -162,7 +162,8 @@ export function summarizeToolActivityItems(
     type: "activity",
     id: `activity-${pickString(items[0] ?? {}, ["id", "itemId", "item_id"]) ?? "1"}`,
     summary: summaryParts.length > 0
-      ? summaryParts.join(", ")
+      // The live summary's separator; see formatActivitySummary.
+      ? summaryParts.join(" · ")
       : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
     createdAt,
     status,

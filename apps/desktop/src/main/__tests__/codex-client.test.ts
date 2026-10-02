@@ -1468,6 +1468,31 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("reads a worker's model settings without its turns", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      MockTransport.readThreadResultByThreadId.set("worker-settings", {
+        thread: { id: "worker-settings", model: "gpt-6.1-sol", reasoningEffort: "high", status: { type: "notLoaded" } },
+      });
+      MockTransport.readThreadResultByThreadId.set("worker-unknown", {
+        thread: { id: "worker-unknown", model: null, reasoningEffort: null, status: { type: "notLoaded" } },
+      });
+      expect(await client.readThreadModelSettings({ threadId: "worker-settings" }))
+        .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high" });
+      expect(await client.readThreadModelSettings({ threadId: "worker-unknown" })).toBeUndefined();
+      const reads = MockTransport.instances
+        .flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)))
+        .filter((request) => request.method === "thread/read");
+      expect(reads.map((request) => request.params)).toEqual([
+        { threadId: "worker-settings", includeTurns: false },
+        { threadId: "worker-unknown", includeTurns: false },
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("exports handoff bytes through the protocol-provided path without opening private storage", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
@@ -2459,7 +2484,7 @@ describe("CodexAppServerClient", () => {
       {
         id: "thread-child",
         preview: "Investigate the child task",
-        threadSource: "subAgentThreadSpawn",
+        threadSource: "subagent",
         parentThreadId: "thread-parent",
         agentNickname: "route-scout",
         agentRole: "explorer",
@@ -2468,6 +2493,7 @@ describe("CodexAppServerClient", () => {
             thread_spawn: {
               parent_thread_id: "thread-parent",
               depth: 1,
+              agent_path: "/root/route_scout",
               agent_nickname: "route-scout",
               agent_role: "explorer",
             },
@@ -2501,6 +2527,7 @@ describe("CodexAppServerClient", () => {
 
     const threads = await client.listThreads({ filter: "native-subagent-source" });
     const nativeSubAgentThreads = await client.listNativeSubAgentThreads({
+      ancestorThreadId: "thread-parent",
       filter: "native-subagent-source",
       limit: 1_000,
     });
@@ -2512,6 +2539,7 @@ describe("CodexAppServerClient", () => {
         codexNativeSubAgent: {
           parentThreadId: "thread-parent",
           depth: 1,
+          agentPath: "/root/route_scout",
           agentNickname: "route-scout",
           agentRole: "explorer",
         },
@@ -2536,7 +2564,8 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             limit: 100,
             sortKey: "updated_at",
-            sourceKinds: ["subAgentThreadSpawn"],
+            sourceKinds: ["subAgent", "subAgentThreadSpawn"],
+            ancestorThreadId: "thread-parent",
             useStateDbOnly: true,
           }),
         }),
@@ -4955,7 +4984,7 @@ describe("CodexAppServerClient", () => {
         {
           type: "activity",
           id: "activity-item-3",
-          summary: "Explored 1 file, Ran 1 command, Edited 1 file, +2, -1",
+          summary: "Explored 1 file · Ran 1 command · Edited 1 file, +2, -1",
           createdAt: undefined,
           status: "completed",
           turn,
@@ -8559,6 +8588,131 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("hydrates Codex subAgentActivity workers as transcript activity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-agent-activity", {
+      thread: {
+        turns: [{
+          id: "turn-review",
+          status: "completed",
+          items: [
+            { type: "subAgentActivity", id: "started-review", kind: "started",
+              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+            { type: "subAgentActivity", id: "completed-review", kind: "completed",
+              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const replay = await client.readThread({ threadId: "thread-agent-activity" });
+      const details = replay.entries.flatMap((entry) =>
+        entry.type === "activity" ? entry.details : [],
+      );
+      expect(details).toEqual([
+        expect.objectContaining({
+          id: "started-review",
+          label: "Started review_savers",
+          command: expect.objectContaining({ subAgent: expect.objectContaining({
+            origin: "codex-native", operation: "spawn",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "running" }],
+          }) }),
+        }),
+        expect.objectContaining({
+          id: "completed-review",
+          // A completion report is not a wait: nothing waited on the worker.
+          label: "review_savers finished",
+          command: expect.objectContaining({ subAgent: expect.objectContaining({
+            operation: "complete",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "completed" }],
+          }) }),
+        }),
+      ]);
+      expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
+        summary: "Started 1 agent · 1 finished",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("summarizes input to a worker in the live summary's words", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-agent-input", {
+      thread: {
+        turns: [{
+          id: "turn-input",
+          status: "completed",
+          items: [
+            { type: "subAgentActivity", id: "input-review", kind: "interacted",
+              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const replay = await client.readThread({ threadId: "thread-agent-input" });
+      // The live summary of the same group; see live-transcript-activity.
+      expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
+        summary: "Sent input to 1 agent",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps a row per worker when parallel workers share a UUIDv7 prefix", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    // UUIDv7 leads with a millisecond timestamp, so workers started together
+    // share their first 8 characters. Replay merges rows by label; labels
+    // built from that prefix collapsed three workers into one.
+    const workers = [
+      { id: "019dde61-c9d6-70d2-9023-28669e27a63b", path: "/root/review_savers" },
+      { id: "019dde61-ca10-7aa1-8a2b-4f1e2d3c4b5a" },
+      { id: "019dde61-ca44-7bb3-9c3d-5a6b7c8d9e0f" },
+    ];
+    MockTransport.readThreadResultByThreadId.set("thread-parallel-activity", {
+      thread: {
+        turns: [{
+          id: "turn-parallel",
+          status: "completed",
+          items: [
+            ...workers.map((worker, index) => ({
+              type: "subAgentActivity", id: `started-${index}`, kind: "started",
+              agentThreadId: worker.id, agentPath: worker.path ?? "",
+            })),
+            ...workers.map((worker, index) => ({
+              type: "subAgentActivity", id: `completed-${index}`, kind: "completed",
+              agentThreadId: worker.id, agentPath: worker.path ?? "",
+            })),
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const replay = await client.readThread({ threadId: "thread-parallel-activity" });
+      const activity = replay.entries.find((entry) => entry.type === "activity");
+      expect(activity).toMatchObject({ summary: "Started 3 agents · 3 finished" });
+      expect(
+        activity?.type === "activity"
+          ? activity.details.map((detail) => detail.label)
+          : [],
+      ).toEqual([
+        "Started review_savers",
+        "Started agent 2d3c4b5a",
+        "Started agent 7c8d9e0f",
+        "review_savers finished",
+        "Agent 2d3c4b5a finished",
+        "Agent 7c8d9e0f finished",
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("hydrates collaboration agent tool calls as transcript activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-collab-agents", {
@@ -8654,17 +8808,17 @@ describe("CodexAppServerClient", () => {
       {
         type: "activity",
         id: "activity-collab-spawn-1",
-        summary: "Spawned 1 agent, Waited on 1 agent, 1 collaboration tool failed",
+        summary: "Spawned 1 agent · Waited on 1 agent · 1 collaboration tool failed",
         createdAt: undefined,
         status: "failed",
         details: [
           expect.objectContaining({
             id: "collab-spawn-1",
             kind: "command",
-            label: "Spawned agent 019e5630",
+            label: "Spawned agent 997c235a",
             status: "completed",
             command: expect.objectContaining({
-              displayCommand: "spawnAgent 019e5630",
+              displayCommand: "spawnAgent 997c235a",
               output: expect.stringContaining("Prompt: You are the correctness reviewer."),
             }),
           }),
@@ -8681,11 +8835,11 @@ describe("CodexAppServerClient", () => {
           expect.objectContaining({
             id: "collab-wait-1",
             kind: "command",
-            label: "Waited on agent 019e5630",
+            label: "Waited on agent 997c235a",
             status: "completed",
             command: expect.objectContaining({
-              displayCommand: "wait 019e5630",
-              output: expect.stringContaining("019e5630: completed"),
+              displayCommand: "wait 997c235a",
+              output: expect.stringContaining("997c235a: completed"),
             }),
           }),
         ],

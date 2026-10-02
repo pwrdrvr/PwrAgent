@@ -766,6 +766,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             };
           }
 
+          // Codex owns native workers independently of the PwrAgent process
+          // that observed them. Reconcile their status through the protocol.
+          if (subAgent.backend === "codex" && subAgent.monitorId.startsWith("codex-native:")) {
+            return subAgent;
+          }
+
           const ownerRuntimeInstanceId = subAgent.ownerRuntimeInstanceId?.trim();
           const ownerRegistrySessionId = subAgent.ownerRegistrySessionId?.trim();
           const belongsToReplacedCurrentRegistry =

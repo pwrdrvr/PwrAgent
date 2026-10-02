@@ -653,9 +653,7 @@ describe("ThreadContextPanel", () => {
       screen.getByText("Codex usage: 800 uncached in · 200 cached · 50 out"),
     ).toBeInTheDocument();
     expect(screen.getByText("Peirce")).toBeInTheDocument();
-    expect(
-      screen.getByText("Spawned by Codex native spawnAgent."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Spawned by Codex.")).toBeInTheDocument();
     expect(
       screen.getByText("PR #783 is open and all required checks are passing."),
     ).toBeInTheDocument();
@@ -666,7 +664,7 @@ describe("ThreadContextPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     const modal = within(screen.getByRole("dialog"));
     expect(modal.getByText("Source")).toBeInTheDocument();
-    expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
+    expect(modal.getByText("Codex")).toBeInTheDocument();
     expect(modal.getByRole("button", { name: "Close" })).toBeInTheDocument();
 
     fireEvent.click(modal.getByRole("button", { name: "Open transcript" }));
@@ -744,15 +742,13 @@ describe("ThreadContextPanel", () => {
             createdAt: 2000,
             updatedAt: 2500,
             monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
-            lastMessage: "Spawned by Codex native spawnAgent.",
+            lastMessage: "Spawned by Codex.",
           },
         ],
       },
     });
 
-    expect(screen.getAllByText("Spawned by Codex native spawnAgent.")).toHaveLength(
-      1,
-    );
+    expect(screen.getAllByText("Spawned by Codex.")).toHaveLength(1);
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {

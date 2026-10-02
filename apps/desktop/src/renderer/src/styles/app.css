@@ -4384,6 +4384,14 @@ a.button {
   min-width: 0;
 }
 
+/* The `role="listitem"` box around a row's sub-thread tray in Inbox and
+   Recents: the `<li><ul>...</ul></li>` shape. `display: contents` for the
+   reason `.directory-row__threads-slot` gives: the tray's layout is unchanged
+   by construction. */
+.thread-group__subthreads-slot {
+  display: contents;
+}
+
 .subthread-list {
   position: relative;
   display: grid;
@@ -4492,6 +4500,13 @@ a.button {
   margin: 1px 0 2px 15px;
   padding-left: 8px;
   border-left: 1px solid var(--border-subtle);
+}
+
+.native-subagents__status-line {
+  margin: 1px 0 2px 23px;
+  padding: 4px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .native-subagents__agent {
@@ -26991,106 +27006,76 @@ div.composer-error-row__toggle {
 }
 
 /* Delegated-agent lifecycle activity: distinct from a shell transcript so a
-   wait visibly reads as observing a child, not running `$ wait`. */
+   wait visibly reads as observing a child, not running `$ wait`. The row
+   above names the event and its status, so the body carries only the worker
+   line. A neutral border, like the diff and command bodies beside it: accent
+   stays reserved for what needs attention. */
 .transcript-subagent {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  background: var(--bg-panel-elevated);
-}
-
-.transcript-subagent__head {
-  display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 12px 0;
-}
-
-.transcript-subagent__origin,
-.transcript-subagent__settings,
-.transcript-subagent__agent-id,
-.transcript-subagent__message {
-  margin: 0;
-}
-
-.transcript-subagent__origin {
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.transcript-subagent__head h4,
-.transcript-subagent__agent-name {
-  margin: 2px 0 0;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.3;
-}
-
-.transcript-subagent__status,
-.transcript-subagent__agent-status {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.transcript-subagent__settings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 0 12px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.transcript-subagent__settings code,
-.transcript-subagent__agent-id,
-.transcript-subagent__output code {
-  font-family: var(--font-mono);
+  gap: 8px;
+  overflow: hidden;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
 }
 
 .transcript-subagent__agents {
   display: flex;
+  align-self: stretch;
   flex-direction: column;
   gap: 8px;
-  padding: 0 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .transcript-subagent__agent {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel);
+  gap: 4px;
 }
 
-.transcript-subagent__agent-head {
+.transcript-subagent__agent-line {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
-.transcript-subagent__agent-id {
-  margin-top: 2px;
+.transcript-subagent__agent-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-subagent__settings {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-muted);
+  font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-subagent__action {
+  flex: 0 0 auto;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .transcript-subagent__message {
+  margin: 0;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
@@ -27098,26 +27083,39 @@ div.composer-error-row__toggle {
   white-space: pre-wrap;
 }
 
-.transcript-subagent__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 12px 12px;
+/* The same quiet text action the sub-agent dialog uses for Copy and Show
+   more. */
+.transcript-subagent__raw-toggle {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms ease;
 }
 
-.transcript-subagent__action {
-  align-self: flex-start;
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+.transcript-subagent__raw-toggle:hover {
+  color: var(--accent-bright);
+}
+
+.transcript-subagent__raw-toggle:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .transcript-subagent__output {
-  margin: -2px 0 0;
+  align-self: stretch;
+  margin: 0 -12px -10px;
   padding: 10px 12px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
+  background: var(--bg-panel-elevated);
   color: var(--text-secondary);
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;

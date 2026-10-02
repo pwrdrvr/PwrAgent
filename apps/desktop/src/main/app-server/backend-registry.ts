@@ -31,6 +31,7 @@ import {
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { priceLocalModelUsage } from "@pwragent/shared";
+import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -130,6 +131,7 @@ import {
   normalizeRenamedTitleSource,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
+  shortSubAgentThreadId,
   threadSeenWatermark,
   type AgentEvent,
   type ArchiveWorktreeRequest,
@@ -147,6 +149,7 @@ import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
+  type AppServerThreadCommandDetail,
   type AppServerThreadEntry,
   type AppServerReviewContext,
   type AppServerReviewTarget,
@@ -161,6 +164,7 @@ import {
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
   type CodexNativeSubAgentSummary,
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
@@ -457,6 +461,7 @@ import {
   type CodexRecoveryBlockingTurn,
 } from "../codex-app-server/invalid-response-message-id-recovery";
 import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
+import { subAgentActivityToolCall } from "../codex-app-server/subagent-activity";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
@@ -870,6 +875,7 @@ type BackendClient = {
   ): Promise<AppServerThreadSummary[]>;
   listNativeSubAgentThreads?(
     params?: {
+      ancestorThreadId?: string;
       filter?: string;
       limit?: number;
       all?: boolean;
@@ -877,6 +883,10 @@ type BackendClient = {
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
+  /** A thread's configured model, without reading its turns. */
+  readThreadModelSettings?(params: {
+    threadId: string;
+  }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -3050,7 +3060,32 @@ type CodexNativeSubAgentTool =
   | "wait"
   | "closeAgent";
 
+/**
+ * The lifecycle tool a replayed transcript row stands for, the same mapping
+ * `subAgentActivityToolCall` applies to a live report: a finish is observed
+ * like a wait, an interrupt ends the worker like a close.
+ */
+function codexNativeToolForOperation(
+  operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"],
+): CodexNativeSubAgentTool {
+  switch (operation) {
+    case "close":
+    case "interrupt":
+      return "closeAgent";
+    case "wait":
+    case "complete":
+      return "wait";
+    case "send_input":
+      return "sendInput";
+    case "resume":
+      return "resumeAgent";
+    default:
+      return "spawnAgent";
+  }
+}
+
 type CodexNativeSubAgentCall = {
+  activityBoundary?: boolean;
   item: Record<string, unknown>;
   itemId?: string;
   parentTurnId?: string;
@@ -3152,7 +3187,7 @@ function groupCodexNativeSubAgents(params: {
           updatedAt: child.updatedAt,
           threadStatus: child.threadStatus,
           depth: provenance?.depth ?? inferredDepth,
-          agentNickname: provenance?.agentNickname,
+          agentNickname: provenance ? codexNativeSubAgentName(provenance) : undefined,
           agentRole: provenance?.agentRole,
         };
         if (isCodexNativeSubAgentVisibleInNavigation(summary, params.now)) {
@@ -3170,7 +3205,7 @@ function groupCodexNativeSubAgents(params: {
 }
 
 function shortCodexNativeAgentId(threadId: string): string {
-  return threadId.length > 8 ? threadId.slice(0, 8) : threadId;
+  return shortSubAgentThreadId(threadId);
 }
 
 function truncateSubAgentText(value: string, maxLength: number): string {
@@ -3342,49 +3377,18 @@ function extractCodexNativeSubAgentNotifications(
   return notifications;
 }
 
-function readCodexNativeAgentNameFromSource(
-  source: Record<string, unknown> | undefined,
+/**
+ * `pathName || nickname` from any of the records, then a `name` field, which
+ * on a receiver thread is its title.
+ */
+function readCodexNativeAgentName(
+  ...records: Array<Record<string, unknown> | undefined>
 ): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  const direct =
-    normalizeCodexNativeAgentName(source.agentNickname) ??
-    normalizeCodexNativeAgentName(source.agent_nickname) ??
-    normalizeCodexNativeAgentName(source.nickname) ??
-    normalizeCodexNativeAgentName(source.name);
-  if (direct) {
-    return direct;
-  }
-
-  const subAgent = readRecord(source.subAgent) ?? readRecord(source.sub_agent);
-  const spawn =
-    readRecord(subAgent?.thread_spawn) ??
-    readRecord(subAgent?.threadSpawn) ??
-    readRecord(source.thread_spawn) ??
-    readRecord(source.threadSpawn);
   return (
-    normalizeCodexNativeAgentName(spawn?.agent_nickname) ??
-    normalizeCodexNativeAgentName(spawn?.agentNickname) ??
-    normalizeCodexNativeAgentName(subAgent?.agentNickname) ??
-    normalizeCodexNativeAgentName(subAgent?.agent_nickname)
-  );
-}
-
-function readCodexNativeAgentNameFromThread(
-  thread: Record<string, unknown> | undefined,
-): string | undefined {
-  if (!thread) {
-    return undefined;
-  }
-  return (
-    normalizeCodexNativeAgentName(thread.agentNickname) ??
-    normalizeCodexNativeAgentName(thread.agent_nickname) ??
-    normalizeCodexNativeAgentName(thread.nickname) ??
-    normalizeCodexNativeAgentName(thread.name) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.source)) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.thread_spawn)) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.threadSpawn))
+    normalizeCodexNativeAgentName(readCodexNativeSubAgentName(...records))
+    ?? records
+      .map((record) => normalizeCodexNativeAgentName(record?.name))
+      .find(Boolean)
   );
 }
 
@@ -3415,21 +3419,13 @@ function readCodexNativeReceiverThreadNames(
       "id",
     ]);
     const thread = readRecord(receiver.thread) ?? receiver;
-    recordName(
-      threadId,
-      readCodexNativeAgentNameFromThread(thread) ??
-        readCodexNativeAgentNameFromSource(readRecord(receiver.source)),
-    );
+    recordName(threadId, readCodexNativeAgentName(thread, receiver));
   }
 
   const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
   for (const [threadId, state] of Object.entries(states ?? {})) {
     const stateRecord = readRecord(state);
-    recordName(
-      threadId,
-      readCodexNativeAgentNameFromThread(stateRecord) ??
-        readCodexNativeAgentNameFromSource(readRecord(stateRecord?.source)),
-    );
+    recordName(threadId, readCodexNativeAgentName(stateRecord));
   }
 
   return names;
@@ -3463,7 +3459,14 @@ function readCodexNativeSubAgentCalls(
     }
   }
 
-  return candidates.flatMap((candidate) => {
+  return candidates.flatMap((rawCandidate) => {
+    // Interaction reports are message delivery, not worker lifecycle changes.
+    // Persist only start/stop boundaries; child status reconciliation owns progress.
+    if (rawCandidate.type === "subAgentActivity" && rawCandidate.kind === "interacted") {
+      return [];
+    }
+    const activity = subAgentActivityToolCall(rawCandidate);
+    const candidate = activity ?? rawCandidate;
     if (normalizeCodexItemType(candidate.type) !== "collabagenttoolcall") {
       return [];
     }
@@ -3471,6 +3474,7 @@ function readCodexNativeSubAgentCalls(
     return [
       {
         item: candidate,
+        ...(activity ? { activityBoundary: true } : {}),
         itemId: readOptionalString(candidate, ["id", "itemId", "item_id"]),
         parentTurnId:
           readOptionalString(candidate, ["turnId", "turn_id"]) ??
@@ -3601,33 +3605,27 @@ function codexNativeSubAgentTask(params: {
     : undefined;
   return promptTitle
     ? truncateSubAgentText(promptTitle, 120)
-    : `Codex subagent ${shortCodexNativeAgentId(params.threadId)}`;
+    : codexNativeSubAgentPlaceholderTask(params.threadId);
 }
 
-function codexNativeSubAgentMessage(params: {
-  agentMessage?: string;
-  agentState?: string;
-  tool: string;
-}): string {
-  if (params.agentMessage) {
-    return truncateSubAgentText(params.agentMessage, 360);
-  }
-  switch (params.tool) {
-    case "spawnAgent":
-      return "Spawned by Codex native spawnAgent.";
-    case "sendInput":
-      return "Sent input to Codex native subagent.";
-    case "resumeAgent":
-      return "Resumed Codex native subagent.";
-    case "wait":
-      return params.agentState
-        ? `Observed Codex native subagent state: ${params.agentState}.`
-        : "Waited on Codex native subagent.";
-    case "closeAgent":
-      return "Closed Codex native subagent.";
-    default:
-      return `Observed Codex native ${params.tool} call.`;
-  }
+/**
+ * What a worker is called before anything better is known. A path-based
+ * worker reports no prompt, so every card starts here; discovery replaces it
+ * with the worker thread's title.
+ */
+function codexNativeSubAgentPlaceholderTask(threadId: string): string {
+  return `Codex sub-agent ${shortCodexNativeAgentId(threadId)}`;
+}
+
+function isCodexNativeSubAgentPlaceholderTask(
+  task: string,
+  threadId: string,
+): boolean {
+  return (
+    task === codexNativeSubAgentPlaceholderTask(threadId)
+    // Cards persisted before the placeholder took the id's random tail.
+    || task === `Codex subagent ${threadId.slice(0, 8)}`
+  );
 }
 
 function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
@@ -8325,6 +8323,34 @@ type PendingLiveThreadUsageLine = {
   observationSequence: number;
 };
 
+/**
+ * A running native worker's latest usage, not yet in sqlite: the card's copy,
+ * and its priced usage lines by id (one per worker turn).
+ */
+type LiveCodexNativeSubAgentUsage = Pick<
+  ThreadSubAgentSummary,
+  "monitorUsage" | "preferredModel" | "preferredReasoningEffort" | "updatedAt"
+> & {
+  lines: ReadonlyMap<string, ThreadUsageLineRecord>;
+};
+
+function withLiveCodexNativeSubAgentUsage(
+  card: ThreadSubAgentSummary,
+  live: LiveCodexNativeSubAgentUsage,
+): ThreadSubAgentSummary {
+  return {
+    ...card,
+    ...(!card.preferredModel && live.preferredModel
+      ? { preferredModel: live.preferredModel }
+      : {}),
+    ...(!card.preferredReasoningEffort && live.preferredReasoningEffort
+      ? { preferredReasoningEffort: live.preferredReasoningEffort }
+      : {}),
+    monitorUsage: live.monitorUsage,
+    updatedAt: Math.max(card.updatedAt, live.updatedAt),
+  };
+}
+
 type LiveThreadUsageEmitWork = {
   backend: AppServerBackendKind;
   derivationFinished: boolean;
@@ -8616,6 +8642,16 @@ export class DesktopBackendRegistry {
   >();
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
+  private readonly codexNativeSubAgentModelSettings = new Map<
+    string,
+    Promise<{ model?: string; reasoningEffort?: string } | undefined>
+  >();
+  /**
+   * Persisted worker cards already handed to reconciliation this session. A
+   * reconciliation that gives up deletes its entry, and without this every
+   * later navigation snapshot would start it again.
+   */
+  private readonly codexNativeSubAgentPersistedProbes = new Set<string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
     CodexNativeSubAgentReconciliation
@@ -8764,6 +8800,18 @@ export class DesktopBackendRegistry {
   private readonly liveTokenMiserSubAgents = new Map<
     string,
     Map<string, ThreadSubAgentSummary>
+  >();
+  /**
+   * Native worker usage by parent thread, then monitor id. A worker reports
+   * usage once per model response, usually seconds apart, so neither the card
+   * (a rewrite of the parent's whole overlay) nor the usage line is written
+   * per report: both wait here for the worker's turn end or close. Reads go
+   * through `mergeLiveTokenMiserSubAgents` and the live pricing merge, so the
+   * rail and the cost panel stay live.
+   */
+  private readonly liveCodexNativeSubAgentUsage = new Map<
+    string,
+    Map<string, LiveCodexNativeSubAgentUsage>
   >();
   private readonly liveTokenMiserUsageLines = new Map<
     string,
@@ -15410,6 +15458,16 @@ export class DesktopBackendRegistry {
         reason: "selected-thread",
         threadId: request.threadId,
       });
+      // Best effort: a worker card that cannot be repaired must not fail the
+      // read of the thread itself.
+      await this.restoreCodexNativeSubAgentsFromReplay(request.threadId, replay).catch(
+        (error: unknown) => {
+          backendRegistryLog.warn("codex native sub-agent restore from replay failed", {
+            threadId: request.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -15832,6 +15890,14 @@ export class DesktopBackendRegistry {
       ?? []) {
       byId.set(subAgent.monitorId, subAgent);
     }
+    // Only the usage is live; status, name and task stay the stored card's.
+    for (const [monitorId, live] of this.liveCodexNativeSubAgentUsage.get(threadId)
+      ?? []) {
+      const card = byId.get(monitorId);
+      if (card) {
+        byId.set(monitorId, withLiveCodexNativeSubAgentUsage(card, live));
+      }
+    }
     return [...byId.values()].sort((left, right) =>
       right.updatedAt - left.updatedAt
       || right.monitorId.localeCompare(left.monitorId)
@@ -15859,6 +15925,12 @@ export class DesktopBackendRegistry {
       withCompactions,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
+        // Held worker lines, for the parent's ledger and the worker's own.
+        ...[...this.liveCodexNativeSubAgentUsage.values()]
+          .flatMap((lives) => [...lives.values()])
+          .flatMap((live) => [...live.lines.values()])
+          .filter((line) =>
+            line.parentThreadId === params.threadId || line.threadId === params.threadId),
       ],
     );
     const localIds = new Set(this.resolveCodexLocalModelIdsFn());
@@ -24541,6 +24613,7 @@ export class DesktopBackendRegistry {
     await this.tokenMiserLedgerReconciliation;
     this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
+    await this.persistLiveCodexNativeSubAgentUsage();
     await this.usageTurnStartupRepair;
     await this.completeRunningThreadUsageTurnsAtShutdown();
     // A command streaming at quit time has accounting worth up to one flush
@@ -26974,6 +27047,7 @@ export class DesktopBackendRegistry {
       overlaysByThreadId,
       parentThreads: threadsWithPending,
     });
+    await this.reconcilePersistedCodexNativeSubAgents(threadsWithPending, overlaysByThreadId);
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
@@ -27028,6 +27102,7 @@ export class DesktopBackendRegistry {
           : [];
         return {
           ...thread,
+          ...this.persistedCodexNativeSubAgentDisclosure(thread, overlay),
           executionMode: overlay?.executionMode ?? thread.executionMode,
           model: overlay?.model ?? thread.model,
           reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
@@ -27058,6 +27133,193 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async reconcilePersistedCodexNativeSubAgents(
+    threads: AppServerThreadSummary[],
+    overlays: Record<string, ThreadOverlayState | undefined>,
+  ): Promise<void> {
+    for (const parent of threads) {
+      const probes: Promise<void>[] = [];
+      for (const card of overlays[parent.id]?.subAgents ?? []) {
+        if (
+          !card.monitorId.startsWith("codex-native:")
+          || !card.monitorThreadId
+          || codexNativeSubAgentIsTerminal(card.status)
+          || this.codexNativeSubAgentReconciliations.has(card.monitorThreadId)
+          || this.codexNativeSubAgentPersistedProbes.has(card.monitorThreadId)
+        ) {
+          continue;
+        }
+        this.codexNativeSubAgentPersistedProbes.add(card.monitorThreadId);
+        this.codexNativeSubAgentParents.set(card.monitorThreadId, parent.id);
+        this.scheduleCodexNativeSubAgentReconciliation({
+          parentThreadId: parent.id,
+          receiverThreadId: card.monitorThreadId,
+          delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
+        });
+        // Each probe replaces only its own card, so they run together rather
+        // than holding the snapshot for one round trip per worker.
+        probes.push(this.reconcileCodexNativeSubAgent(card.monitorThreadId));
+      }
+      if (probes.length > 0) {
+        await Promise.all(probes);
+        overlays[parent.id] = await this.overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: parent.id,
+        });
+      }
+    }
+  }
+
+  private persistedCodexNativeSubAgentDisclosure(
+    thread: AppServerThreadSummary,
+    overlay: ThreadOverlayState | undefined,
+  ): Pick<AppServerThreadSummary, "codexNativeSubAgents"> {
+    const agents = new Map(
+      (thread.codexNativeSubAgents ?? []).map((agent) => [agent.threadId, agent]),
+    );
+    for (const card of overlay?.subAgents ?? []) {
+      if (
+        !card.monitorId.startsWith("codex-native:")
+        || !card.monitorThreadId
+        || agents.has(card.monitorThreadId)
+      ) {
+        continue;
+      }
+      const agent: CodexNativeSubAgentSummary = {
+        threadId: card.monitorThreadId,
+        title: card.task,
+        createdAt: card.createdAt,
+        updatedAt: card.updatedAt,
+        threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
+        agentNickname: card.agentName,
+      };
+      if (isCodexNativeSubAgentVisibleInNavigation(agent, Date.now())) {
+        agents.set(agent.threadId, agent);
+      }
+    }
+    return agents.size > 0 ? { codexNativeSubAgents: [...agents.values()] } : {};
+  }
+
+  /** Repair workers omitted by bounded global discovery when their parent is opened. */
+  private async restoreCodexNativeSubAgentsFromReplay(
+    threadId: string,
+    replay: AppServerThreadReplay,
+  ): Promise<void> {
+    const observed = new Map<string, {
+      agent: NonNullable<AppServerThreadCommandDetail["subAgent"]>["agents"][number];
+      operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"];
+      turnId?: string;
+      observedAt?: number;
+    }>();
+    for (const entry of replay.entries) {
+      if (entry.type !== "activity") {
+        continue;
+      }
+      for (const detail of entry.details) {
+        const call = detail.command?.subAgent;
+        if (call?.origin !== "codex-native") {
+          continue;
+        }
+        for (const agent of call.agents) {
+          observed.set(agent.threadId, {
+            agent,
+            operation: call.operation,
+            turnId: entry.turn?.id,
+            observedAt: entry.turn?.completedAt ?? entry.createdAt,
+          });
+        }
+      }
+    }
+    if (observed.size === 0) {
+      return;
+    }
+    const parentOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId,
+    });
+    const pending = [...observed.keys()].filter((id) => {
+      const activity = observed.get(id)!;
+      const terminal = ["completed", "interrupted", "errored", "shutdown"].includes(activity.agent.status ?? "");
+      const recent = !activity.observedAt
+        || activity.observedAt >= Date.now() - CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS;
+      const existing = parentOverlay?.subAgents?.find((card) => card.monitorId === codexNativeSubAgentId(id));
+      const replayStatus = mapCodexNativeSubAgentStatus({
+        agentState: activity.agent.status,
+        itemStatus: "completed",
+        tool: codexNativeToolForOperation(activity.operation),
+      });
+      return existing
+        ? !codexNativeSubAgentIsTerminal(existing.status) || (terminal && existing.status !== replayStatus)
+        : (!terminal || recent);
+    });
+    // A card made from lifecycle reports alone has no model, and its usage
+    // stays unpriced until discovery reads one. Global discovery is one page
+    // and can miss a fresh worker; this parent-scoped read cannot.
+    const needsDiscovery = [...observed.keys()].some((id) => {
+      const existing = parentOverlay?.subAgents?.find(
+        (card) => card.monitorId === codexNativeSubAgentId(id),
+      );
+      return existing !== undefined && !existing.preferredModel;
+    });
+    if (pending.length === 0 && !needsDiscovery) {
+      return;
+    }
+    const nativeThreads = this.codexClient.listNativeSubAgentThreads
+      ? await this.codexClient.listNativeSubAgentThreads({
+          ancestorThreadId: threadId,
+        }).catch((error) => {
+          backendRegistryLog.debug("parent-scoped native Codex sub-agent discovery failed", {
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [];
+        })
+      : [];
+    const parent = this.getCachedThreadSummary({ backend: "codex", threadId }) ?? {
+      id: threadId,
+      source: "codex" as const,
+      title: "",
+      titleSource: "fallback" as const,
+      linkedDirectories: [],
+    };
+    const grouped = groupCodexNativeSubAgents({
+      nativeThreads,
+      now: Date.now(),
+      parentThreads: [parent],
+    });
+    // Explicit replay outcomes must land before discovery infers success from
+    // an idle worker. Discovery then enriches the authoritative card.
+    for (const receiverThreadId of pending) {
+      const activity = observed.get(receiverThreadId)!;
+      const discovered = nativeThreads.find((thread) => thread.id === receiverThreadId)?.codexNativeSubAgent;
+      const name = (discovered ? codexNativeSubAgentName(discovered) : undefined)
+        ?? activity.agent.name;
+      await this.persistCodexNativeSubAgent({
+        authoritativeReplayOutcome: true,
+        parentThreadId: threadId,
+        receiverThreadId,
+        observedAt: activity.observedAt,
+        call: {
+          activityBoundary: true,
+          parentTurnId: activity.turnId,
+          receiverThreadIds: [receiverThreadId],
+          receiverThreadNames: name ? new Map([[receiverThreadId, name]]) : new Map(),
+          tool: codexNativeToolForOperation(activity.operation),
+          item: { status: "completed", agentsStates: { [receiverThreadId]: activity.agent } },
+        },
+      });
+    }
+    const overlays = await this.overlayStore.getThreadOverlayStates({
+      backend: "codex",
+      threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
+    });
+    await this.reconcileDiscoveredCodexNativeSubAgents({
+      nativeThreads,
+      overlaysByThreadId: overlays,
+      parentThreads: grouped,
+    });
+  }
+
   private async reconcileDiscoveredCodexNativeSubAgents(params: {
     nativeThreads: AppServerThreadSummary[];
     overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
@@ -27074,6 +27336,7 @@ export class DesktopBackendRegistry {
       let parentPricingLines: ThreadUsageLineRecord[] = [];
       let parentPricingSettings: ThreadUsageLineRecord | undefined;
       let parentPricingLoaded = false;
+      let parentPricingRepaired = false;
       const readParentPricingLines = async (): Promise<ThreadUsageLineRecord[]> => {
         if (
           !parentPricingLoaded
@@ -27105,21 +27368,28 @@ export class DesktopBackendRegistry {
           this.clearCodexNativeSubAgentReconciliation(nativeThread.id);
           continue;
         }
+        // Both global and ancestor-scoped discovery flatten descendants under
+        // this ordinary parent; usage must follow the same visible owner.
+        this.codexNativeSubAgentParents.set(nativeThread.id, parent.id);
         const monitorId = codexNativeSubAgentId(nativeThread.id);
         const parentOverlay = params.overlaysByThreadId[parent.id];
         const existing = parentOverlay?.subAgents?.find(
           (subAgent) => subAgent.monitorId === monitorId,
         );
-        let preferredModel =
+        // The worker's own model and effort, or none. A worker can run on a
+        // model its parent does not, so the parent's is never a stand-in:
+        // usage with no known model stays unpriced until the usage path reads
+        // the worker's settings from Codex.
+        const preferredModel =
           nativeThread.model
           ?? existing?.preferredModel
           ?? existing?.monitorUsage?.model
-          ?? existing?.monitorUsage?.cost?.model
-          ?? parent.model;
-        let preferredReasoningEffort =
+          ?? existing?.monitorUsage?.cost?.model;
+        const preferredReasoningEffort =
           nativeThread.reasoningEffort
-          ?? existing?.preferredReasoningEffort
-          ?? parent.reasoningEffort;
+          ?? existing?.preferredReasoningEffort;
+        // Codex reports neither per worker; both follow the account and the
+        // parent's configuration, which the worker inherits.
         let preferredFastMode =
           nativeThread.fastMode
           ?? existing?.preferredFastMode
@@ -27141,17 +27411,10 @@ export class DesktopBackendRegistry {
         );
         if (
           hasPersistedTurnUsage
-          && (
-            !preferredModel
-            || !preferredReasoningEffort
-            || preferredFastMode === undefined
-            || !serviceTier
-          )
+          && (preferredFastMode === undefined || !serviceTier)
           && typeof this.overlayStore.readThreadPricing === "function"
         ) {
           await readParentPricingLines();
-          preferredModel ??= parentPricingSettings?.model;
-          preferredReasoningEffort ??= parentPricingSettings?.reasoningEffort;
           preferredFastMode ??= parentPricingSettings?.fastMode;
           serviceTier ??= parentPricingSettings?.serviceTier;
         }
@@ -27161,14 +27424,18 @@ export class DesktopBackendRegistry {
           overlay: childOverlay,
           serviceTier,
         });
-        const usageBackfill = existing?.monitorUsage
+        // A running worker's usage can be live in memory, off its card and
+        // out of the pricing table until its turn ends. It is not missing.
+        const liveUsage = this.liveCodexNativeSubAgentUsage.get(parent.id)?.get(monitorId);
+        const knownUsage = existing?.monitorUsage ?? liveUsage?.monitorUsage;
+        const usageBackfill = knownUsage
           ? undefined
           : persistedUsageBackfill;
         const monitorTurnId =
           existing?.monitorTurnId
           ?? persistedUsageBackfill?.monitorTurnId;
         const pricingUsage =
-          existing?.monitorUsage
+          knownUsage
           ?? persistedUsageBackfill?.usage;
         const pricingLine = pricingUsage
           ? buildTaskMonitorUsageLine({
@@ -27185,7 +27452,7 @@ export class DesktopBackendRegistry {
               usage: pricingUsage,
             })
           : undefined;
-        const needsPricingWrite = pricingLine
+        const needsPricingWrite = pricingLine && !liveUsage
           ? usageBackfill
             ? true
             : typeof this.overlayStore.readThreadPricing === "function"
@@ -27196,6 +27463,32 @@ export class DesktopBackendRegistry {
                   && line.scope === "monitor",
               )
           : false;
+        // A line written before anything named the worker's model keeps its
+        // own identity and tokens; only the settings are filled. Building a
+        // fresh line would key it by the card's turn, which is the parent's,
+        // and count the worker twice. The store reprices what it is handed.
+        const modelRepairs =
+          preferredModel && typeof this.overlayStore.readThreadPricing === "function"
+            ? (await readParentPricingLines())
+              .filter(
+                (line) =>
+                  line.sourceItemId === monitorId
+                  && line.threadId === nativeThread.id
+                  && line.scope === "monitor"
+                  && !line.model,
+              )
+              .map((line): ThreadUsageLineRecord => ({
+                ...line,
+                model: preferredModel,
+                ...(!line.reasoningEffort && preferredReasoningEffort
+                  ? { reasoningEffort: preferredReasoningEffort }
+                  : {}),
+                ...(!line.serviceTier && serviceTier ? { serviceTier } : {}),
+                ...(line.fastMode === undefined && preferredFastMode !== undefined
+                  ? { fastMode: preferredFastMode }
+                  : {}),
+              }))
+            : [];
         const discoveredStatus =
           nativeThread.threadStatus === "active"
             ? "running"
@@ -27206,9 +27499,24 @@ export class DesktopBackendRegistry {
           existing && codexNativeSubAgentIsTerminal(existing.status)
             ? existing.status
             : discoveredStatus;
+        const outcome = codexNativeSubAgentOutcome(status);
         const agentName =
-          nativeThread.codexNativeSubAgent?.agentNickname
+          (nativeThread.codexNativeSubAgent
+            ? codexNativeSubAgentName(nativeThread.codexNativeSubAgent)
+            : undefined)
           ?? existing?.agentName;
+        // A fallback title says nothing the placeholder does not.
+        const discoveredTitle = nativeThread.titleSource === "fallback"
+          ? undefined
+          : nativeThread.title?.trim();
+        const task =
+          existing
+          && !(
+            discoveredTitle
+            && isCodexNativeSubAgentPlaceholderTask(existing.task, nativeThread.id)
+          )
+            ? existing.task
+            : discoveredTitle || existing?.task || nativeThread.title;
         const completedAt =
           status === "success"
             ? existing?.completedAt
@@ -27219,11 +27527,14 @@ export class DesktopBackendRegistry {
         const needsCardWrite =
           !existing
           || Boolean(usageBackfill)
-          || Boolean(agentName && !existing.agentName)
-          || Boolean(preferredModel && !existing.preferredModel)
+          || Boolean(agentName && agentName !== existing.agentName)
+          || task !== existing.task
+          // Codex's report replaces whatever the card held, including a
+          // parent's model stored by an earlier build that guessed.
+          || Boolean(preferredModel && preferredModel !== existing.preferredModel)
           || Boolean(
             preferredReasoningEffort
-            && !existing.preferredReasoningEffort,
+            && preferredReasoningEffort !== existing.preferredReasoningEffort,
           )
           || Boolean(
             preferredFastMode !== undefined
@@ -27240,9 +27551,7 @@ export class DesktopBackendRegistry {
         try {
           const subAgent: ThreadSubAgentSummary = {
             monitorId,
-            task:
-              existing?.task
-              ?? nativeThread.title,
+            task,
             status,
             createdAt:
               existing?.createdAt
@@ -27261,17 +27570,15 @@ export class DesktopBackendRegistry {
               existing?.ownerRegistrySessionId ?? this.registrySessionId,
             backend: "codex",
             monitorThreadId: nativeThread.id,
-            lastMessage:
-              existing?.lastMessage
-              ?? (status === "success"
-                ? "Codex native sub-agent completed."
-                : "Discovered from Codex native thread metadata."),
+            ...(existing?.lastMessage
+              ? { lastMessage: existing.lastMessage }
+              : {}),
             ...(agentName ? { agentName } : {}),
             ...(preferredModel ? { preferredModel } : {}),
             ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
             ...(preferredFastMode !== undefined ? { preferredFastMode } : {}),
             ...(monitorTurnId ? { monitorTurnId } : {}),
-            ...(status === "success" ? { outcome: "success" as const } : {}),
+            ...(outcome ? { outcome } : {}),
             ...(completedAt !== undefined ? { completedAt } : {}),
             ...(usageBackfill ? { monitorUsage: usageBackfill.usage } : {}),
           };
@@ -27283,6 +27590,17 @@ export class DesktopBackendRegistry {
             logUnpricedThreadUsageLine(pricingLine);
             await this.overlayStore.upsertThreadUsageLine({ line: pricingLine });
             parentPricingLines.push(pricingLine);
+          }
+          for (const line of modelRepairs) {
+            const { line: repaired } = await this.overlayStore.upsertThreadUsageLine({ line });
+            logUnpricedThreadUsageLine(repaired);
+            const index = parentPricingLines.findIndex(
+              (candidate) => candidate.usageLineId === repaired.usageLineId,
+            );
+            if (index >= 0) {
+              parentPricingLines[index] = repaired;
+            }
+            parentPricingRepaired = true;
           }
 
           if (needsCardWrite) {
@@ -27310,6 +27628,11 @@ export class DesktopBackendRegistry {
             },
           );
         }
+      }
+      if (parentPricingRepaired) {
+        // A repriced worker moves the thread total and every running total
+        // after it; open panels refetch on this event.
+        await this.emitThreadPricingUpdated({ backend: "codex", threadId: parent.id });
       }
     }
   }
@@ -29102,6 +29425,112 @@ export class DesktopBackendRegistry {
     );
   }
 
+  /**
+   * One `thread/read` per worker, shared by the usage notifications that race
+   * to ask. A failure is not cached, so the next notification asks again. A
+   * model, once read, lives on the card, so only a read that found none is
+   * kept, to stop every later notification asking again.
+   */
+  private readCodexNativeSubAgentModelSettings(
+    threadId: string,
+  ): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
+    if (!this.codexClient.readThreadModelSettings) {
+      return Promise.resolve(undefined);
+    }
+    const cached = this.codexNativeSubAgentModelSettings.get(threadId);
+    if (cached) {
+      return cached;
+    }
+    const pending = this.codexClient.readThreadModelSettings({ threadId }).then(
+      (settings) => {
+        if (settings?.model) {
+          this.codexNativeSubAgentModelSettings.delete(threadId);
+        }
+        return settings;
+      },
+      (error) => {
+        this.codexNativeSubAgentModelSettings.delete(threadId);
+        backendRegistryLog.debug("codex native subagent model read failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      },
+    );
+    this.codexNativeSubAgentModelSettings.set(threadId, pending);
+    return pending;
+  }
+
+  /**
+   * Moves live worker usage into sqlite: the usage lines in one commit, then
+   * the cards in one commit per parent, each applied to the card as stored
+   * now so a status written meanwhile survives. Without a worker, every
+   * parent is written (close).
+   */
+  private async persistLiveCodexNativeSubAgentUsage(
+    receiverThreadId?: string,
+  ): Promise<void> {
+    const only = receiverThreadId ? codexNativeSubAgentId(receiverThreadId) : undefined;
+    for (const [parentThreadId, lives] of [...this.liveCodexNativeSubAgentUsage]) {
+      const pending = [...lives].filter(([monitorId]) => !only || monitorId === only);
+      if (pending.length === 0) {
+        continue;
+      }
+      const lines = pending.flatMap(([, live]) => [...live.lines.values()]);
+      try {
+        if (lines.length > 0 && typeof this.overlayStore.upsertThreadUsageLines === "function") {
+          await this.overlayStore.upsertThreadUsageLines({ lines });
+        }
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: parentThreadId,
+        });
+        const cards = pending.flatMap(([monitorId, live]) => {
+          const card = overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId);
+          return card ? [withLiveCodexNativeSubAgentUsage(card, live)] : [];
+        });
+        if (cards.length > 0) {
+          if (typeof this.overlayStore.upsertThreadSubAgents === "function") {
+            await this.overlayStore.upsertThreadSubAgents({
+              backend: "codex",
+              threadId: parentThreadId,
+              subAgents: cards,
+            });
+          } else {
+            for (const subAgent of cards) {
+              await this.overlayStore.upsertThreadSubAgent({
+                backend: "codex",
+                threadId: parentThreadId,
+                subAgent,
+              });
+            }
+          }
+          this.invalidateThreadListCache("codex");
+        }
+      } catch (error) {
+        // The usage stays live and is retried at the next boundary.
+        backendRegistryLog.warn("codex native subagent usage write failed", {
+          parentThreadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      for (const [monitorId, live] of pending) {
+        // A newer notification may have replaced the entry during the write.
+        if (lives.get(monitorId) === live) {
+          lives.delete(monitorId);
+        }
+      }
+      if (lives.size === 0) {
+        this.liveCodexNativeSubAgentUsage.delete(parentThreadId);
+      }
+      if (lines.length > 0 && !this.closed) {
+        // The store prices what it writes; open panels take its copy.
+        await this.emitThreadPricingUpdated({ backend: "codex", threadId: parentThreadId });
+      }
+    }
+  }
+
   private async recordCodexNativeSubAgentUsage(event: AgentEvent): Promise<void> {
     if (
       event.backend !== "codex" ||
@@ -29115,14 +29544,13 @@ export class DesktopBackendRegistry {
     if (!parentThreadId) {
       return;
     }
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId: parentThreadId,
-    });
     const monitorId = codexNativeSubAgentId(event.notification.params.threadId);
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
+    const readCard = async (): Promise<ThreadSubAgentSummary | undefined> =>
+      (await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: parentThreadId,
+      }))?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId);
+    let existing = await readCard();
     if (!existing) {
       backendRegistryLog.warn("codex native subagent usage had no matching card", {
         monitorId,
@@ -29142,7 +29570,35 @@ export class DesktopBackendRegistry {
     const fastMode = readTaskMonitorUsageFastMode(
       event.notification.params.tokenUsage,
     );
-    const model = notificationModel ?? existing.preferredModel;
+    const live = this.liveCodexNativeSubAgentUsage.get(parentThreadId)?.get(monitorId);
+    const knownModel = existing.preferredModel ?? live?.preferredModel;
+    const knownReasoningEffort =
+      existing.preferredReasoningEffort ?? live?.preferredReasoningEffort;
+    // A path-based worker's card starts from a subAgentActivity report, which
+    // names no model, and Codex usage notifications carry none either. Ask
+    // Codex for the worker's own settings once, or its usage stays unpriced.
+    let workerSettings: { model?: string; reasoningEffort?: string } | undefined;
+    if (!notificationModel && !knownModel) {
+      workerSettings = await this.readCodexNativeSubAgentModelSettings(
+        event.notification.params.threadId,
+      );
+      // The card may be written back whole below. Anything persisted while
+      // the read was in flight, such as the worker finishing, must survive it.
+      existing = await readCard();
+      if (!existing) {
+        return;
+      }
+    }
+    const model = notificationModel ?? knownModel ?? workerSettings?.model;
+    const reasoningEffort = knownReasoningEffort ?? workerSettings?.reasoningEffort;
+    const settingsForCard = {
+      ...(!existing.preferredModel && (knownModel ?? workerSettings?.model)
+        ? { preferredModel: knownModel ?? workerSettings?.model }
+        : {}),
+      ...(!existing.preferredReasoningEffort && reasoningEffort
+        ? { preferredReasoningEffort: reasoningEffort }
+        : {}),
+    };
     const monitorTurnId =
       readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
       existing.monitorTurnId;
@@ -29164,17 +29620,72 @@ export class DesktopBackendRegistry {
       tokenUsage: event.notification.params.tokenUsage,
       turnId: monitorTurnId,
     });
-
-    await this.overlayStore.upsertThreadSubAgent({
+    const line = buildTaskMonitorUsageLine({
       backend: "codex",
-      threadId: parentThreadId,
-      subAgent: {
-        ...existing,
+      fastMode,
+      model,
+      monitorId,
+      monitorThreadId: event.notification.params.threadId,
+      monitorTurnId,
+      observedReplays,
+      parentThreadId,
+      reasoningEffort,
+      serviceTier,
+      source: "monitor",
+      usage: usageSnapshot,
+    });
+
+    if (typeof this.overlayStore.upsertThreadUsageLines === "function") {
+      // Usage notifications arrive once per model response for the life of
+      // the worker. The card's copy and the line both wait in memory for the
+      // worker's turn end; see `liveCodexNativeSubAgentUsage`.
+      const lives = this.liveCodexNativeSubAgentUsage.get(parentThreadId)
+        ?? new Map<string, LiveCodexNativeSubAgentUsage>();
+      const lines = new Map(lives.get(monitorId)?.lines ?? []);
+      lines.set(line.usageLineId, line);
+      lives.set(monitorId, {
+        ...settingsForCard,
+        lines,
         monitorUsage: usageSnapshot,
         updatedAt: Date.now(),
-      },
-    });
-    this.invalidateThreadListCache("codex");
+      });
+      this.liveCodexNativeSubAgentUsage.set(parentThreadId, lives);
+      logUnpricedThreadUsageLine(line);
+      // Codex can report usage after the turn it belongs to has ended. That
+      // boundary has passed, and the worker may never run again.
+      const completedTurn = this.recentlyCompletedThreadUsageTurns.get(
+        ["codex", event.notification.params.threadId].join(":"),
+      );
+      const reportedTurnId = readOptionalString(notificationParams, ["turnId", "turn_id"]);
+      if (completedTurn && (!reportedTurnId || reportedTurnId === completedTurn.turnId)) {
+        await this.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
+      } else {
+        await this.emitThreadPricingUpdated({
+          backend: "codex",
+          threadId: parentThreadId,
+        });
+      }
+    } else {
+      await this.overlayStore.upsertThreadSubAgent({
+        backend: "codex",
+        threadId: parentThreadId,
+        subAgent: {
+          ...existing,
+          ...settingsForCard,
+          monitorUsage: usageSnapshot,
+          updatedAt: Date.now(),
+        },
+      });
+      this.invalidateThreadListCache("codex");
+      if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+        logUnpricedThreadUsageLine(line);
+        await this.overlayStore.upsertThreadUsageLine({ line });
+        await this.emitThreadPricingUpdated({
+          backend: "codex",
+          threadId: parentThreadId,
+        });
+      }
+    }
     await this.emit({
       backend: "codex",
       notification: {
@@ -29185,27 +29696,6 @@ export class DesktopBackendRegistry {
         },
       },
     });
-    if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
-      const line = buildTaskMonitorUsageLine({
-        backend: "codex",
-        fastMode,
-        model,
-        monitorId,
-        monitorThreadId: event.notification.params.threadId,
-        monitorTurnId,
-        observedReplays,
-        parentThreadId,
-        serviceTier,
-        source: "monitor",
-        usage: usageSnapshot,
-      });
-      logUnpricedThreadUsageLine(line);
-      await this.overlayStore.upsertThreadUsageLine({ line });
-      await this.emitThreadPricingUpdated({
-        backend: "codex",
-        threadId: line.parentThreadId ?? line.threadId,
-      });
-    }
     if (!codexNativeSubAgentIsTerminal(existing.status)) {
       this.scheduleCodexNativeSubAgentReconciliation({
         delayMs: CODEX_NATIVE_SUBAGENT_ACTIVITY_STATUS_DELAY_MS,
@@ -29447,7 +29937,9 @@ export class DesktopBackendRegistry {
   }
 
   private async persistCodexNativeSubAgent(params: {
+    authoritativeReplayOutcome?: boolean;
     call: CodexNativeSubAgentCall;
+    observedAt?: number;
     parentThreadId: string;
     receiverThreadId: string;
   }): Promise<void> {
@@ -29465,7 +29957,7 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const now = Date.now();
+    const now = params.observedAt ?? Date.now();
     this.codexNativeSubAgentParents.set(params.receiverThreadId, params.parentThreadId);
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: "codex",
@@ -29488,6 +29980,7 @@ export class DesktopBackendRegistry {
     });
     const status =
       existing && codexNativeSubAgentIsTerminal(existing.status)
+      && !(params.authoritativeReplayOutcome && codexNativeSubAgentIsTerminal(mappedStatus))
         ? existing.status
         : mappedStatus;
     const completedAt =
@@ -29500,22 +29993,27 @@ export class DesktopBackendRegistry {
       "reasoning_effort",
     ]);
     const fastMode = readBooleanLike(params.call.item, ["fastMode", "fast_mode"]);
+    // Every source resolves `pathName || nickname`, so the reported name is
+    // never a step down from the stored one.
     const agentName =
-      params.call.receiverThreadNames.get(params.receiverThreadId) ??
-      existing?.agentName;
+      params.call.receiverThreadNames.get(params.receiverThreadId)
+      ?? existing?.agentName;
+    if (
+      params.call.activityBoundary
+      && existing
+      && existing.status === status
+      && existing.agentName === agentName
+      && (!params.call.parentTurnId || existing.monitorTurnId === params.call.parentTurnId)
+    ) {
+      return;
+    }
     const outcome = codexNativeSubAgentOutcome(status);
-    const nextLastMessage = codexNativeSubAgentMessage({
-      agentMessage: agentState.message,
-      agentState: agentState.status,
-      tool: params.call.tool,
-    });
-    const lastMessage =
-      existing &&
-      codexNativeSubAgentIsTerminal(existing.status) &&
-      !agentState.message &&
-      existing.lastMessage
-        ? existing.lastMessage
-        : nextLastMessage;
+    // Only the worker's own words. The lifecycle event itself is already the
+    // card's status, and narrating it ("Observed … state: completed.") put
+    // implementation detail where the worker's message belongs.
+    const lastMessage = agentState.message
+      ? truncateSubAgentText(agentState.message, 360)
+      : existing?.lastMessage;
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task:
@@ -29554,7 +30052,7 @@ export class DesktopBackendRegistry {
         : existing?.preferredFastMode !== undefined
           ? { preferredFastMode: existing.preferredFastMode }
           : {}),
-      lastMessage,
+      ...(lastMessage ? { lastMessage } : {}),
       ...(outcome
         ? { outcome }
         : existing?.outcome
@@ -29767,7 +30265,7 @@ export class DesktopBackendRegistry {
     const now = Date.now();
     const lastMessage = replay.lastAssistantMessage
       ? truncateSubAgentText(replay.lastAssistantMessage, 360)
-      : "Codex native sub-agent completed.";
+      : existing.lastMessage;
     await this.overlayStore.upsertThreadSubAgent({
       backend: "codex",
       threadId: params.parentThreadId,
@@ -29776,7 +30274,7 @@ export class DesktopBackendRegistry {
         status: "success",
         outcome: "success",
         completedAt: existing.completedAt ?? now,
-        lastMessage,
+        ...(lastMessage ? { lastMessage } : {}),
         ...(replay.agentName ? { agentName: replay.agentName } : {}),
         updatedAt: now,
       },
@@ -42169,6 +42667,8 @@ export class DesktopBackendRegistry {
         }
       }
       await this.flushLiveThreadUsageLines();
+      // A worker's turn end is where its card takes the usage held live.
+      await this.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
       const notification = event.notification as {
         params: {
           threadId: string;

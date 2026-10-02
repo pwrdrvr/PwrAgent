@@ -348,7 +348,8 @@ export type TokenMiserSubAgentAccounting = {
 };
 
 export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
-  "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
+  | "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
+  | "agentName"
 >;
 
 export type ThreadSubAgentSummary = {

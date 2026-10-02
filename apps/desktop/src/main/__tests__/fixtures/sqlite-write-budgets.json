@@ -498,10 +498,24 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "native-subagent-activity-boundaries": {
+    "commits": 2,
+    "note": "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
+    "observedWalBytes": 41200,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "native-subagent-discovery-backfill": {
     "commits": 2,
     "note": "one missing native child pricing row and parent sub-agent card discovered from the thread list",
     "observedWalBytes": 82400,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "native-subagent-model-repair": {
+    "commits": 2,
+    "note": "One worker's model-less usage line filled in place and its card given the model, once; repeated discovery writes nothing. At 100 legacy workers, approximately 7 MB once, then nothing.",
+    "observedWalBytes": 70040,
     "rowsChanged": 4,
     "statements": 4
   },
@@ -511,6 +525,34 @@
     "observedWalBytes": 65920,
     "rowsChanged": 3,
     "statements": 3
+  },
+  "native-subagent-replay-repair": {
+    "commits": 1,
+    "note": "One persisted worker terminal correction; repeated recovery makes no commits. At 100 repairs/day, approximately 1.6 MB/day, with no idle writes.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "native-subagent-status-repair": {
+    "commits": 1,
+    "note": "One persisted worker terminal correction; repeated recovery makes no commits. At 100 repairs/day, approximately 1.6 MB/day, with no idle writes.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "native-subagent-usage-burst": {
+    "commits": 2,
+    "note": "20 native worker usage updates in one burst, then the worker's turn end writes the line and the card",
+    "observedWalBytes": 82400,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "native-subagent-usage-spaced": {
+    "commits": 2,
+    "note": "20 native worker usage updates a second or more apart, then the worker's turn end writes the line and the card; was 2 commits per update",
+    "observedWalBytes": 82400,
+    "rowsChanged": 4,
+    "statements": 4
   },
   "navigation-append-thread-pin": {
     "commits": 1,

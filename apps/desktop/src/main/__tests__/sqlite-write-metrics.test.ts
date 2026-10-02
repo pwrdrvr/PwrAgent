@@ -7,6 +7,7 @@ import type {
   AppServerThreadSummary,
   StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
+  ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
@@ -1121,6 +1122,492 @@ describe("sqlite write metrics", () => {
     ]);
 
     await registry.close();
+  });
+
+  it("persists subAgentActivity only at lifecycle boundaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const recordActivity = (registry as unknown as {
+      recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void>;
+    }).recordCodexNativeSubAgentActivity.bind(registry);
+    const activity = (kind: string): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-review",
+          item: {
+            type: "subAgentActivity",
+            id: `activity-${kind}`,
+            kind,
+            agentThreadId: "worker-review",
+            agentPath: "/root/review_savers",
+          },
+        },
+      },
+    } as AgentEvent);
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await recordActivity(activity("started"));
+        for (let index = 0; index < 100; index += 1) {
+          await recordActivity(activity("started"));
+          await recordActivity(activity("interacted"));
+        }
+        await recordActivity(activity("completed"));
+        await recordActivity(activity("completed"));
+        await recordActivity(activity("started"));
+      });
+      expectSqliteWriteBudget({
+        scenario: "native-subagent-activity-boundaries",
+        note: "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([
+    ["in one burst", 0],
+    ["a second or more apart", 1_100],
+  ] as const)("holds native worker usage in memory until the worker's turn ends, updates %s", async (_case, gapMs) => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: "thread-parent",
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running", agentName: "review_savers",
+        monitorTurnId: "turn-review", createdAt: now - 10_000, updatedAt: now - 1_000,
+      },
+    });
+    // A path-based worker's card names no model; the first update reads it
+    // from Codex. That is a protocol call and must not add a commit.
+    const codexClient = Object.assign(createStubBackendClient() as object, {
+      readThreadModelSettings: async () => ({ model: "gpt-5.5", reasoningEffort: "high" }),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: codexClient as never,
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      codexNativeSubAgentParents: Map<string, string>;
+      emit(event: AgentEvent): Promise<void>;
+      mergeLiveTokenMiserSubAgents(
+        threadId: string,
+        persisted: readonly ThreadSubAgentSummary[] | undefined,
+      ): ThreadSubAgentSummary[];
+      readThreadPricingWithLiveTokenMiser(params: {
+        backend: "codex";
+        threadId: string;
+      }): Promise<{ lines: ThreadUsageLineRecord[] }>;
+    };
+    internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+    const usage = (total: number): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "worker-review",
+          turnId: "turn-worker",
+          tokenUsage: {
+            total: { inputTokens: total, cachedInputTokens: 0, outputTokens: 50 },
+            last: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 50 },
+          },
+        },
+      },
+    } as AgentEvent);
+    const storedCard = async () => (await store.getThreadOverlayState({
+      backend: "codex", threadId: "thread-parent",
+    }))?.subAgents?.[0];
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 1; index <= 20; index += 1) {
+          await internal.emit(usage(index * 1_000));
+          if (gapMs > 0) {
+            await vi.advanceTimersByTimeAsync(gapMs);
+          }
+        }
+        // Before the turn ends sqlite has neither the card's usage nor the
+        // line. The rail and the cost panel read through the live merges.
+        expect((await storedCard())?.monitorUsage).toBeUndefined();
+        expect((await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" }))
+          .lines.filter((line) => line.threadId === "worker-review")).toEqual([]);
+        expect((await internal.readThreadPricingWithLiveTokenMiser({
+          backend: "codex", threadId: "thread-parent",
+        })).lines.find((line) => line.threadId === "worker-review")).toMatchObject({
+          model: "gpt-5.5", priceStatus: "priced", inputTokens: 20_000,
+        });
+        expect(
+          internal.mergeLiveTokenMiserSubAgents("thread-parent", [(await storedCard())!])[0],
+        ).toMatchObject({
+          preferredModel: "gpt-5.5",
+          monitorUsage: { tokenUsage: expect.objectContaining({ inputTokens: 20_000 }) },
+        });
+        await internal.emit(buildTurnCompletedEvent("worker-review", "turn-worker"));
+      });
+      expect(await storedCard()).toMatchObject({
+        status: "running",
+        preferredModel: "gpt-5.5",
+        monitorUsage: { tokenUsage: expect.objectContaining({ inputTokens: 20_000 }) },
+      });
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" });
+      expect(pricing.lines.find((line) => line.threadId === "worker-review")).toMatchObject({
+        model: "gpt-5.5", priceStatus: "priced",
+      });
+      expectSqliteWriteBudget({
+        scenario: gapMs > 0
+          ? "native-subagent-usage-spaced"
+          : "native-subagent-usage-burst",
+        note: gapMs > 0
+          ? "20 native worker usage updates a second or more apart, then the worker's turn end writes the line and the card; was 2 commits per update"
+          : "20 native worker usage updates in one burst, then the worker's turn end writes the line and the card",
+        writes,
+      });
+    } finally {
+      vi.useRealTimers();
+      await registry.close();
+    }
+  });
+
+  describe("held native worker usage", () => {
+    const seedRunningWorker = async () => {
+      const now = Date.now();
+      await store.upsertThreadSubAgent({
+        backend: "codex", threadId: "thread-parent",
+        subAgent: {
+          monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+          backend: "codex", task: "Review savers", status: "running", agentName: "review_savers",
+          monitorTurnId: "turn-review", createdAt: now - 10_000, updatedAt: now - 1_000,
+        },
+      });
+    };
+    const workerUsage = (total: number): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "worker-review",
+          turnId: "turn-worker",
+          tokenUsage: {
+            total: { inputTokens: total, cachedInputTokens: 0, outputTokens: 50 },
+            last: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 50 },
+          },
+        },
+      },
+    } as AgentEvent);
+    const createRegistry = (settings?: { model?: string }) => {
+      const codexClient = Object.assign(createStubBackendClient() as object, {
+        readThreadModelSettings: async () => settings,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient: codexClient as never,
+        overlayStore: store as never,
+      });
+      const internal = registry as unknown as {
+        codexNativeSubAgentParents: Map<string, string>;
+        emit(event: AgentEvent): Promise<void>;
+        readThreadPricingWithLiveTokenMiser(params: {
+          backend: "codex";
+          threadId: string;
+        }): Promise<{ lines: ThreadUsageLineRecord[] }>;
+      };
+      internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+      return { registry, internal };
+    };
+    const storedWorkerLine = async () =>
+      (await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" }))
+        .lines.find((line) => line.threadId === "worker-review");
+
+    it("writes usage that arrives after the worker's turn ended", async () => {
+      await seedRunningWorker();
+      const { registry, internal } = createRegistry({ model: "gpt-5.5" });
+      try {
+        await internal.emit(workerUsage(1_000));
+        await internal.emit(buildTurnCompletedEvent("worker-review", "turn-worker"));
+        expect(await storedWorkerLine()).toMatchObject({ inputTokens: 1_000 });
+        // No later boundary will come for this report.
+        await internal.emit(workerUsage(2_000));
+        expect(await storedWorkerLine()).toMatchObject({ inputTokens: 2_000 });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("serves a running worker's held line to its own pricing read", async () => {
+      await seedRunningWorker();
+      const { registry, internal } = createRegistry({ model: "gpt-5.5" });
+      try {
+        await internal.emit(workerUsage(1_000));
+        expect(await storedWorkerLine()).toBeUndefined();
+        expect((await internal.readThreadPricingWithLiveTokenMiser({
+          backend: "codex", threadId: "worker-review",
+        })).lines.find((line) => line.scope === "monitor")).toMatchObject({
+          threadId: "worker-review", inputTokens: 1_000,
+        });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("writes held usage at close", async () => {
+      await seedRunningWorker();
+      const { registry, internal } = createRegistry({ model: "gpt-5.5" });
+      await internal.emit(workerUsage(1_000));
+      expect(await storedWorkerLine()).toBeUndefined();
+      await registry.close();
+      expect(await storedWorkerLine()).toMatchObject({ inputTokens: 1_000, model: "gpt-5.5" });
+      expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" }))
+        ?.subAgents?.[0]?.monitorUsage).toBeDefined();
+    });
+
+    it("repairs a model-less worker line once when discovery names the model", async () => {
+      await seedRunningWorker();
+      // Codex named no model while the worker ran, so its line was unpriced.
+      const first = createRegistry(undefined);
+      await first.internal.emit(workerUsage(1_000));
+      await first.registry.close();
+      expect(await storedWorkerLine()).toMatchObject({ priceStatus: "unpriced" });
+      expect((await storedWorkerLine())?.model).toBeUndefined();
+
+      const now = Date.now();
+      const parent: AppServerThreadSummary = {
+        id: "thread-parent", source: "codex", title: "Review audit",
+        titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+      };
+      const registry = new DesktopBackendRegistry({
+        codexClient: createStubBackendClient({
+          threads: [parent],
+          nativeSubAgentThreads: [{
+            ...parent, id: "worker-review", title: "Review savers", threadStatus: "active",
+            model: "gpt-5.5", reasoningEffort: "high",
+            codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
+          }],
+        }),
+        overlayStore: store as never,
+      });
+      try {
+        const { writes } = await measureSqliteWrites(async () => {
+          await registry.listThreads({ backend: "codex", forceRefresh: true });
+        });
+        expect(await storedWorkerLine()).toMatchObject({ model: "gpt-5.5", priceStatus: "priced" });
+        expectSqliteWriteBudget({
+          scenario: "native-subagent-model-repair",
+          note: "One worker's model-less usage line filled in place and its card given the model, once; repeated discovery writes nothing. At 100 legacy workers, approximately 7 MB once, then nothing.",
+          writes,
+        });
+        const repeated = await measureSqliteWrites(async () => {
+          await registry.listThreads({ backend: "codex", forceRefresh: true });
+        });
+        expect(repeated.writes.commits).toBe(0);
+      } finally {
+        await registry.close();
+      }
+    });
+  });
+
+  it("does not backfill a worker whose usage is live", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    // An earlier finished turn of the worker, which discovery can backfill
+    // from when the card has no usage.
+    await store.persistThreadUsageActivity({
+      backend: "codex",
+      threadId: "worker-review",
+      activity: {
+        type: "activity",
+        id: "live-turn-usage-turn-old",
+        createdAt: now - 5_000,
+        summary: "Turn usage: 1,000 uncached in · 0 cached · 50 out (0 reasoning)",
+        status: "completed",
+        details: [],
+        turn: { id: "turn-old", status: "completed", completedAt: now - 5_000 },
+      },
+    });
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: "thread-parent",
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running", agentName: "review_savers",
+        preferredModel: "gpt-5.5", preferredReasoningEffort: "high",
+        monitorTurnId: "turn-review", createdAt: now - 10_000, updatedAt: now - 1_000,
+      },
+    });
+    const parent: AppServerThreadSummary = {
+      id: "thread-parent", source: "codex", title: "Review audit",
+      titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({
+        threads: [parent],
+        nativeSubAgentThreads: [{
+          ...parent, id: "worker-review", title: "Review savers", threadStatus: "active",
+          model: "gpt-5.5", reasoningEffort: "high",
+          codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
+        }],
+      }),
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      codexNativeSubAgentParents: Map<string, string>;
+      emit(event: AgentEvent): Promise<void>;
+    };
+    internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+    try {
+      await internal.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "worker-review",
+            turnId: "turn-worker",
+            tokenUsage: {
+              total: { inputTokens: 3_000, cachedInputTokens: 0, outputTokens: 50 },
+              last: { inputTokens: 3_000, cachedInputTokens: 0, outputTokens: 50 },
+            },
+          },
+        },
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(1_100);
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.listThreads({ backend: "codex", forceRefresh: true });
+      });
+      // The live usage is the worker's; discovery must not write a second,
+      // differently keyed line or card usage beside it.
+      expect(writes.commits).toBe(0);
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" });
+      expect(pricing.lines.filter((line) => line.threadId === "worker-review")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      await registry.close();
+    }
+  });
+
+  it.each([
+    ["names no model", undefined, 0],
+    ["names its model", "gpt-5.4-mini", 1],
+  ] as const)("re-lists a model-less worker on each parent open, and writes at most once when Codex %s", async (_case, workerModel, expectedCommits) => {
+    const now = Date.now();
+    const parent: AppServerThreadSummary = {
+      id: "thread-parent", source: "codex", title: "Review audit",
+      titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+    };
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: parent.id,
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "success", outcome: "success",
+        agentName: "review_savers", monitorTurnId: "turn-review",
+        createdAt: now - 10_000, updatedAt: now - 1_000, completedAt: now - 1_000,
+      },
+    });
+    const replay: AppServerThreadReplay = {
+      threadStatus: "idle", messages: [],
+      pagination: { supportsPagination: true, hasPreviousPage: false },
+      entries: [{
+        type: "activity", id: "completed-review", summary: "1 finished", status: "completed",
+        turn: { id: "turn-review", status: "completed", completedAt: now - 1_000 },
+        details: [{
+          id: "completed-review", kind: "command", label: "review_savers finished",
+          command: { displayCommand: "subAgentActivity completed /root/review_savers", subAgent: {
+            backend: "codex", origin: "codex-native", operation: "complete",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "completed" }],
+          } },
+        }],
+      }],
+    };
+    const stub = createStubBackendClient({ replay, nativeSubAgentThreads: [{
+      ...parent, id: "worker-review", threadStatus: "idle",
+      ...(workerModel ? { model: workerModel } : {}),
+      codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
+    }] }) as { listNativeSubAgentThreads: () => Promise<AppServerThreadSummary[]> };
+    const listNativeSubAgentThreads = vi.spyOn(stub, "listNativeSubAgentThreads");
+    const registry = new DesktopBackendRegistry({
+      codexClient: stub as never,
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
+    };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 3; index += 1) {
+          await internal.restoreCodexNativeSubAgentsFromReplay(parent.id, replay);
+        }
+      });
+      // The re-list is a protocol call per open until the card has a model.
+      expect(listNativeSubAgentThreads).toHaveBeenCalledTimes(workerModel ? 1 : 3);
+      // It must never become a database write per open.
+      expect(writes.commits).toBe(expectedCommits);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each(["replay", "status"] as const)("repairs a persisted native worker once from %s", async (source) => {
+    const now = Date.now();
+    const parent: AppServerThreadSummary = {
+      id: "thread-parent", source: "codex", title: "Review audit",
+      titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+    };
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: parent.id,
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running", agentName: "Noether",
+        preferredModel: "gpt-6-luna", preferredReasoningEffort: "high", monitorTurnId: "turn-review",
+        createdAt: now - 10_000, updatedAt: now - 1_000, lastMessage: "Still running",
+      },
+    });
+    const replay: AppServerThreadReplay = {
+      threadStatus: "idle", entries: [], messages: [],
+      pagination: { supportsPagination: true, hasPreviousPage: false },
+    };
+    if (source === "replay") {
+      replay.entries.push({
+        type: "activity", id: "interrupted-review", summary: "Worker interrupted", status: "completed",
+        turn: { id: "turn-review", status: "completed", completedAt: now },
+        details: [{
+          id: "interrupted-review", kind: "command", label: "Interrupted review",
+          command: { displayCommand: "closeAgent worker-review", subAgent: {
+            backend: "codex", origin: "codex-native", operation: "close",
+            agents: [{ threadId: "worker-review", name: "Noether", status: "interrupted" }],
+          } },
+        }],
+      });
+    }
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({ replay, nativeSubAgentThreads: [{
+        ...parent, id: "worker-review", threadStatus: "idle", model: "gpt-6-luna", reasoningEffort: "high",
+        codexNativeSubAgent: { parentThreadId: parent.id, agentNickname: "Noether" },
+      }] }),
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
+      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], overlays: Record<string, unknown>): Promise<void>;
+    };
+    const overlays = await store.getThreadOverlayStates({ backend: "codex", threadIds: [parent.id] });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 3; index += 1) {
+          if (source === "replay") await internal.restoreCodexNativeSubAgentsFromReplay(parent.id, replay);
+          else await internal.reconcilePersistedCodexNativeSubAgents([parent], overlays);
+        }
+      });
+      const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: parent.id });
+      expect(overlay?.subAgents?.[0]?.status).toBe(source === "replay" ? "cancelled" : "success");
+      expectSqliteWriteBudget({
+        scenario: `native-subagent-${source}-repair`,
+        note: "One persisted worker terminal correction; repeated recovery makes no commits. At 100 repairs/day, approximately 1.6 MB/day, with no idle writes.",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("backfills one discovered native sub-agent in two boundary writes", async () => {
