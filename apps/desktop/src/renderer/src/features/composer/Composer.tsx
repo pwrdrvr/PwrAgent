@@ -204,6 +204,8 @@ import {
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
+import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
@@ -2827,6 +2829,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     : props.thread
       ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
+  const failureTarget = props.thread?.federation?.ref.target ?? rendererFederationTarget;
+  const failureScope = props.thread
+    ? turnFailureScopeKey(props.thread.source, props.thread.id,
+        failureTarget?.scope === "remote" ? failureTarget.instanceId : undefined)
+    : undefined;
   const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
   const draftStore = useOwnedComposerDraftStore(
@@ -4379,16 +4386,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return "failed";
     }
   };
+  const acknowledgeQueuedFailure = (queued: QueuedTurnDraft): void => {
+    turnFailureAcknowledgements.dismissMatching(failureScope, queued.holdReason ?? queued.errorMessage);
+  };
+  const reportQueuedFailure = (message: string): void => {
+    turnFailureAcknowledgements.reportQueueFailure(failureScope, message);
+    setSendError(message);
+  };
   const releaseHeldQueuedTurn = async (
     queued: QueuedTurnDraft,
     scopeKey = composerScopeKey,
   ): Promise<void> => {
+    acknowledgeQueuedFailure(queued);
     if (queued.scheduledActionId) {
       sendQueuedTurnNow(queued);
       return;
     }
     if (!queued.queueEntryId || !props.desktopApi?.releaseQueuedTurn) {
-      setSendError("Queued turn retry is unavailable.");
+      reportQueuedFailure("Queued turn retry is unavailable.");
       return;
     }
     updateSending(true);
@@ -4424,7 +4439,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           manualReleaseRequired: true,
           holdReason: message,
         }));
-        setSendError(message);
+        reportQueuedFailure(message);
         return;
       }
       const message = response.disposition === "busy"
@@ -4432,9 +4447,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         : response.disposition === "not_head"
           ? "Retry the first held message before this one."
           : "This queued message is no longer held for retry.";
-      setSendError(message);
+      reportQueuedFailure(message);
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
+      reportQueuedFailure(error instanceof Error ? error.message : String(error));
     } finally {
       updateSending(false);
     }
@@ -6931,7 +6946,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           const failureMessage = scheduledActionFailureMessage(response.action);
           if (failureMessage) {
             updateSending(false);
-            setSendError(failureMessage);
+            reportQueuedFailure(failureMessage);
             return;
           }
           if (
@@ -6973,7 +6988,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         },
         (error) => {
           updateSending(false);
-          setSendError(error instanceof Error ? error.message : String(error));
+          reportQueuedFailure(error instanceof Error ? error.message : String(error));
         },
       );
       return;
@@ -11049,6 +11064,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       )}
 
       <ComposerErrorRail
+        failureScope={failureScope}
         desktopApi={props.desktopApi}
         entries={composerErrorEntries}
       />
@@ -11258,14 +11274,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 {formatDraftPreview(queued)}
               </span>
               {queued.errorMessage ? (
-                <span className="composer__queued-error">
-                  {queued.errorMessage}
-                </span>
+                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
               ) : null}
               {queued.holdReason ? (
-                <span className="composer__queued-error">
-                  {queued.holdReason}
-                </span>
+                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
               ) : null}
             </div>
             <QueuedImageAttachments attachments={queued.imageAttachments} />
@@ -11349,6 +11361,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 type="button"
                 onClick={() => {
                   const editQueuedTurn = (editable = queued): void => {
+                    acknowledgeQueuedFailure(queued);
                     removeQueuedTurnInScope(queuedScopeKey, queued);
                     if (activeComposerScopeKeyRef.current !== queuedScopeKey) {
                       const currentDraft = draftStore.get(queuedScopeKey);
@@ -11413,6 +11426,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 type="button"
                 onClick={() => {
                   if (!backendOwned) {
+                    acknowledgeQueuedFailure(queued);
                     removeQueuedTurnAt(index);
                     return;
                   }
@@ -11422,6 +11436,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       queuedScopeKey,
                     );
                     if (cancellation === "cancelled") {
+                      acknowledgeQueuedFailure(queued);
                       removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
                   })();
