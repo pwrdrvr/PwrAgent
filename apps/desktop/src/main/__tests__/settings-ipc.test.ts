@@ -38,6 +38,7 @@ const desktopConfigStoreMock = vi.hoisted(() => ({
       ? {
           appearance: {
             theme: "system",
+            palette: "tangerine",
             density: "mission-control",
             sidebarTextSize: "md",
             transcriptTextSize: "md",

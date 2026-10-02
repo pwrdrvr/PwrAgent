@@ -160,6 +160,7 @@ function createSnapshot(
       },
       appearance: {
         theme: { value: "system", source: "default" },
+        palette: { value: "tangerine", source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },

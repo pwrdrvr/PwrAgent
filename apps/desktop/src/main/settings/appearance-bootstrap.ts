@@ -15,13 +15,16 @@
 
 import type {
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearancePalette,
   isDesktopTextSize,
 } from "@pwragent/shared";
 import { resolveDesktopConfigPath } from "./desktop-config";
@@ -30,6 +33,7 @@ import { getExistingDesktopConfigStore } from "./config-store/desktop-config-sto
 
 export type BootstrapAppearance = {
   theme: DesktopAppearanceTheme;
+  palette: DesktopAppearancePalette;
   density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
@@ -63,6 +67,9 @@ export function readBootstrapAppearance(
     );
     return {
       theme: config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+      palette:
+        config.general?.appearance?.palette
+        ?? DESKTOP_APPEARANCE_PALETTE_DEFAULT,
       density:
         config.general?.appearance?.density
         ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
@@ -79,6 +86,7 @@ export function readBootstrapAppearance(
     // normal error path; this synchronous path is best-effort only.
     return {
       theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
+      palette: DESKTOP_APPEARANCE_PALETTE_DEFAULT,
       density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
       sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
       transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
@@ -104,6 +112,11 @@ export function parseBootstrapAppearanceArg(
           && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
           ? (raw.theme as DesktopAppearanceTheme)
           : DESKTOP_APPEARANCE_THEME_DEFAULT;
+      const palette =
+        raw && typeof raw.palette === "string"
+          && isDesktopAppearancePalette(raw.palette)
+          ? raw.palette
+          : DESKTOP_APPEARANCE_PALETTE_DEFAULT;
       const density =
         raw && typeof raw.density === "string"
           && (raw.density === "mission-control" || raw.density === "compact")
@@ -119,7 +132,7 @@ export function parseBootstrapAppearanceArg(
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
-      return { theme, density, sidebarTextSize, transcriptTextSize };
+      return { theme, palette, density, sidebarTextSize, transcriptTextSize };
     } catch {
       return undefined;
     }

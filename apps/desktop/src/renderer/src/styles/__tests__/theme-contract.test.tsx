@@ -2440,3 +2440,192 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain(".composer__autocomplete-token");
   });
 });
+
+describe("Catppuccin palette contract", () => {
+  const mochaBlock = extractTokensForSelector(css, ':root[data-palette="catppuccin"]');
+  const latteBlock = extractTokensForSelector(
+    css,
+    ':root[data-theme="light"][data-palette="catppuccin"]',
+  );
+  // The cascade each flavor actually renders with. Latte matches the Mocha
+  // block too (data-palette alone), so Mocha sits between the light scheme
+  // block and Latte's own overrides.
+  const flavors = {
+    mocha: { ...extractRootTokens(css), ...mochaBlock },
+    latte: {
+      ...extractRootTokens(css),
+      ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      ...mochaBlock,
+      ...latteBlock,
+    },
+  };
+
+  const hexToRgb = (hex: string): number[] =>
+    [0, 2, 4].map((start) => Number.parseInt(expandHex(hex).slice(start, start + 2), 16));
+  const rgbToHex = (rgb: number[]): string =>
+    `#${rgb.map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+  const composite = (foreground: string, background: string, alpha: number): string => {
+    const front = hexToRgb(foreground);
+    const back = hexToRgb(background);
+    return rgbToHex(front.map((channel, index) => channel * alpha + back[index] * (1 - alpha)));
+  };
+
+  /** Resolve a token to the opaque color it paints on `background`:
+   *  `var()` aliases follow the cascade, and a `color-mix(… X%,
+   *  transparent)` overlay is composited onto the background. */
+  const paint = (
+    theme: Record<string, string>,
+    value: string,
+    background: string,
+  ): string => {
+    const alias = value.match(/^var\(--([a-z0-9-]+)\)$/)?.[1];
+    if (alias) return paint(theme, theme[alias], background);
+    const overlay = value.match(
+      /^color-mix\(in srgb, (?<base>var\(--[a-z0-9-]+\)|#[0-9a-f]{6}) (?<pct>[\d.]+)%, transparent\)$/,
+    )?.groups;
+    if (overlay) {
+      return composite(
+        paint(theme, overlay.base, background),
+        background,
+        Number(overlay.pct) / 100,
+      );
+    }
+    expect(value, "an opaque hex color").toMatch(/^#[0-9a-f]{6}$/);
+    return value;
+  };
+
+  /** Every background a text token can land on: the flat surfaces, plus
+   *  the 12% and 16% accent tints over the surfaces that carry them. */
+  const textBackgrounds = (theme: Record<string, string>): string[] => {
+    const flat = [
+      "bg-app",
+      "bg-sidebar",
+      "bg-panel",
+      "bg-panel-elevated",
+      "bg-panel-hover",
+      "bg-row-active",
+      "bg-input",
+    ].map((name) => paint(theme, theme[name], "#000000"));
+    const tinted = ["bg-panel", "bg-sidebar", "bg-panel-hover"].flatMap((name) => {
+      const surface = paint(theme, theme[name], "#000000");
+      return [12, 16].map((pct) =>
+        composite(paint(theme, theme.accent, surface), surface, pct / 100));
+    });
+    return [...flat, ...tinted];
+  };
+
+  const worstCase = (
+    theme: Record<string, string>,
+    token: string,
+    backgrounds: string[],
+  ): number => Math.min(
+    ...backgrounds.map((background) =>
+      contrastRatio(paint(theme, theme[token], background), background)),
+  );
+
+  it("overrides in Latte every token the Mocha block sets", () => {
+    // Otherwise a Mocha value leaks into Latte through the shared
+    // data-palette match.
+    expect(Object.keys(latteBlock).sort()).toEqual(Object.keys(mochaBlock).sort());
+    expect(extractRuleBody(css, ':root[data-palette="catppuccin"]'))
+      .toContain("color-scheme: dark;");
+    expect(extractRuleBody(css, ':root[data-theme="light"][data-palette="catppuccin"]'))
+      .toContain("color-scheme: light;");
+  });
+
+  it("leaves the theme-neutral tokens to the scheme blocks", () => {
+    for (const neutral of [
+      "shadow-base",
+      "shadow-popover",
+      "star-map-float-border",
+      "star-map-float-shadow",
+      "chat-column-max",
+    ]) {
+      expect(mochaBlock, neutral).not.toHaveProperty(neutral);
+    }
+  });
+
+  it("keeps every text token at AA on the lowest-contrast surface it can land on", () => {
+    for (const [flavor, theme] of Object.entries(flavors)) {
+      const backgrounds = textBackgrounds(theme);
+      for (const token of [
+        "text-primary",
+        "text-secondary",
+        "text-muted",
+        "text-subtle",
+        "accent",
+        "accent-strong",
+        "accent-bright",
+        "status-ok",
+        "status-warning",
+        "status-warning-text",
+        "status-error",
+        "info-teal",
+        "brand-purple",
+        "danger-text-light",
+        "savings-great",
+        "savings-good",
+        "savings-even",
+        "savings-over",
+      ]) {
+        expect(worstCase(theme, token, backgrounds), `${flavor}: ${token}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      for (const [text, soft] of [
+        ["danger-text", "danger-soft"],
+        ["success-text", "success-soft"],
+        ["info-text", "info-soft"],
+      ]) {
+        const tinted = backgrounds.map((background) => paint(theme, theme[soft], background));
+        expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${flavor}: ${text}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      for (const fill of ["accent", "accent-strong", "accent-bright"]) {
+        expect(
+          contrastRatio(theme["button-text"], paint(theme, theme[fill], "#000000")),
+          `${flavor}: button-text on ${fill}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      expect(
+        contrastRatio(
+          paint(theme, theme["terminal-fg"], theme["terminal-bg"]),
+          theme["terminal-bg"],
+        ),
+        `${flavor}: terminal-fg`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("holds the floor tokens at the lowest compliant contrast", () => {
+    // The palette is deliberately low-contrast: the floor tokens sit just
+    // above AA instead of drifting up when someone retunes them by eye.
+    for (const [flavor, theme] of Object.entries(flavors)) {
+      const backgrounds = textBackgrounds(theme);
+      for (const token of ["text-muted", "accent"]) {
+        expect(worstCase(theme, token, backgrounds), `${flavor}: ${token}`)
+          .toBeLessThan(4.7);
+      }
+    }
+  });
+
+  it("keeps the text ladder in emphasis order", () => {
+    for (const [flavor, theme] of Object.entries(flavors)) {
+      const backgrounds = textBackgrounds(theme);
+      const ratio = (token: string): number => worstCase(theme, token, backgrounds);
+      expect(ratio("text-primary"), flavor).toBeGreaterThan(ratio("text-secondary"));
+      expect(ratio("text-secondary"), flavor).toBeGreaterThan(ratio("text-muted"));
+      expect(ratio("accent-bright"), flavor).toBeGreaterThan(ratio("accent-strong"));
+      expect(ratio("accent-strong"), flavor).toBeGreaterThan(ratio("accent"));
+    }
+  });
+
+  it("keeps Latte terminal ANSI colors readable on its canvas", () => {
+    const theme = flavors.latte;
+    for (const color of ["red", "green", "yellow", "blue", "magenta", "cyan", "white"]) {
+      expect(
+        contrastRatio(theme[`terminal-ansi-${color}`], theme["terminal-bg"]),
+        `latte: terminal-ansi-${color}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

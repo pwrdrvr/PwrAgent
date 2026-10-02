@@ -242,6 +242,7 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "system",
+          palette: "tangerine",
           density: "mission-control",
           sidebarTextSize: "md",
           transcriptTextSize: "md",
@@ -2996,6 +2997,7 @@ describe("DesktopSettingsService", () => {
     });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
+      palette: "tangerine",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3007,6 +3009,7 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "light",
+          palette: "catppuccin",
           density: "compact",
           sidebarTextSize: "lg",
         },
@@ -3016,12 +3019,17 @@ describe("DesktopSettingsService", () => {
     const writtenFile = fs.readFileSync(configPath, "utf8");
     expect(writtenFile).toContain("[general.appearance]");
     expect(writtenFile).toContain('theme = "light"');
+    expect(writtenFile).toContain('palette = "catppuccin"');
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
     const afterWrite = await service.readSettingsProjection();
     expect(afterWrite.general.appearance.theme).toEqual({
       value: "light",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.palette).toEqual({
+      value: "catppuccin",
       source: "config",
     });
     expect(afterWrite.general.appearance.density).toEqual({
@@ -3034,6 +3042,7 @@ describe("DesktopSettingsService", () => {
     });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "light",
+      palette: "catppuccin",
       density: "compact",
       sidebarTextSize: "lg",
       transcriptTextSize: "md",
@@ -3045,6 +3054,7 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "system",
+          palette: "tangerine",
           density: "mission-control",
           sidebarTextSize: "md",
         },
@@ -3053,17 +3063,20 @@ describe("DesktopSettingsService", () => {
 
     const restoredFile = fs.readFileSync(configPath, "utf8");
     expect(restoredFile).not.toContain('theme = "');
+    expect(restoredFile).not.toContain('palette = "');
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
     const afterRestore = await service.readSettingsProjection();
     expect(afterRestore.general.appearance.theme.source).toBe("default");
+    expect(afterRestore.general.appearance.palette.source).toBe("default");
     expect(afterRestore.general.appearance.density.source).toBe("default");
     expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
       "default",
     );
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
+      palette: "tangerine",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3102,6 +3115,7 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(1);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "light",
+      palette: "tangerine",
       density: "compact",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3123,6 +3137,7 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(2);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "system",
+      palette: "tangerine",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3147,6 +3162,23 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(3);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "dark",
+      palette: "tangerine",
+      density: "mission-control",
+      sidebarTextSize: "md",
+      transcriptTextSize: "md",
+    });
+
+    // A palette-only patch is an appearance change too: every window has
+    // to recolor.
+    await service.writeConfigPatchTargeted({
+      general: {
+        appearance: { palette: "catppuccin" },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(4);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "dark",
+      palette: "catppuccin",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",

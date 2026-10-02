@@ -21,23 +21,28 @@
 
 import type {
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearancePalette,
   isDesktopTextSize,
 } from "@pwragent/shared";
 
 export type ThemePreference = DesktopAppearanceTheme;
+export type PalettePreference = DesktopAppearancePalette;
 export type DensityPreference = DesktopAppearanceDensity;
 export type TextSizePreference = DesktopTextSize;
 export type ResolvedTheme = "dark" | "light";
 
 export type AppearancePreference = {
   theme: ThemePreference;
+  palette: PalettePreference;
   density: DensityPreference;
   sidebarTextSize: TextSizePreference;
   transcriptTextSize: TextSizePreference;
@@ -45,6 +50,7 @@ export type AppearancePreference = {
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
+  palette: DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
   transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
@@ -68,9 +74,13 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
 
 /** Apply the resolved appearance to `<html>` via data-* attributes.
  *  CSS in app.css picks them up via attribute selectors. Removing the
- *  attribute (when the value is the default) keeps the cascade simple. */
+ *  attribute (when the value is the default) keeps the cascade simple.
+ *  `data-theme` stays the scheme (light or absent) whatever the palette,
+ *  so scheme-keyed consumers (brand marks, Mermaid) need no palette
+ *  knowledge; `data-palette` only recolors the tokens. */
 export function applyAppearanceAttributes(
   resolvedTheme: ResolvedTheme,
+  palette: PalettePreference,
   density: DensityPreference,
   sidebarTextSize: TextSizePreference,
   transcriptTextSize: TextSizePreference,
@@ -81,6 +91,11 @@ export function applyAppearanceAttributes(
     root.setAttribute("data-theme", "light");
   } else {
     root.removeAttribute("data-theme");
+  }
+  if (palette !== DESKTOP_APPEARANCE_PALETTE_DEFAULT) {
+    root.setAttribute("data-palette", palette);
+  } else {
+    root.removeAttribute("data-palette");
   }
   if (density === "compact") {
     root.setAttribute("data-density", "compact");
@@ -113,6 +128,7 @@ export function readBridgedAppearance(): AppearancePreference {
   }).__pwragentAppearance;
   return {
     theme: normalizeTheme(bridged?.theme),
+    palette: normalizePalette(bridged?.palette),
     density: normalizeDensity(bridged?.density),
     sidebarTextSize: normalizeTextSize(bridged?.sidebarTextSize),
     transcriptTextSize: normalizeTextSize(bridged?.transcriptTextSize),
@@ -123,6 +139,12 @@ function normalizeTheme(value: unknown): ThemePreference {
   return value === "dark" || value === "light" || value === "system"
     ? value
     : DEFAULT_APPEARANCE.theme;
+}
+
+function normalizePalette(value: unknown): PalettePreference {
+  return typeof value === "string" && isDesktopAppearancePalette(value)
+    ? value
+    : DEFAULT_APPEARANCE.palette;
 }
 
 function normalizeDensity(value: unknown): DensityPreference {

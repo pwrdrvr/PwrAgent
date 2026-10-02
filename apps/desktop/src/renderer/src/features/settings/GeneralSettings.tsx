@@ -3,6 +3,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   AppearanceController,
   DensityPreference,
+  PalettePreference,
   TextSizePreference,
   ThemePreference,
 } from "../../lib/useAppearance";
@@ -25,6 +26,15 @@ const THEME_OPTIONS: Array<{
   { label: "System", meta: "Follow OS", value: "system" },
   { label: "Dark", meta: "Always dark", value: "dark" },
   { label: "Light", meta: "Always light", value: "light" },
+];
+
+const PALETTE_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: PalettePreference;
+}> = [
+  { label: "Tangerine", meta: "PwrAgent", value: "tangerine" },
+  { label: "Catppuccin", meta: "Mocha dark, Latte light", value: "catppuccin" },
 ];
 
 const DENSITY_OPTIONS: Array<{
@@ -182,6 +192,20 @@ export function GeneralSettings(props: {
                   value={appearance.theme}
                   onChange={(value) => {
                     props.appearanceController?.setTheme(value);
+                  }}
+                />
+              }
+            />
+            <SettingsField
+              label="Palette"
+              sub="Colors for the theme above. Catppuccin uses Mocha in dark and Latte in light."
+              control={
+                <SegmentedControl
+                  label="Palette"
+                  options={PALETTE_OPTIONS}
+                  value={appearance.palette}
+                  onChange={(value) => {
+                    props.appearanceController?.setPalette(value);
                   }}
                 />
               }

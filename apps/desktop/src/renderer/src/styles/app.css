@@ -534,6 +534,193 @@
 
 /* =============================================================}
 
+   PALETTE — Catppuccin (Mocha dark, Latte light)
+
+   Palette is a separate axis from theme. `data-theme` stays the scheme
+   (light or absent) so every scheme-keyed rule and script keeps working;
+   `data-palette="catppuccin"` swaps the colors on top. The dark block
+   matches a Latte window too (same specificity as the Tangerine light
+   block, later in source), so the Latte block must override every token
+   the Mocha block sets. Tokens neither block sets — shadows, scrims, the
+   Star Map float — follow the scheme block, as UI-THEME.md requires.
+
+   LOWEST COMPLIANT CONTRAST. Every token read as text sits just above
+   WCAG AA, at 4.55:1 (0.05 of margin for rendering), measured against the
+   lowest-contrast background it can land on: the flat surfaces plus the 12% and 16% accent
+   tints over panel, sidebar, and hover. Each semantic text is also floored
+   against its own soft tint. The text ladder is 7.5 / 5.75 / 4.55. Mocha
+   colors dim toward base so the pastels keep their hue; Latte colors move
+   in lightness only (hue and saturation held, as for the Tangerine light
+   accent). Non-text marks (--danger-base, --status-suspended, chart
+   series) sit at 3.05:1 on the flat surfaces. --text-subtle clears AA here,
+   unlike the Tangerine blocks. Terminal ANSI colors are Catppuccin's own
+   in Mocha; in Latte each one that misses 4.5:1 on the canvas is darkened
+   to it. Bright black and bright white stay dim by design.
+   =========================================================================== */
+:root[data-palette="catppuccin"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #1e1e2e;
+  --bg-sidebar: #181825;
+  --bg-panel: #1e1e2e;
+  --bg-panel-elevated: #252536;
+  --bg-panel-hover: #28293a;
+  --bg-row-active: #342d37;
+  --bg-input: #181825;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text ladder: 7.5 / 5.75 / 4.5 worst case */
+  --text-primary: #d0d8f5;
+  --text-secondary: #b9bed4;
+  --text-muted: #a4a9be;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 70%, transparent);
+
+  /* Accent: Peach */
+  --accent: #d99d7a;
+  --accent-strong: #dda07b;
+  --accent-bright: #e4a47e;
+  --accent-on: #11111b;
+  --button-text: #11111b;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #1e1e2e;
+  --terminal-fg: var(--text-primary);
+  --terminal-cursor: #f5e0dc;
+  --terminal-cursor-accent: #1e1e2e;
+  --terminal-ansi-black: #45475a;
+  --terminal-ansi-red: #f38ba8;
+  --terminal-ansi-green: #a6e3a1;
+  --terminal-ansi-yellow: #f9e2af;
+  --terminal-ansi-blue: #89b4fa;
+  --terminal-ansi-magenta: #f5c2e7;
+  --terminal-ansi-cyan: #94e2d5;
+  --terminal-ansi-white: #bac2de;
+  --terminal-ansi-bright-black: #585b70;
+  --terminal-ansi-bright-red: #f38ba8;
+  --terminal-ansi-bright-green: #a6e3a1;
+  --terminal-ansi-bright-yellow: #f9e2af;
+  --terminal-ansi-bright-blue: #89b4fa;
+  --terminal-ansi-bright-magenta: #f5c2e7;
+  --terminal-ansi-bright-cyan: #94e2d5;
+  --terminal-ansi-bright-white: #a6adc8;
+
+  /* Semantic */
+  --danger-base: #a8657d;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #f6a7bd;
+  --danger-text-light: #edacb6;
+  --success-soft: color-mix(in srgb, #a6e3a1 18%, transparent);
+  --success-border: color-mix(in srgb, #a6e3a1 32%, transparent);
+  --success-text: #a3df9f;
+  --info-soft: color-mix(in srgb, #89b4fa 16%, transparent);
+  --info-border: color-mix(in srgb, #89b4fa 28%, transparent);
+  --info-text: #a3c5fb;
+  --info-teal: #79b5af;
+  --brand-purple: #bd9be7;
+
+  /* Status */
+  --status-ok: #87b687;
+  --status-warning: #ccba95;
+  --status-error: #f0b6bf;
+  --status-suspended: #73788f;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #5f7aaa;
+  --usage-series-3: #598082;
+  --usage-series-4: #856fa6;
+  --usage-series-5: #837869;
+}
+
+:root[data-theme="light"][data-palette="catppuccin"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #eff1f5;
+  --bg-sidebar: #e6e9ef;
+  --bg-panel: #eff1f5;
+  --bg-panel-elevated: #f7f8fa;
+  --bg-panel-hover: #e4e7ed;
+  --bg-row-active: #f1e3de;
+  --bg-input: #f7f8fa;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text ladder: 7.5 / 5.75 / 4.5 worst case */
+  --text-primary: #343648;
+  --text-secondary: #454756;
+  --text-muted: #545666;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 79%, transparent);
+
+  /* Accent: Peach */
+  --accent: #983801;
+  --accent-strong: #933601;
+  --accent-bright: #8e3401;
+  --accent-on: #eff1f5;
+  --button-text: #eff1f5;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #eff1f5;
+  --terminal-fg: var(--text-primary);
+  --terminal-cursor: #dc8a78;
+  --terminal-cursor-accent: #eff1f5;
+  --terminal-ansi-black: #5c5f77;
+  --terminal-ansi-red: #d80f3b;
+  --terminal-ansi-green: #327c21;
+  --terminal-ansi-yellow: #996114;
+  --terminal-ansi-blue: #1761f5;
+  --terminal-ansi-magenta: #c71e9a;
+  --terminal-ansi-cyan: #13797f;
+  --terminal-ansi-white: #696c82;
+  --terminal-ansi-bright-black: #6c6f85;
+  --terminal-ansi-bright-red: #d80f3b;
+  --terminal-ansi-bright-green: #327c21;
+  --terminal-ansi-bright-yellow: #996114;
+  --terminal-ansi-bright-blue: #1761f5;
+  --terminal-ansi-bright-magenta: #c71e9a;
+  --terminal-ansi-bright-cyan: #13797f;
+  --terminal-ansi-bright-white: #bcc0cc;
+
+  /* Semantic */
+  --danger-base: #f13961;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #900a27;
+  --danger-text-light: #8e131e;
+  --success-soft: color-mix(in srgb, #40a02b 18%, transparent);
+  --success-border: color-mix(in srgb, #40a02b 32%, transparent);
+  --success-text: #245918;
+  --info-soft: color-mix(in srgb, #1e66f5 16%, transparent);
+  --info-border: color-mix(in srgb, #1e66f5 28%, transparent);
+  --info-text: #0841b4;
+  --info-teal: #0f6065;
+  --brand-purple: #6e13e6;
+
+  /* Status */
+  --status-ok: #28631b;
+  --status-warning: #764b0f;
+  --status-error: #991520;
+  --status-suspended: #7c8297;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #407df7;
+  --usage-series-3: #179097;
+  --usage-series-4: #a061f2;
+  --usage-series-5: #b67418;
+}
+
+/* =============================================================}
+
    DENSITY — Compact vs. Mission Control
 
    Density is a separate axis from theme. Mission Control is the default

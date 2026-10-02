@@ -8,6 +8,7 @@ import {
   resolveTheme,
   type AppearancePreference,
   type DensityPreference,
+  type PalettePreference,
   type ResolvedTheme,
   type TextSizePreference,
   type ThemePreference,
@@ -21,6 +22,7 @@ export type AppearanceState = AppearancePreference & {
 export type AppearanceController = {
   appearance: AppearanceState;
   setTheme(theme: ThemePreference): void;
+  setPalette(palette: PalettePreference): void;
   setDensity(density: DensityPreference): void;
   setSidebarTextSize(sidebarTextSize: TextSizePreference): void;
   setTranscriptTextSize(transcriptTextSize: TextSizePreference): void;
@@ -58,6 +60,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   const { snapshotPreference, writeConfig } = input;
   const snapshotDensity = snapshotPreference?.density;
   const snapshotTheme = snapshotPreference?.theme;
+  const snapshotPalette = snapshotPreference?.palette;
   const snapshotSidebarTextSize = snapshotPreference?.sidebarTextSize;
   const snapshotTranscriptTextSize = snapshotPreference?.transcriptTextSize;
 
@@ -77,6 +80,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     if (
       !snapshotDensity
       || !snapshotTheme
+      || !snapshotPalette
       || !snapshotSidebarTextSize
       || !snapshotTranscriptTextSize
     ) {
@@ -85,6 +89,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     setAppearanceState((current) => {
       if (
         current.theme === snapshotTheme
+        && current.palette === snapshotPalette
         && current.density === snapshotDensity
         && current.sidebarTextSize === snapshotSidebarTextSize
         && current.transcriptTextSize === snapshotTranscriptTextSize
@@ -93,6 +98,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       }
       return {
         density: snapshotDensity,
+        palette: snapshotPalette,
         resolvedTheme: resolveTheme(snapshotTheme),
         sidebarTextSize: snapshotSidebarTextSize,
         transcriptTextSize: snapshotTranscriptTextSize,
@@ -102,6 +108,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   }, [
     snapshotDensity,
     snapshotTheme,
+    snapshotPalette,
     snapshotSidebarTextSize,
     snapshotTranscriptTextSize,
   ]);
@@ -112,12 +119,14 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   useEffect(() => {
     applyAppearanceAttributes(
       appearance.resolvedTheme,
+      appearance.palette,
       appearance.density,
       appearance.sidebarTextSize,
       appearance.transcriptTextSize,
     );
   }, [
     appearance.resolvedTheme,
+    appearance.palette,
     appearance.density,
     appearance.sidebarTextSize,
     appearance.transcriptTextSize,
@@ -194,6 +203,11 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     [updateAxis],
   );
 
+  const setPalette = useCallback(
+    (palette: PalettePreference) => updateAxis("palette", palette),
+    [updateAxis],
+  );
+
   const setDensity = useCallback(
     (density: DensityPreference) => updateAxis("density", density),
     [updateAxis],
@@ -216,6 +230,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       setAppearanceState((current) => {
         if (
           current.theme === preference.theme
+          && current.palette === preference.palette
           && current.density === preference.density
           && current.sidebarTextSize === preference.sidebarTextSize
           && current.transcriptTextSize === preference.transcriptTextSize
@@ -237,6 +252,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   return {
     appearance,
     setTheme,
+    setPalette,
     setDensity,
     setSidebarTextSize,
     setTranscriptTextSize,
@@ -247,6 +263,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
 export { DEFAULT_APPEARANCE };
 export type {
   ThemePreference,
+  PalettePreference,
   DensityPreference,
   ResolvedTheme,
   TextSizePreference,
