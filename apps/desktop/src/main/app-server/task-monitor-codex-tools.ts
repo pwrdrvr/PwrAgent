@@ -10,9 +10,7 @@ import type {
   TaskMonitorResponse,
 } from "@pwragent/shared";
 import {
-  DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
-  DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
@@ -321,12 +319,14 @@ export function normalizeHeartbeatIntervalSeconds(value: unknown): number | unde
   return Math.max(30, Math.floor(value));
 }
 
+// PwrAgent resolves both before building the prompt; the fallbacks only keep
+// the prompt readable if a caller ever omits them.
 export function normalizePreferredMonitorModel(value: unknown): string {
-  return readString(value) ?? DEFAULT_TASK_MONITOR_MODEL;
+  return readString(value) ?? "provider default";
 }
 
 export function normalizePreferredMonitorReasoningEffort(value: unknown): string {
-  return readString(value) ?? DEFAULT_TASK_MONITOR_REASONING_EFFORT;
+  return readString(value) ?? "provider-default";
 }
 
 export function normalizeStartupTimeoutSeconds(value: unknown): number | undefined {

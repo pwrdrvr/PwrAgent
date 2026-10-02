@@ -11949,6 +11949,20 @@ a.button {
   gap: 8px;
 }
 
+/* Default Models: each line under a helper's pickers names what will run. */
+.settings-default-models__line {
+  display: block;
+}
+
+.settings-default-models__line strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.settings-default-models__line.settings-field__value--warn strong {
+  color: inherit;
+}
+
 .settings-select--chip {
   width: auto;
   min-width: 0;
@@ -11971,6 +11985,15 @@ a.button {
 .settings-select--chip:hover:not(:disabled) {
   border-color: var(--accent-border);
   background-color: var(--bg-panel-hover);
+}
+
+/* A Select (components/Select.tsx) wearing the chip draws its chevron as an
+   element, so the pill drops its painted one and the right padding that
+   made room for it. */
+.select-trigger.settings-select--chip {
+  max-width: min(100%, 320px);
+  padding: 0 10px;
+  background-image: none;
 }
 
 /* =====================================================}

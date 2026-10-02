@@ -217,7 +217,10 @@ export function registerAutomationIpcHandlers(): void {
       const registry = getDesktopBackendRegistry();
       return await generateAutomationPromptDraft({
         description: request.description,
-        generate: (req) => registry.generateStructuredObject(req),
+        generate: (req) => registry.generateStructuredObject({
+          ...req,
+          helper: "automation_prompts",
+        }),
       });
     },
   );

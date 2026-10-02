@@ -157,7 +157,8 @@ export type TokenMiserServiceOptions = {
    */
   isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
-    reasoningEffort: "medium";
+    /** Default Models row: output evaluation, or focused summaries. */
+    helper: "token_miser_evaluation" | "token_miser_focused_summaries";
     disableExecution?: boolean;
     system: string;
     prompt: string;
@@ -623,7 +624,7 @@ export class TokenMiserService {
   > {
     const members = [...group.members.values()];
     const generated = await this.options.generateSummary({
-      reasoningEffort: "medium",
+      helper: "token_miser_evaluation",
       system: TOKEN_MISER_SYSTEM_PROMPT,
       prompt: buildGroupedCodeModeSummaryPrompt(payload, members),
       schema: TOKEN_MISER_GROUP_SUMMARY_SCHEMA,
@@ -796,7 +797,7 @@ export class TokenMiserService {
       return undefined;
     }
     const generated = await this.options.generateSummary({
-      reasoningEffort: "medium",
+      helper: "token_miser_evaluation",
       system: TOKEN_MISER_SYSTEM_PROMPT,
       prompt: params.prompt,
       schema: TOKEN_MISER_SUMMARY_SCHEMA,

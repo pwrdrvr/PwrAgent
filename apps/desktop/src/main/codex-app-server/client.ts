@@ -18,8 +18,12 @@ import {
   normalizeCodexAsyncQuestions,
   parseCodexTurnErrorMessage,
   resolveOpenAiPricingServiceTier,
+  resolveHelperModel,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
+  type DesktopHelperModelSettings,
+  type HelperModelId,
+  type HelperModelResolution,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type {
@@ -175,27 +179,6 @@ const DEFAULT_MCP_INVENTORY_TIMEOUT_MS = 120_000;
 const DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS = 420_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
-export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
-
-export function resolveCodexThreadTitleSettings(models: BackendModelOption[]): {
-  model: string;
-  reasoningEffort?: string;
-} | undefined {
-  const model = models.find((entry) => entry.id === "gpt-6-luna")
-    ?? models.find((entry) => entry.id === DEFAULT_CODEX_THREAD_TITLE_MODEL)
-    ?? models.find((entry) => entry.current)
-    ?? models[0];
-  if (!model) return undefined;
-  const efforts = model.reasoningEfforts;
-  const reasoningEffort = model.supportsReasoning === false || efforts?.length === 0
-    ? undefined
-    : efforts === undefined || efforts.includes("low")
-      ? "low"
-      : efforts.includes(model.defaultReasoningEffort ?? "")
-        ? model.defaultReasoningEffort
-        : efforts[0];
-  return { model: model.id, reasoningEffort };
-}
 
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
@@ -310,6 +293,8 @@ const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 type CodexClientOptions = {
   authenticationRecovery?: boolean;
+  /** The profile's Settings → Default Models choices, read per helper turn. */
+  readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -7555,6 +7540,10 @@ export class CodexAppServerClient {
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
   private availableHelperModels: BackendModelOption[] = [];
+  /** A `model/list` completed, so an empty catalog really is empty. */
+  private helperModelsRead = false;
+  /** Skipped helper models already logged since the last catalog read. */
+  private readonly helperModelWarnings = new Set<string>();
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
@@ -7967,6 +7956,7 @@ export class CodexAppServerClient {
     this.initializationPromise = null;
     this.initializeResult = null;
     this.availableHelperModels = [];
+    this.helperModelsRead = false;
     this.rejectHelperTurnWaiters(helperTurnError);
     this.invalidateThreadListings();
     this.threadListTextCache.clear();
@@ -9230,12 +9220,50 @@ export class CodexAppServerClient {
     }
   }
 
-  // Reuse explicit provider discovery; helper calls must not fetch a model list
-  // for every title, diff, or tool-output summary. Refresh updates this choice.
-  getDefaultHelperModel(): string {
-    return this.availableHelperModels.some((model) => model.id === "gpt-6-luna")
-      ? "gpt-6-luna"
-      : DEFAULT_CODEX_THREAD_TITLE_MODEL;
+  /**
+   * The model and effort one helper turn runs, by the shared Default Models
+   * rule. Reuses the catalog from the last `model/list`, so a title, diff, or
+   * tool-output summary never fetches a list of its own; the catalog is read
+   * once only while nothing has been listed yet. Refresh updates it.
+   */
+  async resolveHelperModelSelection(params: {
+    helper: HelperModelId;
+    model?: string;
+    reasoningEffort?: string;
+  }): Promise<HelperModelResolution> {
+    if (this.availableHelperModels.length === 0) {
+      try {
+        await this.listModels();
+      } catch (error) {
+        codexClientLog.warn("model/list for helper model failed", {
+          helper: params.helper,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const resolution = resolveHelperModel({
+      helper: params.helper,
+      settings: this.options.readHelperModelSettings?.(),
+      models: this.availableHelperModels,
+      catalogRead: this.helperModelsRead,
+      requestedModel: params.model,
+      requestedReasoningEffort: params.reasoningEffort,
+    });
+    const skipped = [
+      resolution.unavailableHelperModel,
+      resolution.unavailableDefaultModel,
+    ].filter((model): model is string => model !== undefined);
+    const warningKey = `${params.helper}:${skipped.join(",")}`;
+    if (skipped.length > 0 && !this.helperModelWarnings.has(warningKey)) {
+      this.helperModelWarnings.add(warningKey);
+      codexClientLog.warn("helper model not offered by Codex", {
+        helper: params.helper,
+        skipped,
+        model: resolution.model,
+        source: resolution.source,
+      });
+    }
+    return resolution;
   }
 
   async listModels(
@@ -9257,6 +9285,8 @@ export class CodexAppServerClient {
       const parsedResult = parseConsumedCodexModelListResponse(result);
       const models = extractGeneratedModelOptions(parsedResult);
       this.availableHelperModels = models;
+      this.helperModelsRead = true;
+      this.helperModelWarnings.clear();
       codexClientLog.info("model/list", {
         durationMs: Math.round(performance.now() - startedAt),
         normalizedModelIds: models.map((model) => model.id),
@@ -9269,6 +9299,8 @@ export class CodexAppServerClient {
 
     const models = extractModelOptions(result);
     this.availableHelperModels = models;
+    this.helperModelsRead = true;
+    this.helperModelWarnings.clear();
     codexClientLog.info("model/list", {
       durationMs: Math.round(performance.now() - startedAt),
       normalizedModelIds: models.map((model) => model.id),
@@ -9725,13 +9757,8 @@ export class CodexAppServerClient {
   }
 
   async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
-    const settings = resolveCodexThreadTitleSettings(await this.listModels());
-    if (!settings) {
-      return { status: "unavailable", reason: "codex_title_no_available_model" };
-    }
     return await this.runHelperStructuredTurn({
-      model: settings.model,
-      reasoningEffort: settings.reasoningEffort ?? null,
+      helper: "thread_titles",
       prompt: params.prompt,
       schema: params.schema,
       isMatch: TITLE_RECORD_PREDICATE,
@@ -9746,6 +9773,9 @@ export class CodexAppServerClient {
    * generation path; the output record is identified by `isMatch`.
    */
   async generateStructuredObject(params: {
+    /** Which Default Models row picks the model. */
+    helper: HelperModelId;
+    /** Overrides the row for this call only, when Codex offers it. */
     model?: string;
     reasoningEffort?: string;
     prompt: string;
@@ -9773,6 +9803,7 @@ export class CodexAppServerClient {
    * it supplied.
    */
   async runHelperToolTurn(params: {
+    helper: HelperModelId;
     model?: string;
     reasoningEffort?: string;
     prompt: string;
@@ -9859,8 +9890,9 @@ export class CodexAppServerClient {
   }
 
   private async runHelperStructuredTurn(params: {
+    helper: HelperModelId;
     model?: string;
-    reasoningEffort?: string | null;
+    reasoningEffort?: string;
     prompt: string;
     /** Omitted by a tool turn, whose product is its tool calls. */
     schema?: Record<string, unknown>;
@@ -9896,11 +9928,18 @@ export class CodexAppServerClient {
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const turnTimeoutMs = params.turnTimeoutMs ?? timeoutMs;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
-    const helperModel = params.model?.trim() || this.getDefaultHelperModel();
-    const helperReasoningEffort =
-      params.reasoningEffort === null
-        ? undefined
-        : normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
+    const selection = await this.resolveHelperModelSelection({
+      helper: params.helper,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+    });
+    const helperModel = selection.model;
+    if (!helperModel) {
+      return { status: "unavailable", reason: "codex_helper_no_available_model" };
+    }
+    const helperReasoningEffort = normalizeCodexReasoningEffort(
+      selection.reasoningEffort,
+    );
     const helperSystem = params.system?.trim() || "";
     const isToolTurn = Boolean(params.onToolCall);
     // A tool turn has no output schema, so nothing it emits should be

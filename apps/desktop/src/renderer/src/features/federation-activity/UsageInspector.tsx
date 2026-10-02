@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { AnalyzeUsageActivityResponse, UsageAnalysisModelBackend } from "@pwragent/shared";
+import {
+  helperChoiceBackend,
+  resolveHelperModel,
+  type AnalyzeUsageActivityResponse,
+  type DesktopHelperModelSettings,
+  type UsageAnalysisModelBackend,
+} from "@pwragent/shared";
 import { Select } from "../../components/Select";
 import { usageClock, usageMoney } from "./usage-activity-presentation";
 import type { OwnedUsageRow, UsageGroup } from "./usage-activity-summary";
@@ -22,7 +28,42 @@ export function parseAnalysisModelKey(key: string): { backend: UsageAnalysisMode
   const space = key.indexOf(" ");
   return { backend: key.slice(0, space) as UsageAnalysisModelBackend, id: key.slice(space + 1) };
 }
-export const DEFAULT_ANALYSIS_MODEL = analysisModelKey("codex", "gpt-6-luna");
+
+export type AnalysisModelOption = { value: string; label: string; description: string };
+
+/**
+ * The picker's first entry: the Usage analysis row in Settings → Default
+ * Models, resolved against the models the owner lists. Before the owner's
+ * list arrives it is the row's own choice, or Automatic for Codex.
+ */
+export function defaultAnalysisModel(
+  settings: DesktopHelperModelSettings | undefined,
+  models: readonly AnalysisModelChoice[],
+  ownerBackends: readonly UsageAnalysisModelBackend[],
+): AnalysisModelOption {
+  const preferred = helperChoiceBackend("usage_analysis", settings?.helpers.usage_analysis);
+  const resolve = (backend: UsageAnalysisModelBackend) => {
+    const offered = models.filter((item) => item.backend === backend);
+    const model = resolveHelperModel({
+      helper: "usage_analysis",
+      settings,
+      backend,
+      models: offered.map((item) => ({ id: item.id })),
+    }).model;
+    return model ? { backend, model, offered } : undefined;
+  };
+  const resolved = (ownerBackends.includes(preferred as UsageAnalysisModelBackend)
+    ? resolve(preferred as UsageAnalysisModelBackend)
+    : undefined) ?? resolve("codex");
+  const backend = resolved?.backend ?? "codex";
+  const id = resolved?.model ?? "";
+  const choice = resolved?.offered.find((item) => item.id === id);
+  return {
+    value: analysisModelKey(backend, id),
+    label: choice?.label ?? id,
+    description: choice?.agent ?? (backend === "codex" ? "Codex" : backend),
+  };
+}
 
 /** An analysis request and where it got to. `key` names the thread and turn it read. */
 export type UsageAnalysis = { key: string; startedAt: number; owner: string; modelLabel: string } & (
@@ -55,6 +96,7 @@ export function UsageInspector(props: {
   scope: AnalysisScope;
   onScope: (scope: AnalysisScope) => void;
   models: AnalysisModelChoice[];
+  defaultModel: AnalysisModelOption;
   /** An `analysisModelKey`. */
   model: string;
   onModel: (model: string) => void;
@@ -87,9 +129,9 @@ export function UsageInspector(props: {
   const target = turn ?? lead;
   const turnScope = props.scope === "turn" && target.line.turnId !== undefined && !target.rollup;
   // Each model names the agent it runs in, since the owner may offer several.
-  const models = [{ value: DEFAULT_ANALYSIS_MODEL, label: "GPT-6-Luna", description: "Codex" },
+  const models = [props.defaultModel,
     ...props.models.map((item) => ({ value: analysisModelKey(item.backend, item.id), label: item.label, description: item.agent }))
-      .filter((item) => item.value !== DEFAULT_ANALYSIS_MODEL)];
+      .filter((item) => item.value !== props.defaultModel.value)];
 
   const turnList = group ? <div className="usage-turns">
     <div className="usage-eyebrow">Turns in window <span className="usage-subtle">· cached · cost</span></div>
