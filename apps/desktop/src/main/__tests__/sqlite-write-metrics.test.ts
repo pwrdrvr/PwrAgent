@@ -1122,6 +1122,67 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it.each([
+    ["names no model", undefined, 0],
+    ["names its model", "gpt-5.4-mini", 1],
+  ] as const)("re-lists a model-less worker on each parent open, and writes at most once when Codex %s", async (_case, workerModel, expectedCommits) => {
+    const now = Date.now();
+    const parent: AppServerThreadSummary = {
+      id: "thread-parent", source: "codex", title: "Review audit",
+      titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+    };
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: parent.id,
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "success", outcome: "success",
+        agentName: "review_savers", monitorTurnId: "turn-review",
+        createdAt: now - 10_000, updatedAt: now - 1_000, completedAt: now - 1_000,
+      },
+    });
+    const replay: AppServerThreadReplay = {
+      threadStatus: "idle", messages: [],
+      pagination: { supportsPagination: true, hasPreviousPage: false },
+      entries: [{
+        type: "activity", id: "completed-review", summary: "1 finished", status: "completed",
+        turn: { id: "turn-review", status: "completed", completedAt: now - 1_000 },
+        details: [{
+          id: "completed-review", kind: "command", label: "review_savers finished",
+          command: { displayCommand: "subAgentActivity completed /root/review_savers", subAgent: {
+            backend: "codex", origin: "codex-native", operation: "complete",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "completed" }],
+          } },
+        }],
+      }],
+    };
+    const stub = createStubBackendClient({ replay, nativeSubAgentThreads: [{
+      ...parent, id: "worker-review", threadStatus: "idle",
+      ...(workerModel ? { model: workerModel } : {}),
+      codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
+    }] }) as { listNativeSubAgentThreads: () => Promise<AppServerThreadSummary[]> };
+    const listNativeSubAgentThreads = vi.spyOn(stub, "listNativeSubAgentThreads");
+    const registry = new DesktopBackendRegistry({
+      codexClient: stub as never,
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
+    };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 3; index += 1) {
+          await internal.restoreCodexNativeSubAgentsFromReplay(parent.id, replay);
+        }
+      });
+      // The re-list is a protocol call per open until the card has a model.
+      expect(listNativeSubAgentThreads).toHaveBeenCalledTimes(workerModel ? 1 : 3);
+      // It must never become a database write per open.
+      expect(writes.commits).toBe(expectedCommits);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it.each(["replay", "status"] as const)("repairs a persisted native worker once from %s", async (source) => {
     const now = Date.now();
     const parent: AppServerThreadSummary = {
