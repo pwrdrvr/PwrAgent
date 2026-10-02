@@ -30,6 +30,7 @@ export type LaunchpadMachineControl = {
   /** Default owner: the local instance, or the owner of a remote viewer. */
   local: {
     label: string;
+    shortLabel?: string;
     celestialIcon?: CelestialIconId;
     instanceId?: string;
     remote?: boolean;
@@ -115,6 +116,9 @@ export function LaunchpadMachineChip(props: {
     ? control.targets.find((target) => target.instanceId === control.currentInstanceId)
     : undefined;
   const currentLabel = control.currentInstanceId
+    ? current?.shortLabel ?? current?.label ?? control.currentInstanceId
+    : control.local.shortLabel ?? control.local.label;
+  const fullLabel = control.currentInstanceId
     ? current?.label ?? control.currentInstanceId
     : control.local.label;
   const currentOffline = (control.currentInstanceId
@@ -128,8 +132,9 @@ export function LaunchpadMachineChip(props: {
 
   const options: ComposerDropdownOption[] = [
     {
-      label: control.local.label,
+      label: control.local.shortLabel ?? control.local.label,
       value: THIS_MACHINE_VALUE,
+      tooltip: control.local.label,
       ...(control.currentInstanceId && defaultUnavailable
         ? {
             description: FEDERATION_TARGET_AVAILABILITY_LABEL[defaultAvailability],
@@ -147,16 +152,17 @@ export function LaunchpadMachineChip(props: {
       const isCurrent = target.instanceId === control.currentInstanceId;
       if (!isCurrent && target.availability !== "available") {
         return {
-          label: target.label,
+          label: target.shortLabel ?? target.label,
           value: target.instanceId,
           description: FEDERATION_TARGET_AVAILABILITY_LABEL[target.availability],
           disabled: true,
+          tooltip: target.label,
         };
       }
       const projectState = isCurrent ? undefined : projectStates?.[target.instanceId];
       if (projectState === "missing") {
         return {
-          label: target.label,
+          label: target.shortLabel ?? target.label,
           value: target.instanceId,
           description: FEDERATION_PROJECT_STATE_LABEL.missing,
           disabled: true,
@@ -164,8 +170,9 @@ export function LaunchpadMachineChip(props: {
         };
       }
       return {
-        label: target.label,
+        label: target.shortLabel ?? target.label,
         value: target.instanceId,
+        tooltip: target.label,
         ...(projectState === "checking" ? { description: FEDERATION_PROJECT_STATE_LABEL.checking } : {}),
       };
     }),
@@ -199,6 +206,7 @@ export function LaunchpadMachineChip(props: {
       <span
         className="composer__fixed-value composer__fixed-value--machine"
         aria-label={`Runs on ${currentLabel}${currentOffline ? ", offline" : ""}`}
+        title={fullLabel}
         data-remote={currentRemote ? "true" : undefined}
         data-offline={currentOffline ? "true" : undefined}
       >
@@ -217,7 +225,7 @@ export function LaunchpadMachineChip(props: {
       disabled={props.disabled}
       icon={Icon}
       tone={currentOffline ? "offline" : currentRemote ? "remote" : undefined}
-      tooltip={currentOffline ? `${currentLabel} is offline` : `Starts on ${currentLabel}`}
+      tooltip={currentOffline ? `${fullLabel} is offline` : `Starts on ${fullLabel}`}
       value={control.currentInstanceId ?? THIS_MACHINE_VALUE}
       options={options}
       onOpenChange={setOpen}

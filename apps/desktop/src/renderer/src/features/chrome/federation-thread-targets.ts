@@ -4,6 +4,7 @@ import {
   type FederationCapability,
   type FederationHealthStatus,
 } from "@pwragent/shared";
+import { federationDisplayLabel } from "../../lib/federation-display-label";
 
 /**
  * Capabilities a peer must advertise before this window can start a thread on
@@ -55,6 +56,8 @@ function resolveAvailability(
 export type FederationPeerTarget<Availability extends string> = {
   instanceId: string;
   label: string;
+  /** Short machine name and profile for controls; `label` retains the full identity. */
+  shortLabel?: string;
   availability: Availability;
   /** The peer's assigned identity mark, as its thread rows draw it. */
   celestialIcon?: CelestialIconId;
@@ -97,6 +100,7 @@ export function buildFederationPeerTargets<Availability extends string>(
     .map((peer) => ({
       instanceId: peer.id,
       label: formatFederationPeerDisplayLabel(peer, visibleInstances),
+      ...(peer.shortLabel ? { shortLabel: federationDisplayLabel(peer, visibleInstances) } : {}),
       availability: resolve(peer),
       ...(peer.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
     }))

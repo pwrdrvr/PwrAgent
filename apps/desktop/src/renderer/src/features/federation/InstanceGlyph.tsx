@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import type { CelestialIconId } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
+import { useFederationDisplayLabel } from "../../lib/federation-display-label";
 
 /**
  * Fallback per-instance glyph for federation surfaces (⌘K remote rows,
@@ -92,9 +93,11 @@ export function InstanceChip(props: {
   label: string;
   icon?: CelestialIconId;
 }): ReactElement {
+  const label = useFederationDisplayLabel(props.instanceId, props.label);
+  const name = label === props.label ? label : `${label} (${props.label})`;
   return (
     <span
-      aria-label={`Runs on ${props.label}`}
+      aria-label={`Runs on ${name}`}
       className="chip chip--instance"
       title={`${props.label} · ${props.instanceId}`}
     >
@@ -103,7 +106,7 @@ export function InstanceChip(props: {
       ) : (
         <InstanceGlyph instanceId={props.instanceId} size={12} />
       )}
-      <span className="chip--instance__label">{props.label}</span>
+      <span className="chip--instance__label">{label}</span>
     </span>
   );
 }

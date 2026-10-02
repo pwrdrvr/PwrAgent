@@ -11,6 +11,8 @@ import type { StarMapView, StarMapViewBox } from "./star-map-view-geometry";
 /** A body the arrows can point at: an instance or a project sun. */
 export type StarMapEdgeArrowTarget = StarMapEdgeTarget & {
   label: string;
+  /** Full machine identity retained for the tooltip when `label` is short. */
+  fullLabel?: string;
   kind: "instance" | "project";
   /** The instance's celestial icon; projects carry a core dot instead. */
   icon?: CelestialIconId;
@@ -52,6 +54,7 @@ function sameTargets(
       && target.x === other.x
       && target.y === other.y
       && target.label === other.label
+      && target.fullLabel === other.fullLabel
       && target.kind === other.kind
       && target.icon === other.icon
       && target.labelWidth === other.labelWidth
@@ -140,7 +143,8 @@ export const StarMapEdgeArrows = memo(
                 "--star-map-edge-shift": `${arrow.labelShift}px`,
               } as CSSProperties
             }
-            aria-label={`Fly to ${arrow.target.label}`}
+            aria-label={`Fly to ${arrow.target.label}${arrow.target.fullLabel ? ` (${arrow.target.fullLabel})` : ""}`}
+            title={arrow.target.fullLabel}
             onClick={() => props.onFlyTo(arrow.target)}
           >
             <span className="star-map__edge-arrow-head" aria-hidden="true">

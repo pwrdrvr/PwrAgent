@@ -253,7 +253,8 @@ export function SendThreadToMachineDialog(props: {
                       className="thread-handoff-dialog__machine"
                       disabled={unavailable}
                       role="radio"
-                      title={describeThreadHandoffTargetAvailability(candidate)}
+                      title={[candidate.shortLabel ? candidate.label : undefined,
+                        describeThreadHandoffTargetAvailability(candidate)].filter(Boolean).join(" · ") || undefined}
                       type="button"
                       onClick={() => {
                         setTargetId(candidate.instanceId);
@@ -264,7 +265,7 @@ export function SendThreadToMachineDialog(props: {
                         <TargetMark target={candidate} />
                       </span>
                       <span className="thread-handoff-dialog__machine-label">
-                        {candidate.label}
+                        {candidate.shortLabel ?? candidate.label}
                       </span>
                       {state ? (
                         <span className="thread-handoff-dialog__machine-state">{state}</span>

@@ -55,6 +55,12 @@ export function FederationTargetMenuSection(props: {
             ? FEDERATION_PROJECT_STATE_LABEL.checking
             : FEDERATION_TARGET_AVAILABILITY_LABEL[target.availability];
         const unavailable = target.availability !== "available" || missingProject;
+        const title = missingProject
+          ? `${target.label} has no project named ${props.projectLabel ?? "this"}`
+          : [
+              target.shortLabel ? target.label : undefined,
+              describeFederationThreadTargetAvailability(target.availability),
+            ].filter(Boolean).join(" · ") || undefined;
         return (
           <button
             key={target.instanceId}
@@ -67,9 +73,7 @@ export function FederationTargetMenuSection(props: {
             // keyboard and screen-reader users entirely — the opposite of why
             // they are listed instead of filtered out.
             aria-disabled={unavailable || undefined}
-            title={missingProject
-              ? `${target.label} has no project named ${props.projectLabel ?? "this"}`
-              : describeFederationThreadTargetAvailability(target.availability)}
+            title={title}
             onClick={() => {
               if (unavailable) {
                 return;
@@ -82,7 +86,7 @@ export function FederationTargetMenuSection(props: {
               className="new-thread-menu__target-dot"
               data-availability={missingProject ? "no-project" : target.availability}
             />
-            <span className="new-thread-menu__target-name">{target.label}</span>
+            <span className="new-thread-menu__target-name">{target.shortLabel ?? target.label}</span>
             {stateLabel ? (
               <span className="new-thread-menu__target-state">{stateLabel}</span>
             ) : null}
