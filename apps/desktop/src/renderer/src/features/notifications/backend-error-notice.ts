@@ -7,6 +7,15 @@ import type {
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 /**
+ * A failed turn, a backend error and a Codex repair page as one kind of
+ * notice (AppNoticeStack.tsx), whatever their ids.
+ */
+const AGENT_ERROR_DISMISS_GROUP = {
+  key: "agent-error",
+  label: "agent error notices",
+} as const;
+
+/**
  * A backend failure signal worth surfacing as a sticky toast. Either a
  * `turn/failed` (carries the real error text) or a
  * `thread/status/changed` → systemError (generic). `threadLabel` is a
@@ -66,6 +75,7 @@ export function resolveBackendErrorNotice(
   if (signal.kind === "codex-invalid-id-recovery") {
     const baseNotice = {
       detail: signal.threadLabel,
+      dismissGroup: AGENT_ERROR_DISMISS_GROUP,
       id:
         `codex-invalid-id-recovery:codex:${signal.threadId}:${signal.turnId}`,
       message: signal.failureMessage,
@@ -141,6 +151,7 @@ export function resolveBackendErrorNotice(
       : signal.originLabel;
     return {
       autoDismiss: false,
+      dismissGroup: AGENT_ERROR_DISMISS_GROUP,
       id: `turn-failed:${signal.backend}:${signal.threadId}:${signal.turnId}`,
       title: context?.automationName
         ? "Automation failed"
@@ -187,6 +198,7 @@ export function resolveBackendErrorNotice(
     : signal.originLabel;
   return {
     autoDismiss: false,
+    dismissGroup: AGENT_ERROR_DISMISS_GROUP,
     id: `system-error:${signal.backend}:${signal.threadId}`,
     title: signal.errorNoticeContext?.automationName
       ? "Automation backend error" : "Agent backend error",

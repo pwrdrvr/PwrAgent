@@ -113,7 +113,14 @@ export function AppNoticeToast(props: {
   onDismiss: () => void;
   onOpenThread?: (link: ResolvedThreadLink) => void;
   onSuppressSkillQuestionsWarning?: () => Promise<boolean>;
+  /**
+   * Lays the notice out without showing it: hidden, inert and out of the
+   * accessibility tree. A card that shares its grid cell takes the larger of
+   * the two sizes (AppNoticeStack.tsx).
+   */
+  sizer?: boolean;
 }) {
+  const sizer = props.sizer === true;
   const [paused, setPaused] = useState(false);
   const [suppressionSaving, setSuppressionSaving] = useState(false);
   const [suppressionError, setSuppressionError] = useState(false);
@@ -121,7 +128,7 @@ export function AppNoticeToast(props: {
   const onDismissRef = useRef(props.onDismiss);
   const noticeId = props.notice?.id;
   const noticePresent = props.notice !== undefined;
-  const autoDismiss = props.notice?.autoDismiss !== false;
+  const autoDismiss = !sizer && props.notice?.autoDismiss !== false;
   const regionHovered = useContext(AppNoticeHoverRegion);
   const [selfHovered, setSelfHovered] = useState(false);
   const hovered = regionHovered ?? selfHovered;
@@ -222,8 +229,6 @@ export function AppNoticeToast(props: {
       .filter(Boolean)
       .join("\n");
   const customActions = props.notice.actions ?? [];
-  const hasFooterActions = customActions.length > 0
-    || props.navigation?.dismissAll !== undefined;
   // One dot carries the state: a status when the notice reports one, the
   // tone otherwise. The card itself stays neutral.
   const dotState = props.notice.status?.state === "progress"
@@ -245,18 +250,20 @@ export function AppNoticeToast(props: {
 
   return (
     <aside
-      ref={observeCard}
-      className="app-notice-toast"
+      ref={sizer ? undefined : observeCard}
+      className={sizer ? "app-notice-toast app-notice-toast--sizer" : "app-notice-toast"}
       data-held={held ? "true" : undefined}
-      data-navigable={props.navigation ? "true" : undefined}
+      data-navigable={props.navigation && !sizer ? "true" : undefined}
       // The stack holds several notices at once — a durable backend warning
       // sits here for the whole run on a machine with no agent installed — so
       // a spec that wants one of them needs to say which. See "E2E Locator
       // Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
-      data-notice-id={props.notice.id}
+      data-notice-id={sizer ? undefined : props.notice.id}
       data-tone={props.notice.tone ?? "neutral"}
-      role="status"
-      aria-live="polite"
+      role={sizer ? undefined : "status"}
+      aria-live={sizer ? undefined : "polite"}
+      aria-hidden={sizer ? true : undefined}
+      inert={sizer}
       style={held
         ? { minWidth: held.width, minHeight: held.height }
         : undefined}
@@ -278,6 +285,17 @@ export function AppNoticeToast(props: {
         />
         <p className="app-notice-toast__title">{props.notice.title}</p>
         <div className="app-notice-toast__actions">
+          {props.navigation?.dismissAll ? (
+            <button
+              className="app-notice-toast__dismiss-all"
+              type="button"
+              aria-label={`Dismiss all ${props.navigation.dismissAll.label}`}
+              title={`Dismiss all ${props.navigation.dismissAll.label}`}
+              onClick={props.navigation.dismissAll.onDismiss}
+            >
+              Dismiss all
+            </button>
+          ) : null}
           <button
             className="app-notice-toast__icon-button"
             type="button"
@@ -429,7 +447,7 @@ export function AppNoticeToast(props: {
               </button>
             </nav>
           ) : null}
-          {hasFooterActions ? (
+          {customActions.length > 0 ? (
             <div className="app-notice-toast__custom-actions">
               {customActions.map((action) => (
                 <button
@@ -442,17 +460,6 @@ export function AppNoticeToast(props: {
                   {action.label}
                 </button>
               ))}
-              {props.navigation?.dismissAll ? (
-                <button
-                  className="button app-notice-toast__button app-notice-toast__dismiss-all"
-                  type="button"
-                  aria-label={`Dismiss all ${props.navigation.dismissAll.label}`}
-                  title={`Dismiss all ${props.navigation.dismissAll.label}`}
-                  onClick={props.navigation.dismissAll.onDismiss}
-                >
-                  Dismiss all
-                </button>
-              ) : null}
             </div>
           ) : null}
         </div>

@@ -1,18 +1,18 @@
-// Closing durable notices one after another, with the pointer parked on the
-// close button.
+// Paging and closing durable notices of one kind, with the pointer parked on
+// the close button.
 //
 // The stack is anchored at the window's bottom-left and the close button
-// sits in the card's top-right corner. The next durable notice draws in the
-// same card, so before the card held its size, a shorter next notice moved
-// the close button down out from under the pointer, and the second click of
-// a run landed on the app behind the card. While the pointer stays, the card
-// now never shrinks; it still grows for a taller notice, so nothing is
-// clipped. jsdom lays nothing out, so this is the gate for the geometry; the
-// hold's logic is pinned in `AppNoticeStack.test.tsx`.
+// sits in the card's top-right corner. Each kind of durable notice has one
+// card, drawn over hidden copies of the kind's other notices so it takes the
+// largest of their sizes: paging between notices of different heights, and
+// closing one after another, leave the close button and the pager where they
+// were. Closing the largest would shrink the card; while the pointer stays
+// on the stack, it does not. jsdom lays nothing out, so this is the gate for
+// the geometry; the logic is pinned in `AppNoticeStack.test.tsx`.
 //
 // The notices are federation shutdown notices, pushed on the agent-event
 // channel exactly as main broadcasts them. Their titles carry the peer's
-// label, so a long label makes a taller card with no other difference.
+// label, so a long label makes a taller notice with no other difference.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
@@ -86,15 +86,15 @@ async function hitAt(page: Page, point: { x: number; y: number }) {
 const LONG_LABEL =
   "Build server in the far rack by the window, second shelf from the top";
 
-test("a run of closes keeps the close button under the pointer", async () => {
+test("paging and closing one kind of notice never moves its controls", async () => {
   const app = await launchElectronApp({ requiresReplayDriver: false });
 
   try {
     const { window } = app;
     const peers = [
-      peer("e2e-tall", LONG_LABEL),
       peer("e2e-short", "Mini"),
-      peer("e2e-last", `${LONG_LABEL}, again`),
+      peer("e2e-tall", LONG_LABEL),
+      peer("e2e-last", "Studio"),
     ];
     const event: AgentEvent = {
       backend: "codex",
@@ -112,73 +112,82 @@ test("a run of closes keeps the close button under the pointer", async () => {
       { channel: AGENT_EVENT_CHANNEL, event },
     );
 
-    // The durable card. A runner with no agent installed can already hold a
-    // backend warning there, ahead of these, so page to the first of ours.
-    const card = window.locator(".app-notice-toast[data-navigable]");
-    await expect(card).toBeVisible();
-    for (let step = 0; step < 10; step += 1) {
-      if (await card.getAttribute("data-notice-id") === "federation-shutdown:e2e-tall") {
-        break;
-      }
-      await card.getByRole("button", { name: "Next notice" }).click();
-    }
-    await expect(card).toHaveAttribute(
-      "data-notice-id",
-      "federation-shutdown:e2e-tall",
+    // The kind's card. Only the notice it shows carries an id; the hidden
+    // copies it is sized by carry none.
+    const card = window.locator(
+      ".app-notice-toast[data-notice-id^='federation-shutdown:']",
     );
-    // Paging under the pointer holds the card too; start from rest.
-    await window.mouse.move(0, 0);
-    await expect(card).not.toHaveAttribute("data-held", "true");
-    await settle(card);
-    const close = card.getByRole("button", { name: "Dismiss notice" });
-    const tallCard = await box(card);
-    const first = await box(close);
-    const aim = centre(first);
-
-    // Closing the tall notice under the pointer: the short one takes the
-    // card, which keeps its size, so the close is still under the pointer.
-    await window.mouse.move(aim.x, aim.y);
-    await window.mouse.down();
-    await window.mouse.up();
     await expect(card).toHaveAttribute(
       "data-notice-id",
       "federation-shutdown:e2e-short",
     );
-    expectSameBox(await box(close), first, "the close stays put after a close");
-    expect(await hitAt(window, aim)).toBe("Dismiss notice");
+    await expect(card).toContainText("1 of 3");
+    await window.mouse.move(0, 0);
+    await settle(card);
+    const close = card.getByRole("button", { name: "Dismiss notice" });
+    const next = card.getByRole("button", { name: "Next notice" });
+    const title = card.locator(".app-notice-toast__title");
+    const shortCard = await box(card);
+    const shortTitle = await box(title);
+    const first = await box(close);
+    const pager = await box(next);
 
-    // The short notice really is shorter: leaving the stack lets it fit, and
-    // its close moves down. Without this, the assertion above could pass on
-    // two notices of one height.
+    // Paging to the tall notice and on: one card, one size, nothing clipped.
+    for (const id of ["e2e-tall", "e2e-last"]) {
+      await next.click();
+      await window.mouse.move(0, 0);
+      await expect(card).toHaveAttribute(
+        "data-notice-id",
+        `federation-shutdown:${id}`,
+      );
+      await settle(card);
+      expectSameBox(await box(card), shortCard, `the card keeps its size on ${id}`);
+      expectSameBox(await box(close), first, `the close stays put on ${id}`);
+      const clipped = await card.locator(".app-notice-toast__content").evaluate(
+        (content) => content.scrollHeight > content.clientHeight + 1,
+      );
+      expect(clipped, `${id} is not clipped`).toBe(false);
+      // The tall notice really is taller: its title wraps. Without this, the
+      // card could keep one size over notices of one height.
+      if (id === "e2e-tall") {
+        expect((await box(title)).height, "the tall title wraps")
+          .toBeGreaterThan(shortTitle.height + 10);
+      }
+    }
+    await card.getByRole("button", { name: "Previous notice" }).click();
+    await card.getByRole("button", { name: "Previous notice" }).click();
+    await expect(card).toHaveAttribute(
+      "data-notice-id",
+      "federation-shutdown:e2e-short",
+    );
+    expectSameBox(await box(next), pager, "the pager stays put");
+
+    // A run of closes with the pointer parked on the close.
+    const aim = centre(first);
+    await window.mouse.move(aim.x, aim.y);
+    for (const id of ["e2e-tall", "e2e-last"]) {
+      await window.mouse.down();
+      await window.mouse.up();
+      await expect(card).toHaveAttribute(
+        "data-notice-id",
+        `federation-shutdown:${id}`,
+      );
+      expectSameBox(await box(close), first, `the close stays put on ${id}`);
+      expect(await hitAt(window, aim)).toBe("Dismiss notice");
+    }
+
+    // The last notice alone is smaller, with no pager and no tall notice
+    // to match: leaving the stack lets the card fit it.
     await window.mouse.move(0, 0);
     await expect(card).not.toHaveAttribute("data-held", "true");
     await settle(card);
-    const shortCard = await box(card);
-    expect(shortCard.height, "the second notice is shorter").toBeLessThan(
-      tallCard.height - 10,
+    const lastCard = await box(card);
+    expect(lastCard.height, "the card fits the last notice").toBeLessThan(
+      shortCard.height - 10,
     );
-    const shortClose = await box(close);
-    expect(shortClose.y).toBeGreaterThan(first.y);
-
-    // The other direction: a taller notice taking the card under the pointer
-    // grows it rather than being clipped to the short notice's size.
-    const shortAim = centre(shortClose);
-    await window.mouse.move(shortAim.x, shortAim.y);
-    await window.mouse.down();
-    await window.mouse.up();
-    await expect(card).toHaveAttribute(
-      "data-notice-id",
-      "federation-shutdown:e2e-last",
+    expect(Math.round(lastCard.width), "one width for the kind").toBe(
+      Math.round(shortCard.width),
     );
-    await settle(card);
-    expect(
-      (await box(card)).height,
-      "the taller notice grows the card",
-    ).toBeGreaterThan(shortCard.height + 10);
-    const clipped = await card.locator(".app-notice-toast__content").evaluate(
-      (content) => content.scrollHeight > content.clientHeight + 1,
-    );
-    expect(clipped, "the taller notice is not clipped").toBe(false);
   } finally {
     await app.close();
   }

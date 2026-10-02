@@ -19,9 +19,10 @@ import { useEffect, useState, type RefObject } from "react";
  * - Nothing but focus arriving moves it. Paging between notices of
  *   different heights, a notice arriving, and a window resize leave it put.
  * - It never slides out from under the pointer, or from under its own
- *   focused buttons. Nor does a card's close button: a card whose notice
+ *   focused buttons. Nor does a card's close button: a durable card takes
+ *   the size of the largest notice of its kind, and a card whose notice
  *   changes under the pointer does not shrink until the pointer leaves the
- *   stack (`AppNoticeToast.tsx`).
+ *   stack (`AppNoticeStack.tsx`, `AppNoticeToast.tsx`).
  *
  * It stays on whichever edge it moved to until keyboard focus lands on a
  * control that edge hides, or the last notice closes. Nothing is dismissed

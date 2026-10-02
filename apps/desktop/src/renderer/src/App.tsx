@@ -520,8 +520,9 @@ function DesktopAppShell(props: {
   // triggers the slim "set up `foo`?" confirmation step; everything
   // else uses the standard first-run / replay flow.
   const [bootInfo, setBootInfo] = useState<DesktopBootInfo | null>(null);
-  // Durable notices are retained in arrival order and shown one at a time.
-  // This is intentionally a queue rather than one slot per producer: backend
+  // Durable notices are retained in arrival order and shown one at a time
+  // per kind, each kind paging in its own card (AppNoticeStack.tsx). This is
+  // intentionally a queue rather than one slot per producer: backend
   // failures can arrive while another safety notice is already visible, and
   // every failure must remain individually reviewable and dismissible.
   const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();

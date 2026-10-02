@@ -8034,6 +8034,25 @@ a.button {
   -webkit-app-region: no-drag;
 }
 
+/* One kind of durable notice: the card and hidden copies of the kind's
+   other notices share one grid cell, so the card takes the largest of
+   their sizes and paging never moves its controls (AppNoticeStack.tsx).
+   It spans the stack, so every page is one width too. */
+.app-notice-kind {
+  display: grid;
+  width: 100%;
+}
+
+.app-notice-kind > .app-notice-toast {
+  grid-area: 1 / 1;
+  width: auto;
+}
+
+.app-notice-toast--sizer {
+  visibility: hidden;
+  animation: none;
+}
+
 /* Copy and Dismiss sit in the title row. As a column beside the text they
    cost 80px of its width for the card's whole height. */
 .app-notice-toast__head {
@@ -8067,8 +8086,8 @@ a.button {
 }
 
 /* Top row, not centred on the title: a title that wraps would otherwise
-   move the close button down, and a held card (`data-held`) promises the
-   pointer it stays put. */
+   move the close button down, and a card paging through its kind, or held
+   under the pointer (`data-held`), promises the pointer it stays put. */
 .app-notice-toast__actions {
   display: flex;
   flex: none;
@@ -8076,21 +8095,17 @@ a.button {
   margin-left: 8px;
 }
 
-/* Indented past the dot, so the text lines up under the title. */
+/* Indented past the dot, so the text lines up under the title. It takes up
+   any height the card has beyond its own notice, as a card sized to its
+   kind's largest notice or held under the pointer does, so the footer stays
+   at the card's foot. */
 .app-notice-toast__content {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 0 8px 0 15px;
   user-select: text;
-}
-
-/* Held at no less than the size of the notice it replaced while the pointer
-   stays on the stack (AppNoticeToast.tsx). The text takes up the slack, so
-   the title row and the footer both stay where the pointer left them. */
-.app-notice-toast[data-held="true"] .app-notice-toast__content {
-  flex-grow: 1;
 }
 
 .app-notice-toast__status {
@@ -8327,14 +8342,36 @@ a.button {
   white-space: nowrap;
 }
 
+/* Leads Copy and the close, shown while the card is hovered or holds focus.
+   Its slot is kept while it is hidden, so it appearing moves nothing. */
 .app-notice-toast__dismiss-all {
+  height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
 }
 
-.app-notice-toast__dismiss-all:hover {
-  background: var(--bg-panel-hover);
-  color: var(--text-primary);
+.app-notice-toast:hover .app-notice-toast__dismiss-all,
+.app-notice-toast:focus-within .app-notice-toast__dismiss-all {
+  opacity: 1;
+}
+
+.app-notice-toast__dismiss-all:hover,
+.app-notice-toast__dismiss-all:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.app-notice-toast__dismiss-all:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
