@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { auditChannels, checksumFor, compareVersions, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
+import { auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
 import { submitChannel } from "./submit-package-manager-release.mjs";
 
 const version = "1.1.4";
@@ -79,7 +79,7 @@ describe("package manager release inputs", () => {
       if (endpoint.endsWith("releases/latest")) return release;
       if (endpoint.includes(`${TAP_REPO}/contents`)) return { content: Buffer.from('  version "1.1.3"\n').toString("base64") };
       if (endpoint.includes(`${WINGET_REPO}/contents`)) return [{ type: "dir", name: "1.9.0" }, { type: "dir", name: "1.10.0" }];
-      if (endpoint.startsWith("search/issues")) return { items: [{ html_url: "https://github.com/example/pull/1", title: "PwrAgent" }] };
+      if (endpoint.startsWith("search/issues")) return { incomplete_results: false, total_count: 1, items: [{ html_url: "https://github.com/example/pull/1", title: "PwrAgent" }] };
       return null;
     };
     const audit = auditChannels(api);
@@ -88,6 +88,74 @@ describe("package manager release inputs", () => {
     expect(audit.winget.pending[0].url).toContain("/pull/1");
     expect(() => auditChannels(() => { throw new Error("HTTP 403"); })).toThrow("HTTP 403");
     expect(() => auditChannels((endpoint) => endpoint.includes("Homebrew/homebrew-cask") ? {} : api(endpoint))).toThrow(/reconcile ownership/);
+    expect(() => auditChannels((endpoint) => endpoint.startsWith("search/")
+      ? { incomplete_results: true, total_count: 0, items: [] } : api(endpoint))).toThrow(/Incomplete/);
+  });
+});
+
+describe("public GitHub reads", () => {
+  const response = (status, body, headers = "") => ({
+    status: status === 200 ? 0 : 1,
+    stdout: `HTTP/2.0 ${status}\r\n${headers}\r\n${JSON.stringify(body)}`,
+    stderr: status === 200 ? "" : `gh: request failed (HTTP ${status})`,
+  });
+  const runtime = (responses) => {
+    const calls = [];
+    const waits = [];
+    let time = 0;
+    return {
+      env: { GH_TOKEN: "test-write-credential", DISTRIBUTION_READ_TOKEN: "test-read-credential" },
+      now: () => time,
+      run: (...args) => { calls.push(args); return responses.shift(); },
+      sleep: (delay) => { waits.push(delay); time += delay; },
+      calls, waits,
+    };
+  };
+
+  it("uses the separate read credential and falls back without replacing the caller's write token", () => {
+    const io = runtime([response(200, { ok: true }), response(200, { ok: true })]);
+    ghJson("repos/public/source", false, null, io);
+    expect(io.calls[0][2].env.GH_TOKEN).toBe("test-read-credential");
+    expect(io.env.GH_TOKEN).toBe("test-write-credential");
+    delete io.env.DISTRIBUTION_READ_TOKEN;
+    ghJson("repos/public/source", false, null, io);
+    expect(io.calls[1][2].env.GH_TOKEN).toBe("test-write-credential");
+  });
+
+  it("honors rate-limit reset and Retry-After, and stops after a bounded retry budget", () => {
+    const limited = response(429, {}, "Retry-After: 90\r\n");
+    const io = runtime([limited, response(200, { ok: true })]);
+    expect(ghJson("repos/public/source", false, null, io)).toEqual({ ok: true });
+    expect(io.waits).toEqual([90_000]);
+    const primary = runtime([response(403, {}, "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 120\r\n"), response(200, {})]);
+    ghJson("repos/public/source", false, null, primary);
+    expect(primary.waits).toEqual([120_000]);
+    const exhausted = runtime([response(429, {}), response(429, {}), response(429, {})]);
+    expect(() => ghJson("repos/public/source", true, null, exhausted)).toThrow(/retry later.*absence/);
+    expect(exhausted.calls).toHaveLength(3);
+    expect(exhausted.waits).toEqual([60_000, 120_000]);
+    const longReset = runtime([response(429, {}, "Retry-After: 300\r\n")]);
+    expect(() => ghJson("repos/public/source", true, null, longReset)).toThrow(/bounded/);
+    expect(longReset.waits).toEqual([]);
+  });
+
+  it("treats only an optional 404 as absence and rejects partial, truncated or malformed searches", () => {
+    expect(ghJson("repos/public/source", true, null, runtime([response(404, {})]))).toBeNull();
+    for (const status of [401, 403, 500]) {
+      const io = runtime([response(status, {})]);
+      expect(() => ghJson("repos/public/source", true, null, io)).toThrow(`HTTP ${status}`);
+      expect(io.calls).toHaveLength(1);
+    }
+    for (const body of [
+      { incomplete_results: true, total_count: 0, items: [] },
+      { incomplete_results: false, total_count: 101, items: [] },
+      { items: [] },
+    ]) {
+      expect(() => ghJson("search/code?q=PwrAgent", false, null, runtime([response(200, body)]))).toThrow(/Incomplete/);
+    }
+    expect(ghJson("search/code?q=PwrAgent", false, null, runtime([
+      response(200, { incomplete_results: false, total_count: 0, items: [] }),
+    ])).total_count).toBe(0);
   });
 });
 

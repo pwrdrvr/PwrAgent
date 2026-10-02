@@ -48,7 +48,7 @@ jobs:
 
       - name: Compare authoritative Homebrew and Winget channels
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json"

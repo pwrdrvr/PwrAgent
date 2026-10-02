@@ -45,11 +45,13 @@ jobs:
           node-version: "22"
       - id: generate
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          DISTRIBUTION_READ_TOKEN_AVAILABLE: ${{ secrets.DISTRIBUTION_READ_TOKEN != '' }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          echo "Organization distribution read token available: $DISTRIBUTION_READ_TOKEN_AVAILABLE"
           mkdir -p distribution
           node scripts/package-manager-release.mjs --audit > distribution/preflight.json
           cat distribution/preflight.json >> "$GITHUB_STEP_SUMMARY"
@@ -121,6 +123,8 @@ jobs:
             hdiutil detach "$mount"
           done
       - name: Validate fresh install and upgrade through Homebrew
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           tap="$(brew --repository)/Library/Taps/pwrdrvr/homebrew-distribution-validation"
@@ -268,6 +272,7 @@ jobs:
       - name: Open channel PRs without merging or claiming publication
         env:
           GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN }}
+          DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
           WINGET_FORK_REPO: ${{ vars.WINGET_FORK_REPO }}
           DISTRIBUTION_VALIDATION_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

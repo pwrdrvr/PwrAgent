@@ -16,16 +16,69 @@ export const PACKAGE_ID = "PwrDrvr.PwrAgent";
 export const WINGET_PATH = "manifests/p/PwrDrvr/PwrAgent";
 export const SCHEMA_VERSION = "1.12.0";
 
-export function ghJson(endpoint, optional = false, projection = null) {
-  const args = ["api", endpoint];
-  if (projection) args.push("--jq", projection);
-  const result = spawnSync("gh", args, { encoding: "utf8" });
-  if (result.status !== 0) {
-    // An authentication, rate-limit or network failure is never absence.
-    if (optional && /HTTP 404/.test(result.stderr)) return null;
-    throw new Error(`GitHub API ${endpoint}: ${result.error?.message ?? result.stderr.trim()}`);
+export function completeSearchItems(result) {
+  if (result.incomplete_results !== false || !Array.isArray(result.items)
+    || !Number.isInteger(result.total_count) || result.total_count !== result.items.length) {
+    throw new Error("Incomplete GitHub search; narrow the query or retry later before deciding package/submission absence");
   }
-  return JSON.parse(result.stdout);
+  return result.items;
+}
+
+const readRuntime = {
+  run: spawnSync,
+  now: Date.now,
+  env: process.env,
+  sleep(milliseconds) {
+    // Keep each blocking wait bounded, including a server-requested reset delay.
+    while (milliseconds > 0) {
+      const chunk = Math.min(milliseconds, 60_000);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, chunk);
+      milliseconds -= chunk;
+    }
+  },
+};
+
+export function ghJson(endpoint, optional = false, projection = null, runtime = readRuntime) {
+  if (endpoint.startsWith("search/") && projection) throw new Error("Search metadata must remain available for completeness validation");
+  const args = ["api", "--include", endpoint];
+  if (projection) args.push("--jq", projection);
+  // Only this GET helper uses the read credential. Submission writes keep GH_TOKEN.
+  const env = { ...runtime.env };
+  if (env.DISTRIBUTION_READ_TOKEN) env.GH_TOKEN = env.DISTRIBUTION_READ_TOKEN;
+  let waited = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = runtime.run("gh", args, { encoding: "utf8", env });
+    const response = (result.stdout ?? "").split(/\r?\n\r?\n/);
+    const headers = response.shift() ?? "";
+    const header = (name) => headers.match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1].trim();
+    const status = Number(headers.match(/^HTTP\/\S+\s+(\d+)/)?.[1])
+      || Number(result.stderr?.match(/HTTP (\d+)/)?.[1]);
+    if (result.status === 0) {
+      const json = JSON.parse(response.join("\n\n"));
+      if (endpoint.startsWith("search/")) completeSearchItems(json);
+      return json;
+    }
+    // A throttled, unauthorized or incomplete query is never package absence.
+    if (optional && status === 404) return null;
+    const limited = status === 429 || (status === 403
+      && (header("retry-after") || header("x-ratelimit-remaining") === "0"
+        || /rate limit/i.test(`${result.stderr}\n${response.join("\n\n")}`)));
+    if (limited && attempt < 2) {
+      const retryAfter = header("retry-after");
+      const retryDelay = retryAfter ? (Number.isFinite(Number(retryAfter))
+        ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - runtime.now()) : 0;
+      const resetDelay = header("x-ratelimit-remaining") === "0"
+        ? Number(header("x-ratelimit-reset")) * 1000 - runtime.now() : 0;
+      const delay = Math.max(retryDelay, resetDelay, 60_000 * 2 ** attempt);
+      // Respect longer server delays by stopping, never retrying prematurely.
+      if (Number.isFinite(delay) && waited + delay <= 180_000) {
+        runtime.sleep(delay);
+        waited += delay;
+        continue;
+      }
+    }
+    throw new Error(`GitHub API ${endpoint}: ${result.error?.message ?? result.stderr?.trim()}${limited ? "; bounded rate-limit retries exhausted; retry later, do not infer absence" : ""}`);
+  }
 }
 
 export function stableVersion(release) {
@@ -176,7 +229,7 @@ export function auditChannels(api = ghJson) {
   const entries = api(`repos/${WINGET_REPO}/contents/${WINGET_PATH}`, true);
   const wingetVersions = entries?.filter((entry) => entry.type === "dir").map((entry) => entry.name) ?? [];
   const wingetVersion = wingetVersions.sort(compareVersions).at(-1) ?? null;
-  const pending = (repo) => api(`search/issues?q=${encodeURIComponent(`repo:${repo} is:pr is:open PwrAgent`)}`).items
+  const pending = (repo) => completeSearchItems(api(`search/issues?per_page=100&q=${encodeURIComponent(`repo:${repo} is:pr is:open PwrAgent`)}`))
     .map(({ html_url, title }) => ({ url: html_url, title }));
   return {
     checkedAt: new Date().toISOString(),

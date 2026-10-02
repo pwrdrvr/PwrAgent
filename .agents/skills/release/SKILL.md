@@ -130,9 +130,18 @@ Latest with the authoritative `pwrdrvr/homebrew-tap` cask and
 `microsoft/winget-pkgs` manifest versions. Record identifiers, check time,
 source URLs, open submissions and exact blockers in the release handoff.
 Investigate ahead/stale channels and reuse pending PRs; do not create duplicate
-registrations. An API failure is not an absent package. Check automation
-credential readiness. Prereleases still require this comparison but do not
-update either stable package channel.
+registrations. An API failure or incomplete search is not an absent package.
+Public source audits/searches and verified manifest generation use the
+organization-provided public-read-only `DISTRIBUTION_READ_TOKEN`, falling back
+to `github.token` for fork checks. Keep unrelated operations on the default token
+and submission writes on the separate `DISTRIBUTION_TOKEN`. Confirm selected
+repository access through secret metadata only, check expiration with the
+organization owner, and arrange rotation before expiry without copying the value
+or broadening permissions. Require a successful authenticated audit after rotation.
+Retain bounded rate-limit retries; a PAT can still receive HTTP 429 or incomplete
+code-search results. Report these as blockers and retry later or narrow the query.
+Check automation credential readiness. Prereleases still require this comparison
+but do not update either stable package channel.
 
 1. Determine the next version from the previous tag and user intent:
 

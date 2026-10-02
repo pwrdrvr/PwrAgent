@@ -230,6 +230,14 @@ Every release, including alpha/beta candidates, records authoritative Homebrew
 and Winget versions, pending submissions and blockers. Stable package entries
 change only after a suffix-free release is promoted.
 
+The channel preflight and public manifest generation use the organization's
+public-read-only `DISTRIBUTION_READ_TOKEN`, with `github.token` fallback for
+fork checks. Confirm repository access from secret metadata, expiration and
+rotation readiness with the organization owner, and successful remote reads.
+Follow the linked runbook for bounded throttling retries and incomplete searches;
+neither condition proves absence. This secret is separate from submission write
+credentials and must never be printed or copied.
+
 ```bash
 # 1. Bump the desktop version and add a matching top CHANGELOG.md entry.
 # Treat apps/desktop/package.json as the release version source.

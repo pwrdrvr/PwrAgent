@@ -91,6 +91,15 @@ pins that checkout for submission, and serializes channel updates.
 
 Configure these in **pwrdrvr/PwrAgent**, without copying signing secrets:
 
+- Organization Actions secret `DISTRIBUTION_READ_TOKEN`: Harold provisioned a
+  dedicated fine-grained PAT restricted to public repositories with no additional
+  permissions, shared with PwrAgent, PwrGit and PwrSnap. Public package-source
+  audits, existing-identity/submission searches and release-metadata generation
+  use `GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}`. Homebrew's
+  online audit uses the same fallback as `HOMEBREW_GITHUB_API_TOKEN`. This selects
+  user authentication for public reads; it does not grant repository write access
+  or authorize submissions. Unrelated operations retain the default workflow token.
+  Fork PR checks can use that fallback when organization secrets are unavailable.
 - Repository variable `WINGET_FORK_REPO`: `pwrdrvr/winget-pkgs`, an existing
   publisher-owned fork of `microsoft/winget-pkgs`.
 - Repository secret `DISTRIBUTION_TOKEN`: a credential authorized to read the
@@ -106,6 +115,30 @@ The automation does not provision credentials, sign a CLA, merge submissions,
 promote product releases, or change existing pending PRs. Missing credentials
 fail the submission job with validated inputs still downloadable. Review the
 workflow's permissions and the credential's expiry during release preflight.
+
+Verify read-token access using only organization secret metadata and its selected
+repository list; never retrieve, print or copy its value. The prepare log reports
+only whether the organization read token is available. A successful remote audit
+in that run verifies authenticated reads. The submission job passes the read token
+separately to GET requests; only its write operations use `DISTRIBUTION_TOKEN`.
+
+During every release preflight, confirm the read PAT's expiration date with its
+organization owner (Actions secret metadata does not expose that date). Arrange
+rotation before expiry: the owner replaces the organization secret through GitHub's
+secret settings and preserves the selected PwrAgent/PwrGit/PwrSnap access and
+public-read-only scope. Rerun the audit after rotation. If it expires or is revoked,
+report the failed run and ask the owner to rotate it; do not broaden permissions,
+copy a signing/submission credential, or infer package absence from an auth failure.
+
+User authentication still has GitHub code-search and secondary rate limits.
+The GET helper permits at most three attempts with a total wait budget of three
+minutes, respects `Retry-After` and primary reset headers, and stops if a requested
+delay exceeds the budget. Only optional HTTP 404 means absence. Throttling,
+`incomplete_results`, malformed search responses and results beyond the requested
+100-item page fail the audit. Retry later or narrow the search and record the
+failure as a blocker; do not register a duplicate based on a partial result.
+See GitHub's [rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)
+and [search response guidance](https://docs.github.com/en/rest/search/search).
 
 ## After stable promotion
 
