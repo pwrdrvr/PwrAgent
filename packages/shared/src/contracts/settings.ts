@@ -2163,6 +2163,8 @@ export type OpenPathRequest = {
 export type OpenPathResponse = {
   opened: boolean;
   error?: string;
+  /** Set when nothing exists at the path, so callers need not parse `error`. */
+  missing?: true;
 };
 
 export type ReadMarkdownFileRequest = {

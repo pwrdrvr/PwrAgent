@@ -125,6 +125,8 @@ type CapturedGroup = {
   members: Map<string, CapturedGroupMember>;
   characters: number;
   overflowed: boolean;
+  /** A nested call in the cell had no exact output, so members are partial. */
+  uncaptured?: boolean;
   timer: NodeJS.Timeout;
 };
 
@@ -201,6 +203,7 @@ export class TokenMiserService {
   private readonly thresholdCharacters: number;
   private readonly summaryTimeoutMs: number;
   private readonly capturedGroups = new Map<string, Omit<CapturedGroup, "members">>();
+  private readonly uncapturedCells = new Map<string, NodeJS.Timeout>();
   private readonly capturedOutputs = new TokenMiserOutputCache();
 
   constructor(private readonly options: TokenMiserServiceOptions) {
@@ -213,8 +216,22 @@ export class TokenMiserService {
   async captureNestedPostToolUse(
     payload: TokenMiserPostToolUsePayload,
   ): Promise<void> {
+    const serialized = lazySerializedPostToolUse(payload);
     if (payload.is_code_mode_nested === true && this.supportsExactPostToolUseOutput(payload)) {
-      this.recordDiagnosticInvocation(payload, true);
+      this.recordDiagnosticInvocation(payload, true, serialized);
+    } else if (
+      payload.is_code_mode_nested === true
+      && payload.token_miser_grouping_version === 1
+      && this.options.codeModeGroupingVersion?.() === 1
+      && payload.code_mode_cell_id
+      && !isDirectTokenMiserRetrievalInvocation(payload)
+    ) {
+      // The cell's output includes this call, but the group cannot vouch for it.
+      this.markUncapturedCell(capturedGroupKey(
+        payload.session_id,
+        payload.turn_id,
+        payload.code_mode_cell_id,
+      ));
     }
     if (
       payload.is_code_mode_nested !== true
@@ -228,10 +245,7 @@ export class TokenMiserService {
     ) {
       return;
     }
-    const output = serializeToolResponse(
-      payload.token_miser_exact_tool_response,
-    );
-    const toolInput = serializeToolResponse(payload.tool_input);
+    const { output, input: toolInput } = serialized();
     const key = capturedGroupKey(
       payload.session_id,
       payload.turn_id,
@@ -291,7 +305,8 @@ export class TokenMiserService {
     ) {
       return undefined;
     }
-    this.recordDiagnosticInvocation(payload, false);
+    const serialized = lazySerializedPostToolUse(payload);
+    this.recordDiagnosticInvocation(payload, false, serialized);
     // A thread can opt out of the helper round trip when latency matters more
     // than context. The global experimental flag remains the outer gate.
     if (!await this.isEnabledForThread(payload.session_id)) {
@@ -300,16 +315,12 @@ export class TokenMiserService {
     if (isDirectTokenMiserRetrievalInvocation(payload)) {
       await this.options.store.confirmModelVisibleRetrievals({
         maxVisibleBytes: TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
-        output: serializeToolResponse(
-          payload.token_miser_exact_tool_response,
-        ),
+        output: serialized().output,
         threadId: payload.session_id,
       });
       return undefined;
     }
-    const output = serializeToolResponse(
-      payload.token_miser_exact_tool_response,
-    );
+    const { output } = serialized();
     // Direct dynamic-tool results need the same receipt authentication as
     // Code Mode. Tool names alone cannot prove that schemas are host-issued.
     // Exempt only a complete delivery; unrelated output must still be gated.
@@ -331,7 +342,7 @@ export class TokenMiserService {
     if (output.length <= this.thresholdCharacters) {
       return undefined;
     }
-    const toolInput = serializeToolResponse(payload.tool_input);
+    const { input: toolInput } = serialized();
     const diagnostic: DiagnosticRequest | undefined = this.options.diagnostics?.isEnabled()
       ? { input: toolInput, invocations: [{ toolName: resolvedInvocationName(payload), toolInput }] }
       : undefined;
@@ -516,7 +527,7 @@ export class TokenMiserService {
       request: payload.script ?? "",
       outputBytes: utf8ByteLength(originalOutput),
       maxOutputBytes: Math.min(maxVisibleBytes, TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES),
-      readInvocations: capturedGroup && !capturedGroup.overflowed
+      readInvocations: capturedGroup && !capturedGroup.overflowed && !capturedGroup.uncaptured
         ? [...capturedGroup.members.values()]
         : [],
     });
@@ -620,6 +631,7 @@ export class TokenMiserService {
       payload.turn_id,
       payload.cell_id,
     );
+    const uncaptured = this.takeUncapturedCell(key);
     const group = this.capturedGroups.get(key);
     if (group) {
       clearTimeout(group.timer);
@@ -628,7 +640,29 @@ export class TokenMiserService {
     if (!group) return undefined;
     const stored = this.capturedOutputs.get(key);
     this.capturedOutputs.remove(key);
-    return { ...group, overflowed: group.overflowed || !stored, members: new Map(stored ? JSON.parse(stored) : []) };
+    return {
+      ...group,
+      overflowed: group.overflowed || !stored,
+      uncaptured,
+      members: new Map(stored ? JSON.parse(stored) : []),
+    };
+  }
+
+  private markUncapturedCell(key: string): void {
+    if (this.uncapturedCells.has(key)) return;
+    const timer = setTimeout(() => {
+      this.uncapturedCells.delete(key);
+    }, CAPTURED_GROUP_TTL_MS);
+    timer.unref?.();
+    this.uncapturedCells.set(key, timer);
+  }
+
+  private takeUncapturedCell(key: string): boolean {
+    const timer = this.uncapturedCells.get(key);
+    if (!timer) return false;
+    clearTimeout(timer);
+    this.uncapturedCells.delete(key);
+    return true;
   }
 
   private codeModeActionableStateCharacters(
@@ -787,15 +821,19 @@ export class TokenMiserService {
     };
   }
 
-  private recordDiagnosticInvocation(payload: TokenMiserPostToolUsePayload, codeMode: boolean): void {
+  private recordDiagnosticInvocation(
+    payload: TokenMiserPostToolUsePayload,
+    codeMode: boolean,
+    serialized: () => SerializedPostToolUse,
+  ): void {
     if (!this.options.diagnostics?.isEnabled()) return;
     try {
+      const { input, output } = serialized();
       this.options.diagnostics.recordInvocation({
         threadId: payload.session_id, turnId: payload.turn_id,
         callId: payload.code_mode_tool_call_id ?? payload.tool_use_id,
         toolName: resolvedInvocationName(payload),
-        input: serializeToolResponse(payload.tool_input),
-        output: serializeToolResponse(payload.token_miser_exact_tool_response), codeMode,
+        input, output, codeMode,
       });
     } catch { /* Capture is independent of the tool result and reducer. */ }
   }
@@ -1524,6 +1562,19 @@ function classifyCapturedGroupMember(
     return "command";
   }
   return "other";
+}
+
+type SerializedPostToolUse = { input: string; output: string };
+
+/** Serialize a hook payload at most once, and only when something reads it. */
+function lazySerializedPostToolUse(
+  payload: TokenMiserPostToolUsePayload,
+): () => SerializedPostToolUse {
+  let serialized: SerializedPostToolUse | undefined;
+  return () => serialized ??= {
+    input: serializeToolResponse(payload.tool_input),
+    output: serializeToolResponse(payload.token_miser_exact_tool_response),
+  };
 }
 
 function dispatchedInvocationNames(input: unknown): string[] {

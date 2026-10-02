@@ -58,6 +58,23 @@ describe("Token Miser diagnostic capture", () => {
     await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("evicts the least recently active thread under memory pressure", async () => {
+    const { capture, file } = await setup({ memoryBytes: 60_000 });
+    const record = (threadId: string, cmd: string) => capture.recordInvocation({
+      threadId, turnId: "turn", callId: cmd, toolName: "exec_command",
+      input: JSON.stringify({ cmd }), output: "x".repeat(4_000), codeMode: false,
+    });
+    capture.recordGate({ ...gate("first"), metadata: { ...gate("first").metadata, threadId: "first" } });
+    capture.recordGate({ ...gate("second"), metadata: { ...gate("second").metadata, threadId: "second" } });
+    // "second" fills most of the budget, then goes idle while "first", which
+    // was inserted earlier, keeps working.
+    for (let i = 0; i < 3; i++) record("second", `rg idle-${i}`);
+    for (let i = 0; i < 2; i++) record("first", `rg busy-${i}`);
+    await capture.flush();
+    const sealed = (await rows(file)).filter((row) => row.window.reason === "memory_limit");
+    expect(sealed.map((row) => row.threadId)).toEqual(["second"]);
+  });
+
   it("batches multiple turns in one append every 30 seconds and writes nothing while idle", async () => {
     vi.useFakeTimers();
     const append = vi.fn<(file: string, data: string) => Promise<void>>(async () => undefined);

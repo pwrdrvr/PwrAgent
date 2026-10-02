@@ -237,6 +237,9 @@ export class TokenMiserDiagnostics {
   }
   private push(threadId: string, turnId: string, kind: string, data: Record<string, unknown>): Event | undefined {
     const thread = this.thread(threadId);
+    // Keep map order least-recently-active first, so memory pressure evicts idle threads.
+    this.threads.delete(threadId);
+    this.threads.set(threadId, thread);
     this.seal(threadId, "observation_window");
     const event: Event = {
       sequence: ++this.sequence, timestamp: this.now(), turnId, kind,
@@ -276,8 +279,8 @@ export class TokenMiserDiagnostics {
       this.samples.set(category, count + 1);
       if (anchor.burstId || count % (this.options.sampleEvery ?? 8) === 0) {
         const burst = anchor.burstId && thread.burst?.id === anchor.burstId ? thread.burst : undefined;
-        const through = burst?.recordedThrough ?? -1;
-        const events = thread.events.filter((event) => event.sequence >= anchor.sequence - 3 && event.sequence > through);
+        const recordedThrough = burst?.recordedThrough ?? -1;
+        const events = thread.events.filter((event) => event.sequence >= anchor.sequence - 3 && event.sequence > recordedThrough);
         if (!events.length) return false;
         if (burst) burst.recordedThrough = events[events.length - 1].sequence;
         const row = `${JSON.stringify({

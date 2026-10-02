@@ -64,7 +64,7 @@ async function openPathWithOsDefault(
   try {
     await access(target);
   } catch {
-    return { opened: false, error: `Path does not exist: ${target}` };
+    return { opened: false, error: `Path does not exist: ${target}`, missing: true };
   }
   // `shell.openPath` resolves to "" on success or an error message on failure.
   const error = await shell.openPath(target);
@@ -86,7 +86,7 @@ async function revealPathInFolder(
   try {
     await access(target);
   } catch {
-    return { opened: false, error: `Path does not exist: ${target}` };
+    return { opened: false, error: `Path does not exist: ${target}`, missing: true };
   }
   shell.showItemInFolder(target);
   return { opened: true };

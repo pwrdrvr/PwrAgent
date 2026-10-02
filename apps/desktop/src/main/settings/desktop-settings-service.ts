@@ -901,9 +901,7 @@ export class DesktopSettingsService {
                   : {}),
             },
         tokenMiserDiagnosticsDirectory: path.join(
-          path.dirname(this.configPath),
-          "state",
-          "token-miser",
+          this.tokenMiserStateDir(),
           TOKEN_MISER_DIAGNOSTICS_DIRNAME,
         ),
         messaging: {
@@ -3957,17 +3955,17 @@ export class DesktopSettingsService {
    * never tried to activate, which reads as "no claim either way" rather than
    * as a failure.
    */
+  /** The profile's Token Miser state, the registry's `state/token-miser`. */
+  private tokenMiserStateDir(): string {
+    return path.join(path.dirname(this.configPath), "state", "token-miser");
+  }
+
   private async readTokenMiserActivation(): Promise<
     TokenMiserActivationStatus | undefined
   > {
     try {
       const raw = await readFile(
-        path.join(
-          path.dirname(this.configPath),
-          "state",
-          "token-miser",
-          TOKEN_MISER_ACTIVATION_FILENAME,
-        ),
+        path.join(this.tokenMiserStateDir(), TOKEN_MISER_ACTIVATION_FILENAME),
         "utf8",
       );
       const parsed = JSON.parse(raw) as TokenMiserActivationStatus;

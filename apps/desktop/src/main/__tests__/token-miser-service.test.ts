@@ -396,7 +396,7 @@ describe("TokenMiserService", () => {
     await prepared?.staged.discard();
   });
 
-  it.each(["uncaptured", "mixed", "over-budget"])("evaluates a Code Mode archive read when %s", async (scenario) => {
+  it.each(["uncaptured", "partly uncaptured", "mixed", "over-budget"])("evaluates a Code Mode archive read when %s", async (scenario) => {
     const store = await createStore();
     const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
       status: "ok",
@@ -423,6 +423,15 @@ describe("TokenMiserService", () => {
     if (scenario === "mixed") {
       await service.captureNestedPostToolUse({
         ...payload("unrelated web results"), tool_name: "web.run", tool_input: { query: "something else" },
+        is_code_mode_nested: true, token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1", code_mode_tool_call_id: "web-search",
+      });
+    }
+    if (scenario === "partly uncaptured") {
+      // A sibling call without exact output still contributes to the cell's output.
+      await service.captureNestedPostToolUse({
+        ...payload("unrelated web results"), tool_name: "web.run", tool_input: { query: "something else" },
+        token_miser_exact_tool_response_version: undefined,
         is_code_mode_nested: true, token_miser_grouping_version: 1,
         code_mode_cell_id: "cell-1", code_mode_tool_call_id: "web-search",
       });

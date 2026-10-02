@@ -3792,7 +3792,7 @@ describe("SettingsScreen", () => {
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
     snapshot.runtime.tokenMiserDiagnosticsDirectory = directory;
     const openPath = vi.fn()
-      .mockResolvedValueOnce({ opened: false, error: `Path does not exist: ${directory}` })
+      .mockResolvedValueOnce({ opened: false, error: `Path does not exist: ${directory}`, missing: true })
       .mockResolvedValueOnce({ opened: true });
     render(<SettingsScreen
       desktopApi={{ openPath } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}

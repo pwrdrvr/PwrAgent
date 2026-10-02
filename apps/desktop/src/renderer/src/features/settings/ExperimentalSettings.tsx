@@ -68,10 +68,9 @@ function TokenMiserDiagnosticsFolder(props: {
     opening.current = true;
     try {
       const response = await openPath({ path: props.directory });
-      // Main answers a missing path with "Path does not exist: <path>".
       setNote(response.opened
         ? undefined
-        : response.error?.startsWith("Path does not exist")
+        : response.missing
           ? "No samples saved yet."
           : response.error ?? "The folder could not be opened.");
     } catch (caught) {
