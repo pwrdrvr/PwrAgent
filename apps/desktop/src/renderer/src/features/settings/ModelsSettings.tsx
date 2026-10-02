@@ -39,10 +39,7 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
-import {
-  DEFAULT_MODELS_FOCUS,
-  DefaultModelsSettings,
-} from "./DefaultModelsSettings";
+import { HelperModelSettings } from "./HelperModelSettings";
 import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
@@ -133,7 +130,7 @@ export function ModelsSettings(props: {
   onSaveProviderThreadMigrations: (
     migrations: Record<string, DesktopProviderThreadModelMigration>,
   ) => Promise<boolean>;
-  /** Persist Settings → AI Providers → Default Models. */
+  /** Persist the Helper model row on Settings → AI Providers. */
   onSaveHelperModels?: (
     helperModels: DesktopHelperModelSettings,
   ) => Promise<unknown>;
@@ -542,20 +539,6 @@ export function ModelsSettings(props: {
       </SettingsSection>
   );
 
-  if (props.focus === DEFAULT_MODELS_FOCUS) {
-    return (
-      <DefaultModelsSettings
-        backends={backends}
-        settings={props.snapshot.models.helperModels ?? { helpers: {} }}
-        catalogRefresh={catalogRefresh}
-        catalogReading={refreshingCatalog}
-        catalogError={catalogError}
-        saving={props.saving}
-        onSave={async (helperModels) => await props.onSaveHelperModels?.(helperModels)}
-      />
-    );
-  }
-
   if (props.focus === "codex") {
     return (
       <SettingsSectionStack
@@ -620,7 +603,7 @@ export function ModelsSettings(props: {
       <SettingsPanelHead
         eyebrow="Models"
         title="AI providers"
-        help="Choose models for new threads, inspect discovered models, and configure provider credentials."
+        help="Choose models for new threads and for work PwrAgent starts on its own, inspect discovered models, and configure provider credentials."
       />
 
       <ProviderModelDefaultsSettings
@@ -636,6 +619,14 @@ export function ModelsSettings(props: {
         onSave={props.onSaveProviderDefaults}
         onSaveMigrations={props.onSaveProviderThreadMigrations}
         onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
+      />
+
+      <HelperModelSettings
+        backends={backends}
+        settings={props.snapshot.models.helperModels ?? { helpers: {} }}
+        catalogReading={refreshingCatalog}
+        saving={props.saving}
+        onSave={async (helperModels) => await props.onSaveHelperModels?.(helperModels)}
       />
 
       <SettingsSection

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   HELPER_MODEL_DEFINITIONS,
-  HELPER_MODEL_GROUPS,
   HELPER_MODEL_IDS,
   helperChoiceBackend,
   resolveHelperModel,
@@ -147,13 +146,56 @@ describe("resolveHelperModel", () => {
   });
 });
 
+describe("helper model reasoning", () => {
+  const models = catalog("gpt-6-luna");
+
+  it("uses each helper's built-in effort when none is chosen", () => {
+    expect(resolveHelperModel({ helper: "thread_titles", models }))
+      .toMatchObject({ reasoningEffort: "low" });
+    expect(resolveHelperModel({ helper: "task_monitors", models }))
+      .toMatchObject({ reasoningEffort: "medium" });
+  });
+
+  it("applies the Helper model effort to every Codex helper below a row and a request", () => {
+    const settings = {
+      defaultReasoningEffort: "high",
+      helpers: { task_monitors: { reasoningEffort: "low" } },
+    };
+    expect(resolveHelperModel({ helper: "thread_titles", settings, models }))
+      .toMatchObject({ model: "gpt-6-luna", reasoningEffort: "high" });
+    expect(resolveHelperModel({ helper: "task_monitors", settings, models }))
+      .toMatchObject({ reasoningEffort: "low" });
+    expect(resolveHelperModel({
+      helper: "thread_titles",
+      settings,
+      models,
+      requestedReasoningEffort: "medium",
+    })).toMatchObject({ reasoningEffort: "medium" });
+  });
+
+  it("skips a Helper model effort the model does not offer", () => {
+    expect(resolveHelperModel({
+      helper: "task_monitors",
+      settings: { defaultReasoningEffort: "xhigh", helpers: {} },
+      models,
+    })).toMatchObject({ reasoningEffort: "medium" });
+  });
+
+  it("does not apply the Helper model effort off Codex", () => {
+    expect(resolveHelperModel({
+      helper: "usage_analysis",
+      settings: { defaultReasoningEffort: "high", helpers: {} },
+      backend: "acp:grok",
+      models: [{ id: "grok-build", reasoningEfforts: EFFORTS }],
+    })).toMatchObject({ model: "grok-build", reasoningEffort: "low" });
+  });
+});
+
 describe("helper model catalog", () => {
-  it("defines every helper once, in a known group", () => {
+  it("defines every helper once, with Codex first", () => {
     expect(HELPER_MODEL_DEFINITIONS.map((definition) => definition.id))
       .toEqual([...HELPER_MODEL_IDS]);
-    const groups = new Set(HELPER_MODEL_GROUPS.map((group) => group.id));
     for (const definition of HELPER_MODEL_DEFINITIONS) {
-      expect(groups.has(definition.group)).toBe(true);
       expect(definition.backends[0]).toBe("codex");
     }
   });

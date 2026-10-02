@@ -33,8 +33,8 @@ export type AutomationPromptDraftResult =
   | { status: "unavailable" | "invalid" | "failed"; reason: string };
 
 /**
- * Structured one-shot supplied by the backend registry. The Automation
- * prompts row in Settings → Default Models picks its model.
+ * Structured one-shot supplied by the backend registry. The Helper model
+ * setting picks its model.
  */
 export type StructuredGenerator = (request: {
   system: string;

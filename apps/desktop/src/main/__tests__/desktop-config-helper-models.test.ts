@@ -22,6 +22,7 @@ describe("desktop config helper models", () => {
   it("writes only the canonical shape to a blank config and reads it back", () => {
     const written = save("", {
       defaultModel: "gpt-6-luna",
+      defaultReasoningEffort: "high",
       helpers: {
         thread_titles: { reasoningEffort: "medium" },
         diff_condensation: { model: "gpt-5.6-luna" },
@@ -32,6 +33,7 @@ describe("desktop config helper models", () => {
     expect(written).toBe([
       "[models]",
       "helper_default_model = \"gpt-6-luna\"",
+      "helper_default_reasoning_effort = \"high\"",
       "",
       "[[models.helper_models]]",
       "helper = \"diff_condensation\"",
@@ -50,6 +52,7 @@ describe("desktop config helper models", () => {
     expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
       helperModels: {
         defaultModel: "gpt-6-luna",
+        defaultReasoningEffort: "high",
         helpers: {
           diff_condensation: { model: "gpt-5.6-luna" },
           thread_titles: { reasoningEffort: "medium" },
@@ -89,11 +92,23 @@ describe("desktop config helper models", () => {
     });
   });
 
-  it("clears both keys when every helper returns to Helper default", () => {
+  it("reads a Helper model effort saved on its own", () => {
+    expect(parseDesktopSettingsToml([
+      "[models]",
+      "helper_default_reasoning_effort = \"medium\"",
+      "",
+    ].join("\n"), "test.toml").models?.helperModels).toEqual({
+      defaultReasoningEffort: "medium",
+      helpers: {},
+    });
+  });
+
+  it("clears every key when the row returns to Automatic and overrides are cleared", () => {
     const existing = [
       "# Operator comment",
       "[models]",
       "helper_default_model = \"gpt-6-luna\"",
+      "helper_default_reasoning_effort = \"high\"",
       "",
       "[[models.helper_models]]",
       "helper = \"diff_condensation\"",
@@ -108,6 +123,7 @@ describe("desktop config helper models", () => {
     expect(written).toContain("# Operator comment");
     expect(written).toContain("allow_fast = false");
     expect(written).not.toContain("helper_default_model");
+    expect(written).not.toContain("helper_default_reasoning_effort");
     expect(written).not.toContain("[[models.helper_models]]");
     expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
       codex: { allowFast: false },

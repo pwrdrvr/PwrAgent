@@ -165,7 +165,7 @@ export type TokenMiserServiceOptions = {
    */
   isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
-    /** Default Models row: output evaluation, or focused summaries. */
+    /** Which helper is running: output evaluation, or focused summaries. */
     helper: "token_miser_evaluation" | "token_miser_focused_summaries";
     disableExecution?: boolean;
     system: string;

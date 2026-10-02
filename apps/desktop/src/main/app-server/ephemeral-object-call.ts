@@ -6,7 +6,7 @@ export type EphemeralObjectResult = {
 };
 
 export type EphemeralObjectCallRequest = {
-  /** Which Settings → Default Models row picks the model. */
+  /** Which helper is running, for its per-helper override and effort. */
   helper: HelperModelId;
   model?: string;
   schema: Record<string, unknown>;

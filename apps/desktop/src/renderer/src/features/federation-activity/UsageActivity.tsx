@@ -147,7 +147,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     }).catch(() => { /* Automatic stays the default. */ });
     readHelperModels();
     // Config writes are not broadcast. Coming back from Settings focuses this
-    // window, so a Default Models change moves the default then.
+    // window, so a Helper model change moves the default then.
     window.addEventListener("focus", readHelperModels);
     return () => window.removeEventListener("focus", readHelperModels);
   }, [desktopApi]);

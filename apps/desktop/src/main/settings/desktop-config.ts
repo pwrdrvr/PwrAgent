@@ -1607,6 +1607,17 @@ export function desktopSettingsPatchToEdits(
     } else {
       edits.push({ op: "delete", path: ["models", "helper_default_model"] });
     }
+    if (helperModels.defaultReasoningEffort) {
+      set(
+        ["models", "helper_default_reasoning_effort"],
+        helperModels.defaultReasoningEffort,
+      );
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["models", "helper_default_reasoning_effort"],
+      });
+    }
     const entries = Object.entries(helperModels.helpers)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([helper, choice]) => ({
@@ -2175,6 +2186,7 @@ function normalizeDesktopConfig(
       ),
       helperModels: readHelperModelSettings(
         models?.helper_default_model,
+        models?.helper_default_reasoning_effort,
         models?.helper_models,
       ),
       codex: {
@@ -2488,7 +2500,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const helperModels = config.models?.helperModels;
   const hasHelperModels = Boolean(
     helperModels
-    && (helperModels.defaultModel || Object.keys(helperModels.helpers).length > 0),
+    && (
+      helperModels.defaultModel
+      || helperModels.defaultReasoningEffort
+      || Object.keys(helperModels.helpers).length > 0
+    ),
   );
   if (
     (codex && hasDefinedValue(codex))
@@ -2885,24 +2901,32 @@ function normalizeHelperModelSettings(
   value: DesktopHelperModelSettings,
 ): DesktopHelperModelSettings {
   const defaultModel = value.defaultModel?.trim();
+  const defaultReasoningEffort = value.defaultReasoningEffort?.trim();
   const helpers: Record<string, DesktopHelperModelChoice> = {};
   for (const [helper, choice] of Object.entries(value.helpers)) {
     const id = helper.trim();
     const normalized = id ? normalizeHelperModelChoice(choice) : undefined;
     if (normalized) helpers[id] = normalized;
   }
-  return { ...(defaultModel ? { defaultModel } : {}), helpers };
+  return {
+    ...(defaultModel ? { defaultModel } : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    helpers,
+  };
 }
 
 /**
- * `[models] helper_default_model` plus `[[models.helper_models]]` rows. New
- * keys with no legacy shape: a malformed row is skipped, never the section.
+ * `[models] helper_default_model` and `helper_default_reasoning_effort`, plus
+ * `[[models.helper_models]]` rows. New keys with no legacy shape: a malformed
+ * row is skipped, never the section.
  */
 function readHelperModelSettings(
   defaultModelValue: TomlScalar | undefined,
+  defaultReasoningEffortValue: TomlScalar | undefined,
   rowsValue: TomlScalar | undefined,
 ): DesktopHelperModelSettings | undefined {
   const defaultModel = readString(defaultModelValue);
+  const defaultReasoningEffort = readString(defaultReasoningEffortValue);
   const helpers: Record<string, DesktopHelperModelChoice> = {};
   if (Array.isArray(rowsValue)) {
     for (const item of rowsValue) {
@@ -2919,8 +2943,18 @@ function readHelperModelSettings(
       if (choice) helpers[helper] = choice;
     }
   }
-  if (!defaultModel && Object.keys(helpers).length === 0) return undefined;
-  return { ...(defaultModel ? { defaultModel } : {}), helpers };
+  if (
+    !defaultModel
+    && !defaultReasoningEffort
+    && Object.keys(helpers).length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    ...(defaultModel ? { defaultModel } : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    helpers,
+  };
 }
 
 function normalizeProviderModelDefaults(

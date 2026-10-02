@@ -12254,7 +12254,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("runs each helper on its Default Models row and skips a model Codex does not offer", async () => {
+  it("runs each helper on its helper model setting and skips a model Codex does not offer", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     let settings: DesktopHelperModelSettings = {
       defaultModel: "gpt-5.5",

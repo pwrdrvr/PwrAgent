@@ -12018,18 +12018,23 @@ a.button {
   gap: 8px;
 }
 
-/* Default Models: each line under a helper's pickers names what will run. */
-.settings-default-models__line {
+/* Helper model: each line under the pickers names what will run. */
+.settings-helper-model__line {
   display: block;
 }
 
-.settings-default-models__line strong {
+.settings-helper-model__line strong {
   color: var(--text-secondary);
   font-weight: 600;
 }
 
-.settings-default-models__line.settings-field__value--warn strong {
+.settings-helper-model__line.settings-field__value--warn strong {
   color: inherit;
+}
+
+.settings-helper-model__actions {
+  display: block;
+  margin-top: 6px;
 }
 
 .settings-select--chip {
