@@ -994,6 +994,42 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(usageTurn).toEqual({ model: "gpt-5.6-sol" });
   });
 
+  it("prices a finished worker line once its model is known, and the thread total follows", async () => {
+    const start = PRICING_CATALOG_TIME;
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      createdAt: start, sourceItemId: "parent-turn", turnId: "turn-parent", usageLineId: "parent-turn",
+    }) });
+    // A Codex native worker's usage, written before anything named its model.
+    const {
+      model: _model, pricingCatalogId: _catalog, pricingCatalogVersion: _version,
+      pricingRateId: _rate, reasoningEffort: _effort, ...unpriced
+    } = buildUsageLine({
+      createdAt: start + 1000, parentThreadId: "thread-1", scope: "monitor",
+      settingsConfidence: "unknown", settingsSource: "monitor", source: "live",
+      sourceItemId: "codex-native:worker-1", threadId: "worker-1", turnId: "turn-worker",
+      usageLineId: "worker-usage",
+    });
+    await store.upsertThreadUsageLine({ line: { ...unpriced, priceStatus: "unpriced", totalCostMicros: 0 } });
+    let pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines.find((line) => line.usageLineId === "worker-usage")).toMatchObject({
+      priceStatus: "unpriced", priceUnavailableReason: "missing-model",
+    });
+    expect(pricing.summaries[0]).toMatchObject({ totalCostMicros: 16_100, unpricedUsageLineCount: 1 });
+
+    await store.upsertThreadUsageLine({ line: {
+      ...unpriced, model: "gpt-5.5", priceStatus: "unpriced", reasoningEffort: "high", totalCostMicros: 0,
+    } });
+    pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines.find((line) => line.usageLineId === "worker-usage")).toMatchObject({
+      model: "gpt-5.5", priceStatus: "priced", totalCostMicros: 16_100,
+    });
+    // The summary is recomputed from the lines, so the repaired row moves the
+    // thread total, and every running total after it is derived from these.
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 2, totalCostMicros: 32_200, unpricedUsageLineCount: 0,
+    });
+  });
+
   it("stores running totals on usage lines without adding them to summaries", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

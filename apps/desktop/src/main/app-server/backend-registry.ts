@@ -856,6 +856,10 @@ type BackendClient = {
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
+  /** A thread's configured model, without reading its turns. */
+  readThreadModelSettings?(params: {
+    threadId: string;
+  }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -8590,6 +8594,10 @@ export class DesktopBackendRegistry {
   >();
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
+  private readonly codexNativeSubAgentModelSettings = new Map<
+    string,
+    Promise<{ model?: string; reasoningEffort?: string } | undefined>
+  >();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
     CodexNativeSubAgentReconciliation
@@ -26724,7 +26732,16 @@ export class DesktopBackendRegistry {
         ? !codexNativeSubAgentIsTerminal(existing.status) || (terminal && existing.status !== replayStatus)
         : (!terminal || recent);
     });
-    if (pending.length === 0) {
+    // A card made from lifecycle reports alone has no model, and its usage
+    // stays unpriced until discovery reads one. Global discovery is one page
+    // and can miss a fresh worker; this parent-scoped read cannot.
+    const needsDiscovery = [...observed.keys()].some((id) => {
+      const existing = parentOverlay?.subAgents?.find(
+        (card) => card.monitorId === codexNativeSubAgentId(id),
+      );
+      return existing !== undefined && !existing.preferredModel;
+    });
+    if (pending.length === 0 && !needsDiscovery) {
       return;
     }
     const nativeThreads = this.codexClient.listNativeSubAgentThreads
@@ -26798,6 +26815,7 @@ export class DesktopBackendRegistry {
       let parentPricingLines: ThreadUsageLineRecord[] = [];
       let parentPricingSettings: ThreadUsageLineRecord | undefined;
       let parentPricingLoaded = false;
+      let parentPricingRepaired = false;
       const readParentPricingLines = async (): Promise<ThreadUsageLineRecord[]> => {
         if (
           !parentPricingLoaded
@@ -26923,6 +26941,32 @@ export class DesktopBackendRegistry {
                   && line.scope === "monitor",
               )
           : false;
+        // A line written before anything named the worker's model keeps its
+        // own identity and tokens; only the settings are filled. Building a
+        // fresh line would key it by the card's turn, which is the parent's,
+        // and count the worker twice. The store reprices what it is handed.
+        const modelRepairs =
+          preferredModel && typeof this.overlayStore.readThreadPricing === "function"
+            ? (await readParentPricingLines())
+              .filter(
+                (line) =>
+                  line.sourceItemId === monitorId
+                  && line.threadId === nativeThread.id
+                  && line.scope === "monitor"
+                  && !line.model,
+              )
+              .map((line): ThreadUsageLineRecord => ({
+                ...line,
+                model: preferredModel,
+                ...(!line.reasoningEffort && preferredReasoningEffort
+                  ? { reasoningEffort: preferredReasoningEffort }
+                  : {}),
+                ...(!line.serviceTier && serviceTier ? { serviceTier } : {}),
+                ...(line.fastMode === undefined && preferredFastMode !== undefined
+                  ? { fastMode: preferredFastMode }
+                  : {}),
+              }))
+            : [];
         const discoveredStatus =
           nativeThread.threadStatus === "active"
             ? "running"
@@ -27021,6 +27065,17 @@ export class DesktopBackendRegistry {
             await this.overlayStore.upsertThreadUsageLine({ line: pricingLine });
             parentPricingLines.push(pricingLine);
           }
+          for (const line of modelRepairs) {
+            const { line: repaired } = await this.overlayStore.upsertThreadUsageLine({ line });
+            logUnpricedThreadUsageLine(repaired);
+            const index = parentPricingLines.findIndex(
+              (candidate) => candidate.usageLineId === repaired.usageLineId,
+            );
+            if (index >= 0) {
+              parentPricingLines[index] = repaired;
+            }
+            parentPricingRepaired = true;
+          }
 
           if (needsCardWrite) {
             params.overlaysByThreadId[parent.id] =
@@ -27047,6 +27102,11 @@ export class DesktopBackendRegistry {
             },
           );
         }
+      }
+      if (parentPricingRepaired) {
+        // A repriced worker moves the thread total and every running total
+        // after it; open panels refetch on this event.
+        await this.emitThreadPricingUpdated({ backend: "codex", threadId: parent.id });
       }
     }
   }
@@ -28839,6 +28899,32 @@ export class DesktopBackendRegistry {
     );
   }
 
+  /**
+   * One `thread/read` per worker, shared by the usage notifications that race
+   * to ask. A failure is not cached, so the next notification asks again.
+   */
+  private readCodexNativeSubAgentModelSettings(
+    threadId: string,
+  ): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
+    if (!this.codexClient.readThreadModelSettings) {
+      return Promise.resolve(undefined);
+    }
+    const cached = this.codexNativeSubAgentModelSettings.get(threadId);
+    if (cached) {
+      return cached;
+    }
+    const pending = this.codexClient.readThreadModelSettings({ threadId }).catch((error) => {
+      this.codexNativeSubAgentModelSettings.delete(threadId);
+      backendRegistryLog.debug("codex native subagent model read failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
+    this.codexNativeSubAgentModelSettings.set(threadId, pending);
+    return pending;
+  }
+
   private async recordCodexNativeSubAgentUsage(event: AgentEvent): Promise<void> {
     if (
       event.backend !== "codex" ||
@@ -28879,7 +28965,19 @@ export class DesktopBackendRegistry {
     const fastMode = readTaskMonitorUsageFastMode(
       event.notification.params.tokenUsage,
     );
-    const model = notificationModel ?? existing.preferredModel;
+    // A path-based worker's card starts from a subAgentActivity report, which
+    // names no model, and Codex usage notifications carry none either. Ask
+    // Codex for the worker's own settings once, or its usage stays unpriced.
+    const workerSettings =
+      notificationModel ?? existing.preferredModel
+        ? undefined
+        : await this.readCodexNativeSubAgentModelSettings(
+            event.notification.params.threadId,
+          );
+    const model =
+      notificationModel ?? existing.preferredModel ?? workerSettings?.model;
+    const reasoningEffort =
+      existing.preferredReasoningEffort ?? workerSettings?.reasoningEffort;
     const monitorTurnId =
       readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
       existing.monitorTurnId;
@@ -28907,6 +29005,12 @@ export class DesktopBackendRegistry {
       threadId: parentThreadId,
       subAgent: {
         ...existing,
+        ...(!existing.preferredModel && workerSettings?.model
+          ? { preferredModel: workerSettings.model }
+          : {}),
+        ...(!existing.preferredReasoningEffort && workerSettings?.reasoningEffort
+          ? { preferredReasoningEffort: workerSettings.reasoningEffort }
+          : {}),
         monitorUsage: usageSnapshot,
         updatedAt: Date.now(),
       },
@@ -28932,6 +29036,7 @@ export class DesktopBackendRegistry {
         monitorTurnId,
         observedReplays,
         parentThreadId,
+        reasoningEffort,
         serviceTier,
         source: "monitor",
         usage: usageSnapshot,

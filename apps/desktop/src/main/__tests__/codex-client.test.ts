@@ -1453,6 +1453,31 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("reads a worker's model settings without its turns", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      MockTransport.readThreadResultByThreadId.set("worker-settings", {
+        thread: { id: "worker-settings", model: "gpt-6.1-sol", reasoningEffort: "high", status: { type: "notLoaded" } },
+      });
+      MockTransport.readThreadResultByThreadId.set("worker-unknown", {
+        thread: { id: "worker-unknown", model: null, reasoningEffort: null, status: { type: "notLoaded" } },
+      });
+      expect(await client.readThreadModelSettings({ threadId: "worker-settings" }))
+        .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high" });
+      expect(await client.readThreadModelSettings({ threadId: "worker-unknown" })).toBeUndefined();
+      const reads = MockTransport.instances
+        .flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)))
+        .filter((request) => request.method === "thread/read");
+      expect(reads.map((request) => request.params)).toEqual([
+        { threadId: "worker-settings", includeTurns: false },
+        { threadId: "worker-unknown", includeTurns: false },
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("exports handoff bytes through the protocol-provided path without opening private storage", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });

@@ -9550,6 +9550,30 @@ export class CodexAppServerClient {
     return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
   }
 
+  /**
+   * The model and effort Codex reports for a thread: its configured settings
+   * while loaded, otherwise the latest persisted ones. Turns are not read.
+   */
+  async readThreadModelSettings(params: {
+    threadId: string;
+  }): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
+    await this.ensureInitialized();
+    const result = await this.connection.request(
+      "thread/read",
+      buildThreadReadPayload({ threadId: params.threadId }),
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.id !== params.threadId) {
+      return undefined;
+    }
+    const model = pickString(thread, ["model"]);
+    const reasoningEffort = pickString(thread, ["reasoningEffort", "reasoning_effort"]);
+    return model || reasoningEffort
+      ? { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}) }
+      : undefined;
+  }
+
   /** Export bytes through Codex; never open or parse its private storage. */
   async exportThreadForHandoff(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport> {
     await this.ensureInitialized();
