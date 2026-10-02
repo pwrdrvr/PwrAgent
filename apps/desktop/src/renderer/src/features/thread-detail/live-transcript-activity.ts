@@ -2,6 +2,7 @@ import {
   buildSubAgentActivityDetail,
   buildTokenUsageActivityEntry,
   isSubAgentActivityDetail,
+  readCodexNativeSubAgentName,
   readSubAgentActivity,
   shortSubAgentThreadId,
   subAgentActivitySummaryParts,
@@ -657,7 +658,7 @@ function collabAgentDetails(
             readString(value, "id")) === threadId,
       );
     const receiverThread = readRecord(receiver?.thread) ?? receiver;
-    const name = readCollabAgentName(state) ?? readCollabAgentName(receiverThread);
+    const name = readCodexNativeSubAgentName(state, receiverThread);
     const status = readString(state, "status") ?? readString(state, "state");
     const message =
       readString(state, "message") ??
@@ -670,27 +671,6 @@ function collabAgentDetails(
       ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
     };
   });
-}
-
-function readCollabAgentName(value: Record<string, unknown> | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const direct =
-    readString(value, "agentNickname") ??
-    readString(value, "agent_nickname") ??
-    readString(value, "nickname");
-  if (direct) {
-    return direct.replace(/^@+/, "");
-  }
-  const source = readRecord(value.source);
-  const subAgent = readRecord(source?.subAgent) ?? readRecord(source?.sub_agent);
-  const spawn =
-    readRecord(subAgent?.thread_spawn) ??
-    readRecord(subAgent?.threadSpawn) ??
-    readRecord(source?.thread_spawn) ??
-    readRecord(source?.threadSpawn);
-  return readString(spawn, "agentNickname") ?? readString(spawn, "agent_nickname");
 }
 
 function formatCollabAgentStates(

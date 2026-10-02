@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
-import type {
-  NavigationThreadSummary,
-  ThreadSubAgentSummary,
+import {
+  isCodexNativeSubAgent,
+  type NavigationThreadSummary,
+  type ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import { isTerminalSubAgent } from "./context-panels/subagent-format";
 import { useNowWhileActive } from "./context-panels/RailCardTiming";
@@ -222,6 +223,12 @@ export function ActiveSubAgentsStrip(props: {
             const failedRow = isFailedSubAgent(subAgent);
             const blockedRow = isBlockedSubAgent(subAgent);
             const stopping = stoppingIds.has(subAgent.monitorId);
+            // A Codex worker goes by the name the rail and sidebar show; its
+            // task is a placeholder unless Codex titled the thread, and the
+            // placeholder carries the id the name falls back to.
+            const label = isCodexNativeSubAgent(subAgent)
+              ? subAgent.agentName ?? subAgent.task
+              : subAgent.task;
             const canStop =
               (subAgent.status === "pending"
                 || subAgent.status === "running"
@@ -246,8 +253,8 @@ export function ActiveSubAgentsStrip(props: {
                         : "status-dot status-dot--active status-dot--blink"
                   }
                 />
-                <span className="live-strip__item-text" title={subAgent.task}>
-                  {subAgent.task}
+                <span className="live-strip__item-text" title={label}>
+                  {label}
                 </span>
                 {/* Never color alone: the row states its state in words, and a
                     blocked row shows no elapsed time because nothing is
@@ -274,7 +281,7 @@ export function ActiveSubAgentsStrip(props: {
                 <span className="live-strip__item-slot">
                   {failedRow ? (
                     <button
-                      aria-label={`Dismiss failed sub-agent: ${subAgent.task}`}
+                      aria-label={`Dismiss failed sub-agent: ${label}`}
                       className="live-strip__item-action"
                       type="button"
                       onClick={() => dismissFailure(subAgent.monitorId)}
@@ -283,7 +290,7 @@ export function ActiveSubAgentsStrip(props: {
                     </button>
                   ) : canStop ? (
                     <button
-                      aria-label={`Stop sub-agent: ${subAgent.task}`}
+                      aria-label={`Stop sub-agent: ${label}`}
                       className="live-strip__item-action live-strip__item-action--danger"
                       disabled={stopping}
                       type="button"

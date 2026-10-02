@@ -16,6 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
   buildSubAgentActivityDetail,
+  readCodexNativeSubAgentName,
   estimateTokenUsageCost,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
@@ -4984,9 +4985,7 @@ function collabAgentDetails(
       .map(asRecord)
       .find((value) => pickString(value ?? {}, ["threadId", "thread_id", "id"]) === threadId);
     const receiverThread = asRecord(receiver?.thread) ?? receiver;
-    const name =
-      readCollabAgentName(state) ??
-      readCollabAgentName(receiverThread);
+    const name = readCodexNativeSubAgentName(state, receiverThread);
     const status = pickString(state ?? {}, ["status", "state"]);
     const message = pickString(state ?? {}, ["message", "output", "summary"]);
     return {
@@ -4996,26 +4995,6 @@ function collabAgentDetails(
       ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
     };
   });
-}
-
-function readCollabAgentName(
-  value: Record<string, unknown> | null | undefined,
-): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const direct = pickString(value, ["agentNickname", "agent_nickname", "nickname"]);
-  if (direct) {
-    return direct.replace(/^@+/, "");
-  }
-  const source = asRecord(value.source);
-  const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.sub_agent);
-  const spawn =
-    asRecord(subAgent?.thread_spawn) ??
-    asRecord(subAgent?.threadSpawn) ??
-    asRecord(source?.thread_spawn) ??
-    asRecord(source?.threadSpawn);
-  return pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
 }
 
 function formatCollabAgentStates(
@@ -5385,7 +5364,7 @@ export function extractThreadReplayFromReadResult(
     extractConversationMessages(value),
     entries,
   );
-  const agentName = extractCodexNativeAgentName(value);
+  const agentName = readCodexNativeSubAgentName(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
 
@@ -5414,25 +5393,6 @@ export function extractThreadReplayFromReadResult(
   };
 }
 
-function extractCodexNativeAgentName(value: unknown): string | undefined {
-  const record = asRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  const thread = asRecord(record.thread) ?? asRecord(record.session) ?? record;
-  const direct = pickString(thread, ["agentNickname", "agent_nickname", "nickname"]);
-  if (direct) {
-    return direct.replace(/^@+/, "");
-  }
-  const source = asRecord(thread.source) ?? asRecord(record.source);
-  const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.sub_agent);
-  const spawn =
-    asRecord(subAgent?.thread_spawn) ??
-    asRecord(subAgent?.threadSpawn) ??
-    asRecord(source?.thread_spawn) ??
-    asRecord(source?.threadSpawn);
-  return pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
-}
 
 function extractThreadIdFromValue(value: unknown): string | undefined {
   const record = asRecord(value);
@@ -6143,6 +6103,10 @@ function readCodexNativeSubAgent(
   }
 
   const depth = pickNumber(spawn ?? {}, ["depth"]);
+  const agentPath =
+    pickString(record, ["agentPath", "agent_path"]) ??
+    pickString(sessionRecord ?? {}, ["agentPath", "agent_path"]) ??
+    pickString(spawn ?? {}, ["agentPath", "agent_path"]);
   const agentNickname =
     pickString(record, ["agentNickname", "agent_nickname"]) ??
     pickString(sessionRecord ?? {}, ["agentNickname", "agent_nickname"]) ??
@@ -6155,6 +6119,7 @@ function readCodexNativeSubAgent(
   return {
     parentThreadId,
     ...(depth !== undefined ? { depth } : {}),
+    ...(agentPath ? { agentPath } : {}),
     ...(agentNickname ? { agentNickname } : {}),
     ...(agentRole ? { agentRole } : {}),
   };

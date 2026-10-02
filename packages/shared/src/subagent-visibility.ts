@@ -54,6 +54,7 @@ export function projectActiveThreadSubAgents(
       updatedAt: agent.updatedAt,
       monitorThreadId: agent.monitorThreadId,
       monitorTurnId: agent.monitorTurnId,
+      ...(agent.agentName ? { agentName: agent.agentName } : {}),
     }));
 }
 

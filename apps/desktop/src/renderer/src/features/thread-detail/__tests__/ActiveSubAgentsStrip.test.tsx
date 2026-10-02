@@ -61,6 +61,28 @@ describe("ActiveSubAgentsStrip", () => {
     expect(view.container).toBeEmptyDOMElement();
   });
 
+  it("names a Codex worker as the rail and sidebar do, not by its placeholder task", () => {
+    const worker = buildSubAgent({
+      monitorId: "codex-native:worker-1",
+      task: "Codex sub-agent 1d8b90cc",
+      agentName: "breakfast_politics",
+    });
+    const unnamed = buildSubAgent({
+      monitorId: "codex-native:worker-2",
+      task: "Codex sub-agent 7263e35b",
+    });
+    const monitor = buildSubAgent({ agentName: "Watcher", task: "Watch the deployment" });
+    const thread = { ...buildThread([]), subAgents: undefined, activeSubAgents: [worker, unnamed, monitor] };
+    render(<ActiveSubAgentsStrip thread={thread} desktopApi={{ stopSubAgent: vi.fn() }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Active sub-agents (3)" }));
+    expect(screen.getByText("breakfast_politics")).toBeVisible();
+    expect(screen.queryByText("Codex sub-agent 1d8b90cc")).not.toBeInTheDocument();
+    // No name yet: the placeholder carries the id it falls back to.
+    expect(screen.getByText("Codex sub-agent 7263e35b")).toBeVisible();
+    // A PwrAgent monitor keeps its task, which is what it was asked to do.
+    expect(screen.getByRole("button", { name: "Stop sub-agent: Watch the deployment" })).toBeVisible();
+  });
+
   describe("presence", () => {
     it("renders nothing when the thread has no sub-agents", () => {
       const { container } = render(

@@ -49,7 +49,7 @@ export function readSubAgentActivity(
   ) {
     return undefined;
   }
-  const agentName = item.agentPath.split("/").filter(Boolean).at(-1);
+  const agentName = codexAgentPathName(item.agentPath);
   return {
     id: item.id,
     kind,
@@ -57,6 +57,102 @@ export function readSubAgentActivity(
     agentPath: item.agentPath,
     ...(agentName ? { agentName } : {}),
   };
+}
+
+/**
+ * A Codex worker's name is the one its parent chose, the last segment of its
+ * agent path (`/root/breakfast_politics`); then the nickname Codex assigned
+ * ("Jason"); then, at each display site, a short id. Every surface resolves
+ * it here, so a worker keeps one name wherever it appears and whichever
+ * event named it first.
+ */
+export function codexAgentPathName(agentPath: unknown): string | undefined {
+  if (typeof agentPath !== "string") {
+    return undefined;
+  }
+  const segments = agentPath.split("/").map((segment) => segment.trim()).filter(Boolean);
+  const name = segments.at(-1);
+  // `/root` alone is the parent itself, not a worker.
+  return name && !(segments.length === 1 && name === "root") ? name : undefined;
+}
+
+function codexAgentNickname(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.trim().replace(/^@+/, "") || undefined;
+}
+
+/** `pathName || nickname`, from fields already read off the protocol. */
+export function codexNativeSubAgentName(agent: {
+  agentPath?: string | null;
+  agentNickname?: string | null;
+}): string | undefined {
+  return codexAgentPathName(agent.agentPath) ?? codexAgentNickname(agent.agentNickname);
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** The record itself and every place Codex nests a worker's spawn details. */
+function codexSpawnRecords(value: unknown): Record<string, unknown>[] {
+  const record = asObject(value);
+  if (!record) {
+    return [];
+  }
+  const thread = asObject(record.thread) ?? asObject(record.session);
+  const records = [record, ...(thread ? [thread] : [])];
+  for (const candidate of [...records]) {
+    const source = asObject(candidate.source);
+    const subAgent =
+      asObject(source?.subAgent)
+      ?? asObject(source?.sub_agent)
+      ?? asObject(candidate.subAgent)
+      ?? asObject(candidate.sub_agent);
+    for (const nested of [
+      source,
+      subAgent,
+      asObject(subAgent?.thread_spawn),
+      asObject(subAgent?.threadSpawn),
+      asObject(source?.thread_spawn),
+      asObject(source?.threadSpawn),
+      asObject(candidate.thread_spawn),
+      asObject(candidate.threadSpawn),
+    ]) {
+      if (nested) {
+        records.push(nested);
+      }
+    }
+  }
+  return records;
+}
+
+/**
+ * Reads a worker's name from raw protocol values: a thread, a collab
+ * receiver, an agent state, or a source. A path anywhere in any of them beats
+ * a nickname anywhere, so the order the values are passed in cannot pick the
+ * nickname over the parent's choice.
+ */
+export function readCodexNativeSubAgentName(...values: unknown[]): string | undefined {
+  const records = values.flatMap(codexSpawnRecords);
+  for (const record of records) {
+    const name = codexAgentPathName(record.agentPath ?? record.agent_path);
+    if (name) {
+      return name;
+    }
+  }
+  for (const record of records) {
+    const name = codexAgentNickname(
+      record.agentNickname ?? record.agent_nickname ?? record.nickname,
+    );
+    if (name) {
+      return name;
+    }
+  }
+  return undefined;
 }
 
 /** The worker's state as of the report, in Codex `CollabAgentStatus` terms. */

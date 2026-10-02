@@ -49942,6 +49942,75 @@ script = "printf setup"
     }
   });
 
+  it("names Codex workers pathName, then nickname, whichever source reports first", async () => {
+    const now = Date.now();
+    const spawned = (id: string, agentPath: string | undefined, agentNickname: string): AppServerThreadSummary => ({
+      id, title: "", titleSource: "fallback", linkedDirectories: [], source: "codex",
+      createdAt: now - 20, updatedAt: now - 10, threadStatus: "active",
+      codexNativeSubAgent: {
+        parentThreadId: "thread-parent", depth: 1,
+        ...(agentPath ? { agentPath } : {}), agentNickname,
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [{
+        id: "thread-parent", title: "Breakfast", titleSource: "explicit",
+        linkedDirectories: [], source: "codex", updatedAt: now,
+      }],
+      nativeSubAgentThreads: [
+        spawned("worker-politics", "/root/breakfast_politics", "Jason"),
+        spawned("worker-poem", "/root/breakfast_poem", "Planck"),
+        // A spawnAgent worker has no path; Codex's nickname is its name.
+        spawned("worker-legacy", undefined, "Euler"),
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    // A card an earlier build named after the nickname.
+    await overlayStore.upsertThreadSubAgent({
+      backend: "codex", threadId: "thread-parent",
+      subAgent: {
+        monitorId: "codex-native:worker-poem", monitorThreadId: "worker-poem",
+        task: "Codex sub-agent poem", agentName: "Planck", status: "running", backend: "codex",
+        createdAt: now - 20, updatedAt: now - 10,
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      // The lifecycle report names the worker by its path before discovery runs.
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent", turnId: "turn-parent",
+          item: { type: "subAgentActivity", id: "politics-started", kind: "started",
+            agentThreadId: "worker-politics", agentPath: "/root/breakfast_politics" },
+        },
+      } as AppServerNotification);
+      const names = async () => (await overlayStore.getThreadOverlayState({
+        backend: "codex", threadId: "thread-parent",
+      }))?.subAgents?.map((card) => [card.monitorThreadId, card.agentName]);
+      expect(await names()).toEqual(expect.arrayContaining([
+        ["worker-politics", "breakfast_politics"],
+      ]));
+
+      const threads = await registry.listThreads({ backend: "codex", forceRefresh: true });
+      expect(await names()).toEqual(expect.arrayContaining([
+        ["worker-politics", "breakfast_politics"],
+        ["worker-poem", "breakfast_poem"],
+        ["worker-legacy", "Euler"],
+      ]));
+      // The sidebar tray reads the same names.
+      expect(threads[0]?.codexNativeSubAgents?.map((agent) => [agent.threadId, agent.agentNickname]))
+        .toEqual(expect.arrayContaining([
+          ["worker-politics", "breakfast_politics"],
+          ["worker-poem", "breakfast_poem"],
+          ["worker-legacy", "Euler"],
+        ]));
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("groups native Codex workers below their ordinary parent without making rows", async () => {
     const now = Date.now();
     const codexClient = new MockBackendClient({

@@ -22,6 +22,7 @@ import {
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { priceLocalModelUsage } from "@pwragent/shared";
+import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -3137,7 +3138,7 @@ function groupCodexNativeSubAgents(params: {
           updatedAt: child.updatedAt,
           threadStatus: child.threadStatus,
           depth: provenance?.depth ?? inferredDepth,
-          agentNickname: provenance?.agentNickname,
+          agentNickname: provenance ? codexNativeSubAgentName(provenance) : undefined,
           agentRole: provenance?.agentRole,
         };
         if (isCodexNativeSubAgentVisibleInNavigation(summary, params.now)) {
@@ -3327,49 +3328,18 @@ function extractCodexNativeSubAgentNotifications(
   return notifications;
 }
 
-function readCodexNativeAgentNameFromSource(
-  source: Record<string, unknown> | undefined,
+/**
+ * `pathName || nickname` from any of the records, then a `name` field, which
+ * on a receiver thread is its title.
+ */
+function readCodexNativeAgentName(
+  ...records: Array<Record<string, unknown> | undefined>
 ): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  const direct =
-    normalizeCodexNativeAgentName(source.agentNickname) ??
-    normalizeCodexNativeAgentName(source.agent_nickname) ??
-    normalizeCodexNativeAgentName(source.nickname) ??
-    normalizeCodexNativeAgentName(source.name);
-  if (direct) {
-    return direct;
-  }
-
-  const subAgent = readRecord(source.subAgent) ?? readRecord(source.sub_agent);
-  const spawn =
-    readRecord(subAgent?.thread_spawn) ??
-    readRecord(subAgent?.threadSpawn) ??
-    readRecord(source.thread_spawn) ??
-    readRecord(source.threadSpawn);
   return (
-    normalizeCodexNativeAgentName(spawn?.agent_nickname) ??
-    normalizeCodexNativeAgentName(spawn?.agentNickname) ??
-    normalizeCodexNativeAgentName(subAgent?.agentNickname) ??
-    normalizeCodexNativeAgentName(subAgent?.agent_nickname)
-  );
-}
-
-function readCodexNativeAgentNameFromThread(
-  thread: Record<string, unknown> | undefined,
-): string | undefined {
-  if (!thread) {
-    return undefined;
-  }
-  return (
-    normalizeCodexNativeAgentName(thread.agentNickname) ??
-    normalizeCodexNativeAgentName(thread.agent_nickname) ??
-    normalizeCodexNativeAgentName(thread.nickname) ??
-    normalizeCodexNativeAgentName(thread.name) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.source)) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.thread_spawn)) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.threadSpawn))
+    normalizeCodexNativeAgentName(readCodexNativeSubAgentName(...records))
+    ?? records
+      .map((record) => normalizeCodexNativeAgentName(record?.name))
+      .find(Boolean)
   );
 }
 
@@ -3400,21 +3370,13 @@ function readCodexNativeReceiverThreadNames(
       "id",
     ]);
     const thread = readRecord(receiver.thread) ?? receiver;
-    recordName(
-      threadId,
-      readCodexNativeAgentNameFromThread(thread) ??
-        readCodexNativeAgentNameFromSource(readRecord(receiver.source)),
-    );
+    recordName(threadId, readCodexNativeAgentName(thread, receiver));
   }
 
   const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
   for (const [threadId, state] of Object.entries(states ?? {})) {
     const stateRecord = readRecord(state);
-    recordName(
-      threadId,
-      readCodexNativeAgentNameFromThread(stateRecord) ??
-        readCodexNativeAgentNameFromSource(readRecord(stateRecord?.source)),
-    );
+    recordName(threadId, readCodexNativeAgentName(stateRecord));
   }
 
   return names;
@@ -26771,7 +26733,8 @@ export class DesktopBackendRegistry {
     // an idle worker. Discovery then enriches the authoritative card.
     for (const receiverThreadId of pending) {
       const activity = observed.get(receiverThreadId)!;
-      const name = nativeThreads.find((thread) => thread.id === receiverThreadId)?.codexNativeSubAgent?.agentNickname
+      const discovered = nativeThreads.find((thread) => thread.id === receiverThreadId)?.codexNativeSubAgent;
+      const name = (discovered ? codexNativeSubAgentName(discovered) : undefined)
         ?? activity.agent.name;
       await this.persistCodexNativeSubAgent({
         authoritativeReplayOutcome: true,
@@ -26979,7 +26942,9 @@ export class DesktopBackendRegistry {
             : discoveredStatus;
         const outcome = codexNativeSubAgentOutcome(status);
         const agentName =
-          nativeThread.codexNativeSubAgent?.agentNickname
+          (nativeThread.codexNativeSubAgent
+            ? codexNativeSubAgentName(nativeThread.codexNativeSubAgent)
+            : undefined)
           ?? existing?.agentName;
         // A fallback title says nothing the placeholder does not.
         const discoveredTitle = nativeThread.titleSource === "fallback"
@@ -29345,9 +29310,10 @@ export class DesktopBackendRegistry {
       "reasoning_effort",
     ]);
     const fastMode = readBooleanLike(params.call.item, ["fastMode", "fast_mode"]);
+    // Every source resolves `pathName || nickname`, so the reported name is
+    // never a step down from the stored one.
     const agentName =
-      (params.call.activityBoundary ? existing?.agentName : undefined)
-      ?? params.call.receiverThreadNames.get(params.receiverThreadId)
+      params.call.receiverThreadNames.get(params.receiverThreadId)
       ?? existing?.agentName;
     if (
       params.call.activityBoundary

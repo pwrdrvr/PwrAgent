@@ -2477,6 +2477,7 @@ describe("CodexAppServerClient", () => {
             thread_spawn: {
               parent_thread_id: "thread-parent",
               depth: 1,
+              agent_path: "/root/route_scout",
               agent_nickname: "route-scout",
               agent_role: "explorer",
             },
@@ -2522,6 +2523,7 @@ describe("CodexAppServerClient", () => {
         codexNativeSubAgent: {
           parentThreadId: "thread-parent",
           depth: 1,
+          agentPath: "/root/route_scout",
           agentNickname: "route-scout",
           agentRole: "explorer",
         },
