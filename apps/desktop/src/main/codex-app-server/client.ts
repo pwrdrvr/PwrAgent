@@ -7550,6 +7550,8 @@ export class CodexAppServerClient {
   private availableHelperModels: BackendModelOption[] = [];
   /** A `model/list` completed, so an empty catalog really is empty. */
   private helperModelsRead = false;
+  /** The first helper turn's catalog read, shared by turns that start with it. */
+  private helperModelsReading: Promise<unknown> | null = null;
   /** Skipped helper models already logged since the last catalog read. */
   private readonly helperModelWarnings = new Set<string>();
   private readonly notificationListeners = new Set<
@@ -9239,15 +9241,20 @@ export class CodexAppServerClient {
     model?: string;
     reasoningEffort?: string;
   }): Promise<HelperModelResolution> {
-    if (this.availableHelperModels.length === 0) {
-      try {
-        await this.listModels();
-      } catch (error) {
-        codexClientLog.warn("model/list for helper model failed", {
-          helper: params.helper,
-          error: error instanceof Error ? error.message : String(error),
+    // A completed read that offered nothing stays read; only a failed or
+    // missing read is retried, and concurrent helper turns share one.
+    if (!this.helperModelsRead) {
+      this.helperModelsReading ??= this.listModels()
+        .catch((error: unknown) => {
+          codexClientLog.warn("model/list for helper model failed", {
+            helper: params.helper,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          this.helperModelsReading = null;
         });
-      }
+      await this.helperModelsReading;
     }
     const resolution = resolveHelperModel({
       helper: params.helper,

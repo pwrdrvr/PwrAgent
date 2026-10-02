@@ -128,6 +128,25 @@ describe("DefaultModelsSettings", () => {
     });
   });
 
+  it("does not call a saved model unavailable before the catalog is read", () => {
+    renderPage(
+      {
+        defaultModel: "gpt-5.5",
+        helpers: { diff_condensation: { model: "gpt-5.6-luna", reasoningEffort: "high" } },
+      },
+      [{ ...codex, available: false, discoveryPending: true, launchpadOptions: undefined }],
+    );
+
+    expect(screen.getByRole("combobox", { name: "Helper default model" }))
+      .toHaveTextContent(/^gpt-5\.5$/);
+    expect(screen.getByRole("combobox", { name: "Diff condensation model" }))
+      .toHaveTextContent(/^gpt-5\.6-luna$/);
+    expect(screen.getByRole("combobox", { name: "Diff condensation reasoning" }))
+      .toHaveTextContent(/^high$/);
+    expect(screen.queryByText(/not offered/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Checking Codex models…").length).toBeGreaterThan(1);
+  });
+
   it("says helpers are skipped while Codex is not connected", () => {
     renderPage({ helpers: {} }, [{ ...codex, available: false, launchpadOptions: undefined }]);
 

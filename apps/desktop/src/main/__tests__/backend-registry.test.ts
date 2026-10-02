@@ -28,6 +28,8 @@ import {
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  resolveHelperModel,
+  type HelperModelId,
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -2045,6 +2047,11 @@ class MockBackendClient {
     skills: AppServerSkillSummary[];
   }>> {
     return this.options.skills ?? [];
+  }
+
+  // The real client's rule over this mock's catalog, without a catalog read.
+  async resolveHelperModelSelection(params: { helper: HelperModelId }) {
+    return resolveHelperModel({ helper: params.helper, models: this.options.models ?? [] });
   }
 
   async listModels(diagnostics?: { callerReason?: string; ownerId?: string }) {

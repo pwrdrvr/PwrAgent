@@ -15225,13 +15225,19 @@ export class DesktopBackendRegistry {
     }
     // An ACP agent answers in a tool-less session on a process of its own,
     // which it forgets afterwards; see acp-structured-generation.ts.
-    const acpSelection = (model: string) => resolveHelperModel({
-      helper: "usage_analysis",
-      backend: modelBackend,
-      settings: this.resolveHelperModelSettingsFn(),
-      models: this.acpBackend.getLaunchpadOptions(modelBackend)?.models ?? [],
-      requestedModel: model,
-    });
+    // The effort for the model that runs: the picked one, checked against
+    // its own catalog entry, never a fallback the resolver would choose.
+    const acpSelection = (model: string) => {
+      const entry = this.acpBackend.getLaunchpadOptions(modelBackend)?.models
+        ?.find((candidate) => candidate.id === model);
+      return resolveHelperModel({
+        helper: "usage_analysis",
+        backend: modelBackend,
+        settings: this.resolveHelperModelSettingsFn(),
+        models: entry ? [entry] : [],
+        requestedModel: model,
+      });
+    };
     return await analyzeUsageActivity(request, read, async (params) => await generateAcpStructuredObject({
       backend: modelBackend,
       cwd: await this.resolveAcpHelperWorkspace(),
@@ -33471,15 +33477,9 @@ export class DesktopBackendRegistry {
     if (params.backend === "codex") {
       // The same resolution the title turn makes, so the sub-agent record
       // never names a model that did not run.
-      const selection = this.codexClient.resolveHelperModelSelection
-        ? await this.codexClient.resolveHelperModelSelection({
-            helper: "thread_titles",
-          })
-        : resolveHelperModel({
-            helper: "thread_titles",
-            settings: this.resolveHelperModelSettingsFn(),
-            models: this.codexBackendSummary?.launchpadOptions?.models ?? [],
-          });
+      const selection = await this.codexClient.resolveHelperModelSelection?.({
+        helper: "thread_titles",
+      });
       return {
         ...(selection?.model ? { model: selection.model } : {}),
         ...(selection?.reasoningEffort

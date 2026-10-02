@@ -155,7 +155,10 @@ function HelperDefaultField(props: {
     "codex",
     props.codex,
   );
-  const offered = saved ? models.some((model) => model.id === saved) : true;
+  // Only a catalog that was read can say a model is not offered.
+  const offered = saved && props.codex.kind === "ready"
+    ? models.some((model) => model.id === saved)
+    : true;
   const automaticLabel = modelLabel(automatic?.model, models);
   const lines: { text: ReactNode; warn?: boolean }[] = [];
   if (props.codex.kind === "loading") {
@@ -205,8 +208,8 @@ function HelperDefaultField(props: {
                 value: "",
                 label: automaticLabel ? `Automatic (${automaticLabel})` : "Automatic",
               },
-              ...(saved && !offered
-                ? [{ value: saved, label: `${saved} (not offered)` }]
+              ...(saved && !models.some((model) => model.id === saved)
+                ? [{ value: saved, label: offered ? saved : `${saved} (not offered)` }]
                 : []),
               ...models.map((model) => ({ value: model.id, label: model.label ?? model.id })),
             ]}
@@ -259,7 +262,7 @@ function HelperModelField(props: {
     state,
   );
   const savedModel = choice?.model;
-  const savedOffered = savedModel
+  const savedOffered = savedModel && state.kind === "ready"
     ? models.some((model) => model.id === savedModel)
     : true;
   const resolvedModel = models.find((model) => model.id === resolution?.model);
@@ -342,13 +345,18 @@ function HelperModelField(props: {
   definition.backends.forEach((kind, index) => {
     const groupState = states[index];
     const prefix = multiBackend ? `${groupState.label} · ` : "";
-    if (savedModel && kind === backend && !savedOffered) {
+    const groupModels = groupState.kind === "ready" ? groupState.models : [];
+    if (
+      savedModel
+      && kind === backend
+      && !groupModels.some((model) => model.id === savedModel)
+    ) {
       modelOptions.push({
         value: optionValue(index, savedModel),
-        label: `${prefix}${savedModel} (not offered)`,
+        label: `${prefix}${savedModel}${savedOffered ? "" : " (not offered)"}`,
       });
     }
-    for (const model of groupState.kind === "ready" ? groupState.models : []) {
+    for (const model of groupModels) {
       modelOptions.push({
         value: optionValue(index, model.id),
         label: `${prefix}${model.label ?? model.id}`,
@@ -412,7 +420,12 @@ function HelperModelField(props: {
                     : "Default",
                 },
                 ...(savedEffort && !efforts.includes(savedEffort)
-                  ? [{ value: savedEffort, label: `${savedEffort} (not offered)` }]
+                  ? [{
+                      value: savedEffort,
+                      label: state.kind === "ready"
+                        ? `${savedEffort} (not offered)`
+                        : savedEffort,
+                    }]
                   : []),
                 ...efforts.map((effort) => ({ value: effort, label: effort })),
               ]}

@@ -12293,6 +12293,30 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("reads the helper catalog once, even when it is empty and turns start together", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    MockTransport.modelListResult = createModelListResponse([]);
+    const run = async () => await client.generateStructuredObject({
+      helper: "diff_condensation",
+      prompt: "Summarize",
+      schema: { type: "object", properties: { summary: { type: "string" } } },
+      isMatch: (record) => typeof record.summary === "string",
+    });
+
+    const unavailable = {
+      status: "unavailable",
+      reason: "codex_helper_no_available_model",
+    };
+    await expect(Promise.all([run(), run()])).resolves.toEqual([unavailable, unavailable]);
+    await expect(run()).resolves.toEqual(unavailable);
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string },
+    );
+    expect(requests.filter((request) => request.method === "model/list")).toHaveLength(1);
+    await client.close();
+  });
+
   it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
