@@ -53,7 +53,8 @@ describe("resolveBackendErrorNotice", () => {
     };
     const failed = resolveBackendErrorNotice(signal, undefined);
     expect(failed).toMatchObject({
-      id: "turn-failed:codex:private-monitor:monitor-turn",
+      id: "turn-failed:codex:private-monitor:monitor-turn"
+        + (instanceId ? `:instance:${instanceId}` : ""),
       title: "Task monitor failed",
       status: { label: signal.originLabel },
       threadLink: {

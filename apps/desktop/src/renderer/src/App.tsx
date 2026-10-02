@@ -137,6 +137,7 @@ import { copyText } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import {
   buildNoStartupBackendNotice,
@@ -521,6 +522,9 @@ function DesktopAppShell(props: {
   const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
     dispatchAppNotice({ type: "show", notice });
   }, []);
+  useEffect(() => turnFailureAcknowledgements.subscribeDismissals((id) => {
+    dispatchAppNotice({ type: "dismiss", id });
+  }), []);
   const codexProfiles = props.settings.snapshot?.models?.codex?.profiles;
   const activeCodexProfileRef = useRef(codexProfiles);
   activeCodexProfileRef.current = codexProfiles;
@@ -1394,10 +1398,25 @@ function DesktopAppShell(props: {
           typeof rawMessage === "string" && rawMessage.trim()
             ? rawMessage
             : "The agent turn failed.";
+        const identity = {
+          backend: event.backend,
+          threadId: params.threadId ?? "unknown",
+          turnId: params.turnId ?? "unknown",
+          ...(instanceId ? { instanceId } : {}),
+        };
+        const noticeId = turnFailureNoticeId(identity);
+        const scope = turnFailureScopeKey(identity.backend, identity.threadId, instanceId);
+        turnFailureAcknowledgements.report(scope, noticeId, errorMessage);
+        if (turnFailureAcknowledgements.isDismissed(scope, errorMessage)) return;
         dispatchAppNotice({
           type: "backend-error",
           signal: {
             kind: "turn-failed",
+            onDismiss: () => {
+              if (!turnFailureAcknowledgements.dismiss(noticeId)) {
+                dispatchAppNotice({ type: "dismiss", id: noticeId });
+              }
+            },
             errorNoticeContext: event.errorNoticeContext,
             originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,

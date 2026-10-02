@@ -1,11 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
 import type { DesktopApi } from "../lib/desktop-api";
+import { Composer } from "../features/composer/Composer";
+import { buildThreadComposerScopeKey, useComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import {
   act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within
@@ -1270,6 +1273,70 @@ describe("App", () => {
       ref: expect.objectContaining({ threadId: "monitor-parent" }),
       ...(rendererTarget ? { federationTarget: rendererTarget } : {}),
     }), expect.anything()));
+  });
+
+  it.each(["retry", "dismiss", "delete"] as const)("acknowledges both turn failure surfaces on %s", async (action) => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const threadId = `linked-failure-${action}`;
+    const message = "Selected model is at capacity. Please try a different model.";
+    const draftStore = renderHook(() => useComposerDraftStore()).result.current;
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", threadId), [{
+      id: "held-message", queueEntryId: "held-message", manualReleaseRequired: true,
+      holdReason: message, text: "Contrived queued message", imageAttachments: [], fileAttachments: [],
+    }]);
+    // Keep admission pending: acknowledgement must happen when Retry is clicked.
+    const releaseQueuedTurn = vi.fn(() => new Promise<never>(() => {}));
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "held-message", cancelled: true, disposition: "cancelled" as const,
+    }));
+    const api = ownerApi({
+      getNavigationSnapshot: async () => ({
+        backend: "all", fetchedAt: Date.now(), unchanged: false,
+        inboxThreadKeys: [], threads: [], directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+      }),
+      listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+      onAgentEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      releaseQueuedTurn,
+      cancelQueuedTurn,
+      readSettings: async () => new Promise<never>(() => {}),
+    });
+    Object.defineProperty(window, "pwragent", { configurable: true, value: api });
+    render(<>
+      <App />
+      <Composer desktopApi={api} disabled={false} draftStore={draftStore} skills={[]}
+        thread={{ id: threadId, title: "Failure fixture", titleSource: "explicit", source: "codex",
+          executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } }} />
+    </>);
+    await waitFor(() => expect(listeners.size).toBeGreaterThan(0));
+    const fail = (turnId: string) => act(() => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "turn/failed", params: { threadId, turnId, turn: {
+          id: turnId, status: "failed", error: { message },
+        } },
+      } });
+    });
+    fail("failed-turn");
+    expect(screen.getAllByText(message)).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: action === "retry" ? "Retry" : action === "delete" ? "Delete" : "Dismiss notice" }));
+    if (action === "delete") {
+      await waitFor(() => expect(screen.queryByText("Turn failed")).not.toBeInTheDocument());
+      expect(screen.queryByText(message)).not.toBeInTheDocument();
+      expect(screen.queryByText("Contrived queued message")).not.toBeInTheDocument();
+      expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+      return;
+    }
+    expect(screen.queryByText("Turn failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+    expect(screen.getByText("Contrived queued message")).toBeInTheDocument();
+    expect(releaseQueuedTurn).toHaveBeenCalledTimes(action === "retry" ? 1 : 0);
+    fail("failed-turn");
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+    fail("next-failed-turn");
+    expect(screen.getAllByText(message)).toHaveLength(2);
   });
 
   it("shows Codex retries for background threads and reports recovery", async () => {
