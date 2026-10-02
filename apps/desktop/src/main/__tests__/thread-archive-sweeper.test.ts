@@ -175,9 +175,18 @@ describe("workspaceIsSafeForAutoArchive", () => {
     await git("config", "user.email", "test@example.com");
     await git("config", "user.name", "Test User");
     await writeFile(path.join(repo, "file.txt"), "committed\n");
+    await writeFile(path.join(repo, ".gitignore"), ".env\nlocal-data/\n");
     await git("add", ".");
     await git("-c", "commit.gpgsign=false", "commit", "-m", "initial");
     const signal = new AbortController().signal;
+    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
+    await writeFile(path.join(repo, ".env"), "private local configuration\n");
+    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
+    await rm(path.join(repo, ".env"));
+    await mkdir(path.join(repo, "local-data"));
+    await writeFile(path.join(repo, "local-data", "data.txt"), "local data\n");
+    expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);
+    await rm(path.join(repo, "local-data"), { recursive: true });
     expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
     await writeFile(path.join(repo, "file.txt"), "dirty\n");
     expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(false);

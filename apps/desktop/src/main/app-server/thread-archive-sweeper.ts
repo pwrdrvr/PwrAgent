@@ -22,7 +22,7 @@ type SweeperDeps = {
   onError: (error: unknown, threadId?: string) => void;
 };
 
-/** Reads live Git state, including untracked files and dirty submodules. A
+/** Reads live Git state, including ignored files, untracked files and dirty submodules. A
  * detached tip is safe only when a local or remote branch retains it. No fetch
  * is needed: committed work on an unpushed local branch is eligible too. */
 export async function workspaceIsSafeForAutoArchive(
@@ -37,7 +37,7 @@ export async function workspaceIsSafeForAutoArchive(
   }
   const options = { signal, timeout: 10_000 };
   const status = await runGitCommand(cwd, [
-    "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none",
+    "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
   ], options);
   if (status.stdout.trim()) return false;
   const retained = await runGitCommand(cwd, [

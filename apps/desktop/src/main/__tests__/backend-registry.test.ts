@@ -50273,6 +50273,7 @@ script = "printf setup"
     await git(repo, ["config", "core.autocrlf", "false"]);
     await git(repo, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repo, "file.txt"), "base\n");
+    await writeFile(path.join(repo, ".gitignore"), ".env\n");
     await git(repo, ["add", "."]);
     await git(repo, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
     await git(repo, ["worktree", "add", "-b", "local-work", worktree]);
@@ -50296,6 +50297,11 @@ script = "printf setup"
       expectSqliteWriteBudget({ scenario: "inactive-thread-sweep-dirty", note: "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).", writes: dirtyWrites });
       await git(worktree, ["add", "."]);
       await git(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "local work, no remote"]);
+      await writeFile(path.join(worktree, ".env"), "private local configuration\n");
+      await registry.sweepInactiveThreads();
+      expect(client.lastArchiveThreadParams).toBeUndefined();
+      expect(await readFile(path.join(worktree, ".env"), "utf8")).toBe("private local configuration\n");
+      await rm(path.join(worktree, ".env"));
       const { writes } = await measureSqliteWrites(async () => { await registry.sweepInactiveThreads(); });
       expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
       await expect(stat(worktree)).rejects.toMatchObject({ code: "ENOENT" });
