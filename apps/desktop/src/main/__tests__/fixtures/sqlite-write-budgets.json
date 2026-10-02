@@ -315,11 +315,11 @@
     "statements": 2
   },
   "inactive-thread-archive-restore": {
-    "commits": 1,
-    "note": "One stale conversational thread archived and restored; subsequent sweep writes nothing. Boundary cost, never an hourly heartbeat.",
-    "observedWalBytes": 16480,
-    "rowsChanged": 1,
-    "statements": 1
+    "commits": 2,
+    "note": "One age-eligible conversation archived and restored: two boundary commits for retention observation and restore; subsequent sweep writes nothing.",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "inactive-thread-sweep-dirty": {
     "commits": 0,

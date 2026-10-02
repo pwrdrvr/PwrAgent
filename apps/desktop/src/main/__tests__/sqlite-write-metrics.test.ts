@@ -9,7 +9,7 @@ import type {
   TaskMonitorUsageSnapshot,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import { buildFederatedThreadRef, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
@@ -77,7 +77,10 @@ describe("sqlite write metrics", () => {
       linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
     };
     await store.setThreadArchiveTombstone({ backend: "codex", threadId: thread.id, restoredAt: Date.now() });
-    const registry = new DesktopBackendRegistry({ codexClient: createStubBackendClient({ threads: [thread] }), overlayStore: store });
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({ threads: [thread] }), overlayStore: store,
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    });
     try {
       const { writes } = await measureSqliteWrites(async () => {
         for (let hour = 0; hour < 24; hour++) await registry.sweepInactiveThreads();
@@ -99,7 +102,10 @@ describe("sqlite write metrics", () => {
       archiveThread: async () => { archived = true; return { threadId: thread.id }; },
       restoreThread: async () => { archived = false; return { threadId: thread.id }; },
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null });
+    const registry = new DesktopBackendRegistry({
+      codexClient: client, overlayStore: store, messagingStore: null,
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    });
     try {
       const { writes } = await measureSqliteWrites(async () => {
         await registry.sweepInactiveThreads();
@@ -108,7 +114,7 @@ describe("sqlite write metrics", () => {
         await registry.sweepInactiveThreads();
         expect(archived).toBe(false);
       });
-      expectSqliteWriteBudget({ scenario: "inactive-thread-archive-restore", note: "One stale conversational thread archived and restored; subsequent sweep writes nothing. Boundary cost, never an hourly heartbeat.", writes });
+      expectSqliteWriteBudget({ scenario: "inactive-thread-archive-restore", note: "One age-eligible conversation archived and restored: two boundary commits for retention observation and restore; subsequent sweep writes nothing.", writes });
     } finally { await registry.close(); }
   });
 
