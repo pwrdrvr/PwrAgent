@@ -512,6 +512,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 aria-label="Agent command running"
                 className="thread-row__agent-command"
                 role="img"
+                title="Agent command running"
               >
                 &gt;_
               </span>

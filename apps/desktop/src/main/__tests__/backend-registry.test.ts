@@ -23790,6 +23790,22 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("reports a Stop as done when the follow-up list read fails", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const terminal = { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project" };
+    const listBackgroundTerminals = vi.fn()
+      .mockResolvedValueOnce({ supported: true, terminals: [terminal] })
+      .mockRejectedValue(new Error("thread/backgroundTerminals/list timed out"));
+    const terminateBackgroundTerminal = vi.fn(async () => true);
+    Object.assign(codexClient, { listBackgroundTerminals, terminateBackgroundTerminal });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+    expect(await registry.terminateBackgroundTerminal({ backend: "codex", threadId: "thread-1", processId: "session-1" }))
+      .toEqual({ terminated: true });
+    expect(listBackgroundTerminals).toHaveBeenCalledTimes(2);
+    await registry.close();
+  });
+
   it("does not restore a completed background terminal from an earlier registry read", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const terminal = { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project" };

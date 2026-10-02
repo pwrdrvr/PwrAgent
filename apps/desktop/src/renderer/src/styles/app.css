@@ -5458,6 +5458,10 @@ a.button {
   font-size: 9px;
   font-weight: 500;
   line-height: 1;
+  /* Like the status indicator: hoverable through the header's pointer
+     transparency so its native `title` explains the mark. */
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .thread-row__title,

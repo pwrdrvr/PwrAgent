@@ -2571,11 +2571,33 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
-    return await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.listBackgroundTerminals, params: request });
+    try {
+      return await this.rpc.request<ListBackgroundTerminalsResponse>({
+        method: FEDERATION_BACKEND_METHODS.listBackgroundTerminals,
+        params: request,
+      });
+    } catch (error) {
+      // An owner from before this method lists nothing; the viewer stops
+      // asking instead of showing the RPC failure as an error.
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        return { supported: false, terminals: [] };
+      }
+      throw error;
+    }
   }
 
   async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
-    return await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal, params: request });
+    try {
+      return await this.rpc.request<TerminateBackgroundTerminalResponse>({
+        method: FEDERATION_BACKEND_METHODS.terminateBackgroundTerminal,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to stop agent commands over Federation.", { cause: error });
+      }
+      throw error;
+    }
   }
 
   async stopCodexEnvironmentAction(

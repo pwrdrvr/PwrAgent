@@ -170,19 +170,19 @@ export function EnvActionRunEntry(props: {
   const { run } = props;
   const status = run.status;
   const terminationMode = run.terminationMode;
-  const label =
+  const stateLabel =
     status === "started"
       ? terminationMode
-        ? "Env action stopping"
-        : "Env action running"
+        ? "stopping"
+        : "running"
       : terminationMode
-        ? "Env action stopped"
+        ? "stopped"
         : status === "exited"
-          ? "Env action exited"
-          : "Env action failed";
+          ? "exited"
+          : "failed";
+  const label = `Env action ${stateLabel}`;
   // In the Actions rail the group label already says Environment, so the
   // row keeps only the state. The full label stays the accessible name.
-  const stateLabel = label.slice("Env action ".length);
   const visibleLabel = props.placement === "sidebar"
     ? stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1)
     : label;

@@ -248,6 +248,16 @@ describe("federation backend bridge", () => {
     expect(request.mock.calls).toHaveLength(2);
   });
 
+  it("lists no agent commands on older owners and explains a Stop", async () => {
+    const request = vi.fn(async () => { throw Object.assign(new Error("No handler"), { code: "method_not_found" }); });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    await expect(client.listBackgroundTerminals({ backend: "codex", threadId: "thread" }))
+      .resolves.toEqual({ supported: false, terminals: [] });
+    await expect(client.terminateBackgroundTerminal({ backend: "codex", threadId: "thread", processId: "session-1" }))
+      .rejects.toThrow("Update PwrAgent on the owning instance");
+    expect(request.mock.calls).toHaveLength(2);
+  });
+
   it("gates explicit review modes before sending them to an old Federation owner", async () => {
     const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);

@@ -8597,7 +8597,13 @@ export class DesktopBackendRegistry {
   /** Started Codex tool items can keep running after their parent turn ends. */
   private readonly liveCodexToolItemsByThread = new Map<string, Map<string, string>>();
   private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
+  /**
+   * Latest revision per thread with a list read in flight. An entry lives
+   * only while a read is outstanding, and the counter is shared so a read
+   * started after a prune can never reuse an older read's number.
+   */
   private readonly backgroundTerminalReadRevisions = new Map<string, number>();
+  private backgroundTerminalReadCounter = 0;
   private backgroundTerminalGeneration = 0;
   /**
    * Live lifecycle notifications and thread reads can be newer than Codex's
@@ -23028,18 +23034,24 @@ export class DesktopBackendRegistry {
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
     if (request.backend !== "codex") return { supported: false, terminals: [] };
     const generation = this.backgroundTerminalGeneration;
-    const revision = (this.backgroundTerminalReadRevisions.get(request.threadId) ?? 0) + 1;
+    const revision = ++this.backgroundTerminalReadCounter;
     this.backgroundTerminalReadRevisions.set(request.threadId, revision);
-    const response = await this.withCodexThreadClient(request.threadId, async (client) =>
-      client.listBackgroundTerminals?.(request.threadId) ?? { supported: false, terminals: [] },
-      undefined, false,
-    );
-    if (!this.closed && response.supported && generation === this.backgroundTerminalGeneration
-      && revision === this.backgroundTerminalReadRevisions.get(request.threadId)) {
-      if (response.terminals.length) this.codexBackgroundTerminals.set(request.threadId, response.terminals);
-      else this.codexBackgroundTerminals.delete(request.threadId);
+    try {
+      const response = await this.withCodexThreadClient(request.threadId, async (client) =>
+        client.listBackgroundTerminals?.(request.threadId) ?? { supported: false, terminals: [] },
+        undefined, false,
+      );
+      if (!this.closed && response.supported && generation === this.backgroundTerminalGeneration
+        && revision === this.backgroundTerminalReadRevisions.get(request.threadId)) {
+        if (response.terminals.length) this.codexBackgroundTerminals.set(request.threadId, response.terminals);
+        else this.codexBackgroundTerminals.delete(request.threadId);
+      }
+      return response;
+    } finally {
+      if (this.backgroundTerminalReadRevisions.get(request.threadId) === revision) {
+        this.backgroundTerminalReadRevisions.delete(request.threadId);
+      }
     }
-    return response;
   }
 
   async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
@@ -23050,7 +23062,13 @@ export class DesktopBackendRegistry {
     });
     // The next list is authoritative. A Stop response alone does not claim
     // that the process tree has exited or manufacture item/completed events.
-    await this.listBackgroundTerminals(request);
+    // The stop already happened, so a failed read must not report it failed;
+    // the cache keeps its last list until the next read succeeds.
+    try {
+      await this.listBackgroundTerminals(request);
+    } catch {
+      // The renderer re-reads after Stop and surfaces a failing list itself.
+    }
     return { terminated };
   }
 
@@ -41211,9 +41229,10 @@ export class DesktopBackendRegistry {
     const params = readRecord(notification.params);
     const threadIdForRevision = readOptionalString(params, ["threadId"]);
     if (threadIdForRevision && ["item/started", "item/completed", "thread/status/changed"].includes(notification.method)) {
-      this.backgroundTerminalReadRevisions.set(threadIdForRevision,
-        (this.backgroundTerminalReadRevisions.get(threadIdForRevision) ?? 0) + 1,
-      );
+      // Invalidate only a read in flight; with none, there is nothing stale.
+      if (this.backgroundTerminalReadRevisions.has(threadIdForRevision)) {
+        this.backgroundTerminalReadRevisions.set(threadIdForRevision, ++this.backgroundTerminalReadCounter);
+      }
       if (notification.method === "thread/status/changed" && readRecord(params?.status)?.type === "notLoaded") {
         this.codexBackgroundTerminals.delete(threadIdForRevision);
       }

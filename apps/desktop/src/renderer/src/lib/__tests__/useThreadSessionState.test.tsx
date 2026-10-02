@@ -16224,6 +16224,129 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
   });
 
+  it("keeps a live turn's own command out of the agent commands status while text streams", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ threadId }) => readThreadResponse({
+        threadId,
+        entries: [],
+        hasPreviousPage: false,
+        threadStatus: "idle",
+      }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id: "tool-1", type: "commandExecution", command: "pnpm test", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "Running the tests.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    // Streamed text clears the pending status, which is what the
+    // transcript used to rely on to hide the post-turn line.
+    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.agentCommandsStatus).toBeUndefined();
+  });
+
+  it("names a surviving command only when it is the only one", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ threadId }) => readThreadResponse({ threadId, entries: [], hasPreviousPage: false, threadStatus: "idle" }),
+      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [
+        { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project" },
+      ] })),
+    };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) }));
+    await waitForThreadHydration(result);
+    await waitFor(() => expect(result.current.backgroundTerminals).toHaveLength(1));
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+        },
+      });
+      for (const id of ["command-1", "command-2"]) {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { id, type: "commandExecution", command: "pnpm dev", status: "inProgress" },
+            },
+          },
+        });
+      }
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId: "thread-1", status: { type: "idle" } },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+        },
+      });
+    });
+
+    // The list has not caught up with the second command yet.
+    expect(result.current.agentCommandsStatus).toEqual({ count: 2 });
+  });
+
   it("shows a surviving Codex command without blocking the next turn", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
