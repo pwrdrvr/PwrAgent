@@ -184,11 +184,13 @@ describe("recent remote threads", () => {
       useFederationThreadEventSubscriptions({ desktopApi, enabled: true, selectedThread: thread, threads, retainedRemoteThreads });
       return useThreadSessionState({ desktopApi, thread, retainedRemoteThreads });
     }, { initialProps: { thread: threads[0]! } });
-    await waitFor(() => expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBe(true));
+    await waitFor(() => expect(rendered.result.current.agentCommandThreadKeys[originalKey]).toBe(true));
+    expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBeUndefined();
     for (const thread of threads.slice(1, 5)) {
       rendered.rerender({ thread });
       await waitFor(() => expect(rendered.result.current.response?.threadId).toBe(thread.id));
-      expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBe(true);
+      expect(rendered.result.current.agentCommandThreadKeys[originalKey]).toBe(true);
+      expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBeUndefined();
     }
     rendered.rerender({ thread: threads[5]! });
     await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("5"));
@@ -196,11 +198,13 @@ describe("recent remote threads", () => {
     const transcriptSelection = ownerSubscription.eventClassSelections?.transcript ?? ownerSubscription.threadSelection;
     expect(transcriptSelection.threads.some((ref: { threadId: string }) => ref.threadId === "0")).toBe(false);
     // No completion can arrive once the transcript subscription has gone away.
+    expect(rendered.result.current.agentCommandThreadKeys[originalKey]).toBeUndefined();
     expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBeUndefined();
     listBackgroundTerminals.mockResolvedValue({ supported: true, terminals: [] });
     rendered.rerender({ thread: threads[0]! });
     await waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(7));
     expect(rendered.result.current.backgroundTerminals).toEqual([]);
+    expect(rendered.result.current.agentCommandThreadKeys[originalKey]).toBeUndefined();
     expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBeUndefined();
     rendered.unmount();
   });
