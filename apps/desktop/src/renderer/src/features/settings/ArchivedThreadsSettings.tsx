@@ -305,7 +305,14 @@ export function ArchivedThreadsSettings(props: {
         help="Archived threads stay out of Inbox, Recents, and Directories until you restore them."
       />
 
-      <ArchivePolicySettings value={props.snapshot?.worktrees.archive} onWriteConfig={props.onWriteConfig} />
+      <ArchivePolicySettings
+        value={props.snapshot?.worktrees.archive}
+        onWriteConfig={props.onWriteConfig}
+        desktopApi={props.desktopApi}
+        onSweepChanged={() => {
+          void loadArchivedThreads();
+        }}
+      />
 
       <div className="settings-archive-toolbar">
         <div

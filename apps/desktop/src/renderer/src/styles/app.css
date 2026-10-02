@@ -14648,6 +14648,72 @@ a.button {
   outline-offset: 2px;
 }
 
+.settings-archive-sweep {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-archive-sweep__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+  min-height: 26px;
+  min-width: 0;
+}
+
+.settings-archive-sweep__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+  min-width: 0;
+}
+
+.settings-archive-sweep__time {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-archive-sweep__text {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-archive-sweep__run {
+  margin-left: auto;
+}
+
+.settings-archive-sweep__run[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-archive-sweep__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.settings-archive-sweep__next {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-thread-management__status {
   padding: 14px 18px;
 }

@@ -55,7 +55,7 @@ function harness() {
 describe("archived thread retention", () => {
   it("deletes the provider conversation before discarding its snapshot and overlay", async () => {
     const { deps, snapshot } = harness();
-    await sweepThreadArchiveRetention(deps);
+    await expect(sweepThreadArchiveRetention(deps)).resolves.toBe(1);
     expect(deps.deleteFamily).toHaveBeenCalledTimes(1);
     expect(deps.deleteSnapshot).toHaveBeenCalledWith(snapshot);
     expect(deps.deleteFamily.mock.invocationCallOrder[0]).toBeLessThan(deps.deleteSnapshot.mock.invocationCallOrder[0]!);
@@ -65,7 +65,7 @@ describe("archived thread retention", () => {
   it("keeps snapshots when provider deletion fails", async () => {
     const { deps } = harness();
     deps.deleteFamily.mockRejectedValue(new Error("provider unavailable"));
-    await sweepThreadArchiveRetention(deps);
+    await expect(sweepThreadArchiveRetention(deps)).resolves.toBe(0);
     expect(deps.deleteSnapshot).not.toHaveBeenCalled();
     expect(deps.forgetStates).not.toHaveBeenCalled();
     expect(deps.onError).toHaveBeenCalledWith(expect.any(Error), "root");
@@ -113,7 +113,8 @@ describe("archived thread retention", () => {
   it("cleans an expired missing thread even when its deletion notification was missed", async () => {
     const { deps, threads } = harness();
     threads.splice(0);
-    await sweepThreadArchiveRetention(deps);
+    // The provider already deleted it, so this sweep deleted no conversation.
+    await expect(sweepThreadArchiveRetention(deps)).resolves.toBe(0);
     expect(deps.deleteFamily).not.toHaveBeenCalled();
     expect(deps.deleteSnapshot).toHaveBeenCalledTimes(1);
     expect(deps.forgetStates).toHaveBeenCalledTimes(1);

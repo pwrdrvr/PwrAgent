@@ -134,6 +134,7 @@ import {
   type PrAutoDispatchBudgetStatus,
   type CodexAppServerRestartResult,
   type CodexAppServerRestartStatus,
+  type DesktopThreadArchiveSweepStatus,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
@@ -266,6 +267,9 @@ import {
   APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
   APP_SERVER_RESTART_CODEX_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+  APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
+  APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+  THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
   BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
@@ -8236,6 +8240,7 @@ const transcriptPrCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
 let unsubscribeCodexRestartStatus: (() => void) | undefined;
+let unsubscribeThreadArchiveSweepStatus: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
 function invalidateNavigationEvent(event: AgentEvent): void {
@@ -8352,6 +8357,40 @@ export function registerAppServerIpcHandlers(): void {
       isFederationWindowWebContents(event?.sender)
         ? { stopped: false }
         : getDesktopBackendRegistry().getCodexAppServerRestartStatus(),
+  );
+  // The sweeper archives and deletes this machine's threads only.
+  unsubscribeThreadArchiveSweepStatus?.();
+  unsubscribeThreadArchiveSweepStatus =
+    getDesktopBackendRegistry().onThreadArchiveSweepStatusChanged((status) => {
+      for (const webContents of subscribersForChannel(
+        THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+      )) {
+        if (!webContents.isDestroyed()) {
+          webContents.send(THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, status);
+        }
+      }
+    });
+  ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
+    (event): DesktopThreadArchiveSweepStatus => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("A remote window cannot read this machine's archive sweep.");
+      }
+      return getDesktopBackendRegistry().getThreadArchiveSweepStatus();
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
+    async (event): Promise<DesktopThreadArchiveSweepStatus> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("A remote window cannot run this machine's archive sweep.");
+      }
+      const registry = getDesktopBackendRegistry();
+      await registry.sweepInactiveThreads();
+      return registry.getThreadArchiveSweepStatus();
+    },
   );
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   ipcMain.handle(
@@ -9446,8 +9485,12 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeNavigationRemoteEvents = undefined;
   unsubscribeCodexRestartStatus?.();
   unsubscribeCodexRestartStatus = undefined;
+  unsubscribeThreadArchiveSweepStatus?.();
+  unsubscribeThreadArchiveSweepStatus = undefined;
   ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

@@ -1,6 +1,10 @@
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
-import { DEFAULT_THREAD_ARCHIVE_POLICY, type DesktopThreadArchivePolicy } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_ARCHIVE_POLICY,
+  type DesktopThreadArchivePolicy,
+  type DesktopThreadArchiveSweepStatus,
+} from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -8779,6 +8783,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   private threadArchiveSweeper?: ThreadArchiveSweeper;
+  private readonly threadArchiveSweepStatusListeners = new Set<(status: DesktopThreadArchiveSweepStatus) => void>();
   private readonly readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
   private readonly runtimeInstanceId: string;
   private readonly registrySessionId: string;
@@ -13627,10 +13632,21 @@ export class DesktopBackendRegistry {
     if (!this.closed) await this.getThreadArchiveSweeper().sweep();
   }
 
+  getThreadArchiveSweepStatus(): DesktopThreadArchiveSweepStatus {
+    return this.getThreadArchiveSweeper().getStatus();
+  }
+
+  onThreadArchiveSweepStatusChanged(
+    listener: (status: DesktopThreadArchiveSweepStatus) => void,
+  ): () => void {
+    this.threadArchiveSweepStatusListeners.add(listener);
+    return () => { this.threadArchiveSweepStatusListeners.delete(listener); };
+  }
+
   private getThreadArchiveSweeper(): ThreadArchiveSweeper {
     return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
       getPolicy: () => this.readThreadArchivePolicy(),
-      cleanupRetention: async () => await this.sweepArchivedThreadRetention(),
+      cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
       resolveProject: async ({ thread, overlay }) => {
         const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
         const cwd = directory?.worktreePath ?? directory?.path;
@@ -13673,6 +13689,9 @@ export class DesktopBackendRegistry {
       onError: (error, threadId) => backendRegistryLog.warn("inactive thread archive sweep failed", {
         threadId, error: error instanceof Error ? error.message : String(error),
       }),
+      onStatus: (status) => {
+        for (const listener of this.threadArchiveSweepStatusListeners) listener(status);
+      },
     });
   }
 
@@ -13695,10 +13714,10 @@ export class DesktopBackendRegistry {
     return [...new Map([...groups[1]!, ...groups[0]!].map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread])).values()];
   }
 
-  private async sweepArchivedThreadRetention(): Promise<void> {
+  private async sweepArchivedThreadRetention(onFailure: (error: unknown) => void): Promise<number> {
     if (!this.overlayStore.listThreadArchiveStates || !this.overlayStore.observeArchivedThreads
-      || !this.overlayStore.forgetThreadArchiveStates) return;
-    await sweepThreadArchiveRetention({
+      || !this.overlayStore.forgetThreadArchiveStates) return 0;
+    return await sweepThreadArchiveRetention({
       getPolicy: () => this.readThreadArchivePolicy(),
       listThreads: async () => await this.listThreadsForArchiveRetention(),
       listStates: async () => await this.overlayStore.listThreadArchiveStates!(),
@@ -13722,9 +13741,11 @@ export class DesktopBackendRegistry {
       forgetStates: async (states) => await this.overlayStore.forgetThreadArchiveStates!(states),
       isBusy: (candidate) => this.autoArchiveCandidateIsBusy(candidate),
       onError: (error, threadId) => {
-        if (!(error instanceof AutomaticArchiveCancelledError)) backendRegistryLog.warn("archived thread retention cleanup failed", {
+        if (error instanceof AutomaticArchiveCancelledError) return;
+        backendRegistryLog.warn("archived thread retention cleanup failed", {
           threadId, error: error instanceof Error ? error.message : String(error),
         });
+        onFailure(error);
       },
     });
   }
@@ -13821,7 +13842,8 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async archiveInactiveThreadFamily(candidates: ThreadArchiveCandidate[]): Promise<void> {
+  /** Resolves false when the archive was cancelled before its mutation. */
+  private async archiveInactiveThreadFamily(candidates: ThreadArchiveCandidate[]): Promise<boolean> {
     const policy = JSON.stringify(this.readThreadArchivePolicy());
     const reservation = { cancelled: false };
     const keys = candidates.map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)).sort();
@@ -13847,8 +13869,10 @@ export class DesktopBackendRegistry {
     };
     try {
       await withFamilyLocks(0);
+      return true;
     } catch (error) {
       if (!(error instanceof AutomaticArchiveCancelledError)) throw error;
+      return false;
     } finally {
       for (const key of keys) this.automaticArchiveReservations.delete(key);
     }

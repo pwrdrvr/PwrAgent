@@ -55,11 +55,73 @@ describe("ThreadArchiveSweeper", () => {
     expect(deps.listCandidates).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(THREAD_ARCHIVE_SWEEP_START_DELAY_MS);
     expect(deps.listCandidates).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(THREAD_ARCHIVE_SWEEP_INTERVAL_MS - THREAD_ARCHIVE_SWEEP_START_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(THREAD_ARCHIVE_SWEEP_INTERVAL_MS - 1);
+    expect(deps.listCandidates).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(deps.listCandidates).toHaveBeenCalledTimes(2);
     await sweeper.stop();
     await vi.advanceTimersByTimeAsync(THREAD_ARCHIVE_SWEEP_INTERVAL_MS);
     expect(deps.listCandidates).toHaveBeenCalledTimes(2);
+  });
+
+  it("restarts the hourly interval after a manual sweep and reports when the next one runs", async () => {
+    vi.useFakeTimers();
+    const { deps, sweeper } = harness([]);
+    sweeper.start();
+    expect(sweeper.getStatus()).toEqual({
+      running: false, archived: 0, deleted: 0, failed: 0, nextAt: Date.now() + THREAD_ARCHIVE_SWEEP_START_DELAY_MS,
+    });
+    await vi.advanceTimersByTimeAsync(THREAD_ARCHIVE_SWEEP_START_DELAY_MS / 2);
+    await sweeper.sweep();
+    expect(deps.listCandidates).toHaveBeenCalledTimes(1);
+    const { finishedAt, nextAt } = sweeper.getStatus();
+    expect(nextAt).toBe(finishedAt! + THREAD_ARCHIVE_SWEEP_INTERVAL_MS);
+    // The startup timer was replaced, not left to run beside the new interval.
+    await vi.advanceTimersByTimeAsync(THREAD_ARCHIVE_SWEEP_INTERVAL_MS - 1);
+    expect(deps.listCandidates).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(deps.listCandidates).toHaveBeenCalledTimes(2);
+    await sweeper.stop();
+  });
+
+  it("publishes a running status, then archive, deletion, and failure counts", async () => {
+    const { deps, sweeper } = harness([candidate("failed"), candidate("archived"), candidate("cancelled")]);
+    const statuses: unknown[] = [];
+    const sweeperWithStatus = new ThreadArchiveSweeper({
+      ...deps,
+      cleanupRetention: async (onFailure) => {
+        onFailure(new Error("snapshot ref is locked"));
+        return 2;
+      },
+      onStatus: (status) => { statuses.push(status); },
+    });
+    deps.archive.mockImplementation(async (item: ThreadArchiveCandidate) => {
+      if (item.thread.id === "failed") throw new Error("provider unavailable");
+      return item.thread.id !== "cancelled";
+    });
+    await sweeperWithStatus.sweep();
+    expect(statuses).toEqual([
+      { running: true, startedAt: expect.any(Number), archived: 0, deleted: 0, failed: 0 },
+      {
+        running: false, startedAt: expect.any(Number), finishedAt: expect.any(Number),
+        archived: 1, deleted: 2, failed: 2, error: "snapshot ref is locked",
+      },
+    ]);
+    // Retention logs its own failures; only the archive failure is logged here.
+    expect(deps.onError).toHaveBeenCalledTimes(1);
+    await sweeperWithStatus.stop();
+    await sweeper.stop();
+  });
+
+  it("reports a sweep that fails before it lists threads", async () => {
+    const { deps, sweeper } = harness();
+    deps.listCandidates.mockRejectedValueOnce(new Error("Codex is restarting"));
+    await sweeper.sweep();
+    expect(sweeper.getStatus()).toMatchObject({ running: false, archived: 0, failed: 1, error: "Codex is restarting" });
+    await sweeper.sweep();
+    expect(sweeper.getStatus()).toMatchObject({ archived: 1, failed: 0 });
+    expect(sweeper.getStatus().error).toBeUndefined();
+    await sweeper.stop();
   });
 
   it("archives old threads while keeping recent, pinned, active and unknown threads", async () => {

@@ -53,15 +53,17 @@ export function archiveRetentionFamilyEligible(
 /** Provider deletion owns conversation files. PwrAgent only releases its own
  * recovery refs and overlay state, after deletion succeeds or an expired
  * thread is absent from a complete provider inventory. Failed cleanup retains
- * its state so the next hourly sweep can retry without relying on an event. */
-export async function sweepThreadArchiveRetention(deps: ThreadArchiveRetentionDeps): Promise<void> {
+ * its state so the next hourly sweep can retry without relying on an event.
+ * Resolves to the number of thread families permanently deleted. */
+export async function sweepThreadArchiveRetention(deps: ThreadArchiveRetentionDeps): Promise<number> {
   const policy = deps.getPolicy();
-  if (deps.shouldStop?.()) return;
+  let deleted = 0;
+  if (deps.shouldStop?.()) return deleted;
   const threads = await deps.listThreads();
   const archived = threads.filter((thread) => thread.archivedAt !== undefined);
   await deps.observeArchives(archived, Date.now());
   let states = await deps.listStates();
-  if (policy.retentionDays === 0) return;
+  if (policy.retentionDays === 0) return deleted;
   const byKey = new Map(states.map((state) => [buildThreadIdentityKey(state.backend, state.threadId), state]));
   const providerKeys = new Set(threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
   const removed = new Set<string>();
@@ -93,7 +95,7 @@ export async function sweepThreadArchiveRetention(deps: ThreadArchiveRetentionDe
   };
 
   for (const root of archived) {
-    if (deps.shouldStop?.()) return;
+    if (deps.shouldStop?.()) return deleted;
     const rootKey = buildThreadIdentityKey(root.source, root.id);
     const parent = root.codexNativeSubAgent?.parentThreadId;
     if (removed.has(rootKey) || (parent && providerKeys.has(buildThreadIdentityKey(root.source, parent)))) continue;
@@ -102,15 +104,16 @@ export async function sweepThreadArchiveRetention(deps: ThreadArchiveRetentionDe
     }));
     if (!archiveRetentionFamilyEligible(family, policy, deps.isBusy, Date.now())) continue;
     try {
-      if (JSON.stringify(policy) !== JSON.stringify(deps.getPolicy())) return;
+      if (JSON.stringify(policy) !== JSON.stringify(deps.getPolicy())) return deleted;
       await deps.deleteFamily(family, policy);
+      deleted += 1;
       await cleanup(family.map((candidate) => candidate.overlay!));
     } catch (error) { deps.onError(error, root.id); }
   }
   // Missed notifications, provider deletion while the app was closed, and a
   // previous snapshot cleanup failure all converge here after the deadline.
   for (const state of states) {
-    if (deps.shouldStop?.()) return;
+    if (deps.shouldStop?.()) return deleted;
     const key = buildThreadIdentityKey(state.backend, state.threadId);
     const startedAt = state.archiveRetentionStartedAt;
     if (providerKeys.has(key) || removed.has(key) || startedAt === undefined
@@ -118,8 +121,9 @@ export async function sweepThreadArchiveRetention(deps: ThreadArchiveRetentionDe
       || Date.now() < startedAt + policy.retentionDays * 86_400_000
       || state.pinnedRank !== undefined || state.agent) continue;
     try {
-      if (JSON.stringify(policy) !== JSON.stringify(deps.getPolicy())) return;
+      if (JSON.stringify(policy) !== JSON.stringify(deps.getPolicy())) return deleted;
       if (await deps.confirmAbsent(state)) await cleanup([state]);
     } catch (error) { deps.onError(error, state.threadId); }
   }
+  return deleted;
 }

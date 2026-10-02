@@ -1,6 +1,11 @@
 import { stat } from "node:fs/promises";
 import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
-import { DEFAULT_THREAD_ARCHIVE_POLICY, type DesktopThreadArchivePolicy, buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_ARCHIVE_POLICY,
+  type DesktopThreadArchivePolicy,
+  type DesktopThreadArchiveSweepStatus,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 
 export const THREAD_AUTO_ARCHIVE_AGE_MS = 7 * 24 * 60 * 60_000;
@@ -15,15 +20,21 @@ export type ThreadArchiveCandidate = {
 type SweeperDeps = {
   getPolicy?: () => DesktopThreadArchivePolicy;
   resolveProject?: (candidate: ThreadArchiveCandidate) => Promise<string | undefined>;
-  cleanupRetention?: () => Promise<void>;
+  /** Resolves to the number of expired families deleted. A cleanup that
+   * logs its own per-thread failures reports each through onFailure. */
+  cleanupRetention?: (onFailure: (error: unknown) => void) => Promise<number | void>;
   listCandidates: () => Promise<ThreadArchiveCandidate[]>;
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
   isBusy: (candidate: ThreadArchiveCandidate) => boolean;
   canArchive: (candidates: ThreadArchiveCandidate[]) => Promise<boolean>;
+  /** Resolves false when the archive was cancelled at the mutation boundary. */
   archive: (candidate: ThreadArchiveCandidate, family: ThreadArchiveCandidate[]) => Promise<unknown>;
   workspaceIsSafe?: (cwd: string, signal: AbortSignal) => Promise<boolean>;
   onError: (error: unknown, threadId?: string) => void;
+  onStatus?: (status: DesktopThreadArchiveSweepStatus) => void;
 };
+
+type SweepTally = Pick<DesktopThreadArchiveSweepStatus, "archived" | "deleted" | "failed" | "error">;
 
 /** Reads live Git state, including ignored files, untracked files and dirty submodules. A
  * detached tip is safe only when a local or remote branch retains it. No fetch
@@ -86,42 +97,75 @@ export function isStaleArchiveCandidate(
 /** Main-process housekeeping. Only explicit start() schedules it, so registry
  * construction and startup discovery never wait on archive or Git work. */
 export class ThreadArchiveSweeper {
-  private timer?: ReturnType<typeof setInterval>;
-  private startupTimer?: ReturnType<typeof setTimeout>;
+  private timer?: ReturnType<typeof setTimeout>;
+  private started = false;
   private running?: Promise<void>;
   private readonly abort = new AbortController();
+  private status: DesktopThreadArchiveSweepStatus = { running: false, archived: 0, deleted: 0, failed: 0 };
 
   constructor(private readonly deps: SweeperDeps) {}
 
-  start(): void {
-    if (this.timer || this.abort.signal.aborted) return;
-    this.startupTimer = setTimeout(() => { void this.sweep(); }, THREAD_ARCHIVE_SWEEP_START_DELAY_MS);
-    this.startupTimer.unref?.();
-    this.timer = setInterval(() => { void this.sweep(); }, THREAD_ARCHIVE_SWEEP_INTERVAL_MS);
-    this.timer.unref?.();
+  getStatus(): DesktopThreadArchiveSweepStatus {
+    return this.status;
   }
 
+  start(): void {
+    if (this.started || this.abort.signal.aborted) return;
+    this.started = true;
+    this.schedule(THREAD_ARCHIVE_SWEEP_START_DELAY_MS);
+  }
+
+  /** A manual sweep joins a running one. Either way the hourly interval is
+   * measured from the last finish, so the advertised next time stays true. */
   sweep(): Promise<void> {
     if (this.abort.signal.aborted) return Promise.resolve();
     if (this.running) return this.running;
-    this.running = this.run().catch((error) => {
-      if (!this.abort.signal.aborted) this.deps.onError(error);
-    }).finally(() => { this.running = undefined; });
+    clearTimeout(this.timer);
+    const tally: SweepTally = { archived: 0, deleted: 0, failed: 0 };
+    this.publish({ ...tally, running: true, startedAt: Date.now() });
+    this.running = this.run(tally).catch((error) => {
+      if (!this.abort.signal.aborted) this.fail(tally, error);
+    }).finally(() => {
+      this.running = undefined;
+      if (this.abort.signal.aborted) return;
+      this.publish({ ...this.status, ...tally, running: false, finishedAt: Date.now() });
+      if (this.started) this.schedule(THREAD_ARCHIVE_SWEEP_INTERVAL_MS);
+    });
     return this.running;
   }
 
   async stop(): Promise<void> {
-    clearInterval(this.timer);
-    clearTimeout(this.startupTimer);
+    clearTimeout(this.timer);
     this.abort.abort();
     // An archive already sent must settle before the registry closes its stores.
     await this.running;
   }
 
-  private async run(): Promise<void> {
+  private schedule(delay: number): void {
+    this.timer = setTimeout(() => { void this.sweep(); }, delay);
+    this.timer.unref?.();
+    this.publish({ ...this.status, nextAt: Date.now() + delay });
+  }
+
+  private publish(status: DesktopThreadArchiveSweepStatus): void {
+    this.status = status;
+    this.deps.onStatus?.(status);
+  }
+
+  private count(tally: SweepTally, error: unknown): void {
+    tally.failed += 1;
+    tally.error ??= error instanceof Error ? error.message : String(error);
+  }
+
+  private fail(tally: SweepTally, error: unknown, threadId?: string): void {
+    this.count(tally, error);
+    this.deps.onError(error, threadId);
+  }
+
+  private async run(tally: SweepTally): Promise<void> {
     const policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const };
-    try { await this.deps.cleanupRetention?.(); }
-    catch (error) { if (!this.abort.signal.aborted) this.deps.onError(error); }
+    try { tally.deleted += await this.deps.cleanupRetention?.((error) => this.count(tally, error)) || 0; }
+    catch (error) { if (!this.abort.signal.aborted) this.fail(tally, error); }
     if (!policy.enabled || this.abort.signal.aborted) return;
     const candidates = await this.deps.listCandidates();
     const children = new Map<string, ThreadArchiveCandidate[]>();
@@ -166,7 +210,7 @@ export class ThreadArchiveSweeper {
           }
           if (!safe) continue;
         } catch (error) {
-          if (!this.abort.signal.aborted) this.deps.onError(error, candidate.thread.id);
+          if (!this.abort.signal.aborted) this.fail(tally, error, candidate.thread.id);
           continue;
         }
         const key = this.deps.resolveProject
@@ -209,9 +253,9 @@ export class ThreadArchiveSweeper {
         if (!refreshed.every((item) => !this.deps.isBusy(item)) || !await this.deps.canArchive(refreshed)) continue;
         if (this.abort.signal.aborted) return;
         if (JSON.stringify(this.deps.getPolicy?.() ?? policy) !== JSON.stringify(policy)) return;
-        await this.deps.archive(refreshed[0]!, refreshed);
+        if (await this.deps.archive(refreshed[0]!, refreshed) !== false) tally.archived += 1;
       } catch (error) {
-        if (!this.abort.signal.aborted) this.deps.onError(error, candidate.thread.id);
+        if (!this.abort.signal.aborted) this.fail(tally, error, candidate.thread.id);
       }
     }
   }

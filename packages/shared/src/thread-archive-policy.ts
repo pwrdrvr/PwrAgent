@@ -30,3 +30,19 @@ export function normalizeThreadArchivePolicy(
     retentionDays: integer(value?.retentionDays, DEFAULT_THREAD_ARCHIVE_POLICY.retentionDays, 0, 3650),
   };
 }
+
+/** Main-process memory only: an idle hourly sweep must make no SQLite commits,
+ * so a relaunch starts again from "not run yet". */
+export type DesktopThreadArchiveSweepStatus = {
+  running: boolean;
+  /** Start of the running sweep, or of the last finished one. */
+  startedAt?: number;
+  finishedAt?: number;
+  /** When the scheduler next starts a sweep. Absent before start() and after stop(). */
+  nextAt?: number;
+  archived: number;
+  deleted: number;
+  failed: number;
+  /** First failure of the last finished sweep. */
+  error?: string;
+};
