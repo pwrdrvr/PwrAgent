@@ -155,7 +155,7 @@ export function TokenMiserSummaryCard(props: {
           ) : null}
           {summary.helperDecisionCount !== undefined ? (
             <RailSummaryRow
-              label="Luna evaluations"
+              label="Output evaluations"
               value={summary.helperDecisionCount.toLocaleString()}
             />
           ) : null}

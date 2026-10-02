@@ -1483,7 +1483,7 @@ describe("ThreadContextPanel", () => {
     expect(cardRowValue(miser, "3 · Revealed to parent")).toBe("$0.39");
     expect(cardRowValue(miser, "Summarized")).toBe("1");
     expect(cardRowValue(miser, "Passed through")).toBe("1");
-    expect(cardRowValue(miser, "Luna evaluations")).toBe("1");
+    expect(cardRowValue(miser, "Output evaluations")).toBe("1");
     expect(cardRowValue(miser, "Parent context avoided")).toBe("54k");
 
     fireEvent.click(
@@ -1534,7 +1534,7 @@ describe("ThreadContextPanel", () => {
     const miser = within(card as HTMLElement);
     expect(miser.getByText("1 decision")).toBeInTheDocument();
     expect(cardRowValue(miser, "Passed through")).toBe("1");
-    expect(cardRowValue(miser, "Luna evaluations")).toBe("0");
+    expect(cardRowValue(miser, "Output evaluations")).toBe("0");
   });
 
   it.each([false, true])("pages visible pricing cards even with hidden orphan gates (%s)", (includeHiddenGates) => {
@@ -3172,7 +3172,7 @@ describe("ThreadContextPanel", () => {
       .not.toBeInTheDocument();
   });
 
-  it("separates reducer decisions from priced Luna evaluations", () => {
+  it("separates reducer decisions from priced output evaluations", () => {
     const accounting = (disposition: "summarized" | "passed_through") => ({
       baselineParentCostMicros: 50_000,
       baselineParentTokens: 10_000,
@@ -3306,7 +3306,7 @@ describe("ThreadContextPanel", () => {
 
     const summary = screen.getByRole("button", { name: /Token Miser/ });
     expect(summary).toHaveTextContent(
-      "3 decisions · 2 Luna evaluations · 2 pass-throughs (1 helper · 1 policy)",
+      "3 decisions · 2 output evaluations · 2 pass-throughs (1 helper · 1 policy)",
     );
     expect(summary).not.toHaveTextContent("2 decisions");
     fireEvent.click(summary);
@@ -3448,7 +3448,7 @@ describe("ThreadContextPanel", () => {
     // The reason there is no savings figure is detail, and detail lives on the
     // counts row, which has a full line to wrap into.
     expect(summary.querySelector(".pricing-token-miser__count")).toHaveTextContent(
-      "3 decisions · 1 Luna evaluation · 3 pass-throughs (1 helper · 2 policy)"
+      "3 decisions · 1 output evaluation · 3 pass-throughs (1 helper · 2 policy)"
         + " · savings not priced yet",
     );
   });

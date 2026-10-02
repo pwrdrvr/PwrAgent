@@ -1822,7 +1822,7 @@ function TokenMiserSavingsLens(props: {
                 zero: (tokenMiser.passThroughCount ?? 0) === 0,
               },
               {
-                label: "Luna evaluations",
+                label: "Output evaluations",
                 value: (tokenMiser.helperDecisionCount ?? 0).toLocaleString(),
                 zero: (tokenMiser.helperDecisionCount ?? 0) === 0,
               },
