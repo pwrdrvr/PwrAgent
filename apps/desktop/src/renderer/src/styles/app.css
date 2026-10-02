@@ -7979,75 +7979,6 @@ a.button {
   line-height: 1.5;
 }
 
-.codex-config-warning-banner {
-  position: fixed;
-  z-index: 82;
-  top: 16px;
-  right: 16px;
-  display: grid;
-  width: max-content;
-  max-width: min(520px, calc(100vw - 32px));
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
-  box-shadow: var(--shadow-popover);
-  animation: app-update-banner-enter 160ms ease-out;
-  -webkit-app-region: no-drag;
-}
-
-.codex-config-warning-banner__content {
-  min-width: 0;
-}
-
-.codex-config-warning-banner__eyebrow {
-  margin: 0 0 4px;
-  color: var(--status-warning);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.codex-config-warning-banner__message,
-.codex-config-warning-banner__detail,
-.codex-config-warning-banner__error {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.codex-config-warning-banner__message {
-  color: var(--text-primary);
-}
-
-.codex-config-warning-banner__detail {
-  margin-top: 8px;
-  color: var(--text-secondary);
-}
-
-.codex-config-warning-banner__error {
-  margin-top: 8px;
-  color: var(--danger-text);
-}
-
-.codex-config-warning-banner__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.codex-config-warning-banner__actions .button {
-  min-height: 30px;
-  padding: 0 10px;
-}
-
 .app-toast-stack {
   /* Read by `useToastStackPlacement` too, which works out where the stack
      would sit on either edge. */
@@ -8079,53 +8010,6 @@ a.button {
   pointer-events: auto;
 }
 
-/* Full stack width in every phase, the same as the notices it hands off to.
-   A `max-content` card changed size at each step of one check: 266px while
-   checking, 420px while downloading, 303px once the update was ready. */
-.app-update-banner {
-  position: relative;
-  display: grid;
-  width: 100%;
-  max-width: 100%;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
-  box-shadow: var(--shadow-popover);
-  animation: app-update-banner-enter 160ms ease-out;
-  -webkit-app-region: no-drag;
-}
-
-.app-update-banner__content {
-  min-width: 0;
-  user-select: text;
-}
-
-.app-update-banner__eyebrow {
-  margin: 0 0 4px;
-  color: var(--accent-bright);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.app-update-banner__message,
-.app-update-banner__error {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.app-update-banner__message {
-  color: var(--text-primary);
-}
-
 /* A notice fits its content, up to the stack's width, and grows with it: a
    paged notice used to be a fixed 208px that clipped a long one mid-line.
    The card stays neutral and the dot in the title row carries the tone —
@@ -8146,7 +8030,7 @@ a.button {
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
-  animation: app-update-banner-enter 160ms ease-out;
+  animation: app-notice-toast-enter 160ms ease-out;
   -webkit-app-region: no-drag;
 }
 
@@ -8182,9 +8066,13 @@ a.button {
   user-select: text;
 }
 
+/* Top row, not centred on the title: a title that wraps would otherwise
+   move the close button down, and a held card (`data-held`) promises the
+   pointer it stays put. */
 .app-notice-toast__actions {
   display: flex;
   flex: none;
+  align-self: flex-start;
   margin-left: 8px;
 }
 
@@ -8196,6 +8084,13 @@ a.button {
   overflow-y: auto;
   padding: 0 8px 0 15px;
   user-select: text;
+}
+
+/* Held at no less than the size of the notice it replaced while the pointer
+   stays on the stack (AppNoticeToast.tsx). The text takes up the slack, so
+   the title row and the footer both stay where the pointer left them. */
+.app-notice-toast[data-held="true"] .app-notice-toast__content {
+  flex-grow: 1;
 }
 
 .app-notice-toast__status {
@@ -8385,17 +8280,6 @@ a.button {
   margin: 0;
 }
 
-.app-update-banner__error {
-  margin-top: 8px;
-  color: var(--danger-text);
-}
-
-.app-update-banner__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
 /* One row: the pager leads, the actions trail, and the way out stays last.
    No rule above it; the gap separates it from the text. */
 .app-notice-toast__footer {
@@ -8510,93 +8394,23 @@ a.button {
   animation-play-state: paused;
 }
 
-/* One row under the content in every phase that has actions: the link
-   leads, the buttons trail, and the way out (Cancel, then Dismiss) is the
-   last button. AppUpdateBanner.tsx says why that last slot matters. The
-   buttons carry `margin-left: auto` themselves so they stay trailing when
-   the version is not semver-shaped and the link renders nothing. */
-.app-update-banner__actions {
-  align-items: center;
-}
-
-.app-update-banner__buttons {
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
-/* 13px, the card's own body size. Unsized, a `.button` here inherits the
-   16px document default, which made Cancel the largest text on the card. */
-.app-update-banner__restart,
-.app-update-banner__dismiss,
-.app-update-banner__cancel {
-  min-height: 30px;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.button.app-update-banner__restart,
 .button.settings-update-channel__restart-button {
   border-color: var(--accent-strong);
   background: var(--accent);
   color: var(--button-text);
 }
 
-.button.app-update-banner__restart:hover:not([disabled]),
 .button.settings-update-channel__restart-button:hover:not([disabled]) {
   background: var(--accent-strong);
 }
 
-/* "Release notes" — text among real buttons, on purpose. The card already
-   carries the one action it exists for (Restart / Cancel) and the one way
-   out of it (Dismiss); a third pill would make the operator choose between
-   three things that look equally like the point. */
-.app-update-banner__notes {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 30px;
-  padding: 0 4px;
-  /* It leads the actions row, so pull the text back onto the content's left
-     edge; the padding stays for the focus outline. */
-  margin-left: -4px;
-  appearance: none;
-  cursor: pointer;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
-  transition: color 120ms ease;
-}
-
-.app-update-banner__notes:hover {
-  color: var(--text-primary);
-  text-decoration: underline;
-}
-
-.app-update-banner__notes:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-/* Live progress for a check the operator asked for. This card carries no
-   `.app-notice-toast__timer`, because the work it reports has no fixed
-   duration - the track below is the only bar on it, and it means the thing
-   the operator is actually waiting on.
-
-   It is one column, like the offer card, with the actions in a row under the
-   track. Cancel and Release notes used to sit in a second column beside the
-   content, whose `min-width: 236px` then overflowed its track once that
-   column grew: at the 420px stack width, the bar and the message ran
-   underneath Cancel. The full-width card is also what keeps the bar from
-   breathing as the percent text changes.
+/* Work in flight with a measurable extent (`notice.progress`). The bar
+   means the thing the operator is waiting on, so a notice carrying one
+   carries no countdown: its work has no fixed duration.
 
    The track has the same measurements as `.context-usage-card__meter` and
    `.incident-explorer__meter`, so the app keeps one bar language. */
-.app-update-banner__track {
+.app-notice-toast__track {
   display: block;
   overflow: hidden;
   height: 5px;
@@ -8605,7 +8419,7 @@ a.button {
   background: color-mix(in srgb, var(--text-primary) 9%, transparent);
 }
 
-.app-update-banner__track i {
+.app-notice-toast__track i {
   display: block;
   width: 0;
   height: 100%;
@@ -8617,9 +8431,9 @@ a.button {
 
 /* No percent to draw - a release read, or a feed that sends no content
    length. A bar parked at 0 would read as a stalled download. */
-.app-update-banner__track--indeterminate i {
+.app-notice-toast__track--indeterminate i {
   width: 35%;
-  animation: app-update-banner-sweep 1.1s ease-in-out infinite;
+  animation: progress-track-sweep 1.1s ease-in-out infinite;
   transition: none;
 }
 
@@ -8628,18 +8442,18 @@ a.button {
    download stuck at 35%. Fill the track instead, dimmed: "working, extent
    unknown". */
 @media (prefers-reduced-motion: reduce) {
-  .app-update-banner__track i {
+  .app-notice-toast__track i {
     transition: none;
   }
 
-  .app-update-banner__track--indeterminate i {
+  .app-notice-toast__track--indeterminate i {
     width: 100%;
     animation: none;
     opacity: 0.5;
   }
 }
 
-@keyframes app-update-banner-sweep {
+@keyframes progress-track-sweep {
   from {
     transform: translateX(-110%);
   }
@@ -8649,7 +8463,7 @@ a.button {
   }
 }
 
-.app-update-banner__meter {
+.app-notice-toast__meter {
   margin: 6px 0 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -8667,7 +8481,7 @@ a.button {
   }
 }
 
-@keyframes app-update-banner-enter {
+@keyframes app-notice-toast-enter {
   from {
     opacity: 0;
     transform: translateY(8px);
@@ -12868,7 +12682,7 @@ a.button {
 /* ------------------------------------------------------------------
    Managed build progress strip (Codex + Grok). One layout for every phase:
    state line, track, byte meter, four-step rail. The track copies
-   `.app-update-banner__track`, so the app keeps one bar language.
+   `.app-notice-toast__track`, so the app keeps one bar language.
    ------------------------------------------------------------------ */
 
 .managed-progress {
@@ -12970,7 +12784,7 @@ a.button {
 
 .managed-progress__track--indeterminate i {
   width: 35%;
-  animation: app-update-banner-sweep 1.1s ease-in-out infinite;
+  animation: progress-track-sweep 1.1s ease-in-out infinite;
   transition: none;
 }
 
@@ -17119,37 +16933,18 @@ a.button {
 }
 
 /* Card-action failures (archive, mark seen) surface over the map rather
-   than on the card, which may have just been refreshed away. */
-.star-map__card-error {
-  display: flex;
+   than on the card, which may have just been refreshed away. The map places
+   the notice; `AppNoticeToast` draws it. */
+/* As wide as the card and no wider, so the map takes presses beside it. */
+.star-map__notice {
   position: absolute;
   bottom: 16px;
   left: 50%;
   z-index: 30;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 7px 10px;
+  display: flex;
+  width: max-content;
+  max-width: min(380px, calc(100% - 32px));
   transform: translateX(-50%);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel-elevated);
-  box-shadow: var(--shadow-popover);
-  color: var(--danger-text);
-  font-size: 11px;
-  /* Failure text with no copy button — keep it selectable under the
-     window-root `user-select` lockout. */
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.star-map__card-error button {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
 }
 
 /* Cards rise into their slots with a small stagger (delay set inline).
