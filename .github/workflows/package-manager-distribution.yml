@@ -165,12 +165,14 @@ jobs:
         shell: pwsh
         run: |
           Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery
-          Repair-WinGetPackageManager -AllUsers
+          Repair-WinGetPackageManager -AllUsers -Latest
           Add-Content $env:GITHUB_PATH "$env:LOCALAPPDATA\Microsoft\WindowsApps"
       - name: Validate signed installer, fresh user/machine installs and upgrade
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          winget --info
+          if ($LASTEXITCODE) { throw "WinGet client is unavailable" }
           $audit = Get-Content distribution/current/audit.json -Raw | ConvertFrom-Json
           $version = $audit.stable.version
           $previous = $audit.previousVersion

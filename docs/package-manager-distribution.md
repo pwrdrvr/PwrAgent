@@ -19,6 +19,28 @@ existing PwrDrvr tap contained only PwrSnap. No PwrAgent formula or official
 Homebrew cask was found. Recheck live sources on every release; this snapshot
 does not prove their current state.
 
+Initial registration submissions:
+
+- [Homebrew tap PR #9](https://github.com/pwrdrvr/homebrew-tap/pull/9): cask,
+  documentation and CI for PwrAgent. Pending merge and refreshed-client
+  verification. The tap's existing PwrSnap online-audit lane fails because its
+  main-branch cask is 1.1.2 while PwrSnap Latest is 1.1.12; that channel's pending
+  bump is separate work and must not be overwritten by this registration.
+- [Winget PR #445659](https://github.com/microsoft/winget-pkgs/pull/445659):
+  `PwrDrvr.PwrAgent` 1.1.4. The Microsoft policy bot requires `huntharo` to accept
+  the CLA. The account owner must review and respond to that bot; automation
+  does not sign the agreement. The submission is draft while Windows validation
+  is completed, then requires upstream validation/review and client indexing.
+- [PwrAgent implementation PR #2473](https://github.com/pwrdrvr/PwrAgent/pull/2473):
+  product-side generation, validation, submissions and required release checks.
+
+The publisher fork `pwrdrvr/winget-pkgs` and repository variable
+`WINGET_FORK_REPO=pwrdrvr/winget-pkgs` were created for this setup.
+`DISTRIBUTION_TOKEN` is still absent. An authorized operator must provision
+the dedicated credential below before automatic submissions can run. Neither
+channel was live at the initial submission; retain these pending links in the
+release handoff until publication is verified.
+
 The audited promoted stable release was `v1.1.4` (2026-09-30). Its downloaded
 bytes matched both GitHub asset digests and the publisher's platform SHA256SUMS:
 
