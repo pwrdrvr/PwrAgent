@@ -10,12 +10,12 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
-import { subAgentActivityToolCall } from "./subagent-activity";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
+  buildSubAgentActivityDetail,
   estimateTokenUsageCost,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
@@ -26,11 +26,14 @@ import {
   navigationQueryEventRequiresRefresh,
   normalizeCodexAsyncQuestions,
   parseCodexTurnErrorMessage,
+  readSubAgentActivity,
   resolveOpenAiPricingServiceTier,
   resolveHelperModel,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
   shortSubAgentThreadId,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
   type DesktopHelperModelSettings,
   type HelperModelId,
   type HelperModelResolution,
@@ -4506,14 +4509,23 @@ function summarizeActivityItems(
   let toolCalls = 0;
   let spawnedAgents = 0;
   let waitedAgents = 0;
-  let startedAgents = 0;
-  let finishedAgents = 0;
-  let interruptedAgents = 0;
   let failedCollabCalls = 0;
   let status: AppServerThreadActivityStatus | undefined;
 
-  for (const rawItem of items) {
-    const item: Record<string, unknown> = subAgentActivityToolCall(rawItem) ?? rawItem;
+  for (const item of items) {
+    // Path-based worker reports. The renderer's live transcript builds the
+    // same row from the same shared builder, so the two merge by id.
+    const subAgentActivity = readSubAgentActivity(item);
+    if (subAgentActivity) {
+      status ??= "completed";
+      pushActivityDetail(
+        details,
+        detailsByLabel,
+        buildSubAgentActivityDetail(subAgentActivity),
+      );
+      continue;
+    }
+
     const itemId =
       pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
     const itemStatus = normalizeActivityStatus(pickString(item, ["status"]));
@@ -4698,16 +4710,7 @@ function summarizeActivityItems(
     if (normalizedItemType === "collabagenttoolcall") {
       const receiverThreadIds = readStringArray(item.receiverThreadIds);
       const tool = pickString(item, ["tool"]) ?? "collabAgent";
-      const activityKind = pickString(item, ["activityKind"]);
-      if (activityKind === "started") {
-        startedAgents += 1;
-      } else if (activityKind === "completed") {
-        finishedAgents += 1;
-      } else if (activityKind === "interrupted") {
-        interruptedAgents += 1;
-      } else if (activityKind) {
-        // Message delivery between agents; the row says so, the summary does not.
-      } else if (tool === "spawnAgent" && itemStatus !== "failed") {
+      if (tool === "spawnAgent" && itemStatus !== "failed") {
         spawnedAgents += receiverThreadIds.length || 1;
       } else if (tool === "wait") {
         waitedAgents += receiverThreadIds.length;
@@ -4717,15 +4720,11 @@ function summarizeActivityItems(
       }
 
       const agents = collabAgentDetails(item, receiverThreadIds);
-      const label = activityKind
-        ? formatSubAgentActivityLabel({ agents, kind: activityKind })
-        : formatCollabAgentToolLabel({ agents, tool, receiverThreadIds, status: itemStatus });
+      const label = formatCollabAgentToolLabel({ agents, tool, receiverThreadIds, status: itemStatus });
       const commandDetail = buildCollabAgentCommandDetail({
         item,
         label,
-        operation: activityKind
-          ? subAgentActivityOperation(activityKind)
-          : collabAgentOperation(tool),
+        operation: collabAgentOperation(tool),
         receiverThreadIds,
         tool,
       });
@@ -4823,15 +4822,7 @@ function summarizeActivityItems(
   if (waitedAgents > 0) {
     summaryParts.push(`Waited on ${waitedAgents} agent${waitedAgents === 1 ? "" : "s"}`);
   }
-  if (startedAgents > 0) {
-    summaryParts.push(`Started ${startedAgents} agent${startedAgents === 1 ? "" : "s"}`);
-  }
-  if (finishedAgents > 0) {
-    summaryParts.push(`${finishedAgents} finished`);
-  }
-  if (interruptedAgents > 0) {
-    summaryParts.push(`${interruptedAgents} interrupted`);
-  }
+  summaryParts.push(...subAgentActivitySummaryParts(details));
   if (failedCollabCalls > 0) {
     summaryParts.push(
       `${failedCollabCalls} collaboration tool${failedCollabCalls === 1 ? "" : "s"} failed`
@@ -4860,59 +4851,6 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     : [];
-}
-
-/**
- * Names one worker for a transcript row. Replay merges rows that share a
- * label, so two workers must never get the same one: prefer the worker's
- * name, then the random tail of its id.
- */
-function subAgentTargetLabel(
-  agent: { name?: string; threadId: string } | undefined,
-): string {
-  if (agent?.name) {
-    return agent.name;
-  }
-  return `agent ${shortSubAgentThreadId(agent?.threadId ?? "")}`;
-}
-
-function formatSubAgentActivityLabel(params: {
-  agents: Array<{ name?: string; threadId: string }>;
-  kind: string;
-}): string {
-  const target = subAgentTargetLabel(params.agents[0]);
-  switch (params.kind) {
-    case "started":
-      return `Started ${target}`;
-    case "interacted":
-      return `Sent input to ${target}`;
-    case "interrupted":
-      return `Interrupted ${target}`;
-    case "completed":
-      // A name is the worker's own spelling; only the fallback is ours.
-      return params.agents[0]?.name
-        ? `${target} finished`
-        : `Agent ${shortSubAgentThreadId(params.agents[0]?.threadId ?? "")} finished`;
-    default:
-      return `Observed ${target}`;
-  }
-}
-
-function subAgentActivityOperation(
-  kind: string,
-): NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"] {
-  switch (kind) {
-    case "started":
-      return "spawn";
-    case "interacted":
-      return "send_input";
-    case "interrupted":
-      return "interrupt";
-    case "completed":
-      return "complete";
-    default:
-      return "unknown";
-  }
 }
 
 function formatCollabAgentToolLabel(params: {

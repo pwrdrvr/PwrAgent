@@ -1,58 +1,44 @@
 import type {
-  SubAgentActivityKind,
+  CollabAgentStatus,
   ThreadItem,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
+import {
+  readSubAgentActivity,
+  subAgentActivityAgentStatus,
+} from "@pwragent/shared";
 
 type CollabAgentToolCall = Extract<ThreadItem, { type: "collabAgentToolCall" }>;
 
 /**
- * Adapt Codex's path-based worker activity to our existing native-agent surface.
- *
- * The tool mapping drives lifecycle state only. A `completed` report is not a
- * wait and an `interrupted` one is not a close, so `activityKind` travels with
- * the item for anything that describes the event to the operator.
+ * Adapt Codex's path-based worker activity to our existing native-agent
+ * lifecycle. The tool mapping drives card state only: transcript rows come
+ * from `buildSubAgentActivityDetail`, because a `completed` report is not a
+ * wait and an `interrupted` one is not a close.
  */
 export function subAgentActivityToolCall(
   item: Record<string, unknown>,
-): (CollabAgentToolCall & { activityKind: SubAgentActivityKind }) | undefined {
-  if (
-    item.type !== "subAgentActivity"
-    || typeof item.id !== "string"
-    || typeof item.agentThreadId !== "string"
-    || !item.agentThreadId.trim()
-    || typeof item.agentPath !== "string"
-  ) {
+): CollabAgentToolCall | undefined {
+  const report = readSubAgentActivity(item);
+  if (!report) {
     return undefined;
   }
-  const kind = item.kind;
-  if (
-    kind !== "started"
-    && kind !== "interacted"
-    && kind !== "interrupted"
-    && kind !== "completed"
-  ) {
-    return undefined;
-  }
-  const name = item.agentPath.split("/").filter(Boolean).at(-1);
   return {
     type: "collabAgentToolCall",
-    activityKind: kind,
-    id: item.id,
-    tool: kind === "started" ? "spawnAgent"
-      : kind === "completed" ? "wait"
-        : kind === "interrupted" ? "closeAgent" : "sendInput",
+    id: report.id,
+    tool: report.kind === "started" ? "spawnAgent"
+      : report.kind === "completed" ? "wait"
+        : report.kind === "interrupted" ? "closeAgent" : "sendInput",
     status: "completed",
     senderThreadId: "",
-    receiverThreadIds: [item.agentThreadId],
+    receiverThreadIds: [report.agentThreadId],
     prompt: null,
     model: null,
     reasoningEffort: null,
     agentsStates: {
-      [item.agentThreadId]: {
-        status: kind === "completed" ? "completed"
-          : kind === "interrupted" ? "interrupted" : "running",
+      [report.agentThreadId]: {
+        status: subAgentActivityAgentStatus(report.kind) as CollabAgentStatus,
         message: null,
-        ...(name ? { agentNickname: name } : {}),
+        ...(report.agentName ? { agentNickname: report.agentName } : {}),
       },
     },
   };

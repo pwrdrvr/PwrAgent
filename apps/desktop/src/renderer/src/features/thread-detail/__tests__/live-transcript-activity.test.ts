@@ -223,6 +223,105 @@ describe("buildLiveToolDetails", () => {
     expect(details[0]?.command?.output).toContain("Still running reviewer output.");
   });
 
+  it("streams Codex subAgentActivity reports as the rows replay builds", () => {
+    const started = {
+      type: "subAgentActivity", id: "started-review", kind: "started",
+      agentThreadId: "worker-review", agentPath: "/root/review_savers",
+    };
+    const completed = { ...started, id: "completed-review", kind: "completed" };
+
+    // Codex sends each report as item/started and again as item/completed.
+    let details = mergeActivityDetails([], buildLiveToolDetails(started));
+    details = mergeActivityDetails(details, buildLiveToolDetails(started));
+    details = mergeActivityDetails(details, buildLiveToolDetails(completed));
+    details = mergeActivityDetails(details, buildLiveToolDetails(completed));
+
+    expect(details).toEqual([
+      {
+        id: "started-review",
+        kind: "command",
+        label: "Started review_savers",
+        status: "completed",
+        command: {
+          displayCommand: "subAgentActivity started /root/review_savers",
+          rawCommand: "subAgentActivity",
+          output: "Agent: worker-review\nPath: /root/review_savers\nEvent: started",
+          subAgent: {
+            backend: "codex",
+            origin: "codex-native",
+            operation: "spawn",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "running" }],
+          },
+        },
+      },
+      expect.objectContaining({
+        id: "completed-review",
+        label: "review_savers finished",
+        command: expect.objectContaining({
+          subAgent: expect.objectContaining({
+            operation: "complete",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "completed" }],
+          }),
+        }),
+      }),
+    ]);
+    // Replay's words, not "Used 2 tools", so the header holds on read-back.
+    expect(summarizeLiveActivity(details)).toBe("Started 1 agent · 1 finished");
+  });
+
+  it("streams a row per worker when parallel workers share a UUIDv7 prefix", () => {
+    const workers = [
+      { id: "019dde61-c9d6-70d2-9023-28669e27a63b", path: "/root/review_savers" },
+      { id: "019dde61-ca10-7aa1-8a2b-4f1e2d3c4b5a", path: "" },
+      { id: "019dde61-ca44-7bb3-9c3d-5a6b7c8d9e0f", path: "" },
+    ];
+    const items = [
+      ...workers.map((worker, index) => ({
+        type: "subAgentActivity", id: `started-${index}`, kind: "started",
+        agentThreadId: worker.id, agentPath: worker.path,
+      })),
+      ...workers.map((worker, index) => ({
+        type: "subAgentActivity", id: `completed-${index}`, kind: "completed",
+        agentThreadId: worker.id, agentPath: worker.path,
+      })),
+    ];
+
+    const details = items.reduce(
+      (current, item) => mergeActivityDetails(current, buildLiveToolDetails(item)),
+      [] as ReturnType<typeof buildLiveToolDetails>,
+    );
+
+    expect(details.map((detail) => detail.label)).toEqual([
+      "Started review_savers",
+      "Started agent 2d3c4b5a",
+      "Started agent 7c8d9e0f",
+      "review_savers finished",
+      "Agent 2d3c4b5a finished",
+      "Agent 7c8d9e0f finished",
+    ]);
+    expect(summarizeLiveActivity(details)).toBe("Started 3 agents · 3 finished");
+  });
+
+  it("leaves input to a worker out of the live summary", () => {
+    const details = [
+      ...buildLiveToolDetails({
+        type: "subAgentActivity", id: "started-review", kind: "started",
+        agentThreadId: "worker-review", agentPath: "/root/review_savers",
+      }),
+      ...buildLiveToolDetails({
+        type: "subAgentActivity", id: "input-review", kind: "interacted",
+        agentThreadId: "worker-review", agentPath: "/root/review_savers",
+      }),
+    ];
+
+    expect(details.map((detail) => detail.label)).toEqual([
+      "Started review_savers",
+      "Sent input to review_savers",
+    ]);
+    // Input is message delivery; it is not counted as a tool or a worker.
+    expect(summarizeLiveActivity(details)).toBe("Started 1 agent");
+  });
+
   it("surfaces dynamic tool result images without adding their base64 to the label", () => {
     const details = buildLiveToolDetails({
       type: "dynamicToolCall",

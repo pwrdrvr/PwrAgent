@@ -1,6 +1,11 @@
 import {
+  buildSubAgentActivityDetail,
   buildTokenUsageActivityEntry,
+  isSubAgentActivityDetail,
+  readSubAgentActivity,
   shortSubAgentThreadId,
+  subAgentActivitySummaryParts,
+  subAgentTargetLabel,
 } from "@pwragent/shared";
 export { buildTokenUsageActivityEntry, buildTurnUsageActivityEntryFromLine } from "@pwragent/shared";
 import {
@@ -525,21 +530,6 @@ function buildLiveToolLabel(
   return formatLiveToolName(toolName, status);
 }
 
-/**
- * Names one worker for a transcript row. Replay merges rows that share a
- * label, so two workers must never get the same one: prefer the worker's
- * name, then the random tail of its id. Keep in step with the main-process
- * summarizer so a live row and its replayed copy read the same.
- */
-function subAgentTargetLabel(
-  agent: { name?: string; threadId: string } | undefined,
-): string {
-  if (agent?.name) {
-    return agent.name;
-  }
-  return `agent ${shortAgentId(agent?.threadId ?? "")}`;
-}
-
 function formatCollabAgentToolLabel(params: {
   agents: Array<{ name?: string; threadId: string }>;
   tool: string;
@@ -759,6 +749,14 @@ export function buildLiveToolDetails(
     }];
   }
 
+  // A path-based worker report. Built by the same shared function as the
+  // main-process replay, so this row and its replayed copy are identical and
+  // merge by id when the turn is read back.
+  if (itemType === "subagentactivity") {
+    const report = readSubAgentActivity(item);
+    return report ? [buildSubAgentActivityDetail(report)] : [];
+  }
+
   if (
     itemType !== "dynamictoolcall" &&
     itemType !== "commandexecution" &&
@@ -902,10 +900,16 @@ function commandSummaryName(label: string): string | undefined {
 }
 
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
-  const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
+  // Worker reports summarize in the replay's words, not as tool names, so the
+  // header reads the same before and after the turn is read back.
+  const subAgentActivityParts = subAgentActivitySummaryParts(details);
+  const primaryDetails = details.filter(
+    (detail) => !detail.id.includes("-source-") && !isSubAgentActivityDetail(detail),
+  );
   const directDetail = primaryDetails.length === 1 ? primaryDetails[0] : undefined;
   if (
     details.length === 1
+    && subAgentActivityParts.length === 0
     && directDetail?.command
     && (
       directDetail.kind === "read"
@@ -934,6 +938,7 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   } else if (commandLabels.length > 1) {
     parts.push(`Used ${commandLabels.length} tools`);
   }
+  parts.push(...subAgentActivityParts);
 
   return parts.join(" · ") || "Activity";
 }
