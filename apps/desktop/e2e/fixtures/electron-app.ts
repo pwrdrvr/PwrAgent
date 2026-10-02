@@ -164,6 +164,8 @@ const PROFILE_RESOLUTION_ENV_VARS = [
 ] as const;
 
 type ElectronChildProcess = ReturnType<ElectronApplication["process"]>;
+type ElectronMainProcess = { pid: number; startedAt: number };
+const electronMainProcesses = new WeakMap<ElectronApplication, ElectronMainProcess>();
 type CloseResult = "closed" | "rejected" | "timeout";
 type RendererViewport = {
   innerHeight: number;
@@ -437,6 +439,10 @@ export async function launchElectronApp(
   // onboarding-wizard check inside `finishElectronLaunch`, which throws by
   // design.
   try {
+    // Onboarding may quit before teardown. Preserve Windows ownership while
+    // the main-process RPC is alive; cmd.exe's exit alone does not close pipes
+    // inherited by Electron descendants.
+    await captureElectronMainProcess(electronApp);
     return await finishElectronLaunch({
       circuitEnabled,
       circuitStateFile,
@@ -1174,16 +1180,8 @@ export async function closeElectronApplication(
       options,
     );
   }
-  const mainProcess = process.platform === "win32"
-    ? await withTimeout(
-      electronApp.evaluate(() => ({
-        pid: process.pid,
-        startedAt: Date.now() - process.uptime() * 1000,
-      })),
-      ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
-      "Electron main PID evaluation timed out",
-    ).catch(() => undefined)
-    : undefined;
+  await captureElectronMainProcess(electronApp);
+  const mainProcess = electronMainProcesses.get(electronApp);
   const quitStartedAt = Date.now();
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
@@ -1223,6 +1221,23 @@ export async function closeElectronApplication(
     ),
   });
   return recordElectronCloseSummary(execution, options);
+}
+
+export async function captureElectronMainProcess(electronApp: ElectronApplication): Promise<void> {
+  if (process.platform !== "win32" || electronMainProcesses.has(electronApp)) {
+    return;
+  }
+  const mainProcess = await withTimeout(
+    electronApp.evaluate(() => ({
+      pid: process.pid,
+      startedAt: Date.now() - process.uptime() * 1000,
+    })),
+    ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+    "Electron main PID evaluation timed out",
+  ).catch(() => undefined);
+  if (mainProcess) {
+    electronMainProcesses.set(electronApp, mainProcess);
+  }
 }
 
 function alreadyExitedCloseExecution(): ElectronCloseExecution {

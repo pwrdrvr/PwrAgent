@@ -4,6 +4,11 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  LINUX_ARCHITECTURES,
+  LINUX_PACKAGE_EXTENSIONS,
+  linuxReleaseArtifactNames,
+} from "../apps/desktop/scripts/linux-release-artifacts.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopPackagePath = resolve(repoRoot, "apps/desktop/package.json");
@@ -57,6 +62,11 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function sameValues(actual, expected) {
+  return actual.length === expected.length
+    && expected.every((value) => actual.includes(value));
+}
+
 function workflowJobBody(workflow, workflowPath, jobName) {
   const jobPattern = new RegExp(`^  ${escapeRegex(jobName)}:\\n`, "m");
   const match = workflow.match(jobPattern);
@@ -104,6 +114,26 @@ function assertWorkflowJobContainsText(workflow, workflowPath, jobName, expected
   const jobBody = workflowJobBody(workflow, workflowPath, jobName);
   if (!jobBody.includes(expected)) {
     fail(`${workflowPath} ${jobName} must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+function assertWorkflowJobNeeds(workflow, workflowPath, jobName, dependency) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  const needs = jobBody.match(/^    needs:\n((?:      - [A-Za-z0-9_-]+\n)+)/m);
+  if (!needs?.[1].split("\n").includes(`      - ${dependency}`)) {
+    fail(`${workflowPath} ${jobName} must depend on ${dependency}`);
+  }
+}
+
+function assertWorkflowStepContainsText(workflow, workflowPath, jobName, stepName, expected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  const stepPattern = new RegExp(`^      - name: ${escapeRegex(stepName)}\\n`, "m");
+  const match = jobBody.match(stepPattern);
+  const remainder = match ? jobBody.slice(match.index + match[0].length) : "";
+  const nextStepOffset = remainder.search(/^      - /m);
+  const stepBody = nextStepOffset === -1 ? remainder : remainder.slice(0, nextStepOffset);
+  if (!stepBody.includes(expected)) {
+    fail(`${workflowPath} ${jobName} ${stepName} must contain ${JSON.stringify(expected)}`);
   }
 }
 
@@ -215,8 +245,6 @@ if (desktopScripts["release:linux"] !== "node ./scripts/release.mjs --linux") {
 for (const expected of [
   "linux:",
   "executableName: pwragent",
-  "target: deb",
-  "arch: [x64, arm64]",
   "artifactName: \"${productName}-${version}-linux-${arch}.${ext}\"",
   // Pins the Windows Add or Remove Programs name. Without an explicit value
   // electron-builder falls back to "${productName} ${version}", which repeats
@@ -233,6 +261,38 @@ for (const expected of [
   }
 }
 
+// Artifact names live in the reusable helper, rather than release.mjs. Keep
+// the complete supported set and existing download URLs pinned at this gate.
+const linuxArtifactArchNames = {
+  x64: { deb: "amd64", rpm: "x86_64", pacman: "x64", "tar.gz": "x64" },
+  arm64: { deb: "arm64", rpm: "aarch64", pacman: "aarch64", "tar.gz": "arm64" },
+};
+if (!sameValues(LINUX_ARCHITECTURES, ["x64", "arm64"])) {
+  fail("Linux release artifacts must support x64 and arm64");
+}
+if (!sameValues(LINUX_PACKAGE_EXTENSIONS, ["deb", "rpm", "pacman", "tar.gz"])) {
+  fail("Linux release artifacts must support DEB, RPM, pacman and tar.gz");
+}
+const expectedLinuxArtifacts = Object.entries(linuxArtifactArchNames).flatMap(
+  ([arch, formats]) => Object.entries(formats).flatMap(([extension, artifactArch]) => [
+    `PwrAgent-${expectedVersion}-linux-${artifactArch}.${extension}`,
+    `PwrAgent-linux-${arch}.${extension}`,
+  ]),
+);
+if (!sameValues(linuxReleaseArtifactNames(expectedVersion, LINUX_ARCHITECTURES), expectedLinuxArtifacts)) {
+  fail("Linux release artifacts must retain every versioned package and stable alias with format-specific architecture names");
+}
+const linuxBuilderConfig = electronBuilderConfig.split(/^linux:\n/m)[1]?.split(/^\S/m)[0] || "";
+for (const extension of LINUX_PACKAGE_EXTENSIONS) {
+  const targetPattern = new RegExp(
+    `^    - target: ${escapeRegex(extension)}\\n      arch: \\[x64, arm64\\]$`,
+    "m",
+  );
+  if (!targetPattern.test(linuxBuilderConfig)) {
+    fail(`apps/desktop/electron-builder.yml must target Linux ${extension} on x64 and arm64`);
+  }
+}
+
 for (const invalid of [/^    Name:/m, /^    Comment:/m, /^    StartupWMClass:/m]) {
   if (invalid.test(electronBuilderConfig)) {
     fail(
@@ -242,9 +302,12 @@ for (const invalid of [/^    Name:/m, /^    Comment:/m, /^    StartupWMClass:/m]
 }
 
 for (const expected of [
-  "-linux-amd64.deb",
-  "PwrAgent-linux-x64.deb",
-  "PwrAgent-linux-arm64.deb",
+  "from \"./linux-release-artifacts.mjs\"",
+  "builderArgs.push(\"--linux\", ...LINUX_PACKAGE_EXTENSIONS, `--${linuxArch}`, \"--publish=never\")",
+  "createLinuxStableAliases(dist, version, linuxArch)",
+  "writeLinuxChecksums(dist, version, [linuxArch])",
+  "linuxReleaseArtifactNames(version, [currentLinuxBuilderArch()])",
+  "requireUpdateChannelFile(dist, channelFile)",
   "patchStageDependencyManifests",
   "configureStageGithubReleaseType",
   "configured GitHub releaseType=${releaseType}",
@@ -317,7 +380,6 @@ for (const unexpected of [
 
 for (const expected of [
   "ubuntu-24.04-arm",
-  "Package Linux DEB",
   "Publish release assets",
   "Publish release notes",
   "scripts/extract-release-notes.mjs",
@@ -335,6 +397,25 @@ for (const expected of [
     fail(`.github/workflows/release.yml must contain ${JSON.stringify(expected)}`);
   }
 }
+for (const expected of [
+  "runs-on: ${{ matrix.runner }}",
+  "- builder_arch: x64\n            grok_platform: linux-x86_64\n            runner: ubuntu-24.04",
+  "- builder_arch: arm64\n            grok_platform: linux-aarch64\n            runner: ubuntu-24.04-arm",
+  "PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}",
+  "node apps/desktop/scripts/release.mjs --linux --no-publish",
+  "name: linux-packages-${{ matrix.builder_arch }}",
+  "apps/desktop/release-stage/dist/latest-linux*.yml",
+  ...LINUX_PACKAGE_EXTENSIONS.map((extension) => `apps/desktop/release-stage/dist/*.${extension}`),
+]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "linux-package", expected);
+}
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "linux-package",
+  "node apps/desktop/scripts/release.mjs --linux --no-publish",
+  "Upload Linux package artifact",
+);
 assertWorkflowJobRunner(
   releaseWorkflow,
   ".github/workflows/release.yml",
@@ -513,6 +594,14 @@ for (const expected of [
   "was not created as a GitHub Pre-release",
   "windows-dist/*",
   "PwrAgent-windows-SHA256SUMS",
+  "pattern: linux-packages-*",
+  "merge-multiple: true",
+  "node apps/desktop/scripts/linux-release-artifacts.mjs linux-dist \"${RELEASE_TAG#v}\"",
+  "node apps/desktop/scripts/update-channel-files.mjs",
+  "verify-staged",
+  "--version \"${RELEASE_TAG#v}\"",
+  "mac-dist windows-dist linux-dist",
+  "verify-published \"$RUNNER_TEMP/release-asset-names.txt\"",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -520,6 +609,34 @@ for (const expected of [
     "publish-release-assets",
     expected,
   );
+}
+// Scope payload checks to the actual publication step: debug retention must
+// not hide an installer, checksum manifest or updater feed omitted from GitHub.
+for (const expected of [
+  "mac-dist/*",
+  "windows-dist/*",
+  "linux-dist/latest-linux*.yml",
+  "linux-dist/SHA256SUMS",
+  ...LINUX_PACKAGE_EXTENSIONS.map((extension) => `linux-dist/*.${extension}`),
+]) {
+  assertWorkflowStepContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "publish-release-assets",
+    "Create release and publish all platform assets",
+    expected,
+  );
+}
+for (const dependency of ["linux-package", "sign", "windows-sign"]) {
+  assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", "publish-release-assets", dependency);
+}
+for (const [first, second] of [
+  ["Download Linux package artifacts", "node apps/desktop/scripts/linux-release-artifacts.mjs"],
+  ["node apps/desktop/scripts/linux-release-artifacts.mjs", "Create release and publish all platform assets"],
+  ["verify-staged", "Create release and publish all platform assets"],
+  ["gh release create", "verify-published"],
+]) {
+  assertWorkflowJobOrdersText(releaseWorkflow, ".github/workflows/release.yml", "publish-release-assets", first, second);
 }
 // Every release is published as a GitHub Pre-release. Promotion to Latest is a
 // deliberate operator action after the assets and smoke checks are validated,
