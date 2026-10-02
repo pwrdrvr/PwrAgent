@@ -33,6 +33,7 @@ export type LaunchpadMachineControl = {
     celestialIcon?: CelestialIconId;
     instanceId?: string;
     remote?: boolean;
+    availability?: FederationThreadTarget["availability"];
   };
   targets: readonly FederationThreadTarget[];
   /** The launchpad's project, as each machine is asked whether it has one. */
@@ -57,11 +58,12 @@ export type LaunchpadMachineControl = {
 export function describeLaunchpadMachineOffline(
   control: LaunchpadMachineControl | undefined,
 ): string | undefined {
-  if (!control?.currentInstanceId) {
+  if (!control) {
     return undefined;
   }
-  const target = control.targets.find((candidate) =>
-    candidate.instanceId === control.currentInstanceId);
+  const target = control.currentInstanceId
+    ? control.targets.find((candidate) => candidate.instanceId === control.currentInstanceId)
+    : control.local.remote ? control.local : undefined;
   return target?.availability === "offline"
     ? `${target.label} is offline. Your draft stays here until it reconnects.`
     : undefined;
@@ -115,7 +117,11 @@ export function LaunchpadMachineChip(props: {
   const currentLabel = control.currentInstanceId
     ? current?.label ?? control.currentInstanceId
     : control.local.label;
-  const currentOffline = current?.availability === "offline";
+  const currentOffline = (control.currentInstanceId
+    ? current?.availability
+    : control.local.remote ? control.local.availability : undefined) === "offline";
+  const defaultAvailability = control.local.availability ?? "available";
+  const defaultUnavailable = control.local.remote && defaultAvailability !== "available";
   const currentRemote = Boolean(control.currentInstanceId || control.local.remote);
   const defaultMachineDescription = control.local.remote ? "This window" : "This machine";
   const projectLabel = control.project?.label ?? "this project";
@@ -124,13 +130,18 @@ export function LaunchpadMachineChip(props: {
     {
       label: control.local.label,
       value: THIS_MACHINE_VALUE,
-      ...(control.localHasProject || !control.currentInstanceId
-        ? { description: defaultMachineDescription }
-        : {
-            description: FEDERATION_PROJECT_STATE_LABEL.missing,
+      ...(control.currentInstanceId && defaultUnavailable
+        ? {
+            description: FEDERATION_TARGET_AVAILABILITY_LABEL[defaultAvailability],
             disabled: true,
-            tooltip: `${control.local.label} has no project named ${projectLabel}`,
-          }),
+          }
+        : control.localHasProject || !control.currentInstanceId
+          ? { description: defaultMachineDescription }
+          : {
+              description: FEDERATION_PROJECT_STATE_LABEL.missing,
+              disabled: true,
+              tooltip: `${control.local.label} has no project named ${projectLabel}`,
+            }),
     },
     ...control.targets.map((target): ComposerDropdownOption => {
       const isCurrent = target.instanceId === control.currentInstanceId;

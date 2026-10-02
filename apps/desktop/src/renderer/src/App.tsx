@@ -2680,6 +2680,7 @@ function DesktopAppShell(props: {
               ?? windowTarget.instanceId,
             instanceId: windowTarget.instanceId,
             remote: true,
+            ...(windowOwner ? { availability: windowOwner.availability } : {}),
             ...(windowOwner?.celestialIcon
               ? { celestialIcon: windowOwner.celestialIcon }
               : {}),
