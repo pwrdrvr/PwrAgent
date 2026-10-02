@@ -956,6 +956,7 @@ describe("App", () => {
     }));
     const capabilities = ["thread_navigation", "launchpad_metadata", "environment_actions"] as const;
     const listeners = new Set<(event: AgentEvent) => void>();
+    let ownerStatus: FederationPeerSummary["status"] = "connected";
     const readFederationHealth = vi.fn(async () => {
       if (healthPending) return await new Promise<never>(() => {});
       return {
@@ -968,7 +969,7 @@ describe("App", () => {
           localProfileName: "default",
           peers: [
             { id: "m5-default", label: "Harold-MBP-M5-Max", profileName: "default",
-              role: "client" as const, status: "connected" as const, capabilities },
+              role: "client" as const, status: ownerStatus, capabilities },
             ...(otherPeers ? [
               { id: "m5-dev", label: "Harold-MBP-M5-Max", profileName: "dev",
                 role: "client" as const, status: "connected" as const, capabilities },
@@ -1053,8 +1054,34 @@ describe("App", () => {
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
         federationTarget: { scope: "remote", instanceId: "laptop" },
       }));
+      ownerStatus = "disconnected";
+      act(() => {
+        for (const listener of listeners) listener({
+          backend: "codex",
+          notification: { method: "federation/peerStatus/changed",
+            params: { instanceId: target.instanceId, status: ownerStatus } },
+        });
+      });
       fireEvent.click(screen.getByRole("button", { name: "Machine" }));
-      fireEvent.click(screen.getByRole("option", { name: /Harold-MBP-M5-Max/, description: "This window" }));
+      const disconnectedOwner = await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "Offline" });
+      expect(disconnectedOwner).toHaveAttribute("aria-disabled", "true");
+      const launchpadReadCount = ensureDirectoryLaunchpad.mock.calls.length;
+      fireEvent.click(disconnectedOwner);
+      await flushReactUpdates();
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(launchpadReadCount);
+      expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Laptop");
+      expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
+        .toHaveAttribute("data-value", "Create this on the M5");
+
+      ownerStatus = "connected";
+      act(() => {
+        for (const listener of listeners) listener({
+          backend: "codex",
+          notification: { method: "federation/peerStatus/changed",
+            params: { instanceId: target.instanceId, status: ownerStatus } },
+        });
+      });
+      fireEvent.click(await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "This window" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Harold-MBP-M5-Max"));
       expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5");
