@@ -1271,7 +1271,12 @@ function SettingsSectionBody(props: {
   }
 
   if (props.section === "archived") {
-    return <ArchivedThreadsSettings desktopApi={props.desktopApi} />;
+    return (
+      <ArchivedThreadsSettings
+        desktopApi={props.desktopApi}
+        onOpenThread={props.onOpenThread}
+      />
+    );
   }
 
   if (props.section === "thread-management") {

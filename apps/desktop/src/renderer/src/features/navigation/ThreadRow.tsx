@@ -112,6 +112,7 @@ type ThreadRowProps = {
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
+  agentCommandThreadKeys?: Record<string, boolean>;
   threadPinState?: "pinned" | "unpinned";
   retainedForSelection?: boolean;
   thread: NavigationThreadSummary;
@@ -212,6 +213,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     && props.thread.federation.peerStatus !== "connected",
   );
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
+  // A command that outlived its turn. The scanner already says "working"
+  // during a turn, so the mark only shows once the thread is otherwise idle.
+  const agentCommandRunning =
+    status !== "thinking" && props.agentCommandThreadKeys?.[threadKey] === true;
   // Saved pins and selection-retained rows share the heading control's
   // space, but only a saved pin offers Unpin or reports itself as pinned.
   const isPinnedRow =
@@ -502,6 +507,16 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               status={status}
             />
             <span className="thread-row__title">{props.thread.title}</span>
+            {agentCommandRunning ? (
+              <span
+                aria-label="Agent command running"
+                className="thread-row__agent-command"
+                role="img"
+                title="Agent command running"
+              >
+                &gt;_
+              </span>
+            ) : null}
             {hasHeadingPin ? (
               onSetThreadPin ? (
                 <button

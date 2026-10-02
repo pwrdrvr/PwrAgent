@@ -84,3 +84,5 @@ export * from "./local-model-pricing";
 export * from "./thread-search-query";
 
 export * from "./contracts/usage-activity";
+
+export * from "./contracts/background-terminals";

@@ -97,6 +97,7 @@ export function EnvActionRunsView(props: {
   onShowAboveComposer?: () => void;
   onStop?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
   placement: "composer" | "sidebar";
+  hideHeader?: boolean;
 }): ReactNode {
   const hasStartedRun = props.runs.some((run) => run.status === "started");
   const [, setElapsedTick] = useState(0);
@@ -119,7 +120,7 @@ export function EnvActionRunsView(props: {
 
   return (
     <>
-      {props.placement === "sidebar" ? (
+      {props.placement === "sidebar" && !props.hideHeader ? (
         <header className="env-actions-panel__header">
           <div className="env-actions-panel__title-group">
             <h3>Actions</h3>
@@ -169,19 +170,25 @@ export function EnvActionRunEntry(props: {
   const { run } = props;
   const status = run.status;
   const terminationMode = run.terminationMode;
-  const label =
+  const stateLabel =
     status === "started"
       ? terminationMode
-        ? "Env action stopping"
-        : "Env action running"
+        ? "stopping"
+        : "running"
       : terminationMode
-        ? "Env action stopped"
+        ? "stopped"
         : status === "exited"
-          ? "Env action exited"
-          : "Env action failed";
+          ? "exited"
+          : "failed";
+  const label = `Env action ${stateLabel}`;
+  // In the Actions rail the group label already says Environment, so the
+  // row keeps only the state. The full label stays the accessible name.
+  const visibleLabel = props.placement === "sidebar"
+    ? stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1)
+    : label;
 
   const meta: string[] = [];
-  if (run.pid) meta.push(`pid ${run.pid}`);
+  if (run.pid) meta.push(`PID ${run.pid}`);
   if (status === "started" && typeof run.startedAt === "number") {
     meta.push(
       `running for ${formatRunningDurationMs(Date.now() - run.startedAt)}`,
@@ -234,7 +241,7 @@ export function EnvActionRunEntry(props: {
           />
         ) : null}
         <span className="composer__queued-env-action-summary-text">
-          <span className="composer__queued-label">{label}</span>
+          <span className="composer__queued-label">{visibleLabel}</span>
           <span className="composer__queued-text">
             {run.actionName}
             {props.environmentName ? ` · ${props.environmentName}` : ""}
@@ -351,7 +358,7 @@ export function EnvActionRunEntry(props: {
   );
 }
 
-function EnvActionControlButton(props: {
+export function EnvActionControlButton(props: {
   ariaLabel: string;
   children: ReactNode;
   className: string;
@@ -395,7 +402,7 @@ function EnvActionControlButton(props: {
   );
 }
 
-function EnvActionStopIcon(): ReactNode {
+export function EnvActionStopIcon(): ReactNode {
   return (
     <svg
       className="composer__queued-env-action-icon"

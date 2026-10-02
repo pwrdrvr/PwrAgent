@@ -1,3 +1,11 @@
+import type {
+  ListBackgroundTerminalsResponse,
+  CodexBackgroundTerminal,
+} from "@pwragent/shared";
+import type {
+  ThreadBackgroundTerminalsListResponse,
+  ThreadBackgroundTerminalsTerminateResponse,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
@@ -9369,6 +9377,70 @@ export class CodexAppServerClient {
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;
+  }
+
+  async listBackgroundTerminals(threadId: string): Promise<ListBackgroundTerminalsResponse> {
+    await this.ensureInitialized();
+    const terminals: CodexBackgroundTerminal[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      let response: ThreadBackgroundTerminalsListResponse;
+      try {
+        response = await this.connection.request(
+          "thread/backgroundTerminals/list",
+          { threadId, limit: 100, ...(cursor ? { cursor } : {}) },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        ) as ThreadBackgroundTerminalsListResponse;
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/backgroundTerminals/list")) {
+          return { supported: false, terminals: [] };
+        }
+        // Unlike thread/read, this RPC consults only the loaded thread's
+        // process registry. An unloaded history thread owns no sessions here.
+        const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        if (message.includes("thread not found:") || message.includes("thread not loaded")) {
+          return { supported: true, terminals: [] };
+        }
+        throw error;
+      }
+      if (!Array.isArray(response.data)) {
+        throw new Error("Codex returned an invalid background terminal list.");
+      }
+      for (const terminal of response.data) {
+        if (typeof terminal.itemId !== "string" || typeof terminal.processId !== "string"
+          || typeof terminal.command !== "string" || typeof terminal.cwd !== "string") {
+          throw new Error("Codex returned an invalid background terminal.");
+        }
+        const memoryKb = terminal.rssKb == null ? undefined : Number(terminal.rssKb);
+        terminals.push({
+          itemId: terminal.itemId, processId: terminal.processId,
+          command: terminal.command, cwd: terminal.cwd,
+          ...(terminal.osPid != null ? { osPid: terminal.osPid } : {}),
+          ...(terminal.cpuPercent != null ? { cpuPercent: terminal.cpuPercent } : {}),
+          ...(memoryKb !== undefined && Number.isSafeInteger(memoryKb) ? { memoryKb } : {}),
+        });
+      }
+      cursor = response.nextCursor ?? undefined;
+      if (cursor && cursors.has(cursor)) {
+        throw new Error("Codex repeated a background terminal cursor.");
+      }
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return { supported: true, terminals };
+  }
+
+  async terminateBackgroundTerminal(threadId: string, processId: string): Promise<boolean> {
+    await this.ensureInitialized();
+    const response = await this.connection.request(
+      "thread/backgroundTerminals/terminate",
+      { threadId, processId },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    ) as ThreadBackgroundTerminalsTerminateResponse;
+    if (typeof response.terminated !== "boolean") {
+      throw new Error("Codex returned an invalid terminal termination response.");
+    }
+    return response.terminated;
   }
 
   async readThread(params: {

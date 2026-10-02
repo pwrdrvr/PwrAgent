@@ -1,3 +1,5 @@
+import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
+import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
@@ -843,6 +845,8 @@ export type ThreadViewProps = {
   pendingStatusText?: string;
   runningTurnUsageText?: string;
   threadBusy?: boolean;
+  backgroundTerminals?: BackgroundTerminalsViewProps;
+  agentCommandsStatus?: AgentCommandsStatus;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
   /** Token Miser experiment availability gate. */
@@ -2835,6 +2839,15 @@ export function ThreadView(props: ThreadViewProps) {
     onContextRailPinnedChange,
   ]);
 
+  // The transcript's "still running" line points here. Pin the rail like the
+  // dock moves do, so an unpinned rail does not show and then hide again.
+  const showAgentCommands = useCallback(() => {
+    onActiveContextTabChange("actions");
+    if (!contextRailPinned) {
+      onContextRailPinnedChange(true);
+    }
+  }, [contextRailPinned, onActiveContextTabChange, onContextRailPinnedChange]);
+
   const showActionRunsAboveComposer = useCallback(() => {
     onActionRunsDockChange("above");
   }, [onActionRunsDockChange]);
@@ -3987,6 +4000,8 @@ export function ThreadView(props: ThreadViewProps) {
               pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
+              agentCommandsStatus={props.agentCommandsStatus}
+              onShowAgentCommands={showAgentCommands}
               pendingRemoteWork={transcriptRemoteWork}
               prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
               runningTurnUsageText={props.runningTurnUsageText}
@@ -4206,6 +4221,7 @@ export function ThreadView(props: ThreadViewProps) {
           onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
+          backgroundTerminals={props.backgroundTerminals}
           actionRuns={visibleEnvActionRuns}
           actionRunsDock={actionRunsDock}
           actionRunsEnvironmentName={
