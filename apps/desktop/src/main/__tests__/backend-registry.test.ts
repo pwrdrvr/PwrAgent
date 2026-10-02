@@ -49648,7 +49648,58 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("recovers opened-thread workers omitted by the global native discovery page", async () => {
+  it.each(["idle", "active"] as const)("checks a persisted running worker outside global discovery before exposing its disclosure (%s)", async (status) => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const codexClient = new MockBackendClient({
+      threads: [{
+        id: "thread-parent", source: "codex", title: "Review audit",
+        titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+      }],
+    });
+    const read = vi.spyOn(codexClient, "readThread").mockResolvedValue({
+      threadStatus: status, lastAssistantMessage: "Finished while offline",
+      entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false },
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadSubAgent({
+      backend: "codex", threadId: "thread-parent",
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running",
+        createdAt: now - 10_000, updatedAt: now - 1_000, lastMessage: "Still running",
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      const threads = await registry.listThreads({ backend: "codex" });
+      expect(threads[0]?.codexNativeSubAgents?.[0]?.threadStatus).toBe(status);
+      expect(read).toHaveBeenCalledWith({ threadId: "worker-review", includeTurns: false, limit: 0 });
+      read.mockClear();
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      expect(read).not.toHaveBeenCalled();
+      if (status === "active") {
+        read.mockResolvedValue({
+          threadStatus: "idle", lastAssistantMessage: "Finished while offline",
+          entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false },
+        });
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" });
+      expect(overlay?.subAgents?.[0]).toMatchObject({ status: "success", lastMessage: "Finished while offline" });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { state: "completed", expected: "success", stored: false, nested: false, threadStatus: "notLoaded" },
+    { state: "interrupted", expected: "cancelled", stored: false, nested: false, threadStatus: "idle" },
+    { state: "completed", expected: "success", stored: true, nested: false, threadStatus: "notLoaded" },
+    { state: "interrupted", expected: "cancelled", stored: "success", nested: false, threadStatus: "idle" },
+    { state: "completed", expected: "success", stored: false, nested: true, threadStatus: "notLoaded" },
+  ] as const)("recovers opened-thread workers outside global discovery ($state, stored=$stored, nested=$nested)", async ({ state, expected, stored, nested, threadStatus }) => {
     const now = Date.now();
     const parent: AppServerThreadSummary = {
       id: "thread-parent", source: "codex", title: "Review audit",
@@ -49657,7 +49708,7 @@ script = "printf setup"
     const worker: AppServerThreadSummary = {
       id: "worker-review", source: "codex", title: "Review savers",
       titleSource: "derived", linkedDirectories: [], createdAt: now - 10_000,
-      updatedAt: now - 1_000, threadStatus: "notLoaded", model: "gpt-6-luna",
+      updatedAt: now - 1_000, threadStatus, model: "gpt-6-luna",
       reasoningEffort: "high",
       codexNativeSubAgent: { parentThreadId: parent.id, agentNickname: "Noether" },
     };
@@ -49673,31 +49724,67 @@ script = "printf setup"
             command: {
               displayCommand: "wait worker-review",
               subAgent: {
-                backend: "codex", origin: "codex-native", operation: "wait",
-                agents: [{ threadId: worker.id, name: "review_savers", status: "completed" }],
+                backend: "codex", origin: "codex-native", operation: state === "interrupted" ? "close" : "wait",
+                agents: [{ threadId: worker.id, name: "review_savers", status: state }],
               },
             },
           }],
         }],
       },
     });
+    const descendant: AppServerThreadSummary = {
+      ...worker, id: "worker-descendant", threadStatus: "active",
+      codexNativeSubAgent: { parentThreadId: worker.id, depth: 2, agentNickname: "Erdos" },
+    };
     const discovery = vi.spyOn(codexClient, "listNativeSubAgentThreads")
-      .mockImplementation(async (params) => params?.ancestorThreadId === parent.id ? [worker] : []);
+      .mockImplementation(async (params) => params?.ancestorThreadId === parent.id
+        ? [worker, ...(nested ? [descendant] : [])] : []);
     const overlayStore = createOverlayStoreMock();
+    if (stored) {
+      await overlayStore.upsertThreadSubAgent({
+        backend: "codex", threadId: parent.id,
+        subAgent: {
+          monitorId: "codex-native:worker-review", monitorThreadId: worker.id,
+          task: "Review savers", status: stored === "success" ? "success" : "running", backend: "codex",
+          createdAt: now - 10_000, updatedAt: now - 1_000, lastMessage: "Still running",
+        },
+      });
+    }
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
     try {
-      expect((await registry.listThreads({ backend: "codex" }))[0]?.codexNativeSubAgents).toBeUndefined();
+      if (!stored) {
+        expect((await registry.listThreads({ backend: "codex" }))[0]?.codexNativeSubAgents).toBeUndefined();
+      }
       await registry.readThread({ backend: "codex", threadId: parent.id });
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: parent.id });
-      expect(overlay?.subAgents).toEqual([expect.objectContaining({
-        monitorThreadId: worker.id, agentName: "Noether", status: "success",
+      expect(overlay?.subAgents).toEqual(expect.arrayContaining([expect.objectContaining({
+        monitorThreadId: worker.id, agentName: "Noether", status: expected, outcome: expected,
         preferredModel: "gpt-6-luna", preferredReasoningEffort: "high",
-      })]);
+      })]));
       expect(discovery).toHaveBeenCalledWith({ ancestorThreadId: parent.id });
       const threads = await registry.listThreads({ backend: "codex", forceRefresh: true });
-      expect(threads[0]?.codexNativeSubAgents).toEqual([expect.objectContaining({
+      expect(threads[0]?.codexNativeSubAgents).toEqual(expect.arrayContaining([expect.objectContaining({
         threadId: worker.id, agentNickname: "Noether", threadStatus: "idle",
-      })]);
+      })]));
+      if (nested) {
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: descendant.id, turnId: "turn-descendant", model: "gpt-6-luna",
+            tokenUsage: {
+              total: { inputTokens: 1_000, cachedInputTokens: 200, outputTokens: 50 },
+              last: { inputTokens: 1_000, cachedInputTokens: 200, outputTokens: 50 },
+            },
+          },
+        });
+        const updated = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: parent.id });
+        expect(updated?.subAgents?.find((agent) => agent.monitorThreadId === descendant.id)?.monitorUsage?.tokenUsage)
+          .toMatchObject({ inputTokens: 1_000, outputTokens: 50 });
+        const pricing = await overlayStore.readThreadPricing({ backend: "codex", threadId: parent.id });
+        expect(pricing.lines).toEqual(expect.arrayContaining([expect.objectContaining({
+          parentThreadId: parent.id, threadId: descendant.id, scope: "monitor", turnId: "turn-descendant",
+        })]));
+      }
       discovery.mockClear();
       await registry.readThread({ backend: "codex", threadId: parent.id });
       expect(discovery).not.toHaveBeenCalled();

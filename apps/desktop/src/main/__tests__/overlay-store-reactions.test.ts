@@ -432,6 +432,28 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
     });
   }
 
+  it("leaves Codex native workers for protocol reconciliation after their observing runtime stops", async () => {
+    await seedSubAgent("native-parent", {
+      monitorId: "codex-native:worker-review",
+      monitorThreadId: "worker-review",
+      backend: "codex",
+      task: "Codex-owned worker",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 1_500,
+      ownerRuntimeInstanceId: "runtime-dead",
+    });
+    await store.reconcileOrphanedThreadSubAgents({
+      currentRuntimeInstanceId: "runtime-current",
+      currentRegistrySessionId: "registry-current",
+      liveRuntimeInstanceIds: ["runtime-current"],
+      sessionStartedAt: 2_000,
+    });
+    await expect(store.getThreadOverlayState({ backend: "codex", threadId: "native-parent" })).resolves.toMatchObject({
+      subAgents: [expect.objectContaining({ status: "running" })],
+    });
+  });
+
   it("repairs dead owners without touching another live instance or ambiguous legacy work", async () => {
     await seedSubAgent("dead-owner", {
       monitorId: "monitor-dead-owner",

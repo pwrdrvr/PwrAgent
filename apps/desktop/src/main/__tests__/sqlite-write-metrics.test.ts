@@ -1122,6 +1122,69 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it.each(["replay", "status"] as const)("repairs a persisted native worker once from %s", async (source) => {
+    const now = Date.now();
+    const parent: AppServerThreadSummary = {
+      id: "thread-parent", source: "codex", title: "Review audit",
+      titleSource: "explicit", linkedDirectories: [], updatedAt: now,
+    };
+    await store.upsertThreadSubAgent({
+      backend: "codex", threadId: parent.id,
+      subAgent: {
+        monitorId: "codex-native:worker-review", monitorThreadId: "worker-review",
+        backend: "codex", task: "Review savers", status: "running", agentName: "Noether",
+        preferredModel: "gpt-6-luna", preferredReasoningEffort: "high", monitorTurnId: "turn-review",
+        createdAt: now - 10_000, updatedAt: now - 1_000, lastMessage: "Still running",
+      },
+    });
+    const replay: AppServerThreadReplay = {
+      threadStatus: "idle", entries: [], messages: [],
+      pagination: { supportsPagination: true, hasPreviousPage: false },
+    };
+    if (source === "replay") {
+      replay.entries.push({
+        type: "activity", id: "interrupted-review", summary: "Worker interrupted", status: "completed",
+        turn: { id: "turn-review", status: "completed", completedAt: now },
+        details: [{
+          id: "interrupted-review", kind: "command", label: "Interrupted review",
+          command: { displayCommand: "closeAgent worker-review", subAgent: {
+            backend: "codex", origin: "codex-native", operation: "close",
+            agents: [{ threadId: "worker-review", name: "Noether", status: "interrupted" }],
+          } },
+        }],
+      });
+    }
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({ replay, nativeSubAgentThreads: [{
+        ...parent, id: "worker-review", threadStatus: "idle", model: "gpt-6-luna", reasoningEffort: "high",
+        codexNativeSubAgent: { parentThreadId: parent.id, agentNickname: "Noether" },
+      }] }),
+      overlayStore: store as never,
+    });
+    const internal = registry as unknown as {
+      restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
+      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], overlays: Record<string, unknown>): Promise<void>;
+    };
+    const overlays = await store.getThreadOverlayStates({ backend: "codex", threadIds: [parent.id] });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 3; index += 1) {
+          if (source === "replay") await internal.restoreCodexNativeSubAgentsFromReplay(parent.id, replay);
+          else await internal.reconcilePersistedCodexNativeSubAgents([parent], overlays);
+        }
+      });
+      const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: parent.id });
+      expect(overlay?.subAgents?.[0]?.status).toBe(source === "replay" ? "cancelled" : "success");
+      expectSqliteWriteBudget({
+        scenario: `native-subagent-${source}-repair`,
+        note: "One persisted worker terminal correction; repeated recovery makes no commits. At 100 repairs/day, approximately 1.6 MB/day, with no idle writes.",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("backfills one discovered native sub-agent in two boundary writes", async () => {
     const nativeThreadId = "thread-epicurus";
     await store.persistThreadUsageActivity({

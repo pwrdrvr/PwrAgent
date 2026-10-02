@@ -26528,6 +26528,7 @@ export class DesktopBackendRegistry {
       overlaysByThreadId,
       parentThreads: threadsWithPending,
     });
+    await this.reconcilePersistedCodexNativeSubAgents(threadsWithPending, overlaysByThreadId);
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
@@ -26613,6 +26614,39 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async reconcilePersistedCodexNativeSubAgents(
+    threads: AppServerThreadSummary[],
+    overlays: Record<string, ThreadOverlayState | undefined>,
+  ): Promise<void> {
+    for (const parent of threads) {
+      let probed = false;
+      for (const card of overlays[parent.id]?.subAgents ?? []) {
+        if (
+          !card.monitorId.startsWith("codex-native:")
+          || !card.monitorThreadId
+          || codexNativeSubAgentIsTerminal(card.status)
+          || this.codexNativeSubAgentReconciliations.has(card.monitorThreadId)
+        ) {
+          continue;
+        }
+        this.codexNativeSubAgentParents.set(card.monitorThreadId, parent.id);
+        this.scheduleCodexNativeSubAgentReconciliation({
+          parentThreadId: parent.id,
+          receiverThreadId: card.monitorThreadId,
+          delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
+        });
+        await this.reconcileCodexNativeSubAgent(card.monitorThreadId);
+        probed = true;
+      }
+      if (probed) {
+        overlays[parent.id] = await this.overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: parent.id,
+        });
+      }
+    }
+  }
+
   private persistedCodexNativeSubAgentDisclosure(
     thread: AppServerThreadSummary,
     overlay: ThreadOverlayState | undefined,
@@ -26680,15 +26714,22 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadId,
     });
-    const missing = [...observed.keys()].filter((id) => {
+    const pending = [...observed.keys()].filter((id) => {
       const activity = observed.get(id)!;
       const terminal = ["completed", "interrupted", "errored", "shutdown"].includes(activity.agent.status ?? "");
       const recent = !activity.observedAt
         || activity.observedAt >= Date.now() - CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS;
-      return (!terminal || recent)
-        && !parentOverlay?.subAgents?.some((card) => card.monitorId === codexNativeSubAgentId(id));
+      const existing = parentOverlay?.subAgents?.find((card) => card.monitorId === codexNativeSubAgentId(id));
+      const replayStatus = mapCodexNativeSubAgentStatus({
+        agentState: activity.agent.status,
+        itemStatus: "completed",
+        tool: activity.operation === "close" ? "closeAgent" : activity.operation === "wait" ? "wait" : "spawnAgent",
+      });
+      return existing
+        ? !codexNativeSubAgentIsTerminal(existing.status) || (terminal && existing.status !== replayStatus)
+        : (!terminal || recent);
     });
-    if (missing.length === 0) {
+    if (pending.length === 0) {
       return;
     }
     const nativeThreads = this.codexClient.listNativeSubAgentThreads
@@ -26714,20 +26755,14 @@ export class DesktopBackendRegistry {
       now: Date.now(),
       parentThreads: [parent],
     });
-    const overlays = await this.overlayStore.getThreadOverlayStates({
-      backend: "codex",
-      threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
-    });
-    await this.reconcileDiscoveredCodexNativeSubAgents({
-      nativeThreads,
-      overlaysByThreadId: overlays,
-      parentThreads: grouped,
-    });
-    for (const receiverThreadId of missing) {
+    // Explicit replay outcomes must land before discovery infers success from
+    // an idle worker. Discovery then enriches the authoritative card.
+    for (const receiverThreadId of pending) {
       const activity = observed.get(receiverThreadId)!;
       const name = nativeThreads.find((thread) => thread.id === receiverThreadId)?.codexNativeSubAgent?.agentNickname
         ?? activity.agent.name;
       await this.persistCodexNativeSubAgent({
+        authoritativeReplayOutcome: true,
         parentThreadId: threadId,
         receiverThreadId,
         observedAt: activity.observedAt,
@@ -26741,6 +26776,15 @@ export class DesktopBackendRegistry {
         },
       });
     }
+    const overlays = await this.overlayStore.getThreadOverlayStates({
+      backend: "codex",
+      threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
+    });
+    await this.reconcileDiscoveredCodexNativeSubAgents({
+      nativeThreads,
+      overlaysByThreadId: overlays,
+      parentThreads: grouped,
+    });
   }
 
   private async reconcileDiscoveredCodexNativeSubAgents(params: {
@@ -26790,6 +26834,9 @@ export class DesktopBackendRegistry {
           this.clearCodexNativeSubAgentReconciliation(nativeThread.id);
           continue;
         }
+        // Both global and ancestor-scoped discovery flatten descendants under
+        // this ordinary parent; usage must follow the same visible owner.
+        this.codexNativeSubAgentParents.set(nativeThread.id, parent.id);
         const monitorId = codexNativeSubAgentId(nativeThread.id);
         const parentOverlay = params.overlaysByThreadId[parent.id];
         const existing = parentOverlay?.subAgents?.find(
@@ -26891,6 +26938,7 @@ export class DesktopBackendRegistry {
           existing && codexNativeSubAgentIsTerminal(existing.status)
             ? existing.status
             : discoveredStatus;
+        const outcome = codexNativeSubAgentOutcome(status);
         const agentName =
           nativeThread.codexNativeSubAgent?.agentNickname
           ?? existing?.agentName;
@@ -26956,7 +27004,7 @@ export class DesktopBackendRegistry {
             ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
             ...(preferredFastMode !== undefined ? { preferredFastMode } : {}),
             ...(monitorTurnId ? { monitorTurnId } : {}),
-            ...(status === "success" ? { outcome: "success" as const } : {}),
+            ...(outcome ? { outcome } : {}),
             ...(completedAt !== undefined ? { completedAt } : {}),
             ...(usageBackfill ? { monitorUsage: usageBackfill.usage } : {}),
           };
@@ -29132,6 +29180,7 @@ export class DesktopBackendRegistry {
   }
 
   private async persistCodexNativeSubAgent(params: {
+    authoritativeReplayOutcome?: boolean;
     call: CodexNativeSubAgentCall;
     observedAt?: number;
     parentThreadId: string;
@@ -29174,6 +29223,7 @@ export class DesktopBackendRegistry {
     });
     const status =
       existing && codexNativeSubAgentIsTerminal(existing.status)
+      && !(params.authoritativeReplayOutcome && codexNativeSubAgentIsTerminal(mappedStatus))
         ? existing.status
         : mappedStatus;
     const completedAt =
@@ -29208,6 +29258,7 @@ export class DesktopBackendRegistry {
     const lastMessage =
       existing &&
       codexNativeSubAgentIsTerminal(existing.status) &&
+      existing.status === status &&
       !agentState.message &&
       existing.lastMessage
         ? existing.lastMessage
