@@ -213,6 +213,7 @@ async function resolveViaConfiguredBackend(params: {
   const startedAt = Date.now();
   try {
     const result = await getDesktopBackendRegistry().generateStructuredObject({
+      helper: "star_map_intake",
       timeoutMs: INTAKE_TIMEOUT_MS,
       turnTimeoutMs: INTAKE_TURN_TIMEOUT_MS,
       schema: INTAKE_SCHEMA,

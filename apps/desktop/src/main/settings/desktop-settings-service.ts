@@ -18,6 +18,7 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
+  DesktopHelperModelSettings,
   DesktopCodexDiscoverySnapshot,
   DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
@@ -1495,6 +1496,7 @@ export class DesktopSettingsService {
         providerDefaults: config.models?.providerDefaults ?? {},
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
+        helperModels: config.models?.helperModels ?? { helpers: {} },
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -2919,6 +2921,10 @@ export class DesktopSettingsService {
 
   resolveProviderThreadModelMigrations() {
     return this.readModelsConfig().providerThreadMigrations ?? {};
+  }
+
+  resolveHelperModelSettings(): DesktopHelperModelSettings {
+    return this.readModelsConfig().helperModels ?? { helpers: {} };
   }
 
   resolveCodexConfigOverrides(): string[] {

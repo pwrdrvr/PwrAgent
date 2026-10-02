@@ -85,7 +85,7 @@ describe("TokenMiserService", () => {
     }));
     expect(generateSummary).toHaveBeenCalledWith(
       expect.objectContaining({
-        reasoningEffort: "medium",
+        helper: "token_miser_evaluation",
         system: expect.stringContaining(
           "Do not recommend actions, searches, reads, refinements, or next steps.",
         ),
@@ -790,7 +790,7 @@ describe("TokenMiserService code-mode reduction", () => {
       model: expect.anything(),
     }));
     expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
-      reasoningEffort: "medium",
+      helper: "token_miser_evaluation",
       prompt: expect.stringMatching(
         /Call ID: call-1[\s\S]*Cell ID: cell-1[\s\S]*rg --files/,
       ),

@@ -5,6 +5,7 @@ import type {
   BackendSummary,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
+  DesktopHelperModelSettings,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
@@ -38,6 +39,10 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
+import {
+  DEFAULT_MODELS_FOCUS,
+  DefaultModelsSettings,
+} from "./DefaultModelsSettings";
 import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
@@ -128,6 +133,10 @@ export function ModelsSettings(props: {
   onSaveProviderThreadMigrations: (
     migrations: Record<string, DesktopProviderThreadModelMigration>,
   ) => Promise<boolean>;
+  /** Persist Settings → AI Providers → Default Models. */
+  onSaveHelperModels?: (
+    helperModels: DesktopHelperModelSettings,
+  ) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
@@ -532,6 +541,20 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
   );
+
+  if (props.focus === DEFAULT_MODELS_FOCUS) {
+    return (
+      <DefaultModelsSettings
+        backends={backends}
+        settings={props.snapshot.models.helperModels ?? { helpers: {} }}
+        catalogRefresh={catalogRefresh}
+        catalogReading={refreshingCatalog}
+        catalogError={catalogError}
+        saving={props.saving}
+        onSave={async (helperModels) => await props.onSaveHelperModels?.(helperModels)}
+      />
+    );
+  }
 
   if (props.focus === "codex") {
     return (

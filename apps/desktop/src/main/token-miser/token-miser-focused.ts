@@ -73,7 +73,7 @@ export class TokenMiserFocusedSummaries {
       if (utf8ByteLength(prompt) > 78_000) throw new Error("Focused prompt exceeds the 78000-byte limit; narrow the selections.");
       if (!this.isEnabled()) throw new Error("Focused summaries are disabled for this thread.");
       const generated = await this.options.generateSummary({
-        reasoningEffort: "medium", disableExecution: true, system: FOCUSED_SYSTEM, prompt,
+        helper: "token_miser_focused_summaries", disableExecution: true, system: FOCUSED_SYSTEM, prompt,
         timeoutMs: this.options.summaryTimeoutMs ?? 45_000,
         schema: {
           type: "object", additionalProperties: false, required: ["answers"],

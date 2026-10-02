@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { AppServerBackendKind, FederationTarget, ReadUsageActivityResponse, UsageAnalysisModelBackend } from "@pwragent/shared";
+import type { AppServerBackendKind, DesktopHelperModelSettings, FederationTarget, ReadUsageActivityResponse,
+  UsageAnalysisModelBackend } from "@pwragent/shared";
 import { UsageTimeline, type UsageChartForecast } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
-import { DEFAULT_ANALYSIS_MODEL, UsageInspector, analysisModelKey, parseAnalysisModelKey,
+import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
   type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
 import { USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
@@ -114,7 +115,9 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [turn, setTurn] = useState<OwnedUsageRow>();
   const [scope, setScope] = useState<AnalysisScope>("turn");
   const [models, setModels] = useState<AnalysisModelChoice[]>([]);
-  const [model, setModel] = useState(DEFAULT_ANALYSIS_MODEL);
+  // An explicit pick; undefined follows the Usage analysis default model.
+  const [model, setModel] = useState<string>();
+  const [helperModels, setHelperModels] = useState<DesktopHelperModelSettings>();
   const [entryLimit, setEntryLimit] = useState("40");
   const [characterLimit, setCharacterLimit] = useState("20000");
   const [analysis, setAnalysis] = useState<UsageAnalysis>();
@@ -138,6 +141,16 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       .finally(() => { if (mounted.current) setPeersReady(true); });
   }, [desktopApi]);
   useEffect(() => { discoverPeers(); }, [discoverPeers]);
+  useEffect(() => {
+    const readHelperModels = () => void desktopApi?.readSettings?.({}).then((value) => {
+      if (mounted.current) setHelperModels(value.snapshot.models.helperModels);
+    }).catch(() => { /* Automatic stays the default. */ });
+    readHelperModels();
+    // Config writes are not broadcast. Coming back from Settings focuses this
+    // window, so a Default Models change moves the default then.
+    window.addEventListener("focus", readHelperModels);
+    return () => window.removeEventListener("focus", readHelperModels);
+  }, [desktopApi]);
 
   const summary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
@@ -158,7 +171,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     setModels([]);
     // Before the owner's models arrive, and if they never do, a choice on a
     // backend this owner does not list is not sent to it.
-    setModel((current) => ownerBackends.includes(parseAnalysisModelKey(current).backend) ? current : DEFAULT_ANALYSIS_MODEL);
+    setModel((current) => current && ownerBackends.includes(parseAnalysisModelKey(current).backend) ? current : undefined);
     if (modelTarget) void desktopApi?.listBackends?.({ federationTarget: modelTarget }).then((value) => {
       if (disposed) return;
       const choices = ownerBackends.flatMap((kind) => {
@@ -169,14 +182,19 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       setModels(choices);
       // An agent this owner cannot run falls back to the default. A Codex
       // model stays selectable; the owner reports its availability.
-      setModel((current) => parseAnalysisModelKey(current).backend === "codex"
-        || choices.some((item) => analysisModelKey(item.backend, item.id) === current) ? current : DEFAULT_ANALYSIS_MODEL);
+      setModel((current) => current === undefined || parseAnalysisModelKey(current).backend === "codex"
+        || choices.some((item) => analysisModelKey(item.backend, item.id) === current) ? current : undefined);
     }).catch(() => { /* The default stays selectable; the owner reports availability. */ });
     return () => { disposed = true; };
     // Refetch per owner, not per selected row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopApi, modelTargetKey, ownerBackendsKey]);
 
+  const defaultModel = useMemo(() => defaultAnalysisModel(helperModels, models, ownerBackends),
+    // ownerBackends is rebuilt each render; its key is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [helperModels, models, ownerBackendsKey]);
+  const selectedModel = model ?? defaultModel.value;
   const enabledSources = sources.filter((source) => isOnline(source) && !disabled.has(sourceId(source.target)));
   const offlineSources = sources.filter((source) => !isOnline(source));
   const limitPreset = preset === "reset" || preset === "five";
@@ -361,10 +379,10 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const key = currentAnalysisKey;
     if (!target || !key || !desktopApi?.analyzeUsageActivity || analyzing) return;
     const turnId = analysisTurnId;
-    const choice = parseAnalysisModelKey(model);
+    const choice = parseAnalysisModelKey(selectedModel);
     const started = { key, startedAt: Date.now(), owner: target.owner,
-      modelLabel: models.find((item) => analysisModelKey(item.backend, item.id) === model)?.label
-        ?? (model === DEFAULT_ANALYSIS_MODEL ? "GPT-6-Luna" : choice.id) };
+      modelLabel: models.find((item) => analysisModelKey(item.backend, item.id) === selectedModel)?.label
+        ?? (selectedModel === defaultModel.value ? defaultModel.label : choice.id) };
     setAnalysis({ ...started, status: "running" });
     const settle = (next: UsageAnalysis) => { if (mounted.current) setAnalysis(next); };
     // Codex is sent as before, so a request to an older owner is unchanged.
@@ -502,7 +520,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
           onTurn={(row) => { setTurn(row); setScope("turn"); }} onClose={closeInspector}
           onOpenThread={openThread(inspected)}
           scope={scope} onScope={setScope}
-          models={models} model={model} onModel={setModel}
+          models={models} defaultModel={defaultModel} model={selectedModel} onModel={setModel}
           entryLimit={entryLimit} onEntryLimit={setEntryLimit} characterLimit={characterLimit} onCharacterLimit={setCharacterLimit}
           analysis={analysis?.key === currentAnalysisKey ? analysis : undefined} analyzing={analyzing} canAnalyze={Boolean(desktopApi?.analyzeUsageActivity)} onAnalyze={runAnalysis} /> : null}
       </div>

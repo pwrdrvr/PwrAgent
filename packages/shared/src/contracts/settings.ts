@@ -1,6 +1,7 @@
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
+import type { DesktopHelperModelSettings } from "../helper-models";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -1305,6 +1306,8 @@ export type DesktopSettingsSnapshot = {
       string,
       DesktopProviderThreadModelMigration
     >;
+    /** Models for work PwrAgent starts on its own. Absent on older builds. */
+    helperModels?: DesktopHelperModelSettings;
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -1598,6 +1601,8 @@ export type DesktopSettingsConfigPatch = {
       string,
       DesktopProviderThreadModelMigration
     >;
+    /** Replaces every helper model choice; omit a helper to use Helper default. */
+    helperModels?: DesktopHelperModelSettings;
     codex?: {
       path?: string;
       profile?: string;
