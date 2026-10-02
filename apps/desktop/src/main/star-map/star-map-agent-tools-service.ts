@@ -1,6 +1,7 @@
 import type {
   FlyStarMapToToolArgs,
   HighlightStarMapThreadsToolArgs,
+  OperatorFocusSnapshot,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
@@ -19,6 +20,10 @@ import {
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import { sendStarMapCommand } from "./star-map-command-bus";
 import { readStarMapView } from "./star-map-view-registry";
+import { readOperatorFocus } from "../native-voice/operator-focus-registry";
+
+const FOCUS_NOT_PUBLISHED_MESSAGE =
+  "No main PwrAgent window has reported what the operator is looking at. Ask the operator which thread they mean.";
 
 const NOT_OPEN_MESSAGE =
   "No Star Map surface is open, so there is nothing on screen to read. Ask the operator to open the Star Map (View → Star Map, or the map button in the sidebar).";
@@ -27,6 +32,7 @@ export type StarMapAgentToolsDeps = {
   readView?: () => StarMapViewSnapshot | undefined;
   now?: () => number;
   sendCommand?: typeof sendStarMapCommand;
+  readFocus?: () => { focus: OperatorFocusSnapshot; receivedAt: number } | undefined;
 };
 
 /**
@@ -42,6 +48,7 @@ export function createStarMapAgentToolsHandler(
   const readView = deps.readView ?? readStarMapView;
   const now = deps.now ?? (() => Date.now());
   const sendCommand = deps.sendCommand ?? sendStarMapCommand;
+  const readFocus = deps.readFocus ?? readOperatorFocus;
   return async (
     request: PwrAgentStarMapRequest,
   ): Promise<PwrAgentStarMapResponse> => {
@@ -54,6 +61,16 @@ export function createStarMapAgentToolsHandler(
         return await highlightResponse(request.args, sendCommand);
       case "set_star_map_view":
         return await setViewResponse(request.args, sendCommand);
+      case "read_operator_focus": {
+        const published = readFocus();
+        if (!published) {
+          return { ok: false, error: { code: "focus_not_published", message: FOCUS_NOT_PUBLISHED_MESSAGE } };
+        }
+        return {
+          ok: true,
+          data: { ageMs: Math.max(0, now() - published.receivedAt), focus: published.focus },
+        };
+      }
     }
   };
 }

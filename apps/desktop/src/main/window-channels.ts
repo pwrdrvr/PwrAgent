@@ -92,6 +92,14 @@ export function federationTargetForChannelSubscriber(
   return entries.get(webContents)?.federationTarget;
 }
 
+/** A main window on this instance's own profile, not a federation viewer. */
+export function isLocalMainWindowWebContents(
+  webContents: WebContents | undefined,
+): boolean {
+  const entry = webContents ? entries.get(webContents) : undefined;
+  return entry?.kind === WINDOW_KIND_MAIN && entry.federationTarget === undefined;
+}
+
 /** Return every WebContents that has subscribed to the given channel. */
 export function subscribersForChannel(channel: string): WebContents[] {
   const result: WebContents[] = [];

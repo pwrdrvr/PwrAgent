@@ -20,6 +20,7 @@ const wireWindowControlsBridgeMock = vi.fn();
 const createMainWindowMock = vi.fn();
 const stopWindowDiagnosticsMock = vi.fn<() => Promise<void>>();
 const registerAppServerIpcHandlersMock = vi.fn();
+const registerNativeVoiceIpcHandlersMock = vi.fn();
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
@@ -378,6 +379,10 @@ vi.mock("../ipc/agent-ipc", () => ({
   disposeAgentIpcHandlers: disposeAgentIpcHandlersMock,
 }));
 
+vi.mock("../ipc/native-voice", () => ({
+  registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
+}));
+
 vi.mock("../ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
   disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,
@@ -708,6 +713,7 @@ describe("bootstrapApp", () => {
       isVisible: () => false,
     }));
     registerAppServerIpcHandlersMock.mockReset();
+    registerNativeVoiceIpcHandlersMock.mockReset();
     startAppServerOwnerNavigationMock.mockClear();
     disposeAppServerIpcHandlersMock.mockReset();
     registerAgentIpcHandlersMock.mockReset();
@@ -1131,6 +1137,7 @@ describe("bootstrapApp", () => {
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerNativeVoiceIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(startAppServerOwnerNavigationMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerScheduledActionIpcHandlersMock).toHaveBeenCalledTimes(1);

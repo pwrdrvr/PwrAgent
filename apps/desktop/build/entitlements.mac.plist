@@ -16,5 +16,8 @@
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
+  <!-- Microphone capture is opt-in through the live voice session. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
 </dict>
 </plist>

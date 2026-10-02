@@ -1,3 +1,5 @@
+import type { NativeVoiceNotification } from "./native-voice-protocol";
+import type { ThreadRealtimeStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   ListBackgroundTerminalsResponse,
   CodexBackgroundTerminal,
@@ -7554,6 +7556,8 @@ export class CodexAppServerClient {
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
   private availableHelperModels: BackendModelOption[] = [];
+  private readonly realtimeListeners = new Set<(event: NativeVoiceNotification) => void>();
+  private readonly realtimeDisconnectListeners = new Set<() => void>();
   /** A `model/list` completed, so an empty catalog really is empty. */
   private helperModelsRead = false;
   /** The first helper turn's catalog read, shared by turns that start with it. */
@@ -7670,7 +7674,10 @@ export class CodexAppServerClient {
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
-      if (!isKnownCodexMethod) {
+      // Realtime is routed to live voice below, never logged: its payloads
+      // carry the operator's spoken words and session SDP, which stay memory
+      // only.
+      if (!isKnownCodexMethod && !method.startsWith("thread/realtime/")) {
         logUnhandledCodexMessage({
           kind: "notification",
           method,
@@ -7710,6 +7717,13 @@ export class CodexAppServerClient {
         }
       }
 
+      // Realtime is ephemeral audio/control traffic. Keep it off ordinary
+      // transcript, federation and persistence paths.
+      if (method.startsWith("thread/realtime/")) {
+        const event = { method, params } as NativeVoiceNotification;
+        for (const listener of this.realtimeListeners) listener(event);
+        return;
+      }
       const normalized = normalizeServerNotification(
         method,
         params,
@@ -7966,6 +7980,7 @@ export class CodexAppServerClient {
   }
 
   private resetConnectionState(helperTurnError: Error): void {
+    for (const listener of this.realtimeDisconnectListeners) listener();
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
@@ -8257,6 +8272,32 @@ export class CodexAppServerClient {
       });
       return { recovered: recoveryResult! };
     });
+  }
+
+  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void): () => void {
+    this.realtimeListeners.add(listener);
+    return () => { this.realtimeListeners.delete(listener); };
+  }
+
+  onRealtimeDisconnect(listener: () => void): () => void {
+    this.realtimeDisconnectListeners.add(listener);
+    return () => { this.realtimeDisconnectListeners.delete(listener); };
+  }
+
+  async startRealtime(params: ThreadRealtimeStartParams): Promise<void> {
+    await this.ensureInitialized();
+    await this.connection.request("thread/realtime/start", params, 20_000);
+  }
+
+  async stopRealtime(threadId: string): Promise<void> {
+    // Never restart a disconnected backend merely to stop voice.
+    if (!this.initialized || this.pendingCloses > 0) return;
+    await this.connection.request("thread/realtime/stop", { threadId }, 10_000);
+  }
+
+  async appendRealtimeText(threadId: string, text: string): Promise<void> {
+    if (!this.initialized || this.pendingCloses > 0) throw new Error("Voice backend disconnected.");
+    await this.connection.request("thread/realtime/appendText", { threadId, text, role: "user" }, 10_000);
   }
 
   onNotification(
@@ -9542,8 +9583,7 @@ export class CodexAppServerClient {
    * Refresh the catalog without starting inference. The registry negotiates
    * dynamicToolsResumeField and reserves the idle thread before calling this.
    */
-  async refreshThreadTools(params: {
-    threadId: string;
+  async refreshThreadTools(params: Parameters<typeof buildThreadResumePayloads>[0] & {
     dynamicTools: CodexDynamicToolSpec[];
   }): Promise<void> {
     await this.ensureInitialized();
@@ -9557,12 +9597,29 @@ export class CodexAppServerClient {
     if (readThreadStatus(current) === "active") {
       throw new Error("Wait for the current turn to finish or stop it, then change Agent thread status.");
     }
+    const [resumePayload] = buildThreadResumePayloads({
+      ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+    }, this.getProtocolCompatibility());
     await requestWithFallbacks({
       client: connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads(params, this.getProtocolCompatibility()),
+      payloads: [resumePayload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
+    // Rejoining a loaded thread preserves its model/effort. Automatic voice
+    // handoffs have no turn/start settings override, so update the live thread
+    // explicitly and await acknowledgement before admitting realtime.
+    const settings = buildThreadSettingsUpdatePayload(params);
+    if (settings || params.approvalPolicy || params.approvalsReviewer || params.sandbox) {
+      const payload: CodexThreadSettingsUpdateParams = {
+        ...settings, threadId: params.threadId,
+        approvalPolicy: resumePayload.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
+        approvalsReviewer: resumePayload.approvalsReviewer,
+        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+      };
+      await connection.request("thread/settings/update", payload,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    }
   }
 
   async injectThreadItems(params: {

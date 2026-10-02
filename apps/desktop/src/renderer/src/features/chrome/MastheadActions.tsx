@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { AutomationsIcon, SearchIcon, SettingsIcon } from "../../icons";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { FederationThreadTarget } from "./federation-thread-targets";
@@ -12,6 +12,8 @@ import { NewThreadButton } from "./NewThreadButton";
  * styling so every placement reads identically.
  */
 export type MastheadActionsProps = {
+  /** Director voice's mic, first in the actions. It subscribes to voice itself. */
+  voiceControl?: ReactNode;
   addingProjectDirectory?: boolean;
   automationsActive?: boolean;
   settingsActive?: boolean;
@@ -40,6 +42,7 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
   const isFederationWindow = Boolean(readRendererFederationTarget());
   return (
     <div className="masthead-actions">
+      {isFederationWindow ? null : props.voiceControl}
       {props.onToggleThreadSearch ? (
         <button
           type="button"
