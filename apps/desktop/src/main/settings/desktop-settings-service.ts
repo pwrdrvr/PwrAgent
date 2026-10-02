@@ -211,6 +211,7 @@ import {
 } from "./desktop-settings-env";
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
+  TOKEN_MISER_DIAGNOSTICS_DIRNAME,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -899,6 +900,12 @@ export class DesktopSettingsService {
                     }
                   : {}),
             },
+        tokenMiserDiagnosticsDirectory: path.join(
+          path.dirname(this.configPath),
+          "state",
+          "token-miser",
+          TOKEN_MISER_DIAGNOSTICS_DIRNAME,
+        ),
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,

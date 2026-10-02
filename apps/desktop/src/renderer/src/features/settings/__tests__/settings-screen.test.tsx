@@ -3786,6 +3786,37 @@ describe("SettingsScreen", () => {
     expect(toggle).toBeDisabled();
   });
 
+  it("shows where diagnostic samples are saved and opens the folder", async () => {
+    const directory = "/tmp/pwragent/state/token-miser/diagnostics";
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiserDiagnosticsDirectory = directory;
+    const openPath = vi.fn()
+      .mockResolvedValueOnce({ opened: false, error: `Path does not exist: ${directory}` })
+      .mockResolvedValueOnce({ opened: true });
+    render(<SettingsScreen
+      desktopApi={{ openPath } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental"
+      settings={createSettingsState(snapshot)}
+      onClose={() => undefined}
+    />);
+
+    // Capture is off, but saved files outlive the switch, so the folder shows.
+    expect(screen.getByRole("switch", {
+      name: "Capture diagnostic samples — Token Miser",
+    })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(directory)).toBeInTheDocument();
+
+    const open = screen.getByRole("button", { name: "Open folder" });
+    fireEvent.click(open);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("No samples saved yet."));
+    expect(openPath).toHaveBeenCalledWith({ path: directory });
+
+    fireEvent.click(open);
+    await waitFor(() => expect(openPath).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };

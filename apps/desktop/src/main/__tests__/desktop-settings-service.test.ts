@@ -1491,8 +1491,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
     expect(service.resolveTokenMiserDiagnosticsEnabled()).toBe(false);
-    expect((await service.readSettingsProjection()).experimental.tokenMiserDiagnosticsEnabled)
+    const projection = await service.readSettingsProjection();
+    expect(projection.experimental.tokenMiserDiagnosticsEnabled)
       .toEqual({ value: false, source: "default" });
+    // The same folder the registry's collector writes, shown even while off.
+    expect(projection.runtime.tokenMiserDiagnosticsDirectory).toBe(
+      path.join(path.dirname(configPath), "state", "token-miser", "diagnostics"),
+    );
     await service.writeConfigPatchTargeted({
       experimental: { tokenMiserDiagnosticsEnabled: true },
     });

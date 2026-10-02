@@ -1081,6 +1081,12 @@ export type DesktopSettingsSnapshot = {
         observedAt: number;
       };
     };
+    /**
+     * Where opt-in Token Miser diagnostic samples are written. The folder
+     * exists only after the first batch, and saved files outlive the switch,
+     * so Settings shows it whether or not capture is on.
+     */
+    tokenMiserDiagnosticsDirectory?: string;
     messaging: {
       disabled: boolean;
       disabledReason?: string;

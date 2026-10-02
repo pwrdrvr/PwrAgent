@@ -2,7 +2,8 @@
 
 This contributor reference describes PwrAgent-owned diagnostic samples. The
 additive `experimental.token_miser_diagnostics_enabled` boolean defaults to
-false. Its desktop control is in the Token Miser experimental section. Capture
+false. Its desktop control is in the Token Miser experimental section, which
+also shows the diagnostics folder with an Open folder action. Capture
 also requires the global Token Miser experiment. Disabling it clears unwritten
 samples; existing files remain until rotation or local deletion.
 

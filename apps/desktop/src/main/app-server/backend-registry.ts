@@ -552,6 +552,7 @@ import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manag
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
+  TOKEN_MISER_DIAGNOSTICS_DIRNAME,
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
@@ -9625,7 +9626,7 @@ export class DesktopBackendRegistry {
     }
     if (tokenMiserStateDir) {
       this.tokenMiserDiagnostics = new TokenMiserDiagnostics({
-        filePath: path.join(tokenMiserStateDir, "diagnostics", `${this.runtimeInstanceId}.jsonl`),
+        filePath: path.join(tokenMiserStateDir, TOKEN_MISER_DIAGNOSTICS_DIRNAME, `${this.runtimeInstanceId}.jsonl`),
         isEnabled: () => {
           try {
             return this.resolveTokenMiserEnabledFn()
