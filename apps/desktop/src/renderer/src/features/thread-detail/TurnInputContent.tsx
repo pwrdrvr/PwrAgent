@@ -18,7 +18,14 @@ export function TurnInputContent(props: {
   origin?: AppServerThreadMessageOrigin;
   desktopApi?: DesktopApi;
 }) {
-  const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
+  // One gallery over every image the message shows, in the order it shows
+  // them, as a sent message's images page in the transcript.
+  const images: AppServerThreadImagePart[] = props.imageParts
+    ?? props.input.flatMap((item) => item.type === "image"
+      ? [{ type: "image" as const, url: item.url, alt: item.name ?? "Attached image" }]
+      : []);
+  const [expandedIndex, setExpandedIndex] = useState<number>();
+  const expandedImage = expandedIndex === undefined ? undefined : images[expandedIndex];
   const links = useThreadLinks();
   const source = props.origin?.sourceThread;
   const link = source
@@ -37,11 +44,14 @@ export function TurnInputContent(props: {
           return null;
         }
         if (item.type === "image") {
+          const imageIndex = props.input
+            .slice(0, index)
+            .filter((candidate) => candidate.type === "image").length;
           return <TranscriptImageTile
             key={index}
-            imagePart={{ type: "image", url: item.url, alt: item.name ?? "Attached image" }}
+            imagePart={images[imageIndex]!}
             imageNumber={index + 1}
-            onOpenImage={setExpandedImage}
+            onOpenImage={() => setExpandedIndex(imageIndex)}
             desktopApi={props.desktopApi}
           />;
         }
@@ -52,15 +62,23 @@ export function TurnInputContent(props: {
           key={`image:${index}`}
           imagePart={image}
           imageNumber={index + 1}
-          onOpenImage={setExpandedImage}
+          onOpenImage={() => setExpandedIndex(index)}
           desktopApi={props.desktopApi}
         />
       ))}
-      {expandedImage ? (
+      {expandedImage && expandedIndex !== undefined ? (
         <ImageLightbox
           src={expandedImage.url}
           alt={expandedImage.alt ?? "Attached image"}
-          onClose={() => setExpandedImage(undefined)}
+          position={expandedIndex + 1}
+          total={images.length}
+          onClose={() => setExpandedIndex(undefined)}
+          onPrevious={expandedIndex > 0
+            ? () => setExpandedIndex(expandedIndex - 1)
+            : undefined}
+          onNext={expandedIndex < images.length - 1
+            ? () => setExpandedIndex(expandedIndex + 1)
+            : undefined}
         />
       ) : null}
     </div>

@@ -515,6 +515,53 @@ type ComposerPdfReference = {
   path: string;
 };
 
+/** One expandable thumbnail in the attachment strip, as the lightbox shows it. */
+type ComposerStripLightboxItem = {
+  alt: string;
+  caption?: string;
+  dialogLabel?: string;
+  key: string;
+  src: string;
+};
+
+function imageStripItemKey(attachment: ComposerImageAttachment): string {
+  return `image:${attachment.id}`;
+}
+
+function pdfStripItemKey(path: string): string {
+  return `pdf:${path}`;
+}
+
+/** The strip's expandable thumbnails in the order it draws them. A PDF joins
+ *  only once its page preview is ready, because until then it has no image. */
+function composerStripLightboxItems(
+  imageAttachments: readonly ComposerImageAttachment[],
+  pdfReferences: readonly ComposerPdfReference[],
+  pdfPreviewStates: ReadonlyMap<string, ComposerPdfPreviewState>,
+): ComposerStripLightboxItem[] {
+  const items: ComposerStripLightboxItem[] = imageAttachments.map(
+    (attachment, index) => ({
+      alt: formatPastedImageAlt(attachment, index),
+      key: imageStripItemKey(attachment),
+      src: attachment.url,
+    }),
+  );
+  for (const reference of pdfReferences) {
+    const state = pdfPreviewStates.get(reference.path);
+    if (state?.status !== "ready") {
+      continue;
+    }
+    items.push({
+      alt: `Page 1 preview of ${reference.label}`,
+      caption: `${reference.label} · Page 1 of ${state.preview.pageCount}`,
+      dialogLabel: `PDF preview: ${reference.label}`,
+      key: pdfStripItemKey(reference.path),
+      src: state.preview.dataUrl,
+    });
+  }
+  return items;
+}
+
 const EMPTY_COMPOSER_REFERENCE_INSPECTION: ComposerReferenceInspection = {
   filePaths: [],
   pdfPaths: [],
@@ -3035,11 +3082,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     cache.set(attachment.id, signature);
     return signature;
   };
-  // Currently expanded attachment shown in the full-size lightbox, or
-  // undefined when the lightbox is closed.
-  const [lightboxAttachment, setLightboxAttachment] =
-    useState<ComposerImageAttachment>();
+  // Key of the attachment-strip item shown in the full-size lightbox
+  // (`image:<id>` or `pdf:<path>`), or undefined when it is closed. A key,
+  // not the item, so the gallery is derived from the strip as it stands and
+  // paging walks the same thumbnails the operator sees.
   // Escape-to-close is owned by `ImageLightbox` itself.
+  const [expandedStripItemKey, setExpandedStripItemKey] = useState<string>();
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
     latestDraftSnapshotRef.current.snapshot.skillTokens
@@ -3058,11 +3106,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const composerPdfPreviewStatesRef = useRef(composerPdfPreviewStates);
   composerPdfPreviewStatesRef.current = composerPdfPreviewStates;
   const composerPdfPreviewRequestIdsRef = useRef(new Map<string, number>());
-  const [pdfPreviewLightbox, setPdfPreviewLightbox] = useState<{
-    label: string;
-    path: string;
-    preview: ComposerPdfPreview;
-  }>();
   const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
     id: string;
     index: number;
@@ -3513,8 +3556,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       composerPdfPreviewStatesRef.current = next;
       setComposerPdfPreviewStates(next);
     }
-    setPdfPreviewLightbox((lightbox) =>
-      lightbox && !allowedPaths.has(lightbox.path) ? undefined : lightbox,
+    // A PDF path can come back (the operator re-references the file), so a
+    // key left pointing at it would reopen the lightbox on its own. Image
+    // keys carry a per-paste id and never return.
+    setExpandedStripItemKey((key) =>
+      key?.startsWith("pdf:") && !allowedPaths.has(key.slice("pdf:".length))
+        ? undefined
+        : key,
     );
   }, [pdfPreviewPathsKey, pdfReferencePaths]);
   useEffect(() => {
@@ -10628,20 +10676,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     imageAttachments.length > 0
     || visibleFileAttachments.length > 0
     || pdfPreviewReferences.length > 0;
-  const imageLightbox = lightboxAttachment ? (
+  // The strip is one gallery: every thumbnail that expands, in the order it
+  // is drawn — pasted images, then PDF page previews that are ready. A sent
+  // message's images page with the arrow keys; these must too, or the same
+  // pair of screenshots behaves differently before and after Send.
+  const stripLightboxItems = expandedStripItemKey
+    ? composerStripLightboxItems(
+        imageAttachments,
+        pdfPreviewReferences,
+        composerPdfPreviewStates,
+      )
+    : [];
+  const expandedStripIndex = stripLightboxItems.findIndex(
+    (item) => item.key === expandedStripItemKey,
+  );
+  const expandedStripItem = stripLightboxItems[expandedStripIndex];
+  const previousStripItem = stripLightboxItems[expandedStripIndex - 1];
+  const nextStripItem = stripLightboxItems[expandedStripIndex + 1];
+  const imageLightbox = expandedStripItem ? (
     <ImageLightbox
-      src={lightboxAttachment.url}
-      alt={formatPastedImageAlt(lightboxAttachment, 0)}
-      onClose={() => setLightboxAttachment(undefined)}
-    />
-  ) : null;
-  const pdfPreviewLightboxNode = pdfPreviewLightbox ? (
-    <ImageLightbox
-      alt={`Page 1 preview of ${pdfPreviewLightbox.label}`}
-      caption={`${pdfPreviewLightbox.label} · Page 1 of ${pdfPreviewLightbox.preview.pageCount}`}
-      dialogLabel={`PDF preview: ${pdfPreviewLightbox.label}`}
-      src={pdfPreviewLightbox.preview.dataUrl}
-      onClose={() => setPdfPreviewLightbox(undefined)}
+      alt={expandedStripItem.alt}
+      caption={expandedStripItem.caption}
+      dialogLabel={expandedStripItem.dialogLabel}
+      src={expandedStripItem.src}
+      position={expandedStripIndex + 1}
+      total={stripLightboxItems.length}
+      onClose={() => setExpandedStripItemKey(undefined)}
+      onPrevious={
+        previousStripItem
+          ? () => setExpandedStripItemKey(previousStripItem.key)
+          : undefined
+      }
+      onNext={
+        nextStripItem
+          ? () => setExpandedStripItemKey(nextStripItem.key)
+          : undefined
+      }
     />
   ) : null;
   const workspaceHandoffDialog =
@@ -11361,7 +11431,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     className="composer__attachment-open"
                     type="button"
                     onClick={() => {
-                      setLightboxAttachment(attachment);
+                      setExpandedStripItemKey(imageStripItemKey(attachment));
                     }}
                   >
                     <img
@@ -11410,11 +11480,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       className="composer__attachment-open"
                       type="button"
                       onClick={() => {
-                        setPdfPreviewLightbox({
-                          label: reference.label,
-                          path: reference.path,
-                          preview,
-                        });
+                        setExpandedStripItemKey(pdfStripItemKey(reference.path));
                       }}
                     >
                       <img
@@ -13382,7 +13448,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       </form>
       {fullAccessRiskDialog}
       {imageLightbox}
-      {pdfPreviewLightboxNode}
     </>
   );
 });
