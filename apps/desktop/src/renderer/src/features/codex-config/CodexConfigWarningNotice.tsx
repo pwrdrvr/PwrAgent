@@ -178,6 +178,9 @@ export function CodexConfigWarningNotice(props: {
           }
         : {}),
       onDismiss: () => {
+        // The old Dismiss was disabled through a trust: closed now, a failed
+        // trust would report its error to no one.
+        if (trusting) return;
         setDismissedIds((current) => new Set(current).add(notice.id));
         setNotice(null);
       },

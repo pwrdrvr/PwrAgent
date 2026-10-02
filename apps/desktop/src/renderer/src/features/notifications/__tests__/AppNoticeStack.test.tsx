@@ -281,4 +281,27 @@ describe("AppNoticeStack", () => {
     expect(card.style.width).toBe("320px");
     expect(card.style.height).toBe("140px");
   });
+
+  it("stops holding once the pointer is somewhere a removed card cannot report", () => {
+    // A card removed from under the pointer fires no pointerleave, so the
+    // stack learns the pointer left from the next element it reaches.
+    const layOut = stubCardLayout();
+    const { container } = render(<DurableHarness initial={SHORT_THEN_TALL} />);
+    const stack = container.querySelector(".app-toast-stack")!;
+    const card = container.querySelector<HTMLElement>(".app-notice-toast")!;
+    layOut(card, 300, 92);
+
+    fireEvent.pointerEnter(stack);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(card).toHaveAttribute("data-held", "true");
+
+    fireEvent.pointerOver(document.body);
+    expect(card).not.toHaveAttribute("data-held");
+
+    // And a later change with the pointer away holds nothing.
+    layOut(card, 320, 140);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(screen.getByText("Last")).toBeInTheDocument();
+    expect(card).not.toHaveAttribute("data-held");
+  });
 });

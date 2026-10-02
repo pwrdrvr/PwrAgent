@@ -399,6 +399,65 @@ describe("AppUpdateBanner", () => {
     expect(notices[0]?.tone).toBe("error");
   });
 
+  it("still reports the outcome of a check whose card was closed early", async () => {
+    // Closing before there is a download to cancel only hides the card. A
+    // download that then fails must still say so.
+    const { desktopApi, notices, emit, emitResult } = renderBanner({
+      status: "idle",
+    });
+
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateCheckResult).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(screen.queryByText("Checking for updates")).toBeNull();
+
+    act(() => {
+      emitResult({ status: "available", version: "1.0.0" });
+    });
+    act(() => {
+      emit({ status: "downloading", version: "1.0.0", percent: 30 });
+    });
+    // Closed means closed for this check: the download does not reopen it.
+    expect(screen.queryByText("Downloading update")).toBeNull();
+    act(() => {
+      emit({ status: "error", message: "connection reset" });
+    });
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.tone).toBe("error");
+  });
+
+  it("keeps the offer up while a restart is in flight", async () => {
+    const { desktopApi, emit } = renderBanner({ status: "idle" });
+    let finishInstall: ((result: { status: "error"; message: string }) => void) | undefined;
+    desktopApi.installAppUpdate.mockImplementation(
+      () => new Promise((resolve) => {
+        finishInstall = resolve;
+      }) as never,
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateStatus).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      emit({ status: "downloaded", version: "1.2.3" });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
+    expect(screen.getByRole("button", { name: "Restarting..." })).toBeDisabled();
+
+    // The old Dismiss was disabled here; the close is ignored instead, so a
+    // failed install has a card to report on.
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    await act(async () => {
+      finishInstall?.({ status: "error", message: "install failed" });
+    });
+    expect(screen.getByText("install failed")).toBeInTheDocument();
+  });
+
   it("takes down the previous answer when the operator asks again", async () => {
     const { desktopApi, notices, dismissed, emitResult } = renderBanner({
       status: "idle",

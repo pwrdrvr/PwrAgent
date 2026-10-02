@@ -186,7 +186,12 @@ test("a menu check reports itself live and ends on an actionable offer", async (
     const restart = await box(
       offer.getByRole("button", { name: "Restart", exact: true }),
     );
-    expect(dismiss, "the close did not move under the pointer").toEqual(cancel);
+    for (const key of ["x", "y", "width", "height"] as const) {
+      expect(
+        Math.abs(dismiss[key] - cancel[key]),
+        `the close did not move under the pointer (${key})`,
+      ).toBeLessThanOrEqual(0.5);
+    }
     expect(contains(dismiss, aim), "Cancel's centre lands on Dismiss").toBe(
       true,
     );

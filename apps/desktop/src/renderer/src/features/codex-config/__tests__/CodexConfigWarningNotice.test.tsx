@@ -174,6 +174,9 @@ describe("CodexConfigWarningNotice", () => {
     expect(screen.getByRole("button", { name: "Trusting..." })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Trusting..." }));
     expect(trustCodexProject).toHaveBeenCalledTimes(1);
+    // Nor can the card close under it: a failure would have nowhere to show.
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Untrusted project");
     await act(async () => {
       resolveTrust?.();
     });

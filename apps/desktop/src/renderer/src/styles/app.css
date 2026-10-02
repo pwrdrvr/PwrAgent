@@ -16936,14 +16936,15 @@ a.button {
 /* Card-action failures (archive, mark seen) surface over the map rather
    than on the card, which may have just been refreshed away. The map places
    the notice; `AppNoticeToast` draws it. */
+/* As wide as the card and no wider, so the map takes presses beside it. */
 .star-map__notice {
   position: absolute;
   bottom: 16px;
   left: 50%;
   z-index: 30;
   display: flex;
-  width: min(380px, calc(100% - 32px));
-  justify-content: center;
+  width: max-content;
+  max-width: min(380px, calc(100% - 32px));
   transform: translateX(-50%);
 }
 

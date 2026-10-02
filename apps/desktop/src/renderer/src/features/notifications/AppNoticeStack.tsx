@@ -24,6 +24,22 @@ export function AppNoticeStack(props: {
   // Holds a card at the size of the notice it replaced until the pointer
   // leaves the stack, not just the card (AppNoticeToast.tsx).
   const [hovered, setHovered] = useState(false);
+
+  // A card removed from under the pointer, as a closed toast is, fires no
+  // pointerleave, so the stack would read as hovered until the pointer next
+  // crossed it. The next element the pointer reaches says otherwise.
+  useEffect(() => {
+    if (!hovered) return;
+    const onPointerOver = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && stackRef.current?.contains(target)) return;
+      setHovered(false);
+    };
+    document.addEventListener("pointerover", onPointerOver, true);
+    return () => {
+      document.removeEventListener("pointerover", onPointerOver, true);
+    };
+  }, [hovered]);
   const lastActiveIndexRef = useRef(0);
   const stackRef = useRef<HTMLDivElement>(null);
   const placement = useToastStackPlacement(stackRef);

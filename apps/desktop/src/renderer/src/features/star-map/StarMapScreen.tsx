@@ -3044,9 +3044,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const [cardError, setCardError] = useState<string | undefined>(undefined);
   // A navigation failure keeps reporting itself until it clears, so closing
-  // its notice hides that one failure; a different one shows again.
+  // its notice hides that one failure; a different one shows again, and so
+  // does the same one once it has cleared and come back.
   const [dismissedNavigationError, setDismissedNavigationError] = useState<string>();
   const navigationErrorText = localFeed.error ?? remoteGeometryErrorText;
+  useEffect(() => {
+    if (!navigationErrorText) setDismissedNavigationError(undefined);
+  }, [navigationErrorText]);
   const retryNavigation = (): void => {
     if (localFeed.error) void localFeed.refresh();
     else if (remoteGeometryError) {

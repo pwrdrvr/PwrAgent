@@ -52,7 +52,6 @@ export function updateCheckOutcomeNotice(
   result: Parameters<typeof updateCheckOutcomeCopy>[0],
 ): AppNoticeToastNotice {
   const copy = updateCheckOutcomeCopy(result);
-  const notesUrl = copy.notesUrl;
   return {
     // Status-keyed so a genuinely new outcome remounts the notice and
     // restarts its countdown, while a repeat of the same one is idempotent.
@@ -61,21 +60,8 @@ export function updateCheckOutcomeNotice(
     title: copy.eyebrow,
     message: copy.message,
     tone: copy.tone,
-    // This is the one update surface that does NOT render `ReleaseNotesLink`:
-    // a notice owns its own action buttons, so the link rides as an action
-    // and shares `openReleaseNotes` instead of the markup. Omitted entirely
-    // for `skipped` and `error`, which name no version.
-    actions:
-      notesUrl === undefined
-        ? undefined
-        : [
-            {
-              label: "Release notes",
-              onClick: () => {
-                openReleaseNotes(notesUrl);
-              },
-            },
-          ],
+    // Omitted entirely for `skipped` and `error`, which name no version.
+    actions: releaseNotesActions(copy.notesUrl),
   };
 }
 
@@ -98,6 +84,9 @@ export function AppUpdateBanner(props: {
   // silent.
   const [watching, setWatching] = useState(false);
   const [canceling, setCanceling] = useState(false);
+  // The operator closed the live card before there was a download to
+  // cancel. The check keeps being watched, so its outcome still arrives.
+  const [liveHidden, setLiveHidden] = useState(false);
   const desktopApi = props.desktopApi;
 
   // Read inside the subscriptions without making them depend on the values -
@@ -176,6 +165,7 @@ export function AppUpdateBanner(props: {
           // preceded it.
           watchingRef.current = true;
           setWatching(true);
+          setLiveHidden(false);
           setCanceling(false);
           setDismissedVersion(undefined);
           setRestartError(undefined);
@@ -267,15 +257,8 @@ export function AppUpdateBanner(props: {
     });
   };
 
-  // Closing the card before there is a download to cancel. The outcome
-  // still arrives through the result channel, which `settle` answers.
-  const stopWatching = (): void => {
-    watchingRef.current = false;
-    setWatching(false);
-  };
-
   const progress =
-    watching && isUpdateCheckInProgress(updateStatus)
+    watching && !liveHidden && isUpdateCheckInProgress(updateStatus)
       ? updateProgressCopy(updateStatus)
       : undefined;
   const offered = version !== undefined && dismissedVersion !== version;
@@ -306,7 +289,7 @@ export function AppUpdateBanner(props: {
           : {}),
         // A download is the work this card reports, so closing it is
         // Cancel. While the release read is still out there is nothing to
-        // stop, and closing only stops watching: the outcome still arrives
+        // stop, and closing only hides the card: the outcome still arrives
         // as a notice.
         ...(progress.cancelable
           ? { dismissLabel: "Cancel update download" }
@@ -348,8 +331,12 @@ export function AppUpdateBanner(props: {
       desktopApi={desktopApi}
       notice={notice}
       onDismiss={progress
-        ? progress.cancelable ? handleCancel : stopWatching
-        : () => setDismissedVersion(version)}
+        ? progress.cancelable ? handleCancel : () => setLiveHidden(true)
+        : () => {
+            // The old Dismiss was disabled through an install: dismissed
+            // now, a failed restart would report its error to no one.
+            if (!restarting) setDismissedVersion(version);
+          }}
     />
   );
 }

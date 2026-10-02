@@ -32,6 +32,30 @@ async function box(locator: Locator): Promise<Box> {
   return measured;
 }
 
+/** Within half a pixel: sub-pixel layout is not a jump under the pointer. */
+function expectSameBox(actual: Box, expected: Box, message: string): void {
+  for (const key of ["x", "y", "width", "height"] as const) {
+    expect(Math.abs(actual[key] - expected[key]), `${message} (${key})`)
+      .toBeLessThanOrEqual(0.5);
+  }
+}
+
+/**
+ * Waits out the card's finite animations. It slides 8px into place as it
+ * enters, so a rect read during those 160ms is not where it comes to rest.
+ */
+async function settle(locator: Locator): Promise<void> {
+  await locator.evaluate((element) =>
+    Promise.all(
+      element.getAnimations({ subtree: true })
+        .filter((animation) =>
+          animation.effect?.getComputedTiming().iterations !== Infinity
+        )
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ).then(() => undefined)
+  );
+}
+
 function centre(target: Box): { x: number; y: number } {
   return { x: target.x + target.width / 2, y: target.y + target.height / 2 };
 }
@@ -104,6 +128,7 @@ test("a run of closes keeps the close button under the pointer", async () => {
     // Paging under the pointer holds the card too; start from rest.
     await window.mouse.move(0, 0);
     await expect(card).not.toHaveAttribute("data-held", "true");
+    await settle(card);
     const close = card.getByRole("button", { name: "Dismiss notice" });
     const shortCard = await box(card);
     const first = await box(close);
@@ -116,7 +141,7 @@ test("a run of closes keeps the close button under the pointer", async () => {
       "data-notice-id",
       "federation-shutdown:e2e-tall",
     );
-    expect(await box(close), "the close stays put after a close").toEqual(first);
+    expectSameBox(await box(close), first, "the close stays put after a close");
     expect(await hitAt(window, aim)).toBe("Dismiss notice");
 
     // The tall notice really is taller: leaving the stack lets it fit, and
@@ -124,6 +149,7 @@ test("a run of closes keeps the close button under the pointer", async () => {
     // two notices of one height.
     await window.mouse.move(0, 0);
     await expect(card).not.toHaveAttribute("data-held", "true");
+    await settle(card);
     const tallCard = await box(card);
     expect(tallCard.height, "the second notice is taller").toBeGreaterThan(
       shortCard.height + 10,
@@ -141,8 +167,10 @@ test("a run of closes keeps the close button under the pointer", async () => {
       "data-notice-id",
       "federation-shutdown:e2e-last",
     );
-    expect(await box(close), "the close stays put after a second close").toEqual(
+    expectSameBox(
+      await box(close),
       tallClose,
+      "the close stays put after a second close",
     );
     expect(await hitAt(window, tallAim)).toBe("Dismiss notice");
   } finally {
