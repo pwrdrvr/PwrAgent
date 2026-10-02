@@ -63,6 +63,11 @@ function cardRowValue(
 
 // A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
 // to a `ThreadSubAgentSummary.monitorId`.
+/** The value cell beside a limit's label on the AI providers tab. */
+function limitValue(label: string): HTMLElement {
+  return screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement;
+}
+
 function buildMonitorLine(
   overrides: Partial<ThreadUsageLineRecord> = {},
 ): ThreadUsageLineRecord {
@@ -4471,10 +4476,10 @@ describe("ThreadContextPanel", () => {
   it("shows regular and Spark rate limits together on the AI provider info tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 
-    expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark 5h limit: 100% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+    expect(limitValue("5h limit")).toHaveTextContent(/^7% used/);
+    expect(limitValue("Weekly limit")).toHaveTextContent(/^12% used/);
+    expect(limitValue("Spark 5h limit")).toHaveTextContent(/^0% used/);
+    expect(limitValue("Spark Weekly limit")).toHaveTextContent(/^0% used/);
   });
 
   it("keeps an ordinary Codex thread unchanged when promotion fails", async () => {
@@ -4638,8 +4643,8 @@ describe("ThreadContextPanel", () => {
       ],
     });
 
-    expect(screen.getByText(/Spark 5h limit: 98% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+    expect(limitValue("Spark 5h limit")).toHaveTextContent(/^2% used/);
+    expect(limitValue("Spark Weekly limit")).toHaveTextContent(/^0% used/);
   });
 
   it("renders the Edits tab empty state when no edits accumulated", () => {

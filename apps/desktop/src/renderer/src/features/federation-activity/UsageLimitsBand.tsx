@@ -1,41 +1,13 @@
-import type { ReactNode } from "react";
-import { limitLabel, projectLimit, type LimitAccount, type LimitSeries } from "./usage-limits";
-import { usageClock, usageCount, usageMoney } from "./usage-activity-presentation";
-
-const HOUR = 3_600_000;
-
-/** "Tue 10 PM" beyond today, the clock time today. */
-function when(at: number, now: number) {
-  const date = new Date(at);
-  return date.toDateString() === new Date(now).toDateString()
-    ? usageClock(at)
-    : date.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric" });
-}
-
-function duration(ms: number) {
-  const hours = Math.floor(ms / HOUR);
-  const minutes = Math.round((ms % HOUR) / 60_000);
-  if (hours >= 36) return `${Math.round(hours / 24)} days`;
-  return hours ? `${hours} h ${minutes} m` : `${minutes} m`;
-}
-
-const percent = (value: number) => `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}`;
+import { limitLabel, type LimitAccount, type LimitSeries } from "./usage-limits";
+import { describeLimitPace, usageClock, usageCount, usageMoney, usagePercent as percent, usageWhen as when } from "./usage-activity-presentation";
 
 function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
   const { latest } = series;
-  const projection = projectLimit(series);
   const lastReset = series.resets.at(-1);
-  let pace: ReactNode = null;
-  if (series.pacePerHour !== undefined && projection) {
-    // Running out before the reset is the one outcome worth a warning.
-    const short = projection.kind === "full" && latest.resetAt !== undefined;
-    pace = <span className={`usage-pace${short ? " is-short" : ""}`}><span>+{percent(series.pacePerHour)}%/h</span>
-      {projection.kind === "atReset"
-        ? `On pace for about ${Math.round(projection.percent)}% at the ${when(projection.resetAt, now)} reset`
-        : short
-          ? `On pace to reach 100% ${when(projection.at, now)}, ${duration(latest.resetAt! - projection.at)} before the reset`
-          : `At this pace, 100% in about ${duration(projection.at - latest.at)} (${when(projection.at, now)})`}</span>;
-  }
+  const described = describeLimitPace(series, now);
+  const pace = described
+    ? <span className={`usage-pace${described.short ? " is-short" : ""}`}><span>{described.rate}</span>{described.text}</span>
+    : null;
   return <div className="usage-limit">
     <span className="usage-eyebrow">{limitLabel(series)}</span>
     <div className="usage-limit__figure"><strong>{percent(latest.usedPercent)}<small>%</small></strong>

@@ -761,6 +761,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         return (
           <PricingPanel
             desktopApi={props.desktopApi}
+            backends={props.backends}
             thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
@@ -872,6 +873,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <ProviderStatusPanel
             backends={props.backends}
             backendError={props.backendError}
+            desktopApi={props.desktopApi}
           />
         );
     }

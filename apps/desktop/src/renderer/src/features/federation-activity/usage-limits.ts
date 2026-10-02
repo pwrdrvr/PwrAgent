@@ -45,6 +45,12 @@ const MIN_PACE_SPAN = 30 * 60_000;
 const seriesKey = (limit: UsageLimitReading) =>
   JSON.stringify([limit.windowKey ?? "", limit.limitId ?? "", limit.windowKey ? "" : limit.name]);
 
+/** The recorded series for one current limit reading, if the account has one. */
+export function limitSeriesFor(account: LimitAccount | undefined, limit: UsageLimitReading): LimitSeries | undefined {
+  const key = seriesKey(limit);
+  return account?.series.find((series) => series.key === key);
+}
+
 /**
  * Group owners' readings by account, never blending two accounts. Readings
  * without an account key stay with their own owner.

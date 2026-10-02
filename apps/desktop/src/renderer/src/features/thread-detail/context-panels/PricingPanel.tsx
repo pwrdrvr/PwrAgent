@@ -14,6 +14,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
+  BackendSummary,
   ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
@@ -32,7 +33,7 @@ import {
   type ChipContextMenuItem,
   type ChipContextMenuPosition,
 } from "../../chrome/ChipContextMenu";
-import { MoreVerticalIcon, PopoutIcon } from "../../../icons";
+import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
@@ -53,6 +54,7 @@ import { useThreadDisplayResource } from "../../../lib/useThreadDisplayResource"
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import { UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
   formatRoundedSummaryMoney,
@@ -68,6 +70,8 @@ type PricingGateSource = Pick<Parameters<typeof useThreadDisplayResource>[0], "d
 
 type PricingPanelProps = {
   desktopApi?: DesktopApi;
+  /** Supplies the Codex limits that tell the Usage Activity card to reread. */
+  backends?: BackendSummary[];
   thread?: PricingGateSource["thread"];
   display?: ThreadPricingDisplay;
   onLoadMore?: () => void;
@@ -293,18 +297,9 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
         <p className="context-empty">No usage pricing recorded yet.</p>
       ) : null}
 
-      {/* This thread's bill; the account's limits and every thread's spend
-          across instances are one window away. */}
-      {props.desktopApi?.openUsageActivity ? (
-        <button
-          className="context-panel__section-action pricing-panel__usage-action"
-          onClick={() => void props.desktopApi?.openUsageActivity?.()}
-          type="button"
-        >
-          <PopoutIcon size={11} aria-hidden="true" />
-          Usage Activity
-        </button>
-      ) : null}
+      {/* This thread's bill; the account's limit and its pace are the card,
+          and every thread's spend across instances is the window it opens. */}
+      <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}

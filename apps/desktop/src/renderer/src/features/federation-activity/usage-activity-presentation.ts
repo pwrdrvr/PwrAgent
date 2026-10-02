@@ -1,5 +1,6 @@
 import { usageActivityCoverage, usageChartStep, type UsageActivityRollup } from "@pwragent/shared";
 import type { OwnedUsageRow } from "./usage-activity-summary";
+import { projectLimit, type LimitProjection, type LimitSeries } from "./usage-limits";
 
 export const usageMoney = (micros: number) => new Intl.NumberFormat(undefined, {
   style: "currency", currency: "USD", minimumFractionDigits: 2,
@@ -9,6 +10,51 @@ export const usageCount = (value: number) => new Intl.NumberFormat(undefined, {
   notation: "compact", maximumFractionDigits: 1,
 }).format(value);
 export const usageClock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+/**
+ * The clock time today; beyond today "Tue, Oct 6, 10 PM", or "Tue 10 PM" when
+ * `compact` (a rail) and within the coming week.
+ */
+export function usageWhen(at: number, now: number, compact = false) {
+  const date = new Date(at);
+  if (date.toDateString() === new Date(now).toDateString()) return usageClock(at);
+  if (compact && Math.abs(at - now) < 6 * DAY) {
+    return date.toLocaleString(undefined, { weekday: "short", hour: "numeric" });
+  }
+  return date.toLocaleString(undefined, compact
+    ? { month: "short", day: "numeric" }
+    : { weekday: "short", month: "short", day: "numeric", hour: "numeric" });
+}
+
+export function usageDuration(ms: number) {
+  const hours = Math.floor(ms / HOUR);
+  const minutes = Math.round((ms % HOUR) / 60_000);
+  if (hours >= 36) return `${Math.round(hours / 24)} days`;
+  return hours ? `${hours} h ${minutes} m` : `${minutes} m`;
+}
+
+export const usagePercent = (value: number) => `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}`;
+
+/**
+ * Where a limit's pace lands, in the words every surface uses. `short` is the
+ * one outcome worth a warning: running out before the reset.
+ */
+export function describeLimitPace(series: LimitSeries, now: number, compact = false):
+  { rate: string; text: string; short: boolean; projection: LimitProjection } | undefined {
+  const projection = projectLimit(series);
+  if (series.pacePerHour === undefined || !projection) return undefined;
+  const { latest } = series;
+  const short = projection.kind === "full" && latest.resetAt !== undefined;
+  const text = projection.kind === "atReset"
+    ? `On pace for about ${Math.round(projection.percent)}% at the ${usageWhen(projection.resetAt, now, compact)} reset`
+    : short
+      ? `On pace to reach 100% ${usageWhen(projection.at, now, compact)}, ${usageDuration(latest.resetAt! - projection.at)} before the reset`
+      : `At this pace, 100% in about ${usageDuration(projection.at - latest.at)} (${usageWhen(projection.at, now, compact)})`;
+  return { rate: `+${usagePercent(series.pacePerHour)}%/h`, text, short, projection };
+}
 
 /** Why a row sits outside the window's total, in the words the list shows. */
 export function usageNotCountedReason(row: OwnedUsageRow, from: number, to: number): string {
@@ -43,9 +89,6 @@ export function usageDimensionValue(row: OwnedUsageRow, dimension: Exclude<Usage
   if (dimension === "provider") return PROVIDER_LABELS[row.line.provider] ?? row.line.provider;
   return row.line.modelLabel ?? row.line.model ?? "Unknown model";
 }
-
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 
 export type UsageBucket = { from: number; to: number; cost: number; rows: number; series: number[]; other: number };
 
