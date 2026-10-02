@@ -8133,12 +8133,12 @@ const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 20_000;
 const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 1_800_000;
 
 /**
- * How long opening a new-thread draft waits for the MCP connections that seed
- * it. On a second instance the read crosses the owner broker, whose own
- * timeout is sized for a ten-minute tool call; a wedged owner must cost the
- * draft its defaults, not hold the New thread screen for that long.
+ * How long thread creation or a new-thread draft waits for MCP defaults.
+ * On a second instance the read crosses the owner broker, whose own timeout
+ * is sized for a ten-minute tool call; a wedged owner must cost the thread
+ * its defaults, not block creation for that long.
  */
-const LAUNCHPAD_MCP_SEED_BUDGET_MS = 2_000;
+const MCP_DEFAULTS_READ_BUDGET_MS = 2_000;
 
 /**
  * Match the forward-slashed directory identifiers
@@ -15976,10 +15976,14 @@ export class DesktopBackendRegistry {
       parentThreadInstanceId,
       prAutoDispatchEnabled,
       tokenMiserEnabled: tokenMiserOverride,
-      mcpConnectionIds,
+      mcpConnectionIds: requestedMcpConnectionIds,
       mcpProviderServersEnabled,
       ...request
     } = params;
+    // Handoffs and messaging create threads without a launchpad. Apply the
+    // profile defaults here too, while preserving an explicit empty selection.
+    const mcpConnectionIds = requestedMcpConnectionIds
+      ?? await this.resolveNewThreadMcpConnectionIds();
     const modelSettings = await this.resolveModelSettings(backend, request);
     let cwd: string | undefined =
       !request.cwd?.trim()
@@ -24819,7 +24823,7 @@ export class DesktopBackendRegistry {
    * drafts that already exist.
    *
    * Failing to read the connections, or not reading them within
-   * `LAUNCHPAD_MCP_SEED_BUDGET_MS`, leaves the draft as it is. A missing
+   * `MCP_DEFAULTS_READ_BUDGET_MS`, leaves the draft as it is. A missing
    * default is recoverable from the MCP access panel; a failed or stalled
    * ensure is a New thread screen that will not open.
    */
@@ -24834,31 +24838,8 @@ export class DesktopBackendRegistry {
   > {
     const seeded = existing?.mcpConnectionIdsFromDefaults === true;
     if (existing?.mcpConnectionIds !== undefined && !seeded) return undefined;
-    const service = this.mcpConnectionService;
-    if (!service?.listConnections) return undefined;
-    let ids: string[];
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(
-            `No answer within ${LAUNCHPAD_MCP_SEED_BUDGET_MS} ms.`,
-          )),
-          LAUNCHPAD_MCP_SEED_BUDGET_MS,
-        );
-        timer.unref?.();
-      });
-      ids = mcpConnectionIdsForNewThread(
-        await Promise.race([service.listConnections(), deadline]),
-      );
-    } catch (error) {
-      backendRegistryLog.warn("launchpad_mcp_defaults_unavailable", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    } finally {
-      clearTimeout(timer);
-    }
+    const ids = await this.resolveNewThreadMcpConnectionIds();
+    if (ids === undefined) return undefined;
     if (ids.length === 0) {
       return seeded
         ? { mcpConnectionIds: undefined, mcpConnectionIdsFromDefaults: undefined }
@@ -24868,6 +24849,33 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     return { mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: true };
+  }
+
+  private async resolveNewThreadMcpConnectionIds(): Promise<string[] | undefined> {
+    const service = this.mcpConnectionService;
+    if (!service?.listConnections) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(
+            `No answer within ${MCP_DEFAULTS_READ_BUDGET_MS} ms.`,
+          )),
+          MCP_DEFAULTS_READ_BUDGET_MS,
+        );
+        timer.unref?.();
+      });
+      return mcpConnectionIdsForNewThread(
+        await Promise.race([service.listConnections(), deadline]),
+      );
+    } catch (error) {
+      backendRegistryLog.warn("new_thread_mcp_defaults_unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async resolveLaunchpadDefaults(

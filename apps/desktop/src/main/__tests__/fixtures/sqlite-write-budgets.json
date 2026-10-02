@@ -559,6 +559,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "new-thread-mcp-default-selection": {
+    "commits": 1,
+    "note": "Persist two default MCP ids together once at thread creation, with no writes per connection or streamed event. At 100 new threads/day this adds approximately 1.6 MB/day of WAL and no idle writes.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
     "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",
