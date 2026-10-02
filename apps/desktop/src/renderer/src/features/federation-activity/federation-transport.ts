@@ -66,6 +66,17 @@ export function federationTransportTag(connection: FederationActiveConnection): 
   return connection.remoteAddress ? classifyHost(hostOf(connection.remoteAddress)) : "Direct";
 }
 
+/**
+ * The tag as it fits on a Star Map preview body, which has no room for
+ * "Cloudflare". The body's tooltip still says the whole word.
+ */
+export function federationTransportShortTag(tag: FederationTransportTag): string {
+  return tag === "Cloudflare" ? "CF"
+    : tag === "Tailscale" ? "TS"
+      : tag === "TS Funnel" ? "Funnel"
+        : tag;
+}
+
 /** The route an incoming connection took through a local connector, in words. */
 export function federationViaLabel(via: FederationActiveConnection["via"]): string | undefined {
   return via === "cloudflare-tunnel" ? "Cloudflare Tunnel"

@@ -10,7 +10,7 @@ import {
 type PeerSeries = { peerId: string; series: FederationActivitySeries };
 
 /**
- * The popover's instance chips, reused as the Activity window's peer filter.
+ * The Federation instance chips, as the Activity window's peer filter.
  * Only peers with a series in the current view get a chip; one the directory
  * does not name (the attribution-limit bucket) keeps its series id as label.
  */
@@ -21,7 +21,7 @@ export function federationPeerFilterChips(
   const known = federationInstanceChips(health).filter((chip) =>
     peers.some((peer) => peer.peerId === chip.instanceId));
   const unnamed = peers.filter((peer) => !known.some((chip) => chip.instanceId === peer.peerId))
-    .map((peer): FederationInstanceChipModel => ({ instanceId: peer.peerId, label: peer.peerId, online: true }));
+    .map((peer): FederationInstanceChipModel => ({ instanceId: peer.peerId, label: peer.peerId, host: peer.peerId, online: true }));
   return [...known, ...unnamed];
 }
 

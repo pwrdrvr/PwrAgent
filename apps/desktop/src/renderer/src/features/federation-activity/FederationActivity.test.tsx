@@ -32,6 +32,11 @@ afterEach(() => { cleanup(); vi.useRealTimers(); });
 /** Presses one button of a labelled group: a segmented control or the peer chips. */
 const choose = (group: string, name: string | RegExp) =>
   fireEvent.click(within(screen.getByRole("group", { name: group })).getByRole("button", { name }));
+/** Opens the Star Map button's popover and returns its map preview. */
+const openSky = async () => {
+  fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+  return screen.findByRole("group", { name: "Star Map" });
+};
 const activityAction = async (name: string, role: "menuitem" | "menuitemcheckbox" = "menuitem") => {
   fireEvent.click(screen.getByRole("button", { name: "More Federation Activity actions" }));
   fireEvent.click(await screen.findByRole(role, { name }));
@@ -468,7 +473,7 @@ describe("Activity report controls", () => {
     await waitFor(() => expect(openFederationActivity).toHaveBeenCalledTimes(1));
   });
 
-  it("shows instances as chips that fly the Star Map to them, and the map preview opens it", async () => {
+  it("draws instances as Star Map bodies that fly the map to them, and the button or empty sky opens it", async () => {
     const snapshot = fixture();
     snapshot.health.instanceId = "local";
     snapshot.health.peers = [
@@ -485,17 +490,80 @@ describe("Activity report controls", () => {
     const onOpen = vi.fn();
     render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => structuredClone(snapshot), openStarMapWindow }}
       onOpen={onOpen} />);
-    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
-    const chips = within(await screen.findByRole("list", { name: "Federation instances" }));
-    expect(chips.getAllByRole("button").map((chip) => chip.textContent))
-      .toEqual(["LaptopLAN", "Travel laptopCloudflare", "Build VM"]);
-    expect(screen.getByText("2 of 3 connected")).toBeInTheDocument();
-    fireEvent.click(chips.getByRole("button", { name: "Open Travel laptop on the Star Map" }));
+    const sky = await openSky();
+    const buttons = within(sky).getAllByRole("button");
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Open Laptop on the Star Map",
+      "Open Travel laptop on the Star Map",
+      "Open Build VM on the Star Map",
+      "Open the Star Map",
+    ]);
+    // The transport rides on the body; the chip list it replaced is gone.
+    expect(buttons.slice(0, 3).map((button) => button.textContent)).toEqual(["LaptopLAN", "Travel laptopCF", "Build VM"]);
+    expect(sky).toHaveTextContent("Star Map · 4 instances · 2 connected");
+    expect(screen.queryByRole("list", { name: "Federation instances" })).not.toBeInTheDocument();
+    fireEvent.click(within(sky).getByRole("button", { name: "Open Travel laptop on the Star Map" }));
     await waitFor(() => expect(openStarMapWindow).toHaveBeenCalledWith({ instanceId: "travel" }));
     expect(onOpen).not.toHaveBeenCalled();
-    fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Open the Star Map" }));
+    fireEvent.click(within(await openSky()).getByRole("button", { name: "Open the Star Map" }));
     expect(onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.click(await openSky());
+    expect(onOpen).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the profile apart from the host, tags only direct connections, and spreads a small federation", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "local";
+    snapshot.health.role = "client";
+    snapshot.health.peers = [
+      { id: "gateway", label: "Studio", profileName: "default", role: "gateway", status: "connected", capabilities: [] },
+      { id: "studio-dev", label: "Studio", profileName: "dev", role: "client", status: "connected", capabilities: [] },
+      { id: "vm", label: "Build VM", role: "client", status: "disconnected", capabilities: [] },
+    ];
+    snapshot.health.activeConnections = [
+      { peerId: "gateway", direction: "outgoing", endpoint: "wss://gateway.example.test" },
+    ];
+    render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => structuredClone(snapshot) }}
+      onOpen={vi.fn()} />);
+    const sky = await openSky();
+    const bodies = within(sky).getAllByRole("button").slice(0, 3);
+    expect(bodies.map((body) => body.getAttribute("aria-label"))).toEqual([
+      "Open Studio / default on the Star Map",
+      "Open Studio / dev on the Star Map",
+      "Open Build VM on the Star Map",
+    ]);
+    // The profile is its own element, so the host's ellipsis cannot reach it.
+    expect(bodies.map((body) => body.querySelector(".federation-sky__profile")?.textContent))
+      .toEqual(["default", "dev", undefined]);
+    // The gateway is reached directly; the relayed peer gets no "Relay" tag.
+    expect(bodies.map((body) => body.querySelector(".federation-chip__tag")?.textContent))
+      .toEqual(["Direct", undefined, undefined]);
+    expect(bodies.map((body) => [body.style.left, body.style.top]))
+      .toEqual([["72%", "22px"], ["79%", "86px"], ["21%", "86px"]]);
+  });
+
+  it("gives the eighth place to the instances that do not fit, and an empty sky says so", async () => {
+    const snapshot = fixture();
+    snapshot.health.instanceId = "local";
+    snapshot.health.peers = Array.from({ length: 10 }, (_, index) => ({
+      id: `peer-${index}`, label: `Peer ${index}`, role: "client" as const, status: "connected" as const, capabilities: [],
+    }));
+    const onOpen = vi.fn();
+    const { unmount } = render(<FederationStatusControl
+      desktopApi={{ readFederationActivity: async () => structuredClone(snapshot) }} onOpen={onOpen} />);
+    const sky = await openSky();
+    expect(within(sky).getAllByRole("button", { name: /^Open Peer \d on the Star Map$/ })).toHaveLength(7);
+    fireEvent.click(within(sky).getByRole("button", { name: "3 more instances; open the Star Map" }));
+    expect(onOpen).toHaveBeenCalledOnce();
+    unmount();
+    snapshot.health.peers = [];
+    render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => structuredClone(snapshot) }}
+      onOpen={vi.fn()} />);
+    const empty = await openSky();
+    expect(empty).toHaveTextContent("No other instances yet");
+    expect(empty).toHaveTextContent("Star Map · 1 instance");
+    expect(within(empty).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Open the Star Map"]);
   });
 
   it("closes the Activity window's menu when the pointer goes down outside it", async () => {
