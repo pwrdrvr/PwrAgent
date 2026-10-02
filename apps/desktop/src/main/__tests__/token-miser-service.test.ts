@@ -36,6 +36,111 @@ afterEach(async () => {
 });
 
 describe("TokenMiserService", () => {
+  it.each([
+    { toolName: "pwragent", input: { tool: "call_mcp_tool", connectionId: "one", toolName: "lookup" }, expected: 'mcp:["one","lookup"]' },
+    { toolName: "pwragent", input: { tool: "call_mcp_tool", arguments: { connectionId: "one", toolName: "lookup" } }, expected: 'mcp:["one","lookup"]' },
+    { toolName: "Bash", input: { name: "get_profile", command: "true" }, expected: "Bash" },
+    { toolName: "pwragent", input: { tool: 123, name: "", operation: null }, expected: "pwragent" },
+  ])("preserves attribution for $expected", async ({ toolName, input, expected }) => {
+    const store = await createStore();
+    const diagnostics = new TokenMiserDiagnostics({ filePath: "unused", isEnabled: () => true });
+    const record = vi.spyOn(diagnostics, "recordInvocation");
+    const service = new TokenMiserService({
+      store, diagnostics, isEnabled: () => true, thresholdCharacters: 9,
+      generateSummary: async () => ({ status: "failed", reason: "small output" }),
+    });
+    try {
+      await service.preparePostToolUse({ ...payload("ok"), tool_name: toolName, tool_input: input });
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ toolName: expected }));
+    } finally { await diagnostics.close(); }
+  });
+
+  it.each(["tool", "name", "operation"].flatMap((field) =>
+    [false, true].map((nested) => ({ field, nested }))
+  ))("classifies dispatched retrievals through $field (nested: $nested)", async ({ field, nested }) => {
+    const store = await createStore();
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "miser-dispatch-"));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, "diagnostics.jsonl");
+    const diagnostics = new TokenMiserDiagnostics({ filePath: file, isEnabled: () => true, sampleEvery: 1 });
+    const service = new TokenMiserService({
+      store, diagnostics, isEnabled: () => true, thresholdCharacters: 9,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Host result", usefulDetails: [],
+      } }),
+    });
+    try {
+      const seed = await service.preparePostToolUse({
+        ...payload("fixture host result"), tool_name: "pwragent", tool_input: { [field]: "read_thread" },
+      });
+      await seed!.staged.commit();
+      for (const tool of ["read_all_token_miser_output", "read_token_miser_output", "summarize_token_miser_output"]) {
+        const request = { ...payload("expired retrieval"), tool_name: "pwragent", tool_input: { [field]: tool, objectId: "missing" } };
+        if (nested) await service.captureNestedPostToolUse({ ...request, is_code_mode_nested: true });
+        else expect(await service.preparePostToolUse(request)).toBeUndefined();
+      }
+      diagnostics.endTurn("thread-1");
+      await diagnostics.close();
+      const [row] = (await fs.readFile(file, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(row.category).toBe("summarized_no_recovery_observed");
+      const attempts = row.events.filter((event: { kind: string }) => event.kind === "retrieval_attempt");
+      expect(attempts.map((event: { data: { toolName: string; retrievalMode: string; codeMode: boolean } }) => event.data))
+        .toEqual([
+          expect.objectContaining({ toolName: "pwragent.read_all_token_miser_output", retrievalMode: "all_requested", codeMode: nested }),
+          expect.objectContaining({ toolName: "pwragent.read_token_miser_output", retrievalMode: "some_requested", codeMode: nested }),
+          expect.objectContaining({ toolName: "pwragent.summarize_token_miser_output", retrievalMode: "focused_summary_requested", codeMode: nested }),
+        ]);
+    } finally { await diagnostics.close(); }
+  });
+
+  it.each(["tool", "name", "operation"].flatMap((field) =>
+    [false, true].map((grouped) => ({ field, grouped }))
+  ))("distinguishes dispatched gate identities through $field (grouped: $grouped)", async ({ field, grouped }) => {
+    const store = await createStore();
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "miser-dispatch-"));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, "diagnostics.jsonl");
+    const diagnostics = new TokenMiserDiagnostics({ filePath: file, isEnabled: () => true, sampleEvery: 1 });
+    const service = new TokenMiserService({
+      store, diagnostics, isEnabled: () => true, thresholdCharacters: 9, codeModeGroupingVersion: () => 1,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Host result", usefulDetails: [],
+        ...(grouped ? { members: [{ toolCallId: "nested-1", summary: "Thread result" }] } : {}),
+      } }),
+    });
+    const dispatched = (tool: string, output: string) => ({
+      ...payload(output), tool_name: "pwragent", tool_input: { [field]: tool },
+    });
+    try {
+      const seed = dispatched("read_thread", "fixture host result");
+      let prepared;
+      if (grouped) {
+        await service.captureNestedPostToolUse({
+          ...seed, is_code_mode_nested: true, token_miser_grouping_version: 1,
+          code_mode_cell_id: "cell-1", code_mode_tool_call_id: "nested-1",
+        });
+        prepared = await service.prepareCodeModeOutput(codeModePayload([{ type: "input_text", text: "fixture host result" }]));
+      } else prepared = await service.preparePostToolUse(seed);
+      await prepared!.staged.commit();
+      for (const tool of ["get_profile", "list_threads", "get_thread_status", "read_thread", "read_thread", "read_thread"]) {
+        const request = dispatched(tool, "ok");
+        if (grouped) await service.captureNestedPostToolUse({ ...request, is_code_mode_nested: true });
+        else expect(await service.preparePostToolUse(request)).toBeUndefined();
+      }
+      diagnostics.endTurn("thread-1");
+      await diagnostics.close();
+      const [row] = (await fs.readFile(file, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(row).toMatchObject({ category: "suspected_retry_burst", repeats: 3, exactRepeats: 3 });
+      const gate = row.events.find((event: { kind: string }) => event.kind === "gate");
+      expect(gate.data.invocations).toEqual([expect.objectContaining({ toolName: "pwragent.read_thread" })]);
+      expect(row.events.filter((event: { kind: string }) => event.kind === "tool")
+        .map((event: { data: { toolName: string } }) => event.data.toolName)).toEqual([
+        "pwragent.read_thread", "pwragent.get_profile", "pwragent.list_threads", "pwragent.get_thread_status",
+        "pwragent.read_thread", "pwragent.read_thread", "pwragent.read_thread",
+      ]);
+    } finally { await diagnostics.close(); }
+  });
+
   it("captures gates only after acceptance, once, and ignores discarded proposals", async () => {
     const store = await createStore();
     const diagnostics = new TokenMiserDiagnostics({ filePath: "unused", isEnabled: () => true });

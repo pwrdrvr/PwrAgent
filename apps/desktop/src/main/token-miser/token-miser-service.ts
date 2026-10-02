@@ -267,7 +267,7 @@ export class TokenMiserService {
     }
     members.set(payload.code_mode_tool_call_id, {
       toolCallId: payload.code_mode_tool_call_id,
-      toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
+      toolName: resolvedInvocationName(payload),
       toolInput,
       output,
     });
@@ -333,7 +333,7 @@ export class TokenMiserService {
     }
     const toolInput = serializeToolResponse(payload.tool_input);
     const diagnostic: DiagnosticRequest | undefined = this.options.diagnostics?.isEnabled()
-      ? { input: toolInput, invocations: [{ toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name, toolInput }] }
+      ? { input: toolInput, invocations: [{ toolName: resolvedInvocationName(payload), toolInput }] }
       : undefined;
     const deterministicPassThrough = classifyDeterministicPassThrough({
       parentIntent: payload.parent_intent,
@@ -347,7 +347,7 @@ export class TokenMiserService {
         threadId: payload.session_id,
         turnId: payload.turn_id,
         toolUseId: payload.tool_use_id,
-        toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
+        toolName: resolvedInvocationName(payload),
         output,
         signal: options.signal,
         summary: deterministicPassThrough,
@@ -360,7 +360,7 @@ export class TokenMiserService {
       threadId: payload.session_id,
       turnId: payload.turn_id,
       toolUseId: payload.tool_use_id,
-      toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
+      toolName: resolvedInvocationName(payload),
       output,
       prompt: buildSummaryPrompt(payload, output),
       diagnostic,
@@ -793,7 +793,7 @@ export class TokenMiserService {
       this.options.diagnostics.recordInvocation({
         threadId: payload.session_id, turnId: payload.turn_id,
         callId: payload.code_mode_tool_call_id ?? payload.tool_use_id,
-        toolName: gatewayInvocationName(payload.tool_name, payload.tool_input) ?? payload.tool_name,
+        toolName: resolvedInvocationName(payload),
         input: serializeToolResponse(payload.tool_input),
         output: serializeToolResponse(payload.token_miser_exact_tool_response), codeMode,
       });
@@ -1526,19 +1526,34 @@ function classifyCapturedGroupMember(
   return "other";
 }
 
+function dispatchedInvocationNames(input: unknown): string[] {
+  if (!input || typeof input !== "object") return [];
+  const args = input as Record<string, unknown>;
+  return [args.tool, args.name, args.operation].filter((value): value is string =>
+    typeof value === "string" && value.length > 0
+  );
+}
+
+function resolvedInvocationName(payload: TokenMiserPostToolUsePayload): string {
+  const gateway = gatewayInvocationName(payload.tool_name, payload.tool_input);
+  if (gateway) return gateway;
+  if (!/(?:^|\.|__|\/)pwragent$/.test(payload.tool_name)) return payload.tool_name;
+  const names = dispatchedInvocationNames(payload.tool_input);
+  // Follow the retrieval classifier's recognized dispatch forms. Other host
+  // operations need distinct identities too, rather than one dispatcher family.
+  const dispatched = names.find(isTokenMiserRetrievalToolName) ?? names[0];
+  if (!dispatched) return payload.tool_name;
+  return /^(?:pwragent\.|pwragent__|pwragent\/)/.test(dispatched)
+    ? dispatched : `pwragent.${dispatched}`;
+}
+
 function isDirectTokenMiserRetrievalInvocation(
   payload: TokenMiserPostToolUsePayload,
 ): boolean {
   if (isTokenMiserRetrievalToolName(payload.tool_name)) {
     return true;
   }
-  if (!payload.tool_input || typeof payload.tool_input !== "object") {
-    return false;
-  }
-  const input = payload.tool_input as Record<string, unknown>;
-  return [input.tool, input.name, input.operation].some((value) =>
-    typeof value === "string" && isTokenMiserRetrievalToolName(value)
-  );
+  return dispatchedInvocationNames(payload.tool_input).some(isTokenMiserRetrievalToolName);
 }
 
 function isTokenMiserRetrievalToolName(value: string): boolean {
