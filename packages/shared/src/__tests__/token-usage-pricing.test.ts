@@ -875,6 +875,11 @@ describe("token usage pricing", () => {
       }),
     ).toBeUndefined();
     expect(resolveOpenAiPricingServiceTier({ serviceTier: "flex" })).toBeUndefined();
+    expect(resolveOpenAiPricingServiceTier({ serviceTier: "ultrafast", fastMode: true })).toBeUndefined();
+    expect(estimateOpenAiTokenUsageCost({
+      model: "gpt-6-astra", serviceTier: "ultrafast", fastMode: false,
+      cachedInputTokens: 0, uncachedInputTokens: 100, outputTokens: 100,
+    })).toBeUndefined();
   });
 
   it("exposes catalog rates with currency-specific metadata", () => {

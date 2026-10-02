@@ -33668,6 +33668,31 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--button-text);
 }
 
+/* A dropdown that replaces an icon toggle keeps the toggle's footprint while
+   its choice is the default: the 26px circle of `.composer__toggle`. */
+.composer-dropdown--icon-only .composer-dropdown__button {
+  width: 26px;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* An opt-in mode that is on (Speed at Fast or Ultrafast). Same treatment as
+   `.composer__toggle.is-active`, so a model with the plain Fast toggle and a
+   model with the Speed menu say "on" the same way. */
+.composer-dropdown--active .composer-dropdown__button,
+.composer-dropdown--active .composer-dropdown__button:hover,
+.composer-dropdown--active .composer-dropdown__button:focus-visible,
+.composer-dropdown--active.composer-dropdown--open .composer-dropdown__button {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer-dropdown--active .composer-dropdown__icon {
+  color: var(--accent);
+}
+
 /* The launchpad's machine chip when it targets another machine. An accent
    rim and mark, never the solid fill: Full Access owns that, and a thread
    bound for a peer is a routing fact, not a risk. Local reads neutral. */

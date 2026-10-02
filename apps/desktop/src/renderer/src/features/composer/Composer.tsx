@@ -1,3 +1,4 @@
+import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { NativeVoiceBar, NativeVoiceToggle, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { DirectorVoiceComposerToggle } from "../native-voice/DirectorVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
@@ -684,6 +685,14 @@ type ReviewWorkspaceOption = {
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
+
+// Fast keeps the Fast toggle's own tooltip copy. Ultrafast claims only what
+// the catalog proves: the model advertises it, and nothing is priced yet.
+const CODEX_SPEED_DESCRIPTIONS: Record<CodexSpeed, string> = {
+  standard: "Default processing",
+  fast: "Faster, lower-latency responses",
+  ultrafast: "The fastest tier this model offers",
+};
 const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 15m", delayMs: 15 * 60_000 },
   { label: "Send in 30m", delayMs: 30 * 60_000 },
@@ -9699,6 +9708,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         backend.launchpadOptions?.supportsFastMode ??
         false
       : false;
+  const speedOptions = backend?.kind === "codex"
+    ? codexSpeedOptions(
+        selectedModelOption,
+        filesystemFederationTarget?.scope === "remote"
+          ? backend.codexFastAllowed !== false
+          : props.codexFastAllowed !== false,
+        supportsFast,
+      )
+    : [];
+  const selectedSpeed = selectedCodexSpeed(currentSettings ?? {});
   const selectedServiceTier =
     currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
   const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
@@ -12825,7 +12844,35 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             />
           ) : null}
 
-          {(props.launchpad || props.thread) && supportsFast ? (
+          {(props.launchpad || props.thread) && speedOptions.includes("ultrafast") ? (
+            <ComposerDropdown
+              id="composer-speed"
+              ariaLabel="Speed"
+              disabled={launchpadSubmitting}
+              icon={LightningIcon}
+              // Standard keeps the old Fast toggle's 26px circle; a faster
+              // tier is a paid choice, so it is named and lit like the toggle.
+              iconOnly={selectedSpeed === "standard"}
+              tone={selectedSpeed === "standard" ? undefined : "active"}
+              tooltip={`Speed: ${CODEX_SPEED_LABELS[selectedSpeed]}`}
+              value={selectedSpeed}
+              options={speedOptions.map((speed) => ({
+                value: speed,
+                label: CODEX_SPEED_LABELS[speed],
+                description: CODEX_SPEED_DESCRIPTIONS[speed],
+              }))}
+              onChange={(value) => {
+                const patch = codexSpeedSettings(value as CodexSpeed);
+                if (props.launchpad) {
+                  handleLaunchpadPatch(patch);
+                  return;
+                }
+                handleThreadModelSettingsPatch(patch);
+              }}
+            />
+          ) : null}
+
+          {(props.launchpad || props.thread) && supportsFast && !speedOptions.includes("ultrafast") ? (
             <button
               type="button"
               className={`composer__toggle tooltip-target${

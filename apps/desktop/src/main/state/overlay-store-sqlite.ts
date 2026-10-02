@@ -7053,12 +7053,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     for (const row of rows) {
       try {
         const thread = JSON.parse(row.payload) as ThreadOverlayState;
-        if (thread.backend !== "codex" || thread.fastMode !== true) {
+        if (thread.backend !== "codex"
+          || (thread.fastMode !== true && thread.serviceTier !== "ultrafast")) {
           continue;
         }
         this.putThread(row.thread_id, {
           ...thread,
           fastMode: false,
+          serviceTier: undefined,
         });
         updatedThreadIds.push(thread.threadId);
         threadCount += 1;
@@ -7070,12 +7072,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const launchpads = await this.listDirectoryLaunchpads();
     let launchpadCount = 0;
     for (const launchpad of launchpads) {
-      if (launchpad.backend !== "codex" || launchpad.fastMode !== true) {
+      if (launchpad.backend !== "codex"
+        || (launchpad.fastMode !== true && launchpad.serviceTier !== "ultrafast")) {
         continue;
       }
       await this.upsertDirectoryLaunchpad({
-        ...launchpad,
-        fastMode: false,
+        ...applyNavigationLaunchpadProviderSettingsPatch(launchpad, {
+          fastMode: false,
+          serviceTier: undefined,
+        }),
         updatedAt: Date.now(),
       });
       launchpadCount += 1;
