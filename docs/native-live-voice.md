@@ -100,7 +100,10 @@ The panel shows:
   **End director voice**, which ends the session and closes the panel;
 - the state on its own row: **Microphone live** with the level meter, **Muted ·
   ends 30s after the reply**, or the connecting, ending, and ended states;
-- the thread or launchpad the window is looking at;
+- what the window is looking at, which is what "this" means to the voice:
+  **Looking at: Sample thread**, or **Looking at: new thread in Sample
+  project** on a launchpad. It follows the window live, so it is hidden once
+  the session ends;
 - the transcript with its receipts, and **Message voice**.
 
 The header holds only items whose width does not change with the state, so it

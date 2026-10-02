@@ -293,9 +293,12 @@
   min-height: 0;
   flex-direction: column;
 }
+/* The rule keeps scrolled transcript text from running into the lines above. */
 .director-voice-panel__feed .native-voice-feed {
   flex: 1 1 auto;
   max-height: none;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
 }
 .director-voice-panel .native-voice__text {
   flex: none;

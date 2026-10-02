@@ -522,9 +522,11 @@ function OpenDirectorVoicePanel({
   const ended = endedAt !== undefined;
   const closeLabel = ended ? "Close director voice" : "End director voice";
   const listening = view.status === "listening";
-  const looking = focus
-    ? `Looking at ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}.`
-    : launchpad ? `Starting a new thread in ${launchpad.directoryLabel}.` : "No thread selected.";
+  // What "this" means to the voice, so it describes the window, never an
+  // action. It follows the window live, so it goes when the session ends.
+  const looking = ended ? undefined : focus
+    ? `Looking at: ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}`
+    : launchpad ? `Looking at: new thread in ${launchpad.directoryLabel}` : "Looking at: no thread";
   const transcript = [...view.transcript]
     .map((row) => `${row.role === "user" ? "You" : "Voice"}: ${row.text}`)
     .join("\n");
@@ -580,7 +582,7 @@ function OpenDirectorVoicePanel({
         </div>
       </header>
       <DirectorVoiceState controller={controller} ended={ended} view={view} />
-      <p className="director-voice-panel__focus">{looking}</p>
+      {looking ? <p className="director-voice-panel__focus">{looking}</p> : null}
       {request ? (
         <VoiceManagerRequestCard
           desktopApi={desktopApi}

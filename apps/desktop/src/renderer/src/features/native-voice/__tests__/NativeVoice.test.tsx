@@ -282,7 +282,7 @@ it("keeps director voice through navigation and shows what its tools did", async
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
   expect(vi.mocked(f.api.startNativeVoice).mock.calls[0][0]).toMatchObject({ threadId: "sample-voice-manager", mode: "director" });
-  expect(directorPanel()).toHaveTextContent("Looking at Sample first thread");
+  expect(directorPanel()).toHaveTextContent("Looking at: Sample first thread");
 
   // The composer's toggle cannot start a second session, and leaving the
   // thread does not end director voice.
@@ -315,6 +315,7 @@ it("keeps the director transcript after a muted session ends, until closed or st
   render(<><DirectorVoicePanel api={f.api} /><Notices api={f.api} /></>);
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  expect(directorPanel()).toHaveTextContent("Looking at: no thread");
   const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   try {
@@ -338,6 +339,8 @@ it("keeps the director transcript after a muted session ends, until closed or st
   expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("Voice: Two sample PRs are green.");
   expect(screen.getByRole("timer")).toHaveAccessibleName(/^Voice was open for /);
   expect(screen.queryByRole("textbox", { name: "Message voice" })).toBeNull();
+  // What "this" means only matters while the voice can hear it.
+  expect(panel).not.toHaveTextContent("Looking at:");
   // The panel says how it ended; no second notice repeats it.
   expect(noticeCard("native-voice-ended")).toBeNull();
 
@@ -354,9 +357,11 @@ it("keeps the director transcript after a muted session ends, until closed or st
 
 it("keeps an ended director panel until the operator closes it", async () => {
   const f = voiceFixture();
-  render(<DirectorVoicePanel api={f.api} />);
+  render(<DirectorVoicePanel api={f.api} launchpad={{ directoryLabel: "Sample project" }} />);
   await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  // A launchpad is where the voice would start a thread, not a thread it is starting.
+  expect(directorPanel()).toHaveTextContent("Looking at: new thread in Sample project");
   const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
   f.emit({ sessionId, type: "transcript", role: "assistant", text: "Sample answer.", done: true });
   // The service closes the session; nothing the operator did.
