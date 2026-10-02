@@ -1273,6 +1273,8 @@ function SettingsSectionBody(props: {
   if (props.section === "archived") {
     return (
       <ArchivedThreadsSettings
+        snapshot={props.snapshot}
+        onWriteConfig={props.settings.writeConfig}
         desktopApi={props.desktopApi}
         onOpenThread={props.onOpenThread}
       />

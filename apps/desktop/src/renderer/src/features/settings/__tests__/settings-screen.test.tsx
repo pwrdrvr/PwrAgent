@@ -2449,6 +2449,22 @@ describe("SettingsScreen", () => {
     expect(listThreads).toHaveBeenCalledTimes(2);
   });
 
+  it("shows recovery snapshots and the permanent deletion deadline in Archived Threads", async () => {
+    const startedAt = new Date("2026-10-01T12:00:00Z").getTime();
+    const thread: AppServerThreadSummary = {
+      id: "expiry-details", title: "Archive with snapshot", titleSource: "explicit", source: "codex", linkedDirectories: [],
+      archiveRetentionStartedAt: startedAt,
+      worktreeSnapshots: [createArchivedSnapshot("expiry-details", startedAt)],
+    };
+    const settings = createSettingsState();
+    settings.snapshot!.worktrees.archive = { enabled: true, mode: "count", inactivityDays: 7, keepPerProject: 20, retentionDays: 30 };
+    const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [thread] }));
+    render(<SettingsScreen desktopApi={{ listThreads }} settings={settings} initialSection="archived" onClose={() => undefined} />);
+    expect(await screen.findByText("Archive with snapshot")).toBeInTheDocument();
+    expect(screen.getByText(/1 recovery snapshot/)).toBeInTheDocument();
+    expect(screen.getByText(/Permanent deletion (after|pending since)/)).toHaveTextContent(new Date(startedAt + 30 * 86_400_000).toLocaleString());
+  });
+
   it("lists archived threads and restores one", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-archived",

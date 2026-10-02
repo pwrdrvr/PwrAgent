@@ -7,12 +7,16 @@ import {
   type ReactNode,
 } from "react";
 import {
+  normalizeThreadArchivePolicy,
+  type DesktopSettingsSnapshot,
+  type DesktopSettingsConfigPatch,
   buildThreadIdentityKey,
   isToolManagedWorktreePath,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type ArchiveThreadCleanupResult,
 } from "@pwragent/shared";
+import { ArchivePolicySettings } from "./ArchivePolicySettings";
 import { SearchIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -70,6 +74,8 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 export function ArchivedThreadsSettings(props: {
+  snapshot?: DesktopSettingsSnapshot;
+  onWriteConfig?: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
   desktopApi?: DesktopApi;
   onOpenThread?: (target: OpenThreadTarget) => void;
 }) {
@@ -128,6 +134,7 @@ export function ArchivedThreadsSettings(props: {
     void loadArchivedThreads();
   }, [loadArchivedThreads]);
 
+  const archivePolicy = normalizeThreadArchivePolicy(props.snapshot?.worktrees.archive);
   const filterQuery = filter.trim();
   const isFiltering = filterQuery.length > 0;
   const queryTerms = useMemo(
@@ -298,6 +305,8 @@ export function ArchivedThreadsSettings(props: {
         help="Archived threads stay out of Inbox, Recents, and Directories until you restore them."
       />
 
+      <ArchivePolicySettings value={props.snapshot?.worktrees.archive} onWriteConfig={props.onWriteConfig} />
+
       <div className="settings-archive-toolbar">
         <div
           className="settings-archive-filter"
@@ -450,6 +459,7 @@ export function ArchivedThreadsSettings(props: {
                   />
                 ) : (
                   <ArchivedThreadRow
+                    retentionDays={archivePolicy.retentionDays}
                     key={threadKey}
                     action={action}
                     desktopApi={props.desktopApi}
@@ -488,6 +498,7 @@ export function ArchivedThreadsSettings(props: {
 }
 
 function ArchivedThreadRow(props: {
+  retentionDays: number;
   action?: ArchivedRowAction;
   desktopApi?: DesktopApi;
   groupLabel: string;
@@ -563,6 +574,14 @@ function ArchivedThreadRow(props: {
             />
           </p>
         ) : null}
+        <p className="settings-archive-row__meta">
+          {thread.worktreeSnapshots?.length ? `${thread.worktreeSnapshots.length} recovery snapshot${thread.worktreeSnapshots.length === 1 ? "" : "s"}` : "No recovery snapshot"}
+          {" · "}
+          {thread.archiveRetentionProtectedReason ? `Protected: ${thread.archiveRetentionProtectedReason}`
+            : props.retentionDays === 0 ? "No automatic deletion"
+            : thread.archiveRetentionStartedAt === undefined ? "Deletion deadline not recorded yet"
+            : `Permanent deletion ${Date.now() >= thread.archiveRetentionStartedAt + props.retentionDays * 86_400_000 ? "pending since" : "after"} ${new Date(thread.archiveRetentionStartedAt + props.retentionDays * 86_400_000).toLocaleString()}`}
+        </p>
         {props.action?.notice ? (
           <p className="settings-archive-row__notice" role="status">
             {props.action.notice}
