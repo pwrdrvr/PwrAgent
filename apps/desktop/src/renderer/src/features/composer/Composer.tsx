@@ -3556,15 +3556,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       composerPdfPreviewStatesRef.current = next;
       setComposerPdfPreviewStates(next);
     }
-    // A PDF path can come back (the operator re-references the file), so a
-    // key left pointing at it would reopen the lightbox on its own. Image
-    // keys carry a per-paste id and never return.
+  }, [pdfPreviewPathsKey, pdfReferencePaths]);
+  // A PDF drops out of the gallery when its preview stops being ready — the
+  // path left the strip (its state is pruned above) or a refresh failed. The
+  // key must go with it: the preview can become ready again (the path is
+  // re-referenced, or Retry succeeds), and a key still pointing at it would
+  // reopen the lightbox on its own. Image keys carry a per-paste id and never
+  // return.
+  useEffect(() => {
     setExpandedStripItemKey((key) =>
-      key?.startsWith("pdf:") && !allowedPaths.has(key.slice("pdf:".length))
+      key?.startsWith("pdf:")
+      && composerPdfPreviewStates.get(key.slice("pdf:".length))?.status !== "ready"
         ? undefined
         : key,
     );
-  }, [pdfPreviewPathsKey, pdfReferencePaths]);
+  }, [composerPdfPreviewStates]);
   useEffect(() => {
     if (props.pdfAnalysisEnabled === false || pdfPreviewPathsKey.length === 0) {
       return;
