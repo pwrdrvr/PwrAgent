@@ -3935,7 +3935,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     }
     return bodies.map((body) => {
-      const label = displayLabelById.get(body.instanceId) ?? body.instanceId;
+      const parts = displayLabelPartsById.get(body.instanceId);
+      const machine = parts?.shortLabel ?? parts?.label ?? body.instanceId;
+      const label = parts?.profileName ? `${machine} / ${parts.profileName}` : machine;
+      const fullLabel = displayLabelById.get(body.instanceId);
       const icon = celestialIcons.iconFor(
         body.instanceId === localInstanceId ? undefined : body.instanceId,
       );
@@ -3944,6 +3947,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         x: body.x,
         y: body.y,
         label,
+        ...(fullLabel && fullLabel !== label ? { fullLabel } : {}),
         kind: "instance" as const,
         icon,
         labelWidth: estimateStarMapEdgeLabelWidth(label, {
@@ -3955,6 +3959,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     bodies,
     celestialIcons,
     displayLabelById,
+    displayLabelPartsById,
     localInstanceId,
     projectLayout,
     projects,

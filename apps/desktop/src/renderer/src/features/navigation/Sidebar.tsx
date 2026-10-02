@@ -2005,7 +2005,8 @@ export function Sidebar(props: SidebarProps) {
             ? [{
                 instanceId: contextMenuParentInstanceId,
                 label:
-                  contextMenuParentMachine?.label
+                  contextMenuParentMachine?.shortLabel
+                  ?? contextMenuParentMachine?.label
                   ?? contextMenu?.thread.federation?.instanceLabel
                   ?? contextMenuParentInstanceId,
                 // A parent on an offline peer is disabled like any offline
@@ -2038,7 +2039,7 @@ export function Sidebar(props: SidebarProps) {
               - Number(b.availability !== "available"))
             .map((target) => ({
               instanceId: target.instanceId,
-              label: target.label,
+              label: target.shortLabel ?? target.label,
               availability: target.availability,
               parent: false,
               ...subthreadWorktreeChoice(target.instanceId, target.label),

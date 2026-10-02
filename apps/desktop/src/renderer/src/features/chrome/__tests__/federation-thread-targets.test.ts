@@ -37,6 +37,19 @@ function health(
 }
 
 describe("buildFederationThreadTargets", () => {
+  it("carries short names with profiles for menus while preserving full target labels", () => {
+    const targets = buildFederationThreadTargets(health([
+      peer({ id: "max-default", label: "Studio-MBP-M5-Max", shortLabel: "M5 Max", profileName: "default" }),
+      peer({ id: "max-dev", label: "Studio-MBP-M5-Max", shortLabel: "M5 Max", profileName: "dev", status: "disconnected" }),
+      peer({ id: "win", label: "DESKTOP-BUILD-PC", shortLabel: "Win PC", profileName: "dev" }),
+    ]));
+    expect(targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ instanceId: "max-default", label: "Studio-MBP-M5-Max / default", shortLabel: "M5 Max / default" }),
+      expect.objectContaining({ instanceId: "max-dev", label: "Studio-MBP-M5-Max / dev", shortLabel: "M5 Max / dev", availability: "offline" }),
+      expect.objectContaining({ instanceId: "win", label: "DESKTOP-BUILD-PC / dev", shortLabel: "Win PC / dev" }),
+    ]));
+  });
+
   it("returns nothing before health has been read", () => {
     expect(buildFederationThreadTargets(undefined)).toEqual([]);
   });

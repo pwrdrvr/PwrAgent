@@ -28,7 +28,7 @@ const VIEWPORT = { width: 1280, height: 800 };
 const LOCAL_LABEL = "Harold-MBP-M5-Max";
 const PEER_LABEL = "Mac-Mini-M4";
 
-function buildDesktopApi(): DesktopApi {
+function buildDesktopApi(shortNames = false): DesktopApi {
   return {
     readFederationHealth: vi.fn(async () => ({
       health: {
@@ -38,12 +38,14 @@ function buildDesktopApi(): DesktopApi {
         instanceId: "pwr_local",
         localCelestialIcon: "sun" as const,
         localLabel: LOCAL_LABEL,
+        ...(shortNames ? { localShortLabel: "M5 Max" } : {}),
         localProfileName: "default",
         peers: [
           {
             id: "pwr_mini",
             label: PEER_LABEL,
-            profileName: "default",
+            ...(shortNames ? { shortLabel: "M4 Mini" } : {}),
+            profileName: shortNames ? "dev" : "default",
             role: "client" as const,
             // Offline on purpose: a body on the map with no thread feed to
             // fetch, so the screen needs nothing beyond health.
@@ -144,6 +146,7 @@ async function flushFrame() {
 async function renderMap(
   layout: "orbit" | "projects" | "lanes",
   threads: NavigationThreadSummary[],
+  desktopApi = buildDesktopApi(),
 ) {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
@@ -152,7 +155,7 @@ async function renderMap(
   await act(async () => {
     render(
       <StarMapScreen
-        desktopApi={buildDesktopApi()}
+        desktopApi={desktopApi}
         localThreads={threads}
         sessionKeys={{}}
         localInstanceLabel="fallback"
@@ -187,6 +190,22 @@ describe("star map edge arrows", () => {
     vi.unstubAllGlobals();
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
     window.localStorage.removeItem("pwragent.starMap.filterSelection");
+  });
+
+  it("names fly-to arrows like their destination markers, keeps full-name tooltips, and still flies to the body", async () => {
+    await renderMap("orbit", [thread("t1", "PwrSnap")], buildDesktopApi(true));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: `Focus M5 Max (${LOCAL_LABEL})` })).toBeTruthy();
+      expect(screen.getByRole("button", { name: `Focus M4 Mini / dev (${PEER_LABEL})` })).toBeTruthy();
+    });
+    pan(-1000, 0);
+    const arrow = screen.getByRole("button", { name: `Fly to M5 Max (${LOCAL_LABEL})` });
+    expect(arrow.textContent).toBe("M5 Max");
+    expect(arrow.getAttribute("title")).toBe(LOCAL_LABEL);
+    fireEvent.click(arrow);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: `Fly to M5 Max (${LOCAL_LABEL})` })).toBeNull();
+    });
   });
 
   it("points at a body the operator has panned out of the window, from the side it left by", async () => {

@@ -51,6 +51,7 @@ import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
+import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "./lib/federation-display-label";
 import { buildThreadHandoffTargets } from "./features/federation/thread-handoff-targets";
 import {
   SendThreadToMachineDialog,
@@ -2666,6 +2667,7 @@ function DesktopAppShell(props: {
       ...(currentInstanceId ? { currentInstanceId } : {}),
       local: {
         label: liveFederationHealth?.localLabel ?? "This machine",
+        shortLabel: federationLocalDisplayLabel(liveFederationHealth),
         ...(liveFederationHealth?.localCelestialIcon
           ? { celestialIcon: liveFederationHealth.localCelestialIcon }
           : {}),
@@ -3194,6 +3196,7 @@ function DesktopAppShell(props: {
   };
 
   return (
+    <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -3294,7 +3297,7 @@ function DesktopAppShell(props: {
             });
           }}
           newThreadFederationTargets={newThreadFederationTargets}
-          localMachineLabel={liveFederationHealth?.localLabel}
+          localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
           checkFederationTargetProject={checkFederationTargetProject}
           onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
           onSendThreadToMachine={threadHandoffTargets.length > 0
@@ -3726,6 +3729,7 @@ function DesktopAppShell(props: {
         </AppNoticeStack>
       </div>
     </TranscriptLinkProvider>
+    </FederationDisplayLabelsProvider>
   );
 }
 
