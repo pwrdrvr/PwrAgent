@@ -2443,7 +2443,7 @@ describe("CodexAppServerClient", () => {
       {
         id: "thread-child",
         preview: "Investigate the child task",
-        threadSource: "subAgentThreadSpawn",
+        threadSource: "subagent",
         parentThreadId: "thread-parent",
         agentNickname: "route-scout",
         agentRole: "explorer",
@@ -2485,6 +2485,7 @@ describe("CodexAppServerClient", () => {
 
     const threads = await client.listThreads({ filter: "native-subagent-source" });
     const nativeSubAgentThreads = await client.listNativeSubAgentThreads({
+      ancestorThreadId: "thread-parent",
       filter: "native-subagent-source",
       limit: 1_000,
     });
@@ -2520,7 +2521,8 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             limit: 100,
             sortKey: "updated_at",
-            sourceKinds: ["subAgentThreadSpawn"],
+            sourceKinds: ["subAgent", "subAgentThreadSpawn"],
+            ancestorThreadId: "thread-parent",
             useStateDbOnly: true,
           }),
         }),
@@ -8490,6 +8492,49 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it("hydrates Codex subAgentActivity workers as transcript activity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-agent-activity", {
+      thread: {
+        turns: [{
+          id: "turn-review",
+          status: "completed",
+          items: [
+            { type: "subAgentActivity", id: "started-review", kind: "started",
+              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+            { type: "subAgentActivity", id: "completed-review", kind: "completed",
+              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const replay = await client.readThread({ threadId: "thread-agent-activity" });
+      const details = replay.entries.flatMap((entry) =>
+        entry.type === "activity" ? entry.details : [],
+      );
+      expect(details).toEqual([
+        expect.objectContaining({
+          id: "started-review",
+          command: expect.objectContaining({ subAgent: expect.objectContaining({
+            origin: "codex-native", operation: "spawn",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "running" }],
+          }) }),
+        }),
+        expect.objectContaining({
+          id: "completed-review",
+          command: expect.objectContaining({ subAgent: expect.objectContaining({
+            operation: "wait",
+            agents: [{ threadId: "worker-review", name: "review_savers", status: "completed" }],
+          }) }),
+        }),
+      ]);
+    } finally {
+      await client.close();
+    }
   });
 
   it("hydrates collaboration agent tool calls as transcript activity", async () => {

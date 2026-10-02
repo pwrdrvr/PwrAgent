@@ -10,6 +10,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
+import { subAgentActivityToolCall } from "./subagent-activity";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -3939,6 +3940,7 @@ function isActivityItemType(itemType: string | undefined): boolean {
     normalized === "mcptoolcall" ||
     normalized === "dynamictoolcall" ||
     normalized === "collabagenttoolcall" ||
+    normalized === "subagentactivity" ||
     normalized === "websearch" ||
     normalized === "imageview" ||
     normalized === "imagegeneration"
@@ -4506,7 +4508,8 @@ function summarizeActivityItems(
   let failedCollabCalls = 0;
   let status: AppServerThreadActivityStatus | undefined;
 
-  for (const item of items) {
+  for (const rawItem of items) {
+    const item: Record<string, unknown> = subAgentActivityToolCall(rawItem) ?? rawItem;
     const itemId =
       pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
     const itemStatus = normalizeActivityStatus(pickString(item, ["status"]));
@@ -6288,6 +6291,7 @@ function buildThreadDiscoveryPayloads(
   cursor?: string,
   limit = 50,
   sourceKinds?: CodexThreadListParams["sourceKinds"],
+  ancestorThreadId?: string,
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
@@ -6297,7 +6301,13 @@ function buildThreadDiscoveryPayloads(
     sortKey: "updated_at",
     sourceKinds: sourceKinds ?? ["cli", "vscode"],
     useStateDbOnly: true,
+    ...(ancestorThreadId ? { ancestorThreadId } : {}),
   };
+
+  // A scoped recovery must never fall back to the global worker collection.
+  if (ancestorThreadId) {
+    return [{ ...baseParams, searchTerm }];
+  }
 
   return [
     {
@@ -7395,6 +7405,7 @@ async function requestThreadListPages(params: {
   requestTimeoutMs: number;
   deadlineAt?: number;
   sourceKinds?: CodexThreadListParams["sourceKinds"];
+  ancestorThreadId?: string;
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
   const seenCursors = new Set<string>();
@@ -7423,6 +7434,7 @@ async function requestThreadListPages(params: {
         cursor,
         requestedLimit,
         params.sourceKinds,
+        params.ancestorThreadId,
       ),
       timeoutMs: params.requestTimeoutMs,
       deadlineAt: params.deadlineAt,
@@ -8833,6 +8845,7 @@ export class CodexAppServerClient {
    * the shorter display horizon after grouping nested workers.
    */
   async listNativeSubAgentThreads(params?: {
+    ancestorThreadId?: string;
     filter?: string;
     limit?: number;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
@@ -8853,7 +8866,8 @@ export class CodexAppServerClient {
       ),
       maxPages: 1,
       requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      sourceKinds: ["subAgentThreadSpawn"],
+      sourceKinds: ["subAgent", "subAgentThreadSpawn"],
+      ancestorThreadId: params?.ancestorThreadId,
     });
 
     return await this.enrichThreads(

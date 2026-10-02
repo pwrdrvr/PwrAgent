@@ -433,6 +433,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "native-subagent-activity-boundaries": {
+    "commits": 2,
+    "note": "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
+    "observedWalBytes": 41200,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "native-subagent-discovery-backfill": {
     "commits": 2,
     "note": "one missing native child pricing row and parent sub-agent card discovered from the thread list",

@@ -1076,6 +1076,52 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
+  it("persists subAgentActivity only at lifecycle boundaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const recordActivity = (registry as unknown as {
+      recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void>;
+    }).recordCodexNativeSubAgentActivity.bind(registry);
+    const activity = (kind: string): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-review",
+          item: {
+            type: "subAgentActivity",
+            id: `activity-${kind}`,
+            kind,
+            agentThreadId: "worker-review",
+            agentPath: "/root/review_savers",
+          },
+        },
+      },
+    } as AgentEvent);
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await recordActivity(activity("started"));
+        for (let index = 0; index < 100; index += 1) {
+          await recordActivity(activity("started"));
+          await recordActivity(activity("interacted"));
+        }
+        await recordActivity(activity("completed"));
+        await recordActivity(activity("completed"));
+        await recordActivity(activity("started"));
+      });
+      expectSqliteWriteBudget({
+        scenario: "native-subagent-activity-boundaries",
+        note: "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("backfills one discovered native sub-agent in two boundary writes", async () => {
     const nativeThreadId = "thread-epicurus";
     await store.persistThreadUsageActivity({
