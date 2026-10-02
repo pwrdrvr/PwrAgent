@@ -294,6 +294,9 @@ describe("App", () => {
     delete (window as typeof window & {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget;
+    delete (window as typeof window & {
+      __pwragentFederationLabel?: unknown;
+    }).__pwragentFederationLabel;
   });
 
   it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
@@ -911,6 +914,122 @@ describe("App", () => {
     expect(screen.queryByRole("menuitem", {
       name: "Harold-Mac-Mini-M4",
     })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { explicitOwner: false, otherPeers: true },
+    { explicitOwner: true, otherPeers: true },
+    { explicitOwner: false, otherPeers: false },
+  ])("shows and starts on the remote viewer owner ($explicitOwner, $otherPeers)", async ({ explicitOwner, otherPeers }) => {
+    const target = { scope: "remote" as const, instanceId: "m5-default" };
+    Object.assign(window, {
+      __pwragentFederationTarget: target,
+      __pwragentFederationLabel: "Harold-MBP-M5-Max / default",
+    });
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const workspace = {
+      key: "workspace:new-thread",
+      kind: "workspace" as const,
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async (request: EnsureDirectoryLaunchpadRequest) => ({
+      launchpad: {
+        directoryKey: request.directoryKey,
+        directoryKind: request.directoryKind,
+        directoryLabel: request.directoryLabel,
+        ...defaults,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 1,
+        ...(explicitOwner ? { federationTarget: request.federationTarget } : {}),
+      },
+      defaults,
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      ...defaults,
+      threadId: "remote-new-thread",
+      workMode: "local" as const,
+    }));
+    const capabilities = ["thread_navigation", "launchpad_metadata", "environment_actions"] as const;
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const focusListeners = new Set<() => void>();
+    const readFederationHealth = vi.fn(async () => ({
+      health: {
+        enabled: true,
+        role: "gateway" as const,
+        status: "connected" as const,
+        instanceId: "m4-default",
+        localLabel: "Harold-Mac-Mini-M4",
+        localProfileName: "default",
+        peers: [
+          { id: "m5-default", label: "Harold-MBP-M5-Max", profileName: "default",
+            role: "client" as const, status: "connected" as const, capabilities },
+          ...(otherPeers ? [
+            { id: "m5-dev", label: "Harold-MBP-M5-Max", profileName: "dev",
+              role: "client" as const, status: "connected" as const, capabilities },
+            { id: "laptop", label: "Laptop", role: "client" as const,
+              status: "connected" as const, capabilities },
+          ] : []),
+        ],
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [workspace],
+          launchpadDefaults: defaults,
+        }),
+        ensureDirectoryLaunchpad,
+        materializeDirectoryLaunchpad,
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        onWindowFocus: (listener: () => void) => {
+          focusListeners.add(listener);
+          return () => focusListeners.delete(listener);
+        },
+        readFederationHealth,
+      }),
+    });
+
+    render(<App />);
+    await waitFor(() => expect(focusListeners.size).toBeGreaterThan(0));
+    act(() => {
+      for (const listener of focusListeners) listener();
+    });
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
+    await clickButton("New thread");
+    const chip = await screen.findByRole("button", { name: "Machine" });
+    expect(chip).toHaveTextContent("Harold-MBP-M5-Max");
+    expect(chip).not.toHaveTextContent("Harold-Mac-Mini-M4");
+    expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
+    fireEvent.click(chip);
+    const menu = screen.getByRole("listbox", { name: "Machine" });
+    const owner = within(menu).getByRole("option", { name: /Harold-MBP-M5-Max.*This window/ });
+    expect(owner).toHaveAttribute("aria-selected", "true");
+    expect(within(menu).queryByRole("option", { name: /Harold-Mac-Mini-M4/ })).not.toBeInTheDocument();
+    fireEvent.click(owner);
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: target,
+    })));
+
+    pasteComposerText(await screen.findByRole("textbox", { name: "New thread" }), "Create this on the M5");
+    await clickButton("Start thread");
+    await waitFor(() => expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: target,
+      input: [{ type: "text", text: "Create this on the M5" }],
+    })));
   });
 
   it("surfaces GitHub organization SAML enforcement as a sticky error toast", async () => {
