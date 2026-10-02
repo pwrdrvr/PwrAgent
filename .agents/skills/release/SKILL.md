@@ -1,12 +1,12 @@
 ---
 name: release
-description: Prepare, validate, tag, publish, and monitor guarded PwrAgent desktop releases. Use when the user asks to release PwrAgent, prepare a vX.Y.Z or vX.Y.Z-prerelease tag, update release notes or CHANGELOG.md for a desktop release, verify package.json/tag/changelog alignment, trigger the macOS signed/notarized release workflow, or inspect release workflow status.
+description: Prepare, validate, tag, publish, and monitor guarded PwrAgent desktop releases, including Winget and Homebrew distribution. Use when the user asks to release PwrAgent, prepare a vX.Y.Z or vX.Y.Z-prerelease tag, update release notes or CHANGELOG.md for a desktop release, verify package.json/tag/changelog alignment, trigger the signed release workflow, or inspect release/distribution status.
 ---
 
 # Release
 
 Use this skill for PwrAgent desktop releases published by the
-`.github/workflows/release.yml` Universal + Apple Silicon macOS workflow.
+`.github/workflows/release.yml` macOS, Windows and Linux workflow.
 
 ## Read First
 
@@ -16,6 +16,8 @@ Read these files before changing release metadata:
 2. [../../../docs/desktop-distribution-phase-2-runbook.md](../../../docs/desktop-distribution-phase-2-runbook.md) when the release affects update feeds or distribution repos
 3. [../../../.github/workflows/release.yml](../../../.github/workflows/release.yml)
 4. [../../../scripts/check-desktop-release-metadata.mjs](../../../scripts/check-desktop-release-metadata.mjs)
+5. [../../../docs/package-manager-distribution.md](../../../docs/package-manager-distribution.md) for every release, including prereleases
+6. [../../../.github/workflows/package-manager-distribution.yml](../../../.github/workflows/package-manager-distribution.yml)
 
 ## Guardrails
 
@@ -122,6 +124,24 @@ releases on `main`. Only after the owner directs the `1.1` transition do you cut
 `releases/1.0` from the current `main`, then bump `main` to `1.1.0-alpha.1`.
 
 ## Prepare Release Metadata
+
+Before changing metadata, run `pnpm release:channels --audit`. Compare GitHub
+Latest with the authoritative `pwrdrvr/homebrew-tap` cask and
+`microsoft/winget-pkgs` manifest versions. Record identifiers, check time,
+source URLs, open submissions and exact blockers in the release handoff.
+Investigate ahead/stale channels and reuse pending PRs; do not create duplicate
+registrations. An API failure or incomplete search is not an absent package.
+Public source audits/searches and verified manifest generation use the
+organization-provided public-read-only `DISTRIBUTION_READ_TOKEN`, falling back
+to `github.token` for fork checks. Keep unrelated operations on the default token
+and submission writes on the separate `DISTRIBUTION_TOKEN`. Confirm selected
+repository access through secret metadata only, check expiration with the
+organization owner, and arrange rotation before expiry without copying the value
+or broadening permissions. Require a successful authenticated audit after rotation.
+Retain bounded rate-limit retries; a PAT can still receive HTTP 429 or incomplete
+code-search results. Report these as blockers and retry later or narrow the query.
+Check automation credential readiness. Prereleases still require this comparison
+but do not update either stable package channel.
 
 1. Determine the next version from the previous tag and user intent:
 
@@ -377,6 +397,21 @@ gh release edit v<version> --repo pwrdrvr/PwrAgent --latest --prerelease=false
 
 No retag is needed. Clearing the flag moves a suffix-free tag from Stable
 Prerelease into Stable Latest.
+
+After promotion, follow the package-manager distribution runbook through
+platform validation, Homebrew/Winget submissions, review/merge and refreshed
+client publication checks. If the promotion did not trigger the workflow,
+dispatch `package-manager-distribution.yml` with `submit=true`. Validate
+architecture-specific released artifacts and actual downloaded checksums,
+signature/notarization, fresh install and previous-version upgrade. Never
+substitute an alias URL, an unsigned build or a guessed hash.
+
+The release handoff must report both channel versions and outcomes. Link each
+pending PR or failed run, name any credential/CLA/review/index/cache blocker,
+and give its next action and last check time. Do not call setup live or channel
+updates complete until authoritative remote files and refreshed clients both
+resolve the new version. Carry delayed channels forward explicitly; opening a
+PR or observing a successful product build does not prove distribution.
 
 Never run this on a suffixed tag such as `v1.1.0-beta.3`. `--latest` repoints
 `/releases/latest/download/`, so it would hand the website a beta build while

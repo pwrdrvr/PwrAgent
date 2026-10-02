@@ -3,6 +3,7 @@ import {
   type CodexStreamSignal,
 } from "./codex-stream-notice";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
+import { turnFailureNoticeId } from "./turn-failure-acknowledgements";
 import {
   resolveBackendErrorNotice,
   type BackendErrorSignal,
@@ -87,7 +88,7 @@ function dismissSupersededRecoveryNotices(
   // Recovery status becomes the live UI for this incident. The persisted
   // turn-failure and recovery audit remain in the thread transcript.
   const supersededIds = new Set([
-    `turn-failed:codex:${signal.threadId}:${signal.turnId}`,
+    turnFailureNoticeId({ ...signal, backend: "codex" }),
     `system-error:codex:${signal.threadId}`,
   ]);
   const durable = state.durable.filter(
@@ -173,7 +174,7 @@ function findRelatedBackendNotice(
         `turn-failed:codex:${signal.threadId}:`,
       ]
     : signal.kind === "turn-failed"
-      ? [`turn-failed:${signal.backend}:${signal.threadId}:${signal.turnId}`]
+      ? [turnFailureNoticeId(signal)]
       : [
           `turn-failed:${signal.backend}:${signal.threadId}:`,
           ...(signal.backend === "codex"
@@ -183,7 +184,8 @@ function findRelatedBackendNotice(
   const notices = [...state.durable, ...state.transient];
   for (let index = notices.length - 1; index >= 0; index -= 1) {
     const notice = notices[index];
-    if (notice && prefixes.some((prefix) => notice.id.startsWith(prefix))) {
+    if (notice && notice.threadLink?.instanceId === signal.instanceId
+      && prefixes.some((prefix) => notice.id.startsWith(prefix))) {
       return notice;
     }
   }

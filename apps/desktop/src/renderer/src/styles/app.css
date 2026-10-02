@@ -10670,7 +10670,8 @@ a.button {
   margin-left: auto;
 }
 
-.incoming-files-folder__action {
+.incoming-files-folder__action,
+.settings-folder-line__action {
   min-height: 24px;
   padding: 0 8px;
   color: var(--text-secondary);
@@ -10678,9 +10679,45 @@ a.button {
   white-space: nowrap;
 }
 
-.incoming-files-folder__action:hover:not([disabled]):not([aria-disabled="true"]) {
+.incoming-files-folder__action:hover:not([disabled]):not([aria-disabled="true"]),
+.settings-folder-line__action:hover {
   border-color: var(--accent-border);
   color: var(--accent);
+}
+
+/* A read-only folder under a settings control: the path, then a quiet
+   Open folder that sits right and keeps the incoming folder's 24px size. */
+.settings-folder-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  min-height: 24px;
+}
+
+.settings-folder-line__path {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settings-folder-line__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.settings-folder-line__note {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .discord-permission-result {
@@ -32713,9 +32750,20 @@ button.pricing-token-miser__folded:focus-visible {
      ring flat. Pad the two edges it overhangs; the negative top margin puts
      the strip back where it was, and the right pad sits inside the row's
      own wrapping slack so the left edge stays aligned with the rest of the
-     composer column. */
-  padding: 10px 10px 0 0;
+     composer column.
+
+     The left edge needs the same care for a different overhang: each
+     thumbnail's own focus ring (`.composer__attachment-open:focus-visible`,
+     2px at 2px) reaches 4px past the first column, and with no left pad the
+     scroller sliced it flat — visible every time the lightbox closed and
+     handed focus back. The left pad is paid back by moving the box 4px left,
+     and the right margin returns the same 4px so the margin box stays the
+     width `.composer > *` centres. A left margin alone shifts the centred box
+     by half of it and puts the thumbnails 2px right of the Reply box. */
+  padding: 10px 10px 0 4px;
   margin-top: -10px;
+  margin-right: 4px;
+  margin-left: -4px;
 }
 
 .composer__attachment {
@@ -33671,6 +33719,31 @@ button.pricing-token-miser__folded:focus-visible {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
   color: var(--button-text);
+}
+
+/* A dropdown that replaces an icon toggle keeps the toggle's footprint while
+   its choice is the default: the 26px circle of `.composer__toggle`. */
+.composer-dropdown--icon-only .composer-dropdown__button {
+  width: 26px;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* An opt-in mode that is on (Speed at Fast or Ultrafast). Same treatment as
+   `.composer__toggle.is-active`, so a model with the plain Fast toggle and a
+   model with the Speed menu say "on" the same way. */
+.composer-dropdown--active .composer-dropdown__button,
+.composer-dropdown--active .composer-dropdown__button:hover,
+.composer-dropdown--active .composer-dropdown__button:focus-visible,
+.composer-dropdown--active.composer-dropdown--open .composer-dropdown__button {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer-dropdown--active .composer-dropdown__icon {
+  color: var(--accent);
 }
 
 /* The launchpad's machine chip when it targets another machine. An accent

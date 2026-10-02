@@ -30,6 +30,7 @@
     "lint:eslint:typed": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/src/**/*.{ts,tsx}\" --config eslint.typed.config.mjs --no-inline-config --report-unused-disable-directives-severity off",
     "lint:sql": "node ./scripts/lint-sql-templates.mjs",
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
+    "release:channels": "node ./scripts/package-manager-release.mjs",
     "test:desktop-e2e": "pnpm --filter @pwragent/desktop test:e2e",
     "test:desktop-e2e:nice": "node ./scripts/nice-run.mjs pnpm test:desktop-e2e",
     "eval:smoke": "pnpm --filter @pwragent/desktop eval:smoke",

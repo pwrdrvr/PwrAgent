@@ -122,10 +122,15 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A receipt wraps rather than squeezing its target: the tool, machine and
+   outcome never shrink, so in a narrow panel the target is the one item
+   left, and it alone carries what the action was about. It ellipsizes only
+   when it is wider than a line by itself. */
 .native-voice-feed__action {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   min-width: 0;
   margin: 4px 0;
   padding: 4px 8px;
@@ -141,6 +146,7 @@
 }
 .native-voice-feed__target {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: var(--text-primary);
   font-weight: 600;

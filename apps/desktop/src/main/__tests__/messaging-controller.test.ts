@@ -12085,6 +12085,135 @@ describe("MessagingController", () => {
     });
   });
 
+  it.each([
+    { speed: "Standard", clicks: 1, fastMode: false },
+    { speed: "Fast", clicks: 2, fastMode: true },
+  ])("honors explicit $speed over a remote new-thread Ultrafast launchpad", async ({ speed, clicks, fastMode }) => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      model: "gpt-6-astra",
+      serviceTier: "ultrafast",
+      fastMode: false,
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [buildBackendSummary({
+          launchpadOptions: {
+            models: [{ id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"] }],
+            supportsFastMode: true,
+          },
+        })],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "browse:select-project",
+      value: {
+        directoryKey: "directory:pwragent",
+        label: "PwrAgent",
+        path: "/repo/pwragent",
+        federationInstanceId: "remote-owner",
+      },
+    }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:fast", label: "Speed: ultrafast" }),
+      ]),
+    });
+
+    for (let click = 0; click < clicks; click += 1) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:fast" }));
+    }
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:fast", label: `Speed: ${speed.toLowerCase()}` }),
+      ]),
+    });
+    expect(harness.updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use the selected speed"));
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        federationTarget: { scope: "remote", instanceId: "remote-owner" },
+        launchpad: expect.objectContaining({ model: "gpt-6-astra", serviceTier: undefined, fastMode }),
+      }),
+      expectMaterializeOptions(),
+    );
+  });
+
+  it.each([
+    { initialFast: false, clicks: 2 },
+    { initialFast: true, clicks: 1 },
+  ])("cycles new-thread speeds using the projected directory model (initialFast=$initialFast)", async ({ initialFast, clicks }) => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = { ...navigation.launchpadDefaults, model: "gpt-6.1-sol", fastMode: false };
+    const directory = navigation.directories[0]!;
+    directory.launchpad = {
+      backend: "codex",
+      directoryKey: directory.key,
+      directoryKind: directory.kind,
+      directoryLabel: directory.label,
+      directoryPath: directory.path,
+      executionMode: "default",
+      model: "gpt-6-astra",
+      fastMode: initialFast,
+      prompt: "",
+      workMode: "local",
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [buildBackendSummary({
+          launchpadOptions: {
+            models: [
+              { id: "gpt-6.1-sol", supportsFast: true, current: true, serviceTiers: ["priority"] },
+              { id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"] },
+            ],
+            supportsFastMode: true,
+          },
+        })],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "browse:select-project",
+      value: { directoryKey: directory.key, label: directory.label, path: "/repo/pwragent" },
+    }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Model: gpt-6-astra"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:fast", label: `Speed: ${initialFast ? "fast" : "standard"}` }),
+      ]),
+    });
+    for (let click = 0; click < clicks; click += 1) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:fast" }));
+    }
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:fast", label: "Speed: ultrafast" }),
+      ]),
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("Use the directory model"));
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({ model: "gpt-6-astra", serviceTier: "ultrafast", fastMode: false }),
+      }),
+      expectMaterializeOptions(),
+    );
+  });
+
   it("reports zero create-capable backends before opening the new-thread picker", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({
@@ -21893,6 +22022,47 @@ describe("MessagingController", () => {
         ],
       }),
     );
+  });
+
+  it("does not revive a binding's Ultrafast preference after the owner selects Standard", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = { ...navigation.threads[0]!, fastMode: false, model: "gpt-6-astra" };
+    const harness = await createHarness({ navigation });
+    await harness.store.upsertBinding({
+      id: "speed-binding", authorizedActorIds: ["user-1"], backend: "codex",
+      channel: buildTextEvent("continue").channel, createdAt: 1000, updatedAt: 1000,
+      targetKind: "thread", threadId: "thread-1",
+      preferences: { serviceTier: "ultrafast", fastMode: false, updatedAt: 1000 },
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("continue"));
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: undefined, fastMode: false,
+    }));
+  });
+
+  it("cycles advertised Ultrafast through messaging and preserves it for the next turn", async () => {
+    const harness = await createHarness({
+      listBackends: async () => ({ fetchedAt: 1000, backends: [buildBackendSummary({
+        launchpadOptions: {
+          models: [{ id: "gpt-5.3-codex", supportsFast: true, serviceTiers: ["priority", "ultrafast"] }],
+          supportsFastMode: true,
+        },
+      })] }),
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    expect(harness.setThreadModelSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: "ultrafast", fastMode: false,
+    }));
+    await harness.controller.handleInboundEvent(buildTextEvent("please run tests"));
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: "ultrafast", fastMode: false,
+    }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    expect(harness.setThreadModelSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      serviceTier: undefined, fastMode: false,
+    }));
   });
 
   it("toggles fast mode and applies it to later free-form turns", async () => {

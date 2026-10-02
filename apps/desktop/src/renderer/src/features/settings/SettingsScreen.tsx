@@ -1062,6 +1062,11 @@ function SettingsSectionBody(props: {
             experimental: { tokenMiserFocusedSummariesEnabled: enabled },
           });
         }}
+        onTokenMiserDiagnosticsEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { tokenMiserDiagnosticsEnabled: enabled },
+          });
+        }}
         onTokenMiserPollingReviewsEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserPollingReviewsEnabled: enabled },

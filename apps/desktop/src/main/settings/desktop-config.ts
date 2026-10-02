@@ -138,6 +138,7 @@ export type DesktopSettingsConfig = {
     codexToolDiscovery?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
+    tokenMiserDiagnosticsEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
@@ -782,6 +783,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "token_miser_focused_summaries_enabled"],
       patch.experimental.tokenMiserFocusedSummariesEnabled,
+    );
+  }
+  if (patch.experimental?.tokenMiserDiagnosticsEnabled !== undefined) {
+    set(
+      ["experimental", "token_miser_diagnostics_enabled"],
+      patch.experimental.tokenMiserDiagnosticsEnabled,
     );
   }
   if (patch.experimental?.tokenMiserPollingReviewsEnabled !== undefined) {
@@ -1943,6 +1950,8 @@ function normalizeDesktopConfig(
         ?? readBoolean(general?.token_miser_enabled),
       tokenMiserFocusedSummariesEnabled:
         readBoolean(experimental?.token_miser_focused_summaries_enabled),
+      tokenMiserDiagnosticsEnabled:
+        readBoolean(experimental?.token_miser_diagnostics_enabled),
       tokenMiserPollingReviewsEnabled:
         readBoolean(experimental?.token_miser_polling_reviews_enabled),
       tokenMiserDefaultEnabled:

@@ -7856,9 +7856,38 @@ export function useThreadSessionState(params: {
     ]
   );
 
+  // Only Codex background terminals outlive a turn, and its list names all
+  // of them. Live items that list omits are done, whether or not this window
+  // saw their item/completed; otherwise a missed completion reports a
+  // command "still running" forever while Actions lists nothing.
+  const pruneLiveToolItems = useCallback(
+    (listedThreadKey: string, itemIds: ReadonlySet<string>) => {
+      const currentItems = liveToolItemsRef.current[listedThreadKey];
+      if (!currentItems) {
+        return;
+      }
+      const nextItems = Object.fromEntries(
+        Object.entries(currentItems).filter(([itemId]) => itemIds.has(itemId)),
+      );
+      if (Object.keys(nextItems).length === Object.keys(currentItems).length) {
+        return;
+      }
+      const next = { ...liveToolItemsRef.current };
+      if (Object.keys(nextItems).length > 0) {
+        next[listedThreadKey] = nextItems;
+      } else {
+        delete next[listedThreadKey];
+      }
+      liveToolItemsRef.current = next;
+      setLiveToolItemsByThread(next);
+    },
+    [],
+  );
+
   const background = useCodexBackgroundTerminals({
     desktopApi, thread, suspended,
     retainedRemoteThreadKeys: params.retainedRemoteThreads === undefined ? undefined : retainedRemoteKeys,
+    onAuthoritativeList: pruneLiveToolItems,
   });
 
   const thinkingThreadKeys = useMemo(

@@ -5,6 +5,7 @@ import type {
   FederationInstanceId,
 } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
+import { turnFailureNoticeId } from "./turn-failure-acknowledgements";
 
 /**
  * A backend failure signal worth surfacing as a sticky toast. Either a
@@ -28,6 +29,7 @@ export type BackendErrorSignal = (
     }
   | {
       kind: "turn-failed";
+      onDismiss?: () => void;
       onCodexLogin?: () => void;
       backend: AppServerBackendKind;
       threadId: string;
@@ -141,7 +143,8 @@ export function resolveBackendErrorNotice(
       : signal.originLabel;
     return {
       autoDismiss: false,
-      id: `turn-failed:${signal.backend}:${signal.threadId}:${signal.turnId}`,
+      id: turnFailureNoticeId(signal),
+      ...(signal.onDismiss ? { onDismiss: signal.onDismiss } : {}),
       title: context?.automationName
         ? "Automation failed"
         : context?.taskMonitor ? "Task monitor failed" : "Turn failed",
@@ -171,6 +174,7 @@ export function resolveBackendErrorNotice(
     `codex-invalid-id-recovery:codex:${signal.threadId}:`;
   if (
     current
+    && current.threadLink?.instanceId === signal.instanceId
     && (
       current.id.startsWith(sameThreadTurnFailedPrefix)
       || (

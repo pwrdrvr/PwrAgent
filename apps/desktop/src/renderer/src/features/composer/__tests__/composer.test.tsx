@@ -1334,6 +1334,51 @@ describe("Composer", () => {
     await waitFor(() => expect(listBackends).toHaveBeenCalledExactlyOnceWith({ includeUnavailable: true, federationTarget }));
   });
 
+  it.each([true, false])("offers advertised Ultrafast using the owner's policy (%s)", async (allowed) => {
+    const onSetThreadModelSettings = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    render(<Composer skills={[]} codexFastAllowed={!allowed}
+      backends={[{ ...backendSummary("codex", { models: [{
+        id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"],
+      }] }), codexFastAllowed: allowed }]}
+      onSetThreadModelSettings={onSetThreadModelSettings}
+      thread={{ id: "speed-fixture", title: "Remote", titleSource: "explicit", source: "codex",
+        model: "gpt-6-astra", fastMode: true, linkedDirectories: [], inbox: { inInbox: false },
+        federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "speed-fixture", target } },
+      }} />);
+    expect(Boolean(screen.queryByLabelText("Speed"))).toBe(allowed);
+    if (allowed) {
+      chooseDropdownOption("Speed", "Ultrafast");
+      await waitFor(() => expect(onSetThreadModelSettings).toHaveBeenCalledWith({
+        serviceTier: "ultrafast", fastMode: false,
+      }));
+    }
+  });
+
+  it.each([
+    [{ fastMode: false }, "Standard", false],
+    [{ fastMode: true }, "Fast", true],
+    [{ serviceTier: "ultrafast", fastMode: false }, "Ultrafast", true],
+  ] as const)("draws Speed %j like the Fast toggle it replaces", (settings, label, active) => {
+    render(<Composer skills={[]} codexFastAllowed
+      backends={[backendSummary("codex", { models: [{
+        id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"],
+      }] })]}
+      thread={{ id: "speed-look", title: "Speed", titleSource: "explicit", source: "codex",
+        model: "gpt-6-astra", ...settings, linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const trigger = screen.getByRole("button", { name: "Speed" });
+    const dropdown = trigger.closest(".composer-dropdown");
+    expect(trigger).toHaveAttribute("aria-description", `Speed: ${label}`);
+    // Standard keeps the toggle's icon-only circle; a paid tier is named and lit.
+    expect(dropdown).toHaveClass(active ? "composer-dropdown--active" : "composer-dropdown--icon-only");
+    expect(dropdown).not.toHaveClass(active ? "composer-dropdown--icon-only" : "composer-dropdown--active");
+    expect(trigger.textContent).toBe(active ? label : "");
+    openDropdown("Speed");
+    expect(screen.getByRole("option", { name: "Ultrafast" })).toHaveAccessibleDescription(
+      "The fastest tier this model offers",
+    );
+  });
+
   it.each([true, false])("uses the owner's Fast mode policy (%s), independent of the viewer", (allowed) => {
     const target = { scope: "remote" as const, instanceId: "owner" };
     render(<Composer skills={[]} codexFastAllowed={!allowed}
@@ -21520,6 +21565,73 @@ describe("Composer", () => {
         screen.queryByRole("dialog", { name: "Expanded image" })
       ).not.toBeInTheDocument()
     );
+  });
+
+  it("pages between pasted images in the lightbox like a sent message's gallery", async () => {
+    // GIFs keep their own bytes (normalization would turn both into the same
+    // stub image here), and the strip drops an image it already holds.
+    const files = ["first.gif", "second.gif"].map(
+      (name, index) =>
+        new File([new Uint8Array([index + 1])], name, { type: "image/gif" }),
+    );
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: files.map((file) => ({
+          kind: "file",
+          type: file.type,
+          getAsFile: () => file,
+        })),
+      },
+    });
+
+    // Both thumbnails must be in the strip before opening, or a count of one
+    // proves nothing.
+    await screen.findByRole("button", { name: "Expand second.gif" });
+    fireEvent.click(screen.getByRole("button", { name: "Expand first.gif" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
+    expect(within(dialog).getByAltText("first.gif")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Previous image" })
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(dialog).getByRole("button", { name: "Next image" })
+    ).toHaveAttribute("aria-disabled", "false");
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(within(dialog).getByText("Image 2 of 2")).toBeInTheDocument();
+    expect(await within(dialog).findByAltText("second.gif")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Next image" })
+    ).toHaveAttribute("aria-disabled", "true");
+
+    // The last image is the end of the run, not a wrap back to the first.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(within(dialog).getByText("Image 2 of 2")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Previous image" }));
+    expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
+    expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
   });
 
   it("keeps dropped GIF images animated by preserving the original data URL", async () => {

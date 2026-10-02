@@ -3465,20 +3465,20 @@ describe("SettingsScreen", () => {
     expect(scheduledDialog).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Turn Fast off everywhere" }),
+      screen.getByRole("button", { name: "Use Standard speed everywhere" }),
     );
     const fastConfirmation =
-      await screen.findByText("Turn Fast off everywhere?");
+      await screen.findByText("Use Standard speed everywhere?");
     expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
       "Codex",
     );
     expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
-      "Fast mode",
+      "Fast and Ultrafast",
     );
     expect(
-      screen.queryByRole("button", { name: "Turn Fast off everywhere" }),
+      screen.queryByRole("button", { name: "Use Standard speed everywhere" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Standard speed" }));
     await waitFor(() => {
       expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(1);
     });
@@ -3489,12 +3489,12 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("switch", { name: "Allow Codex Fast mode" }),
+      screen.getByRole("switch", { name: "Allow Codex Fast and Ultrafast" }),
     );
     expect(
-      await screen.findByText("Prohibit Fast for this profile?"),
+      await screen.findByText("Prohibit Fast and Ultrafast for this profile?"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Standard speed" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
@@ -3751,6 +3751,70 @@ describe("SettingsScreen", () => {
       onClose={() => undefined}
     />);
     expect(toggle).toBeDisabled();
+  });
+
+  it("offers default-off diagnostic capture inside Token Miser", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    const settings = createSettingsState(snapshot);
+    const view = render(<SettingsScreen
+      desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental"
+      settings={settings}
+      onClose={() => undefined}
+    />);
+    const toggle = screen.getByRole("switch", {
+      name: "Capture diagnostic samples — Token Miser",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      experimental: { tokenMiserDiagnosticsEnabled: true },
+    }));
+    view.rerender(<SettingsScreen
+      desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental"
+      settings={createSettingsState({
+        ...snapshot,
+        experimental: {
+          ...snapshot.experimental,
+          tokenMiserEnabled: { value: false, source: "config" },
+        },
+      })}
+      onClose={() => undefined}
+    />);
+    expect(toggle).toBeDisabled();
+  });
+
+  it("shows where diagnostic samples are saved and opens the folder", async () => {
+    const directory = "/tmp/pwragent/state/token-miser/diagnostics";
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiserDiagnosticsDirectory = directory;
+    const openPath = vi.fn()
+      .mockResolvedValueOnce({ opened: false, error: `Path does not exist: ${directory}`, missing: true })
+      .mockResolvedValueOnce({ opened: true });
+    render(<SettingsScreen
+      desktopApi={{ openPath } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental"
+      settings={createSettingsState(snapshot)}
+      onClose={() => undefined}
+    />);
+
+    // Capture is off, but saved files outlive the switch, so the folder shows.
+    expect(screen.getByRole("switch", {
+      name: "Capture diagnostic samples — Token Miser",
+    })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(directory)).toBeInTheDocument();
+
+    const open = screen.getByRole("button", { name: "Open folder" });
+    fireEvent.click(open);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("No samples saved yet."));
+    expect(openPath).toHaveBeenCalledWith({ path: directory });
+
+    fireEvent.click(open);
+    await waitFor(() => expect(openPath).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
   });
 
   it("lets an available Token Miser experiment default threads on or off", async () => {

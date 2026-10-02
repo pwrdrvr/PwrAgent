@@ -2,6 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import { summarizeComposerError } from "./composer-error-message";
+import { useTurnFailureDismissed } from "../notifications/LinkedTurnFailureMessage";
+import { turnFailureAcknowledgements } from "../notifications/turn-failure-acknowledgements";
 
 export type ComposerErrorEntry = {
   /** Stable per source, so dismissing one error never hides another. */
@@ -25,6 +27,7 @@ export type ComposerErrorEntry = {
 export function ComposerErrorRail(props: {
   desktopApi?: Pick<DesktopApi, "copyText">;
   entries: readonly ComposerErrorEntry[];
+  failureScope?: string;
 }): ReactNode {
   const [dismissed, setDismissed] = useState<ReadonlyMap<string, string>>(new Map());
 
@@ -53,6 +56,7 @@ export function ComposerErrorRail(props: {
         <ComposerErrorRow
           key={entry.id}
           desktopApi={props.desktopApi}
+          failureScope={props.failureScope}
           label={entry.label}
           message={entry.message}
           retry={entry.retry}
@@ -71,6 +75,7 @@ function dismissalKey(entry: ComposerErrorEntry): string {
 }
 
 function ComposerErrorRow(props: {
+  failureScope?: string;
   desktopApi?: Pick<DesktopApi, "copyText">;
   label: string;
   message: string;
@@ -79,7 +84,9 @@ function ComposerErrorRow(props: {
   onDismiss: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const failureDismissed = useTurnFailureDismissed(props.failureScope, props.message);
   const { summary, detail } = summarizeComposerError(props.message);
+  if (failureDismissed) return null;
   const toggleContent = (
     <>
       <span
@@ -138,7 +145,10 @@ function ComposerErrorRow(props: {
             <button
               className="composer__secondary-action composer__queued-env-action-dismiss"
               type="button"
-              onClick={() => props.onDismiss()}
+              onClick={() => {
+                turnFailureAcknowledgements.dismissMatching(props.failureScope, props.message);
+                props.onDismiss();
+              }}
             >
               Dismiss
             </button>

@@ -69,15 +69,21 @@ export function ComposerDropdown(props: {
   compact?: boolean;
   disabled?: boolean;
   icon?: ComposerDropdownIcon;
+  /**
+   * Draw the trigger as the icon alone, in a toggle-sized circle. The label
+   * still names the choice through `ariaLabel` and `tooltip`, so pass both.
+   */
+  iconOnly?: boolean;
   id?: string;
   kind?: "branch";
   /**
    * `danger` is Full Access. `remote` marks a chip whose choice routes the
    * thread to another machine: an accent rim and an accent icon, louder than
    * a neutral chip and quieter than the solid Full Access fill. `offline`
-   * is that machine while it is unreachable: a dashed rim, muted.
+   * is that machine while it is unreachable: a dashed rim, muted. `active`
+   * is an opt-in mode that is on, drawn like `.composer__toggle.is-active`.
    */
-  tone?: "danger" | "remote" | "offline";
+  tone?: "active" | "danger" | "remote" | "offline";
   onChange: (value: string) => void;
   onOpenChange?: (open: boolean) => void;
   onPointerEnter?: () => void;
@@ -237,6 +243,8 @@ export function ComposerDropdown(props: {
         "composer-dropdown",
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
+        props.iconOnly && Icon ? "composer-dropdown--icon-only" : "",
+        props.tone === "active" ? "composer-dropdown--active" : "",
         props.tone === "danger" ? "composer-dropdown--danger" : "",
         props.tone === "remote" ? "composer-dropdown--remote" : "",
         props.tone === "offline" ? "composer-dropdown--offline" : "",
@@ -284,12 +292,14 @@ export function ComposerDropdown(props: {
       >
         {Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
-            <Icon size={13} />
+            <Icon size={props.iconOnly ? 15 : 13} />
           </span>
         ) : null}
-        <span className="composer-dropdown__label">
-          {selectedOption?.label ?? props.value}
-        </span>
+        {props.iconOnly && Icon ? null : (
+          <span className="composer-dropdown__label">
+            {selectedOption?.label ?? props.value}
+          </span>
+        )}
       </button>
       {/* The listbox carries its own name: the trigger's label does not reach
           it through `aria-controls`, and an unnamed one is an axe
