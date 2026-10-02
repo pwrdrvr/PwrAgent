@@ -215,7 +215,12 @@ jobs:
           $installDir = "$env:RUNNER_TEMP\pwragent-user"
           function Assert-InstalledVersion($expected) {
             $exe = "$installDir\PwrAgent.exe"
-            if ((Get-Item $exe).VersionInfo.ProductVersion -ne $expected) { throw "Wrong installed version" }
+            $versionInfo = (Get-Item $exe).VersionInfo
+            # electron-builder stamps the app version in FileVersion and appends
+            # the zero build component to the executable's ProductVersion.
+            if ($versionInfo.FileVersion -ne $expected -or $versionInfo.ProductVersion -ne "$expected.0") {
+              throw "Wrong installed version: FileVersion=$($versionInfo.FileVersion), ProductVersion=$($versionInfo.ProductVersion); expected $expected / $expected.0"
+            }
             $bytes = [System.IO.File]::ReadAllBytes($exe)
             $offset = [BitConverter]::ToInt32($bytes, 0x3c)
             if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x8664) { throw "Installed executable is not x64" }
