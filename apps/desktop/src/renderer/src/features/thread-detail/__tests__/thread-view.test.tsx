@@ -238,6 +238,55 @@ describe("ThreadView", () => {
     cleanup();
   });
 
+  it("preserves the document viewer when navigation replaces the selected thread summary", async () => {
+    const readMarkdownFile = vi.fn(async () => ({
+      path: "/repo/report.md",
+      content: "# Report\n\nKeep this paragraph selected.",
+    }));
+    const selectedThread = buildTimestampTargetThread("reader", "Document reader");
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: (_text) => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: true,
+      desktopApi: { readMarkdownFile },
+      loading: false,
+      loadingMore: false,
+      messageCount: 1,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id) => undefined,
+      selectedThread,
+      skills: [],
+      transcriptEntries: [{
+        type: "message",
+        id: "report-link",
+        role: "assistant",
+        text: "Read [report](/repo/report.md).",
+      }],
+    };
+    const view = render(<ThreadView {...props} />);
+    fireEvent.click(screen.getByRole("link", { name: "report" }));
+    await screen.findByRole("heading", { name: "Report" });
+    const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
+    const paragraph = within(dialog).getByText("Keep this paragraph selected.");
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const scroll = dialog.querySelector<HTMLElement>(".markdown-document-modal__body")!;
+    scroll.scrollTop = 640;
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      await act(async () => view.rerender(<ThreadView {...props} selectedThread={{ ...selectedThread }} />));
+      expect(paragraph).toBeInTheDocument();
+      expect(selection.anchorNode).toBe(paragraph);
+      expect(selection.toString()).toBe("Keep this paragraph selected.");
+      expect(scroll.scrollTop).toBe(640);
+      expect(readMarkdownFile).toHaveBeenCalledTimes(1);
+    }
+    selection.removeAllRanges();
+  });
+
   it("offers async question answers only when the composer is ready", () => {
     const props: Omit<ThreadViewProps, "terminals"> = {
       addOptimisticUserMessage: (_text) => "optimistic-1",

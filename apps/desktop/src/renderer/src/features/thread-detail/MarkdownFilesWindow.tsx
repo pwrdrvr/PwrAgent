@@ -11,6 +11,7 @@ import { CloseIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { useMarkdownFileSource } from "./useMarkdownFileSource";
 
 type LoadState =
   | { status: "idle" | "loading" }
@@ -21,11 +22,12 @@ export function MarkdownFilesWindow() {
   const desktopApi = useDesktopApi();
   const contextKey = useMemo(() => markdownFilesContextKeyFromHash(), []);
   const [snapshot, setSnapshot] = useState<MarkdownFileViewerSnapshot | undefined>();
+  const { thread, federationTarget } = useMarkdownFileSource(snapshot?.context);
   const viewerApi = useMemo(() => scopeDesktopApiToFederationTarget(
     desktopApi,
-    snapshot?.context.federationTarget && isRemoteFederationTarget(snapshot.context.federationTarget)
-      ? snapshot.context.federationTarget : undefined,
-  ), [desktopApi, snapshot?.context.federationTarget]);
+    federationTarget && isRemoteFederationTarget(federationTarget)
+      ? federationTarget : undefined,
+  ), [desktopApi, federationTarget]);
   const selectedFile = snapshot?.files.find(
     (file) => file.path === snapshot.selectedPath,
   ) ?? snapshot?.files[0];
@@ -39,6 +41,7 @@ export function MarkdownFilesWindow() {
     [snapshot?.context],
   );
   const [loadState, setLoadState] = useState<LoadState>({ status: "idle" });
+  const readMarkdownFile = viewerApi?.readMarkdownFile;
 
   useEffect(() => {
     if (!snapshot?.context.title) {
@@ -83,14 +86,14 @@ export function MarkdownFilesWindow() {
   }, [contextKey, desktopApi]);
 
   useEffect(() => {
-    const reader = viewerApi?.readMarkdownFile;
+    const reader = readMarkdownFile;
     if (!reader || !selectedPath) {
       return;
     }
 
     let cancelled = false;
     setLoadState({ status: "loading" });
-    void reader({ path: selectedPath, thread: snapshot?.context.thread })
+    void reader({ path: selectedPath, thread })
       .then((response) => {
         if (cancelled) return;
         if (response.error || response.content === undefined) {
@@ -113,7 +116,7 @@ export function MarkdownFilesWindow() {
     return () => {
       cancelled = true;
     };
-  }, [viewerApi, selectedPath, snapshot?.context.thread]);
+  }, [readMarkdownFile, selectedPath, thread]);
 
   const selectFile = useCallback(
     (file: MarkdownFileViewerFile) => {
