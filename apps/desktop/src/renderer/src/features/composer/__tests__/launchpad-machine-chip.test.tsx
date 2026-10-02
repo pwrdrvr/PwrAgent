@@ -37,6 +37,79 @@ describe("LaunchpadMachineChip", () => {
     expect(chip.closest(".composer-dropdown")).not.toHaveClass("composer-dropdown--remote");
   });
 
+  it("marks a viewer's default owner as remote and offers other peers", async () => {
+    const onRetarget = vi.fn();
+    render(
+      <LaunchpadMachineChip
+        control={control({
+          local: { label: "Remote owner", instanceId: "owner", remote: true },
+        })}
+        onRetarget={onRetarget}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: "Machine" });
+    expect(chip).toHaveTextContent("Remote owner");
+    expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
+    fireEvent.click(chip);
+    expect(options()[0]).toHaveTextContent("This window");
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(options()[1]!);
+    expect(onRetarget).toHaveBeenCalledWith("studio");
+  });
+
+  it.each(["offline", "unsupported"] as const)("blocks returning to an %s viewer owner until it is available", (availability) => {
+    const onRetarget = vi.fn();
+    const selected = control({
+      currentInstanceId: "studio",
+      local: { label: "Remote owner", instanceId: "owner", remote: true, availability },
+    });
+    const view = render(<LaunchpadMachineChip control={selected} onRetarget={onRetarget} />);
+    fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+    const owner = options()[0]!;
+    expect(owner).toHaveAttribute("aria-disabled", "true");
+    expect(owner).toHaveTextContent(availability === "offline" ? "Offline" : "Unsupported");
+    fireEvent.click(owner);
+    expect(onRetarget).not.toHaveBeenCalled();
+
+    view.rerender(<LaunchpadMachineChip
+      control={{ ...selected, local: { ...selected.local, availability: "available" } }}
+      onRetarget={onRetarget}
+    />);
+    expect(options()[0]).not.toHaveAttribute("aria-disabled");
+    expect(options()[0]).toHaveTextContent("This window");
+    fireEvent.click(options()[0]!);
+    expect(onRetarget).toHaveBeenCalledWith(undefined);
+  });
+
+  it("marks the selected viewer owner offline while allowing a move to another peer", () => {
+    const selected = control({
+      local: { label: "Remote owner", instanceId: "owner", remote: true, availability: "offline" },
+    });
+    const onRetarget = vi.fn();
+    render(<LaunchpadMachineChip control={selected} onRetarget={onRetarget} />);
+    expect(screen.getByRole("button", { name: "Machine" }).closest(".composer-dropdown"))
+      .toHaveClass("composer-dropdown--offline");
+    expect(describeLaunchpadMachineOffline(selected))
+      .toBe("Remote owner is offline. Your draft stays here until it reconnects.");
+    fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+    fireEvent.click(options()[1]!);
+    expect(onRetarget).toHaveBeenCalledWith("studio");
+  });
+
+  it("reports a viewer sub-thread's default owner as remote", () => {
+    render(
+      <LaunchpadMachineChip
+        control={control({
+          local: { label: "Remote owner", instanceId: "owner", remote: true },
+          targets: [],
+          planRetarget: undefined,
+        })}
+        onRetarget={() => undefined}
+      />,
+    );
+    expect(screen.getByLabelText("Runs on Remote owner")).toHaveAttribute("data-remote", "true");
+  });
+
   it("marks a peer target and greys out a peer without the project", async () => {
     const check = vi.fn(async (instanceId: string) => instanceId !== "tower");
     render(

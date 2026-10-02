@@ -14,7 +14,7 @@ import {
 import { InstanceGlyph } from "../federation/InstanceGlyph";
 import { ComposerDropdown, type ComposerDropdownOption } from "./ComposerDropdown";
 
-/** The dropdown value for this machine; peer ids never start with "@". */
+/** The window-default dropdown value; peer ids never start with "@". */
 const THIS_MACHINE_VALUE = "@this-machine";
 
 /** Where a retarget lands, resolved before the launchpad switches. */
@@ -25,12 +25,15 @@ export type LaunchpadMachineRetarget = {
 };
 
 export type LaunchpadMachineControl = {
-  /** Peer instance the launchpad starts its thread on; undefined is here. */
+  /** Peer instance override; undefined uses this window's default owner. */
   currentInstanceId?: string;
+  /** Default owner: the local instance, or the owner of a remote viewer. */
   local: {
     label: string;
     celestialIcon?: CelestialIconId;
     instanceId?: string;
+    remote?: boolean;
+    availability?: FederationThreadTarget["availability"];
   };
   targets: readonly FederationThreadTarget[];
   /** The launchpad's project, as each machine is asked whether it has one. */
@@ -55,11 +58,12 @@ export type LaunchpadMachineControl = {
 export function describeLaunchpadMachineOffline(
   control: LaunchpadMachineControl | undefined,
 ): string | undefined {
-  if (!control?.currentInstanceId) {
+  if (!control) {
     return undefined;
   }
-  const target = control.targets.find((candidate) =>
-    candidate.instanceId === control.currentInstanceId);
+  const target = control.currentInstanceId
+    ? control.targets.find((candidate) => candidate.instanceId === control.currentInstanceId)
+    : control.local.remote ? control.local : undefined;
   return target?.availability === "offline"
     ? `${target.label} is offline. Your draft stays here until it reconnects.`
     : undefined;
@@ -113,20 +117,31 @@ export function LaunchpadMachineChip(props: {
   const currentLabel = control.currentInstanceId
     ? current?.label ?? control.currentInstanceId
     : control.local.label;
-  const currentOffline = current?.availability === "offline";
+  const currentOffline = (control.currentInstanceId
+    ? current?.availability
+    : control.local.remote ? control.local.availability : undefined) === "offline";
+  const defaultAvailability = control.local.availability ?? "available";
+  const defaultUnavailable = control.local.remote && defaultAvailability !== "available";
+  const currentRemote = Boolean(control.currentInstanceId || control.local.remote);
+  const defaultMachineDescription = control.local.remote ? "This window" : "This machine";
   const projectLabel = control.project?.label ?? "this project";
 
   const options: ComposerDropdownOption[] = [
     {
       label: control.local.label,
       value: THIS_MACHINE_VALUE,
-      ...(control.localHasProject || !control.currentInstanceId
-        ? { description: "This machine" }
-        : {
-            description: FEDERATION_PROJECT_STATE_LABEL.missing,
+      ...(control.currentInstanceId && defaultUnavailable
+        ? {
+            description: FEDERATION_TARGET_AVAILABILITY_LABEL[defaultAvailability],
             disabled: true,
-            tooltip: `This machine has no project named ${projectLabel}`,
-          }),
+          }
+        : control.localHasProject || !control.currentInstanceId
+          ? { description: defaultMachineDescription }
+          : {
+              description: FEDERATION_PROJECT_STATE_LABEL.missing,
+              disabled: true,
+              tooltip: `${control.local.label} has no project named ${projectLabel}`,
+            }),
     },
     ...control.targets.map((target): ComposerDropdownOption => {
       const isCurrent = target.instanceId === control.currentInstanceId;
@@ -184,7 +199,7 @@ export function LaunchpadMachineChip(props: {
       <span
         className="composer__fixed-value composer__fixed-value--machine"
         aria-label={`Runs on ${currentLabel}${currentOffline ? ", offline" : ""}`}
-        data-remote={control.currentInstanceId ? "true" : undefined}
+        data-remote={currentRemote ? "true" : undefined}
         data-offline={currentOffline ? "true" : undefined}
       >
         <span aria-hidden="true" className="composer-dropdown__icon">
@@ -201,7 +216,7 @@ export function LaunchpadMachineChip(props: {
       ariaLabel="Machine"
       disabled={props.disabled}
       icon={Icon}
-      tone={currentOffline ? "offline" : control.currentInstanceId ? "remote" : undefined}
+      tone={currentOffline ? "offline" : currentRemote ? "remote" : undefined}
       tooltip={currentOffline ? `${currentLabel} is offline` : `Starts on ${currentLabel}`}
       value={control.currentInstanceId ?? THIS_MACHINE_VALUE}
       options={options}
