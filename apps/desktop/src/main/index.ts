@@ -495,6 +495,9 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // spawns `codex plugin marketplace` subprocesses and a full retention prune,
   // and the refresh above owns the event that releases the renderer's startup
   // hold. Contending with it would delay first paint to no purpose.
+  void startupProviderRefresh.then(() => {
+    getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
+  });
   void startupProviderRefresh
     .then(async () =>
       await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup(),

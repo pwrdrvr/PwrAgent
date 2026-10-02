@@ -606,6 +606,7 @@ import {
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
+import { ThreadArchiveSweeper, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import {
   createCompositeJsonRpcObserver,
@@ -831,6 +832,7 @@ type BackendClient = {
       filter?: string;
       limit?: number;
       maxPages?: number;
+      requireComplete?: boolean;
       skipArchivedMetadataRefresh?: boolean;
       deadlineAt?: number;
     },
@@ -840,6 +842,7 @@ type BackendClient = {
     params?: {
       filter?: string;
       limit?: number;
+      all?: boolean;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
@@ -909,6 +912,7 @@ type BackendClient = {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
+  readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
   refreshThreadTools?(params: {
     threadId: string;
@@ -8742,6 +8746,7 @@ export class DesktopBackendRegistry {
     TaskMonitorDelegationRecord
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
+  private threadArchiveSweeper?: ThreadArchiveSweeper;
   private readonly runtimeInstanceId: string;
   private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
@@ -13570,6 +13575,98 @@ export class DesktopBackendRegistry {
     throw new Error(ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR);
   }
 
+  startThreadArchiveSweeper(): void {
+    if (!this.closed) this.getThreadArchiveSweeper().start();
+  }
+
+  async sweepInactiveThreads(): Promise<void> {
+    if (!this.closed) await this.getThreadArchiveSweeper().sweep();
+  }
+
+  private getThreadArchiveSweeper(): ThreadArchiveSweeper {
+    return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
+      listCandidates: async () => {
+        await this.subAgentStartupReconciliation;
+        if (this.closed || this.isBootstrapModeFn()) return [];
+        // Use complete provider reads without navigation projection or display
+        // persistence. An idle hourly sweep must make no SQLite commits.
+        const codexThreads = this.isCodexBootstrapDeferredFn() || !this.codexClient.listNativeSubAgentThreads ? [] : (await Promise.all([
+          this.codexClient.listThreads({
+            archived: false, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true,
+          }, { callerReason: "auto-archive" }),
+          this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
+        ])).flat();
+        const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
+        const candidates: ThreadArchiveCandidate[] = [];
+        for (const backend of new Set(threads.map((thread) => thread.source))) {
+          const backendThreads = threads.filter((thread) => thread.source === backend);
+          const overlays = await this.overlayStore.getThreadOverlayStates({
+            backend, threadIds: backendThreads.map((thread) => thread.id),
+          });
+          candidates.push(...backendThreads.map((thread) => ({ thread, overlay: overlays[thread.id] })));
+        }
+        return candidates;
+      },
+      refreshCandidate: async (candidate) => await this.refreshAutoArchiveCandidate(candidate),
+      isBusy: (candidate) => this.autoArchiveCandidateIsBusy(candidate),
+      canArchive: async (candidates) => {
+        for (const candidate of candidates) {
+          const current = await this.refreshAutoArchiveCandidate(candidate);
+          if (!isStaleArchiveCandidate(current, Date.now()) || this.autoArchiveCandidateIsBusy(current)) return false;
+          const paths = (item: ThreadArchiveCandidate) => JSON.stringify(
+            [...item.thread.linkedDirectories, ...item.overlay?.extraLinkedDirectories ?? []]
+              .map((directory) => directory.worktreePath ?? directory.path).sort(),
+          );
+          // A workspace move after the Git probes needs a new sweep, rather
+          // than archiving a checkout that has not been checked for changes.
+          if (paths(current) !== paths(candidate)) return false;
+        }
+        return !this.closed && !this.stoppingRunningTurnsForShutdown
+          && candidates.every((candidate) => !this.autoArchiveCandidateIsBusy(candidate));
+      },
+      archive: async ({ thread }) => await this.archiveThread({ backend: thread.source, threadId: thread.id }),
+      onError: (error, threadId) => backendRegistryLog.warn("inactive thread archive sweep failed", {
+        threadId, error: error instanceof Error ? error.message : String(error),
+      }),
+    });
+  }
+
+  private async refreshAutoArchiveCandidate(candidate: ThreadArchiveCandidate): Promise<ThreadArchiveCandidate> {
+    const { source: backend, id: threadId } = candidate.thread;
+    const thread = isAcpBackendId(backend)
+      ? (() => {
+          const session = this.acpBackend.getSession(backend, threadId);
+          return session ? this.acpBackend.sessionToThreadSummary(session) : undefined;
+        })()
+      : await this.withCodexThreadClient(threadId, async (client) => {
+          if (!client.readThreadSummary) throw new Error("Thread metadata reads are unavailable.");
+          return await client.readThreadSummary(threadId);
+        });
+    if (!thread) throw new Error(`Thread metadata was not found: ${threadId}`);
+    return {
+      thread: {
+        ...candidate.thread,
+        ...thread,
+        linkedDirectories: thread.linkedDirectories.length > 0 ? thread.linkedDirectories : candidate.thread.linkedDirectories,
+      },
+      overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
+    };
+  }
+
+  private autoArchiveCandidateIsBusy({ thread }: ThreadArchiveCandidate): boolean {
+    const identity = { backend: thread.source, threadId: thread.id };
+    const info = this.threadInfoStore.get(identity);
+    return this.closed || this.stoppingRunningTurnsForShutdown
+      || this.threadHasActiveTurn(thread.id, thread.source)
+      || this.threadHasBlockingWorkspaceMove(identity)
+      || this.threadTurnQueue.getQueuedEntries(identity).length > 0
+      || info?.archived === true
+      || (info?.updatedAt ?? 0) > (thread.updatedAt ?? 0)
+      || [...this.pendingServerRequests.values()].some((pending) =>
+        pending.backend === thread.source && pending.notification.params.threadId === thread.id,
+      );
+  }
+
   async archiveThread(
     request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
   ): Promise<ArchiveThreadResponse> {
@@ -13789,6 +13886,7 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         archivedAt: undefined,
+        restoredAt: Date.now(),
       });
     }
     this.invalidateThreadListCache(backend);
@@ -23992,6 +24090,7 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.closed = true;
+    await this.threadArchiveSweeper?.stop();
     this.invalidateArchiveCleanupReads();
     // A recovery drain waiting for other Codex turns gives up now; the final
     // Codex close below still waits for that drain before it runs.

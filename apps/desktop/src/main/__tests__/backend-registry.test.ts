@@ -937,10 +937,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       archivedAt,
+      restoredAt,
     }: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
       archivedAt?: number;
+      restoredAt?: number;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -952,6 +954,7 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         archiveTombstonedAt: archivedAt,
+        archiveRestoredAt: restoredAt ?? current.archiveRestoredAt,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -50233,6 +50236,101 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("sweeps inactive threads through the archive path and protects a subsequent restore", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread], archivedThreads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const archive = vi.spyOn(registry, "archiveThread");
+    const nativeDiscovery = vi.spyOn(client, "listNativeSubAgentThreads");
+    try {
+      await registry.sweepInactiveThreads();
+      expect(archive).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: thread.id });
+      expect(nativeDiscovery).toHaveBeenCalledWith({ all: true }, { callerReason: "auto-archive" });
+      client.setThreads([]);
+      expect(await registry.listThreads({ backend: "codex", archived: true, forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining(thread)]));
+      await registry.restoreThread({ backend: "codex", threadId: thread.id });
+      client.setThreads([thread]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.archiveRestoredAt).toEqual(expect.any(Number));
+      await registry.sweepInactiveThreads();
+      expect(archive).toHaveBeenCalledTimes(1);
+    } finally { await registry.close(); }
+  });
+
+  it("auto archives a clean local branch worktree, retains its snapshot, and restores its files", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-integration-")));
+    const repo = path.join(root, "repo");
+    const worktree = path.join(root, "worktree");
+    await mkdir(repo);
+    await git(repo, ["init", "-b", "main"]);
+    await git(repo, ["config", "user.name", "Test User"]);
+    await git(repo, ["config", "user.email", "test@example.com"]);
+    await writeFile(path.join(repo, "file.txt"), "base\n");
+    await git(repo, ["add", "."]);
+    await git(repo, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
+    await git(repo, ["worktree", "add", "-b", "local-work", worktree]);
+    const metricsEnv = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const db = StateDb.open(path.join(root, "state.db"));
+    const overlayStore = new SqliteOverlayStore(db);
+    const thread: AppServerThreadSummary = {
+      id: "old-worktree", title: "Old worktree", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
+      updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+      linkedDirectories: [{ id: "dir", label: "repo", path: repo, worktreePath: worktree, kind: "worktree" }],
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread], archivedThreads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, messagingStore: null });
+    try {
+      await writeFile(path.join(worktree, "file.txt"), "local work\n");
+      const { writes: dirtyWrites } = await measureSqliteWrites(async () => { await registry.sweepInactiveThreads(); });
+      expect(client.lastArchiveThreadParams).toBeUndefined();
+      expectSqliteWriteBudget({ scenario: "inactive-thread-sweep-dirty", note: "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).", writes: dirtyWrites });
+      await git(worktree, ["add", "."]);
+      await git(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "local work, no remote"]);
+      const { writes } = await measureSqliteWrites(async () => { await registry.sweepInactiveThreads(); });
+      expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
+      await expect(stat(worktree)).rejects.toMatchObject({ code: "ENOENT" });
+      const snapshot = (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.worktreeSnapshots?.[0];
+      expect(snapshot?.state).toBe("archived");
+      expect(await git(repo, ["branch", "--list", "local-work"])).toContain("local-work");
+      expectSqliteWriteBudget({ scenario: "inactive-thread-worktree-archive", note: "One successful automatic worktree archive persists a recoverable snapshot at the archive boundary; no heartbeat writes.", writes });
+      await registry.restoreThread({ backend: "codex", threadId: thread.id });
+      expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("local work\n");
+      await registry.sweepInactiveThreads();
+      expect(await stat(worktree)).toBeDefined();
+    } finally {
+      await registry.close();
+      db.close();
+      if (metricsEnv === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = metricsEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects auto archive when the provider reports new activity during admission", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const readThreadSummary = vi.fn(async () => ({ ...thread, updatedAt: Date.now() }));
+    readThreadSummary.mockResolvedValueOnce({ ...thread, updatedAt: thread.updatedAt! });
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const archive = vi.spyOn(registry, "archiveThread");
+    try {
+      await registry.sweepInactiveThreads();
+      expect(readThreadSummary).toHaveBeenCalledTimes(2);
+      expect(archive).not.toHaveBeenCalled();
+    } finally { await registry.close(); }
+  });
+
   it("skips worktree cleanup when an active same-worktree child is recorded as local", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
@@ -51414,7 +51512,7 @@ script = "printf setup"
 
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
     await registry.restoreThread({ backend: "codex", threadId: "thread-1" });
-    expect(tombstone).toHaveBeenLastCalledWith({ backend: "codex", threadId: "thread-1", archivedAt: undefined });
+    expect(tombstone).toHaveBeenLastCalledWith({ backend: "codex", threadId: "thread-1", archivedAt: undefined, restoredAt: expect.any(Number) });
     expect(restoreWorktrees).toHaveBeenCalledTimes(1);
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
 

@@ -561,6 +561,8 @@ export type AppServerThreadSummary = {
   titleSource: AppServerThreadTitleSource;
   /** Current backend runtime status when exposed by the thread-list protocol. */
   threadStatus?: AppServerThreadStatus;
+  /** Provider-owned pin, independent of PwrAgent's per-directory pin rank. */
+  isPinned?: boolean;
   summary?: string;
   projectKey?: string;
   createdAt?: number;

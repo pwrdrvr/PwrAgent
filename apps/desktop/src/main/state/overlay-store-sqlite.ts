@@ -3706,6 +3706,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     archivedAt?: number;
+    restoredAt?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -3717,6 +3718,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = {
       ...current,
       archiveTombstonedAt: params.archivedAt,
+      archiveRestoredAt: params.restoredAt ?? current.archiveRestoredAt,
     };
     this.putThread(threadKey, nextState);
     return nextState;

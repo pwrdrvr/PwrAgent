@@ -2694,6 +2694,8 @@ export type ThreadOverlayState = {
    * they do not reappear after refresh or restart.
    */
   archiveTombstonedAt?: number;
+  /** A restore counts as activity even when the provider keeps its old timestamp. */
+  archiveRestoredAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];

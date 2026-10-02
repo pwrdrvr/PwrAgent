@@ -2466,6 +2466,22 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("fails closed on incomplete descendant discovery for archive housekeeping", async () => {
+    MockTransport.threadListNextCursor = "repeated-native-cursor";
+    MockTransport.threadListResultBySearchTerm.set("incomplete-archive", []);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.listNativeSubAgentThreads({ all: true, filter: "incomplete-archive" })).rejects.toThrow("archive eligibility is incomplete");
+      const requests = MockTransport.instances.at(-1)!.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: { cursor?: string; sourceKinds?: string[] } })
+        .filter((message) => message.method === "thread/list" && message.params?.sourceKinds?.includes("subAgentThreadSpawn"));
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.params?.cursor).toBe("repeated-native-cursor");
+      await expect(client.listThreads({ requireComplete: true, filter: "incomplete-archive", skipArchivedMetadataRefresh: true })).rejects.toThrow("archive eligibility is incomplete");
+    } finally { await client.close(); }
+  });
+
   it("filters app-originated Codex sessions from protocol metadata", async () => {
     MockTransport.threadListResultBySearchTerm.set("originator-filter", [
       {
@@ -6204,6 +6220,22 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it("reads fresh archive eligibility metadata without hydrating history", async () => {
+    MockTransport.readThreadResultByThreadId.set("archive-metadata", {
+      thread: { id: "archive-metadata", name: "Old thread", cwd: "/repo/current-checkout", updatedAt: 1_777_500_000, isPinned: true, status: { type: "idle" } },
+    });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const summary = await client.readThreadSummary("archive-metadata");
+      expect(summary).toMatchObject({ id: "archive-metadata", updatedAt: 1_777_500_000_000, isPinned: true, threadStatus: "idle" });
+      expect(summary.linkedDirectories[0]?.path).toBe("/repo/current-checkout");
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message) as { method?: string; params?: unknown });
+      expect(requests.find((request) => request.method === "thread/read")?.params).toEqual({ threadId: "archive-metadata", includeTurns: false });
+      expect(requests.some((request) => ["thread/turns/list", "thread/items/list", "thread/resume"].includes(request.method ?? ""))).toBe(false);
+    } finally { await client.close(); }
   });
 
   it("forwards metadata-only thread/read requests to Codex", async () => {

@@ -6232,6 +6232,7 @@ function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache)
       id: threadId,
       ...text,
       ...(threadStatus ? { threadStatus } : {}),
+      isPinned: pickBoolean(record, ["isPinned", "is_pinned"]),
       originator,
       path: rolloutPath,
       projectKey,
@@ -7399,6 +7400,7 @@ async function requestThreadListPages(params: {
   filter?: string;
   limit?: number;
   maxPages?: number;
+  requireComplete?: boolean;
   requestTimeoutMs: number;
   deadlineAt?: number;
   sourceKinds?: CodexThreadListParams["sourceKinds"];
@@ -7457,6 +7459,7 @@ async function requestThreadListPages(params: {
       break;
     }
     if (seenCursors.has(nextCursor)) {
+      if (params.requireComplete) throw new Error("Thread discovery returned a repeated cursor; archive eligibility is incomplete.");
       terminalReason = "repeated-cursor";
       break;
     }
@@ -8740,6 +8743,7 @@ export class CodexAppServerClient {
     filter?: string;
     limit?: number;
     maxPages?: number;
+    requireComplete?: boolean;
     skipArchivedMetadataRefresh?: boolean;
     deadlineAt?: number;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
@@ -8753,6 +8757,7 @@ export class CodexAppServerClient {
       params?.archived === true, params?.enrichDirectories ?? true,
       params?.filter?.trim() || "", params?.limit, params?.maxPages,
       params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
+      params?.requireComplete === true,
     ]);
     const existing = this.pendingThreadListings.get(key);
     if (existing) {
@@ -8788,6 +8793,7 @@ export class CodexAppServerClient {
         filter: params?.filter,
         limit: params?.limit,
         maxPages: params?.maxPages,
+        requireComplete: params?.requireComplete,
         requestTimeoutMs: requestParams.timeoutMs,
         deadlineAt: params?.deadlineAt,
       });
@@ -8805,6 +8811,7 @@ export class CodexAppServerClient {
         filter: params?.filter,
         limit: params?.limit,
         maxPages: params?.maxPages,
+        requireComplete: params?.requireComplete,
         requestTimeoutMs: requestParams.timeoutMs,
         deadlineAt: params?.deadlineAt,
       }),
@@ -8835,6 +8842,8 @@ export class CodexAppServerClient {
   async listNativeSubAgentThreads(params?: {
     filter?: string;
     limit?: number;
+    /** Housekeeping needs every descendant before archiving a parent. */
+    all?: boolean;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
@@ -8851,7 +8860,8 @@ export class CodexAppServerClient {
           CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT,
         ),
       ),
-      maxPages: 1,
+      maxPages: params?.all ? undefined : 1,
+      requireComplete: params?.all,
       requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       sourceKinds: ["subAgentThreadSpawn"],
     });
@@ -9337,6 +9347,20 @@ export class CodexAppServerClient {
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;
+  }
+
+  async readThreadSummary(threadId: string): Promise<AppServerThreadSummary> {
+    await this.ensureInitialized();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    const summaries = await this.enrichThreads(extractThreadsFromValue({ data: [asRecord(result)?.thread] }, this.threadListTextCache), {
+      enrichDirectories: false,
+    });
+    const thread = summaries.find((summary) => summary.id === threadId);
+    if (!thread) throw new Error(`Thread metadata was not found: ${threadId}`);
+    return { ...thread, linkedDirectories: buildProjectKeyLinkedDirectories(thread.projectKey) };
   }
 
   async readThread(params: {

@@ -71,6 +71,47 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "recently-restored", title: "Restored thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
+      linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    await store.setThreadArchiveTombstone({ backend: "codex", threadId: thread.id, restoredAt: Date.now() });
+    const registry = new DesktopBackendRegistry({ codexClient: createStubBackendClient({ threads: [thread] }), overlayStore: store });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let hour = 0; hour < 24; hour++) await registry.sweepInactiveThreads();
+      });
+      expectSqliteWriteBudget({ scenario: "inactive-thread-sweep-idle-day", note: "24 hourly sweeps of an unchanged restored thread: read-only, 0 MB/day of SQLite writes.", writes });
+      expect((await new SqliteOverlayStore(stateDb).getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.archiveRestoredAt).toEqual(expect.any(Number));
+    } finally { await registry.close(); }
+  });
+
+  it("budgets one automatic thread archive and its restore boundary", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "auto-archive-budget", title: "Stale thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
+      linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    let archived = false;
+    const client = Object.assign(createStubBackendClient(), {
+      listThreads: async (params?: { archived?: boolean }) => params?.archived === archived ? [thread] : [],
+      readThreadSummary: async () => thread,
+      archiveThread: async () => { archived = true; return { threadId: thread.id }; },
+      restoreThread: async () => { archived = false; return { threadId: thread.id }; },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.sweepInactiveThreads();
+        expect(archived).toBe(true);
+        await registry.restoreThread({ backend: "codex", threadId: thread.id });
+        await registry.sweepInactiveThreads();
+        expect(archived).toBe(false);
+      });
+      expectSqliteWriteBudget({ scenario: "inactive-thread-archive-restore", note: "One stale conversational thread archived and restored; subsequent sweep writes nothing. Boundary cost, never an hourly heartbeat.", writes });
+    } finally { await registry.close(); }
+  });
+
   it("applies a profile model default to many launchpads in one commit", async () => {
     const before = { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } };
     const after = { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } };

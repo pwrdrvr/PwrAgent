@@ -265,6 +265,34 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "inactive-thread-archive-restore": {
+    "commits": 1,
+    "note": "One stale conversational thread archived and restored; subsequent sweep writes nothing. Boundary cost, never an hourly heartbeat.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "inactive-thread-sweep-dirty": {
+    "commits": 0,
+    "note": "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "inactive-thread-sweep-idle-day": {
+    "commits": 0,
+    "note": "24 hourly sweeps of an unchanged restored thread: read-only, 0 MB/day of SQLite writes.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "inactive-thread-worktree-archive": {
+    "commits": 1,
+    "note": "One successful automatic worktree archive persists a recoverable snapshot at the archive boundary; no heartbeat writes.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "live-thread-token-usage": {
     "commits": 1,
     "note": "500 cumulative usage observations across 10 turns, then one terminal flush",
