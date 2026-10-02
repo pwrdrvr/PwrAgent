@@ -32822,6 +32822,62 @@ command = "pnpm dev"
     }
   });
 
+  it("keeps a worker's finish that lands while its model is being read", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const workerThreadId = "019ebb70-2c58-7143-850e-0a699607c7ab";
+    // The worker finishes during the model read; its card is written then.
+    const readThreadModelSettings = vi.fn(async () => {
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex", threadId: "thread-parent",
+      });
+      const card = overlay?.subAgents?.[0];
+      if (card) {
+        await overlayStore.upsertThreadSubAgent({
+          backend: "codex", threadId: "thread-parent",
+          subAgent: { ...card, status: "success", outcome: "success", lastMessage: "Done." },
+        });
+      }
+      return { model: "gpt-5.5" };
+    });
+    Object.assign(codexClient, { readThreadModelSettings });
+    try {
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent", turnId: "turn-parent",
+          item: { type: "subAgentActivity", id: "activity-started", kind: "started",
+            agentThreadId: workerThreadId, agentPath: "/root/breakfast_picker" },
+        },
+      } as AppServerNotification);
+      await codexClient.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: workerThreadId,
+          turnId: "turn-worker",
+          tokenUsage: {
+            total: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 50 },
+            last: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 50 },
+          },
+        },
+      } as AppServerNotification);
+
+      expect(readThreadModelSettings).toHaveBeenCalledTimes(1);
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex", threadId: "thread-parent",
+      });
+      expect(overlay?.subAgents?.[0]).toMatchObject({
+        status: "success", outcome: "success", lastMessage: "Done.",
+        preferredModel: "gpt-5.5", monitorUsage: expect.anything(),
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("fills Codex native sub-agent names from parent assistant output", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

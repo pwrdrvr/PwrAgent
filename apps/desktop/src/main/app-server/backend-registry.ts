@@ -3035,6 +3035,30 @@ type CodexNativeSubAgentTool =
   | "wait"
   | "closeAgent";
 
+/**
+ * The lifecycle tool a replayed transcript row stands for, the same mapping
+ * `subAgentActivityToolCall` applies to a live report: a finish is observed
+ * like a wait, an interrupt ends the worker like a close.
+ */
+function codexNativeToolForOperation(
+  operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"],
+): CodexNativeSubAgentTool {
+  switch (operation) {
+    case "close":
+    case "interrupt":
+      return "closeAgent";
+    case "wait":
+    case "complete":
+      return "wait";
+    case "send_input":
+      return "sendInput";
+    case "resume":
+      return "resumeAgent";
+    default:
+      return "spawnAgent";
+  }
+}
+
 type CodexNativeSubAgentCall = {
   activityBoundary?: boolean;
   item: Record<string, unknown>;
@@ -8560,6 +8584,12 @@ export class DesktopBackendRegistry {
     string,
     Promise<{ model?: string; reasoningEffort?: string } | undefined>
   >();
+  /**
+   * Persisted worker cards already handed to reconciliation this session. A
+   * reconciliation that gives up deletes its entry, and without this every
+   * later navigation snapshot would start it again.
+   */
+  private readonly codexNativeSubAgentPersistedProbes = new Set<string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
     CodexNativeSubAgentReconciliation
@@ -14997,7 +15027,16 @@ export class DesktopBackendRegistry {
         reason: "selected-thread",
         threadId: request.threadId,
       });
-      await this.restoreCodexNativeSubAgentsFromReplay(request.threadId, replay);
+      // Best effort: a worker card that cannot be repaired must not fail the
+      // read of the thread itself.
+      await this.restoreCodexNativeSubAgentsFromReplay(request.threadId, replay).catch(
+        (error: unknown) => {
+          backendRegistryLog.warn("codex native sub-agent restore from replay failed", {
+            threadId: request.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -26591,9 +26630,11 @@ export class DesktopBackendRegistry {
           || !card.monitorThreadId
           || codexNativeSubAgentIsTerminal(card.status)
           || this.codexNativeSubAgentReconciliations.has(card.monitorThreadId)
+          || this.codexNativeSubAgentPersistedProbes.has(card.monitorThreadId)
         ) {
           continue;
         }
+        this.codexNativeSubAgentPersistedProbes.add(card.monitorThreadId);
         this.codexNativeSubAgentParents.set(card.monitorThreadId, parent.id);
         this.scheduleCodexNativeSubAgentReconciliation({
           parentThreadId: parent.id,
@@ -26649,7 +26690,7 @@ export class DesktopBackendRegistry {
   ): Promise<void> {
     const observed = new Map<string, {
       agent: NonNullable<AppServerThreadCommandDetail["subAgent"]>["agents"][number];
-      operation: string;
+      operation: NonNullable<AppServerThreadCommandDetail["subAgent"]>["operation"];
       turnId?: string;
       observedAt?: number;
     }>();
@@ -26688,7 +26729,7 @@ export class DesktopBackendRegistry {
       const replayStatus = mapCodexNativeSubAgentStatus({
         agentState: activity.agent.status,
         itemStatus: "completed",
-        tool: activity.operation === "close" ? "closeAgent" : activity.operation === "wait" ? "wait" : "spawnAgent",
+        tool: codexNativeToolForOperation(activity.operation),
       });
       return existing
         ? !codexNativeSubAgentIsTerminal(existing.status) || (terminal && existing.status !== replayStatus)
@@ -26746,7 +26787,7 @@ export class DesktopBackendRegistry {
           parentTurnId: activity.turnId,
           receiverThreadIds: [receiverThreadId],
           receiverThreadNames: name ? new Map([[receiverThreadId, name]]) : new Map(),
-          tool: activity.operation === "close" ? "closeAgent" : activity.operation === "wait" ? "wait" : "spawnAgent",
+          tool: codexNativeToolForOperation(activity.operation),
           item: { status: "completed", agentsStates: { [receiverThreadId]: activity.agent } },
         },
       });
@@ -28866,7 +28907,9 @@ export class DesktopBackendRegistry {
 
   /**
    * One `thread/read` per worker, shared by the usage notifications that race
-   * to ask. A failure is not cached, so the next notification asks again.
+   * to ask. A failure is not cached, so the next notification asks again. A
+   * model, once read, lives on the card, so only a read that found none is
+   * kept, to stop every later notification asking again.
    */
   private readCodexNativeSubAgentModelSettings(
     threadId: string,
@@ -28878,14 +28921,22 @@ export class DesktopBackendRegistry {
     if (cached) {
       return cached;
     }
-    const pending = this.codexClient.readThreadModelSettings({ threadId }).catch((error) => {
-      this.codexNativeSubAgentModelSettings.delete(threadId);
-      backendRegistryLog.debug("codex native subagent model read failed", {
-        threadId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    });
+    const pending = this.codexClient.readThreadModelSettings({ threadId }).then(
+      (settings) => {
+        if (settings?.model) {
+          this.codexNativeSubAgentModelSettings.delete(threadId);
+        }
+        return settings;
+      },
+      (error) => {
+        this.codexNativeSubAgentModelSettings.delete(threadId);
+        backendRegistryLog.debug("codex native subagent model read failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      },
+    );
     this.codexNativeSubAgentModelSettings.set(threadId, pending);
     return pending;
   }
@@ -28903,14 +28954,13 @@ export class DesktopBackendRegistry {
     if (!parentThreadId) {
       return;
     }
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId: parentThreadId,
-    });
     const monitorId = codexNativeSubAgentId(event.notification.params.threadId);
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
+    const readCard = async (): Promise<ThreadSubAgentSummary | undefined> =>
+      (await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: parentThreadId,
+      }))?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId);
+    let existing = await readCard();
     if (!existing) {
       backendRegistryLog.warn("codex native subagent usage had no matching card", {
         monitorId,
@@ -28933,12 +28983,18 @@ export class DesktopBackendRegistry {
     // A path-based worker's card starts from a subAgentActivity report, which
     // names no model, and Codex usage notifications carry none either. Ask
     // Codex for the worker's own settings once, or its usage stays unpriced.
-    const workerSettings =
-      notificationModel ?? existing.preferredModel
-        ? undefined
-        : await this.readCodexNativeSubAgentModelSettings(
-            event.notification.params.threadId,
-          );
+    let workerSettings: { model?: string; reasoningEffort?: string } | undefined;
+    if (!notificationModel && !existing.preferredModel) {
+      workerSettings = await this.readCodexNativeSubAgentModelSettings(
+        event.notification.params.threadId,
+      );
+      // The card is written back whole below. Anything persisted while the
+      // read was in flight, such as the worker finishing, must survive it.
+      existing = await readCard();
+      if (!existing) {
+        return;
+      }
+    }
     const model =
       notificationModel ?? existing.preferredModel ?? workerSettings?.model;
     const reasoningEffort =
