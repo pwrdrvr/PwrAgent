@@ -372,6 +372,107 @@ describe("nav chrome parity with Settings", () => {
   });
 });
 
+describe("editor stack", () => {
+  const renderScreen = (overrides: Partial<DesktopApi> = {}) =>
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+            ...overrides,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+  const titlebar = () => document.querySelector(".settings-titlebar") as HTMLElement;
+  const table = () => screen.queryByRole("table", { name: "Automations" });
+
+  // The editor opened as a panel above the table with the breadcrumb and
+  // heading unchanged, so "Exit Automations" was the only way out on screen.
+  it("pushes the editor as its own level and returns through the crumb", async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+
+    const crumb = within(titlebar()).getByRole("button", { name: "All Automations" });
+    expect(crumb).toHaveClass("settings-titlebar__crumb");
+    expect(titlebar().querySelector(".settings-titlebar__current")?.textContent).toBe(
+      "Check email",
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "Check email" })).toBeInTheDocument();
+    expect(screen.getByText("Edit automation")).toHaveClass("eyebrow");
+    expect(table()).not.toBeInTheDocument();
+
+    fireEvent.click(crumb);
+
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(table()).toBeInTheDocument();
+    expect(within(titlebar()).queryByRole("button", { name: "All Automations" })).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "Automations" })).toBeInTheDocument();
+  });
+
+  it("returns to the list from the nav row and from Cancel", async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const nav = screen.getByRole("navigation", { name: "Automation navigation" });
+    fireEvent.click(within(nav).getByRole("button", { name: "All Automations" }));
+    expect(table()).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(table()).toBeInTheDocument();
+  });
+
+  it("names a new automation in the crumb and heading, with a fresh form", async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("Check email");
+
+    fireEvent.click(screen.getByRole("button", { name: "New Automation" }));
+
+    expect(titlebar().querySelector(".settings-titlebar__current")?.textContent).toBe(
+      "New Automation",
+    );
+    expect(screen.getByText("New automation")).toHaveClass("eyebrow");
+    expect(screen.getByLabelText("Name")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument();
+  });
+
+  // Save sat under a form about 2,600px tall; the bar that holds it is
+  // pinned (sticky) inside `.automations-editor-panel`, and owns everything
+  // that decides what Save does.
+  it("keeps Enabled, the error, and the buttons in one actions bar", async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "New Automation" }));
+    const bar = document.querySelector(
+      ".automations-editor-panel .automation-editor__actions",
+    ) as HTMLElement;
+    expect(bar).not.toBeNull();
+    expect(within(bar).getByLabelText("Enabled")).toBeChecked();
+    expect(within(bar).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    fireEvent.click(within(bar).getByRole("button", { name: "Create" }));
+
+    expect(within(bar).getByRole("alert")).toHaveClass("automation-editor__error");
+  });
+
+  it("opens the editor at the top and restores the list's scroll on return", async () => {
+    renderScreen();
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    const content = document.querySelector(".automations-content") as HTMLElement;
+    content.scrollTop = 420;
+
+    fireEvent.click(edit);
+    expect(content.scrollTop).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(content.scrollTop).toBe(420);
+  });
+});
+
 describe("row runtime and actions", () => {
   it("states the execution profile so a risky automation is spottable", async () => {
     const risky: AutomationDetail = {

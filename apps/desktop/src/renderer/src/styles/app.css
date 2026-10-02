@@ -29448,10 +29448,51 @@ div.composer-error-row__toggle {
   font-size: 12px;
 }
 
+/* The form's last row: Enabled, the validation error, Cancel, and Save.
+   Edge to edge in the card (the negative margin cancels the form's 12px
+   padding) with its own rule above, so it reads as the form's footer whether
+   it is resting at the end or pinned over the fields (below). */
 .automation-editor__actions {
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  margin: 0 -12px -12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 8px 8px;
+  background: var(--bg-panel-elevated);
+}
+
+/* The error takes a line of its own, beside the button that raised it. */
+.automation-editor__actions .automation-editor__error {
+  flex: 1 1 100%;
+}
+
+.automation-editor__actions .automation-checkbox {
+  margin-right: auto;
+}
+
+/* `.button` sets no size, so these inherited the 16px document size beside
+   the editor's 12px buttons (`.automation-preview__toggle`). */
+.automation-editor__actions .button {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* On the Automations screen the form is a page about 2,600px tall, and its
+   actions were only at the end. Sticky against `.automations-content`'s
+   scrollport keeps them on the pane's bottom edge until the form's end
+   scrolls up to meet them. The sticky edge is the scrollport's content box,
+   so `bottom` cancels the pane's 24px bottom padding to land the bar on the
+   window edge (Settings cancels its top padding the same way, with
+   `--settings-section-sticky-top`). Above the stage nodes (`z-index: 1`);
+   below the picker menus (20 and 30). The thread rail's editor keeps the bar
+   in flow. */
+.automations-editor-panel .automation-editor__actions {
+  position: sticky;
+  bottom: -24px;
+  z-index: 2;
 }
 
 .automation-run-history {
