@@ -195,6 +195,20 @@ if (desktopPackage.homepage !== "https://pwragent.ai") {
   fail("apps/desktop/package.json must contain homepage metadata for Linux DEB packaging");
 }
 
+// Legacy hoisted Windows deploy resolves this first-party pin again, even
+// when a frozen workspace install already succeeded inside the age window.
+const protocolPackage = "@pwrdrvr/codex-app-server-protocol";
+const protocolException = `${protocolPackage}@${desktopPackage.dependencies[protocolPackage]}`;
+const workspaceConfig = readFileSync(resolve(repoRoot, "pnpm-workspace.yaml"), "utf8");
+const ageExclusions = workspaceConfig.match(/^minimumReleaseAgeExclude:\n((?:[ \t].*\n)*)/m)?.[1] || "";
+const protocolExceptionPattern = new RegExp(
+  `^  - ['"]?${escapeRegex(protocolException)}['"]?\\s*$`,
+  "m",
+);
+if (!protocolExceptionPattern.test(ageExclusions)) {
+  fail(`pnpm-workspace.yaml minimumReleaseAgeExclude must contain the exact desktop protocol pin ${protocolException}`);
+}
+
 let changelog = "";
 try {
   changelog = readFileSync(changelogPath, "utf8");

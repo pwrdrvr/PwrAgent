@@ -8,6 +8,7 @@ const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const directories = [];
 const signingInputPaths = JSON.parse(readFileSync(join(repoRoot, "scripts/release/signing-input-paths.json"), "utf8"));
 const sources = new Set([
+  "pnpm-workspace.yaml",
   "scripts/check-desktop-release-metadata.mjs",
   "scripts/release/check-signing-input.mjs",
   "scripts/release/signing-input-paths.json",
@@ -57,6 +58,31 @@ afterEach(() => {
 test("accepts the current packaging contract with Linux naming delegated to its helper", () => {
   const result = check(fixture());
   expect(result.status, result.stderr).toBe(0);
+});
+
+test.each([
+  ["a stale protocol version", "@pwrdrvr/codex-app-server-protocol@0.133.0"],
+  ["a package-wide protocol exception", "@pwrdrvr/codex-app-server-protocol"],
+  ["an organization-wide exception", "@pwrdrvr/*"],
+])("rejects %s in the release age exclusions", (_name, exception) => {
+  const root = fixture();
+  const desktop = JSON.parse(readFileSync(join(root, "apps/desktop/package.json"), "utf8"));
+  const pin = `@pwrdrvr/codex-app-server-protocol@${desktop.dependencies["@pwrdrvr/codex-app-server-protocol"]}`;
+  replace(root, "pnpm-workspace.yaml", `  - '${pin}'`, `  - '${exception}'`);
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`minimumReleaseAgeExclude must contain the exact desktop protocol pin ${pin}`);
+});
+
+test("rejects a desktop protocol upgrade without its version-scoped age exception", () => {
+  const root = fixture();
+  const path = join(root, "apps/desktop/package.json");
+  const desktop = JSON.parse(readFileSync(path, "utf8"));
+  desktop.dependencies["@pwrdrvr/codex-app-server-protocol"] = "0.999.0";
+  writeFileSync(path, JSON.stringify(desktop));
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("exact desktop protocol pin @pwrdrvr/codex-app-server-protocol@0.999.0");
 });
 
 test.each([
