@@ -6,7 +6,7 @@ function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
   const lastReset = series.resets.at(-1);
   const described = describeLimitPace(series, now);
   const pace = described
-    ? <span className={`usage-pace${described.short ? " is-short" : ""}`}><span>{described.rate}</span>{described.text}</span>
+    ? <span className={`usage-pace${described.short ? " is-short" : ""}`}><span>{described.rate}</span>{" "}{described.text}</span>
     : null;
   return <div className="usage-limit">
     <span className="usage-eyebrow">{limitLabel(series)}</span>

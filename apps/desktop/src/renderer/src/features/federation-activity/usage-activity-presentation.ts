@@ -1,5 +1,6 @@
 import { usageActivityCoverage, usageChartStep, type UsageActivityRollup } from "@pwragent/shared";
 import type { OwnedUsageRow } from "./usage-activity-summary";
+import { formatUsedPercent as usagePercent } from "../../lib/backend-status-format";
 import { projectLimit, type LimitProjection, type LimitSeries } from "./usage-limits";
 
 export const usageMoney = (micros: number) => new Intl.NumberFormat(undefined, {
@@ -36,7 +37,7 @@ export function usageDuration(ms: number) {
   return hours ? `${hours} h ${minutes} m` : `${minutes} m`;
 }
 
-export const usagePercent = (value: number) => `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}`;
+export { formatUsedPercent as usagePercent } from "../../lib/backend-status-format";
 
 /**
  * Where a limit's pace lands, in the words every surface uses. `short` is the

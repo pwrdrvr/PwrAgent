@@ -32,8 +32,9 @@ const CAP = 6;
  */
 export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends }: UsagePaceCardProps) {
   const verdictId = useId();
-  const pace = useLocalUsagePace(desktopApi?.readUsageActivity, usagePaceRefreshKey(backends));
   const open = desktopApi?.openUsageActivity;
+  // Nothing renders without a way to open the window, so nothing is read.
+  const pace = useLocalUsagePace(open ? desktopApi?.readUsageActivity : undefined, usagePaceRefreshKey(backends));
   if (!open) return null;
   const series = sinceResetSeries(pace?.account);
   if (!pace || !series) {

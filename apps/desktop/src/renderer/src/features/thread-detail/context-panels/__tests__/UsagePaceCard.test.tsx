@@ -88,6 +88,24 @@ describe("UsagePaceCard", () => {
     expect(card.querySelector(".usage-pace-card__projection")).not.toBeInTheDocument();
   });
 
+  it("keeps a read that was in flight when the limits changed", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    let resolve: (value: ReadUsageActivityResponse) => void = () => undefined;
+    const readUsageActivity = vi.fn(() => new Promise<ReadUsageActivityResponse>((done) => { resolve = done; }));
+    const backends = (usedPercent: number) => [{
+      kind: "codex", label: "OpenAI", available: true, methods: [], executionModes: [],
+      capabilities: {} as never, rateLimits: [{ ...WEEKLY, usedPercent }],
+    }] as never;
+    const desktopApi = { openUsageActivity: vi.fn(), readUsageActivity };
+    const { rerender } = render(<UsagePaceCard backends={backends(41)} desktopApi={desktopApi} />);
+    await vi.waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(1));
+
+    rerender(<UsagePaceCard backends={backends(42)} desktopApi={desktopApi} />);
+    resolve({ rows: [], readAt: NOW, rateLimits: [], truncated: false, limitObservation: reading(42) });
+
+    expect(await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 42% used." })).toBeInTheDocument();
+  });
+
   it("rereads when Codex reports new limits, at most once a minute", async () => {
     vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {

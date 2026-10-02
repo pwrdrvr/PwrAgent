@@ -84,6 +84,12 @@ export function formatBackendPlanType(
 }
 
 /**
+ * A percent as every usage surface prints it: one decimal below 10, so a
+ * fresh window reads 0.6% rather than 1%, and whole numbers above.
+ */
+export const formatUsedPercent = (value: number) => `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}`;
+
+/**
  * One limit as a label-column row: a figure the value leads with, the rest of
  * the value, the reset, and the fill for a meter. Reads `% used` like the
  * Usage Activity window, never `% left`.
@@ -125,7 +131,7 @@ export function describeRateLimitRow(
     };
   }
   if (typeof limit.usedPercent === "number") {
-    return { ...base, figure: `${Math.round(limit.usedPercent)}%`, text: "used", usedPercent: limit.usedPercent };
+    return { ...base, figure: `${formatUsedPercent(limit.usedPercent)}%`, text: "used", usedPercent: limit.usedPercent };
   }
   if (typeof limit.remaining === "number" && typeof limit.limit === "number" && limit.limit !== 100 && limit.limit > 0) {
     const used = Math.max(0, limit.limit - limit.remaining);
@@ -138,7 +144,7 @@ export function describeRateLimitRow(
   }
   if (typeof limit.remaining === "number") {
     const used = Math.max(0, Math.min(100, 100 - limit.remaining));
-    return { ...base, figure: `${Math.round(used)}%`, text: "used", usedPercent: used };
+    return { ...base, figure: `${formatUsedPercent(used)}%`, text: "used", usedPercent: used };
   }
   return { ...base, text: "Unavailable" };
 }
