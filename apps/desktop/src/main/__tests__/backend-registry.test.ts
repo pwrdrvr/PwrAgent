@@ -34450,6 +34450,50 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("pre-approves an automation's allowed MCP server in Default Access", async () => {
+    const codexClient = new MockBackendClient({});
+    Object.assign(codexClient, {
+      readConfiguredMcpServerNames: vi.fn(async () => ["datadog", "other"]),
+      listMcpServers: vi.fn(async () => [
+        { name: "datadog", authStatus: "oAuth", tools: ["get_metrics", "write_monitor"] },
+        { name: "other", authStatus: "oAuth", tools: ["search"] },
+      ]),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "agent-thread-1", automationRunId: "run-1",
+      executionMode: "default", mcpAllowlist: ["datadog"], toolAllowlist: ["get_metrics"],
+      input: [{ type: "text", text: "Check Datadog." }],
+    });
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      sandbox: "workspace-write", approvalPolicy: "never",
+      config: { mcp_servers: {
+        datadog: { enabled: true, required: true, enabled_tools: ["get_metrics"], default_tools_approval_mode: "approve", tools: { get_metrics: { approval_mode: "approve" } } },
+        other: { enabled: false },
+      } },
+    });
+    await registry.close();
+  });
+
+  it("publishes headless automation start before an early terminal notification", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const statuses: unknown[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/turnQueue/updated") statuses.push(event.notification.params.status);
+    });
+    vi.spyOn(codexClient, "startTurn").mockImplementation(async ({ threadId }) => {
+      await codexClient.emit({ method: "turn/completed", params: { threadId, turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } } });
+      return { threadId, turnId: "turn-1" };
+    });
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "agent-thread-1", automationRunId: "run-1",
+      input: [{ type: "text", text: "Check Datadog." }],
+    });
+    expect(statuses).toEqual(["started", "terminal"]);
+    await registry.close();
+  });
+
   it("auto-cancels approval requests from headless automations", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

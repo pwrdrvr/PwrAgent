@@ -540,6 +540,7 @@ import {
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
+import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
   buildStarMapIntakeAgentTools,
@@ -9098,6 +9099,11 @@ export class DesktopBackendRegistry {
       queueEntryId: string;
       startedAt: number;
       suppressBindingBroadcast?: boolean;
+      mcpConnectionIds?: string[];
+      mcpServerAliases?: Record<string, string[]>;
+      toolAllowlist?: string[];
+      mcpRegistrations?: McpConnectionBridgeRegistration[];
+      pendingTerminalNotification?: AppServerNotification;
     }
   >();
   /**
@@ -9866,6 +9872,11 @@ export class DesktopBackendRegistry {
             ...context, tool: "call_mcp_tool",
           });
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
+          const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
+          if (automation?.mcpConnectionIds) {
+            const selected = await this.readThreadMcpConnections({ backend: context.backend, threadId: automation.agentThreadId });
+            return automation.mcpConnectionIds.filter((id) => selected.connectionIds.includes(id));
+          }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
         approve: (invocation, context, signal) => this.approveGatewayInvocation(invocation, context, signal),
@@ -10876,6 +10887,8 @@ export class DesktopBackendRegistry {
     model?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    mcpAllowlist?: string[];
+    toolAllowlist?: string[];
     suppressBindingBroadcast?: boolean;
   }): Promise<{
     backend: AppServerBackendKind;
@@ -10919,6 +10932,12 @@ export class DesktopBackendRegistry {
       sandbox,
     });
     const client = this.getClient(params.backend, executionMode);
+    const mcp = params.backend === "codex"
+      ? await this.prepareAutomationMcp({ client, agentThreadId: params.agentThreadId, cwd, overlay, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist })
+      : undefined;
+    if (params.backend !== "codex" && (params.mcpAllowlist?.length || params.toolAllowlist?.length)) {
+      throw new Error("Automation MCP allowlists currently require the Codex backend.");
+    }
     const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
     backendRegistryLog.info("starting automation headless thread", {
       agentThreadId: params.agentThreadId,
@@ -10933,14 +10952,22 @@ export class DesktopBackendRegistry {
       promptLength: submittedPrompt?.length ?? 0,
       sandbox,
     });
-    const headlessThread = await client.startThread({
-      ...(cwd ? { cwd } : {}),
-      ...modelSettings,
-      approvalPolicy,
-      approvalsReviewer: modeSettings.approvalsReviewer,
-      ephemeral: params.backend === "codex" ? true : undefined,
-      sandbox,
-    });
+    let headlessThread: { threadId: string };
+    try {
+      headlessThread = await client.startThread({
+        ...(cwd ? { cwd } : {}),
+        ...modelSettings,
+        approvalPolicy,
+        approvalsReviewer: modeSettings.approvalsReviewer,
+        ephemeral: params.backend === "codex" ? true : undefined,
+        sandbox,
+        ...(mcp?.config ? { config: mcp.config } : {}),
+        ...(mcp?.connectionIds.length ? { dynamicTools: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)).buildDynamicToolSpecs() } : {}),
+      });
+    } catch (error) {
+      for (const registration of mcp?.registrations ?? []) registration.revoke();
+      throw error;
+    }
     backendRegistryLog.info("automation headless thread created", {
       agentThreadId: params.agentThreadId,
       automationName: params.automationName,
@@ -10949,16 +10976,44 @@ export class DesktopBackendRegistry {
       executionMode,
       headlessThreadId: headlessThread.threadId,
     });
-    const turn = await client.startTurn({
-      threadId: headlessThread.threadId,
-      input,
-      ...(cwd ? { cwd } : {}),
-      ...modelSettings,
-      approvalPolicy,
-      approvalsReviewer: modeSettings.approvalsReviewer,
-      sandbox,
-    });
     const queueEntryId = `headless:${params.automationRunId}`;
+    const pendingKey = buildHeadlessAutomationTurnKey(params.backend, headlessThread.threadId, "");
+    const record = {
+      agentThreadId: params.agentThreadId,
+      backend: params.backend,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      executionMode,
+      executionThreadId: headlessThread.threadId,
+      queueEntryId,
+      startedAt: Date.now(),
+      suppressBindingBroadcast: params.suppressBindingBroadcast,
+      mcpConnectionIds: mcp?.connectionIds,
+      mcpServerAliases: mcp?.serverAliases,
+      toolAllowlist: params.toolAllowlist,
+      mcpRegistrations: mcp?.registrations,
+      pendingTerminalNotification: undefined as AppServerNotification | undefined,
+    };
+    // Tool calls can arrive before turn/start returns. Install the scoped
+    // authorization before allowing the runtime to execute any tools.
+    this.headlessAutomationTurns.set(pendingKey, record);
+    for (const registration of mcp?.registrations ?? []) registration.bindThread(headlessThread.threadId);
+    let turn: Awaited<ReturnType<BackendClient["startTurn"]>>;
+    try {
+      turn = await client.startTurn({
+        threadId: headlessThread.threadId,
+        input,
+        ...(cwd ? { cwd } : {}),
+        ...modelSettings,
+        approvalPolicy,
+        approvalsReviewer: modeSettings.approvalsReviewer,
+        sandbox,
+      });
+    } catch (error) {
+      this.headlessAutomationTurns.delete(pendingKey);
+      for (const registration of mcp?.registrations ?? []) registration.revoke();
+      throw error;
+    }
     backendRegistryLog.info("automation headless turn started", {
       agentThreadId: params.agentThreadId,
       automationName: params.automationName,
@@ -10971,20 +11026,9 @@ export class DesktopBackendRegistry {
       sandbox,
       turnId: turn.turnId,
     });
-    this.headlessAutomationTurns.set(
-      buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId),
-      {
-        agentThreadId: params.agentThreadId,
-        backend: params.backend,
-        automationName: params.automationName,
-        automationRunId: params.automationRunId,
-        executionMode,
-        executionThreadId: turn.threadId,
-        queueEntryId,
-        startedAt: Date.now(),
-        suppressBindingBroadcast: params.suppressBindingBroadcast,
-      },
-    );
+    if (this.headlessAutomationTurns.delete(pendingKey)) {
+      this.headlessAutomationTurns.set(buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId), record);
+    }
     await this.emit({
       backend: params.backend,
       notification: {
@@ -11002,6 +11046,9 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (record.pendingTerminalNotification) {
+      await this.emitHeadlessAutomationLifecycle(params.backend, record.pendingTerminalNotification);
+    }
     return {
       backend: params.backend,
       headlessThreadId: turn.threadId,
@@ -17887,6 +17934,73 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async prepareAutomationMcp(params: {
+    client: BackendClient;
+    agentThreadId: string;
+    cwd?: string;
+    overlay?: ThreadOverlayState;
+    mcpAllowlist?: string[];
+    toolAllowlist?: string[];
+  }): Promise<{
+    config?: CodexThreadStartParams["config"];
+    connectionIds: string[];
+    serverAliases: Record<string, string[]>;
+    registrations: McpConnectionBridgeRegistration[];
+  }> {
+    const registrations: Array<{ connectionId: string; registration: McpConnectionBridgeRegistration }> = [];
+    try {
+      for (const connectionId of params.overlay?.mcpConnectionIds ?? []) {
+        for (const registration of await this.registerMcpConnections([connectionId])) {
+          registrations.push({ connectionId, registration });
+        }
+      }
+      const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
+      const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
+      if (inheritedNames === undefined && (params.mcpAllowlist?.length || params.toolAllowlist?.length || !providerEnabled)) {
+        throw new Error("The Codex runtime cannot report configured MCP servers, so the automation's MCP allowlist cannot be applied.");
+      }
+      let inventory: ListThreadMcpServersResponse["servers"] = [];
+      if (params.client.listMcpServers && (inheritedNames?.length || registrations.length)) {
+        inventory = await params.client.listMcpServers({ threadId: params.agentThreadId, detail: "toolsAndAuthOnly" });
+      }
+      const bridgeRegistrations = registrations.map(({ registration }) => registration);
+      const baseConfig = buildCodexConnectionMcpConfig(bridgeRegistrations, inheritedNames, { isolateFromInherited: !providerEnabled });
+      const baseServers = readRecord(baseConfig?.mcp_servers) ?? {};
+      const servers: AutomationMcpServer[] = (inheritedNames ?? [])
+        .filter((name) => providerEnabled && readRecord(baseServers[name])?.enabled !== false)
+        .map((name) => ({ name, tools: inventory.find((server) => server.name === name)?.tools }));
+      const connectionStatuses = registrations.length ? await this.mcpConnectionService?.listConnections?.() : undefined;
+      for (const { connectionId, registration } of registrations) {
+        const parentBridge = this.mcpConnectionService?.peekThreadBridge?.(connectionId, params.agentThreadId);
+        const parentName = parentBridge ? buildCodexConnectionMcpServerName(parentBridge) : undefined;
+        const name = buildCodexConnectionMcpServerName(registration.server);
+        const displayName = connectionStatuses?.find((connection) => connection.id === connectionId)?.displayName;
+        servers.push({
+          name,
+          aliases: [connectionId, registration.server.name, ...(parentName ? [parentName] : []), ...(displayName ? [displayName, displayName.toLowerCase()] : [])],
+          connectionId,
+          config: readRecord(baseServers[name]),
+          tools: inventory.find((server) => server.name === parentName)?.tools,
+        });
+      }
+      const policy = buildAutomationMcpPolicy({ servers, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist });
+      const selectedRegistrations = registrations.filter(({ connectionId, registration }) => {
+        if (policy.connectionIds.includes(connectionId)) return true;
+        registration.revoke();
+        return false;
+      });
+      return {
+        config: servers.length || baseConfig ? mergeCodexThreadConfigs(baseConfig, policy.config) : undefined,
+        connectionIds: policy.connectionIds,
+        serverAliases: Object.fromEntries(servers.filter((server) => server.connectionId).map((server) => [server.connectionId!, [server.name, ...(server.aliases ?? [])]])),
+        registrations: selectedRegistrations.map(({ registration }) => registration),
+      };
+    } catch (error) {
+      for (const { registration } of registrations) registration.revoke();
+      throw error;
+    }
+  }
+
   private async registerMcpConnections(
     connectionIds: string[] | undefined,
     threadId?: string,
@@ -24563,6 +24677,9 @@ export class DesktopBackendRegistry {
       await this.stopRunningTurnsForShutdown();
     }
     this.mcpGatewayTools?.cancel();
+    for (const run of this.headlessAutomationTurns.values()) {
+      for (const registration of run.mcpRegistrations ?? []) registration.revoke();
+    }
     this.closed = true;
     this.backgroundTerminalGeneration += 1;
     this.codexBackgroundTerminals.clear();
@@ -26178,6 +26295,7 @@ export class DesktopBackendRegistry {
     if (!turnId) {
       return;
     }
+    const pendingKey = buildHeadlessAutomationTurnKey(backend, notification.params.threadId, "");
     const run = this.headlessAutomationTurns.get(
       buildHeadlessAutomationTurnKey(
         backend,
@@ -26185,6 +26303,15 @@ export class DesktopBackendRegistry {
         turnId,
       ),
     );
+    if (!run) {
+      const pending = this.headlessAutomationTurns.get(pendingKey);
+      if (pending) {
+        // The Agent must observe its run starting before it finishes. Keep
+        // authorization live during startup and publish this after "started".
+        pending.pendingTerminalNotification = notification;
+        return;
+      }
+    }
     if (!run) {
       backendRegistryLog.debug("terminal turn did not match a headless automation", {
         backend,
@@ -26201,6 +26328,8 @@ export class DesktopBackendRegistry {
         turnId,
       ),
     );
+    this.headlessAutomationTurns.delete(pendingKey);
+    for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     backendRegistryLog.info("automation headless turn reached terminal status", {
       agentThreadId: run.agentThreadId,
       automationName: run.automationName,
@@ -26266,13 +26395,16 @@ export class DesktopBackendRegistry {
         automationRunId: string;
         executionMode: ThreadExecutionMode;
         queueEntryId: string;
+        mcpConnectionIds?: string[];
+        mcpServerAliases?: Record<string, string[]>;
+        toolAllowlist?: string[];
       }
     | undefined {
     const turnId = request.params.turnId?.trim();
     if (turnId) {
       return this.headlessAutomationTurns.get(
         buildHeadlessAutomationTurnKey(backend, request.params.threadId, turnId),
-      );
+      ) ?? this.headlessAutomationTurns.get(buildHeadlessAutomationTurnKey(backend, request.params.threadId, ""));
     }
 
     const keyPrefix = `${backend}:${request.params.threadId}:`;
@@ -26295,6 +26427,11 @@ export class DesktopBackendRegistry {
       match = run;
     }
     return match;
+  }
+
+  private findHeadlessAutomationForThread(backend: AppServerBackendKind, threadId: string) {
+    const matches = [...this.headlessAutomationTurns.values()].filter((run) => run.backend === backend && run.executionThreadId === threadId);
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private getClient(
@@ -35276,6 +35413,14 @@ export class DesktopBackendRegistry {
     // Full Access already authorizes it; ordinary forms and URL flows still
     // pass through performServerRequest and remain interactive.
     const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
+    if (automation?.mcpConnectionIds) {
+      if (!automation.mcpConnectionIds.includes(invocation.connectionId)
+        || !automationMcpToolAllowed(automation.toolAllowlist, [invocation.serverName, invocation.connectionId, ...(automation.mcpServerAliases?.[invocation.connectionId] ?? [])], invocation.toolName)) {
+        return false;
+      }
+      signal.throwIfAborted();
+      return true;
+    }
     if (await this.isMcpGatewayFullAccess(context, automation?.executionMode)) {
       signal.throwIfAborted();
       backendRegistryLog.info("auto-approving Full Access MCP gateway invocation", {

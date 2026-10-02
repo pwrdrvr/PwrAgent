@@ -19,6 +19,8 @@ describe("backend MCP gateway dispatch", () => {
   let store: SqliteOverlayStore;
   let registry: DesktopBackendRegistry;
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
+  let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
+  let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
@@ -32,6 +34,8 @@ describe("backend MCP gateway dispatch", () => {
       executionThreadId: string;
       queueEntryId: string;
       startedAt: number;
+      mcpConnectionIds?: string[];
+      toolAllowlist?: string[];
     }>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<{ success: boolean; contentItems: unknown[] }>;
     pendingServerRequests: Map<string, unknown>;
@@ -51,10 +55,20 @@ describe("backend MCP gateway dispatch", () => {
           name: "lookup", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
+    startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
+    registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
+      server: { name: "one", command: "fixture", args: [], env: {} },
+      bindThread: vi.fn(), revoke: vi.fn(),
+    }));
     registry = new DesktopBackendRegistry({
-      codexClient: { close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [], onNotification: () => () => {}, onPendingRequest: () => () => {} } as never,
+      codexClient: {
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
+        onNotification: () => () => {}, onPendingRequest: () => () => {},
+        readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
+        startTurn,
+      } as never,
       overlayStore: store, isBootstrapMode: () => false,
-      mcpConnectionService: { registerBridge: vi.fn(), requestGatewayToolOperation: operation },
+      mcpConnectionService: { registerBridge, requestGatewayToolOperation: operation },
     });
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
@@ -122,6 +136,72 @@ describe("backend MCP gateway dispatch", () => {
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(mode === "full-access");
     expect(events).toEqual([]);
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(mode === "full-access" ? 1 : 0);
+  });
+
+  it.each(["default", "auto"] as const)("pre-approves selected automation tools during turn startup in %s", async (executionMode) => {
+    const events = declineUnexpectedApproval();
+    startTurn.mockImplementation(async () => {
+      internals.activeTurnKeys.add("codex:headless-1:turn-1");
+      const call = request("call_mcp_tool", args);
+      const result = await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } });
+      expect(result.success).toBe(true);
+      return { threadId: "headless-1", turnId: "turn-1" };
+    });
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      executionMode, mcpAllowlist: ["one"], toolAllowlist: ["lookup"], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    expect(events).toEqual([]);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
+    expect(internals.pendingServerRequests.size).toBe(0);
+    const bridge = await registerBridge.mock.results[0].value;
+    expect(bridge.bindThread).toHaveBeenCalledWith("headless-1");
+    await registry.close();
+    expect(bridge.revoke).toHaveBeenCalled();
+  });
+
+  it("rejects an automation tool outside its allowlist even in Full Access", async () => {
+    internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
+      executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1, mcpConnectionIds: ["one"], toolAllowlist: ["other_tool"],
+    });
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(false);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+  });
+
+  it("rechecks the Agent's selection before an automation invocation", async () => {
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    const call = request("call_mcp_tool", args);
+    expect((await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } })).success).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("revokes automation bridge grants if turn startup fails", async () => {
+    startTurn.mockRejectedValue(new Error("fixture start failure"));
+    await expect(registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
+    })).rejects.toThrow("fixture start failure");
+    const bridge = await registerBridge.mock.results[0].value;
+    expect(bridge.revoke).toHaveBeenCalledOnce();
+    expect(internals.headlessAutomationTurns.size).toBe(0);
+  });
+
+  it("cancels upstream MCP questions even when the automation pre-approves that server", async () => {
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    expect(await internals.handleServerRequest("codex", {
+      method: "mcpServer/elicitation/request",
+      params: { threadId: "headless-1", turnId: "turn-1", requestId: "question-1", serverName: "Fixture", mode: "form", message: "Enter a verification code", requestedSchema: { type: "object", properties: { code: { type: "string" } } }, _meta: null },
+    })).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(internals.pendingServerRequests.size).toBe(0);
   });
 
   it.each([
@@ -213,6 +293,21 @@ describe("backend MCP gateway dispatch", () => {
     const { writes } = await measureSqliteWrites(async () => {
       expect((await internals.handleServerRequest("codex", request("search_mcp_tools", { query: "lookup" }))).success).toBe(true);
       expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).success).toBe(true);
+    });
+    expectSqliteWriteBudget({ scenario: "mcp-gateway-discovery-and-invocation", note: "Fixed MCP gateway discovery and one scoped approved call use in-memory catalogs and the existing event flow, with no additional SQLite commits.", writes });
+  });
+
+  it("adds no SQLite writes for an automation's pre-approved gateway flow", async () => {
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      for (const call of [request("search_mcp_tools", { query: "lookup" }), request("call_mcp_tool", args, "call-2")]) {
+        expect((await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } })).success).toBe(true);
+      }
     });
     expectSqliteWriteBudget({ scenario: "mcp-gateway-discovery-and-invocation", note: "Fixed MCP gateway discovery and one scoped approved call use in-memory catalogs and the existing event flow, with no additional SQLite commits.", writes });
   });
