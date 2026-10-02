@@ -14,7 +14,7 @@ import {
 import { InstanceGlyph } from "../federation/InstanceGlyph";
 import { ComposerDropdown, type ComposerDropdownOption } from "./ComposerDropdown";
 
-/** The dropdown value for this machine; peer ids never start with "@". */
+/** The window-default dropdown value; peer ids never start with "@". */
 const THIS_MACHINE_VALUE = "@this-machine";
 
 /** Where a retarget lands, resolved before the launchpad switches. */
@@ -25,12 +25,14 @@ export type LaunchpadMachineRetarget = {
 };
 
 export type LaunchpadMachineControl = {
-  /** Peer instance the launchpad starts its thread on; undefined is here. */
+  /** Peer instance override; undefined uses this window's default owner. */
   currentInstanceId?: string;
+  /** Default owner: the local instance, or the owner of a remote viewer. */
   local: {
     label: string;
     celestialIcon?: CelestialIconId;
     instanceId?: string;
+    remote?: boolean;
   };
   targets: readonly FederationThreadTarget[];
   /** The launchpad's project, as each machine is asked whether it has one. */
@@ -114,6 +116,8 @@ export function LaunchpadMachineChip(props: {
     ? current?.label ?? control.currentInstanceId
     : control.local.label;
   const currentOffline = current?.availability === "offline";
+  const currentRemote = Boolean(control.currentInstanceId || control.local.remote);
+  const defaultMachineDescription = control.local.remote ? "This window" : "This machine";
   const projectLabel = control.project?.label ?? "this project";
 
   const options: ComposerDropdownOption[] = [
@@ -121,11 +125,11 @@ export function LaunchpadMachineChip(props: {
       label: control.local.label,
       value: THIS_MACHINE_VALUE,
       ...(control.localHasProject || !control.currentInstanceId
-        ? { description: "This machine" }
+        ? { description: defaultMachineDescription }
         : {
             description: FEDERATION_PROJECT_STATE_LABEL.missing,
             disabled: true,
-            tooltip: `This machine has no project named ${projectLabel}`,
+            tooltip: `${control.local.label} has no project named ${projectLabel}`,
           }),
     },
     ...control.targets.map((target): ComposerDropdownOption => {
@@ -184,7 +188,7 @@ export function LaunchpadMachineChip(props: {
       <span
         className="composer__fixed-value composer__fixed-value--machine"
         aria-label={`Runs on ${currentLabel}${currentOffline ? ", offline" : ""}`}
-        data-remote={control.currentInstanceId ? "true" : undefined}
+        data-remote={currentRemote ? "true" : undefined}
         data-offline={currentOffline ? "true" : undefined}
       >
         <span aria-hidden="true" className="composer-dropdown__icon">
@@ -201,7 +205,7 @@ export function LaunchpadMachineChip(props: {
       ariaLabel="Machine"
       disabled={props.disabled}
       icon={Icon}
-      tone={currentOffline ? "offline" : control.currentInstanceId ? "remote" : undefined}
+      tone={currentOffline ? "offline" : currentRemote ? "remote" : undefined}
       tooltip={currentOffline ? `${currentLabel} is offline` : `Starts on ${currentLabel}`}
       value={control.currentInstanceId ?? THIS_MACHINE_VALUE}
       options={options}

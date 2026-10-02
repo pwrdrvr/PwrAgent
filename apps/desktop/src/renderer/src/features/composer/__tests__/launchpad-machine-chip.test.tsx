@@ -37,6 +37,40 @@ describe("LaunchpadMachineChip", () => {
     expect(chip.closest(".composer-dropdown")).not.toHaveClass("composer-dropdown--remote");
   });
 
+  it("marks a viewer's default owner as remote and offers other peers", async () => {
+    const onRetarget = vi.fn();
+    render(
+      <LaunchpadMachineChip
+        control={control({
+          local: { label: "Remote owner", instanceId: "owner", remote: true },
+        })}
+        onRetarget={onRetarget}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: "Machine" });
+    expect(chip).toHaveTextContent("Remote owner");
+    expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
+    fireEvent.click(chip);
+    expect(options()[0]).toHaveTextContent("This window");
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(options()[1]!);
+    expect(onRetarget).toHaveBeenCalledWith("studio");
+  });
+
+  it("reports a viewer sub-thread's default owner as remote", () => {
+    render(
+      <LaunchpadMachineChip
+        control={control({
+          local: { label: "Remote owner", instanceId: "owner", remote: true },
+          targets: [],
+          planRetarget: undefined,
+        })}
+        onRetarget={() => undefined}
+      />,
+    );
+    expect(screen.getByLabelText("Runs on Remote owner")).toHaveAttribute("data-remote", "true");
+  });
+
   it("marks a peer target and greys out a peer without the project", async () => {
     const check = vi.fn(async (instanceId: string) => instanceId !== "tower");
     render(
