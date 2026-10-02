@@ -3437,8 +3437,13 @@ function stripShellWrapper(command: string | undefined): string | undefined {
   return collapsed || undefined;
 }
 
+/**
+ * Same separator as the live summary (`summarizeLiveActivity`), so a header
+ * does not change when the turn is read back. Not a comma: "Edited 2 files,
+ * +10, -3" already has commas inside it.
+ */
 function formatActivitySummary(parts: string[]): string {
-  return parts.join(", ");
+  return parts.join(" · ");
 }
 
 function formatElapsedMs(elapsedMs: number): string {

@@ -4906,7 +4906,7 @@ describe("CodexAppServerClient", () => {
         {
           type: "activity",
           id: "activity-item-3",
-          summary: "Explored 1 file, Ran 1 command, Edited 1 file, +2, -1",
+          summary: "Explored 1 file · Ran 1 command · Edited 1 file, +2, -1",
           createdAt: undefined,
           status: "completed",
           turn,
@@ -8536,7 +8536,7 @@ describe("CodexAppServerClient", () => {
         }),
       ]);
       expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
-        summary: "Started 1 agent, 1 finished",
+        summary: "Started 1 agent · 1 finished",
       });
     } finally {
       await client.close();
@@ -8575,7 +8575,7 @@ describe("CodexAppServerClient", () => {
     try {
       const replay = await client.readThread({ threadId: "thread-parallel-activity" });
       const activity = replay.entries.find((entry) => entry.type === "activity");
-      expect(activity).toMatchObject({ summary: "Started 3 agents, 3 finished" });
+      expect(activity).toMatchObject({ summary: "Started 3 agents · 3 finished" });
       expect(
         activity?.type === "activity"
           ? activity.details.map((detail) => detail.label)
@@ -8688,7 +8688,7 @@ describe("CodexAppServerClient", () => {
       {
         type: "activity",
         id: "activity-collab-spawn-1",
-        summary: "Spawned 1 agent, Waited on 1 agent, 1 collaboration tool failed",
+        summary: "Spawned 1 agent · Waited on 1 agent · 1 collaboration tool failed",
         createdAt: undefined,
         status: "failed",
         details: [
