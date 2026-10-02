@@ -21567,6 +21567,73 @@ describe("Composer", () => {
     );
   });
 
+  it("pages between pasted images in the lightbox like a sent message's gallery", async () => {
+    // GIFs keep their own bytes (normalization would turn both into the same
+    // stub image here), and the strip drops an image it already holds.
+    const files = ["first.gif", "second.gif"].map(
+      (name, index) =>
+        new File([new Uint8Array([index + 1])], name, { type: "image/gif" }),
+    );
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: files.map((file) => ({
+          kind: "file",
+          type: file.type,
+          getAsFile: () => file,
+        })),
+      },
+    });
+
+    // Both thumbnails must be in the strip before opening, or a count of one
+    // proves nothing.
+    await screen.findByRole("button", { name: "Expand second.gif" });
+    fireEvent.click(screen.getByRole("button", { name: "Expand first.gif" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
+    expect(within(dialog).getByAltText("first.gif")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Previous image" })
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(dialog).getByRole("button", { name: "Next image" })
+    ).toHaveAttribute("aria-disabled", "false");
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(within(dialog).getByText("Image 2 of 2")).toBeInTheDocument();
+    expect(await within(dialog).findByAltText("second.gif")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Next image" })
+    ).toHaveAttribute("aria-disabled", "true");
+
+    // The last image is the end of the run, not a wrap back to the first.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(within(dialog).getByText("Image 2 of 2")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Previous image" }));
+    expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
+    expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
+  });
+
   it("keeps dropped GIF images animated by preserving the original data URL", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

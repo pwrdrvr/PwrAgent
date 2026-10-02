@@ -32745,9 +32745,20 @@ button.pricing-token-miser__folded:focus-visible {
      ring flat. Pad the two edges it overhangs; the negative top margin puts
      the strip back where it was, and the right pad sits inside the row's
      own wrapping slack so the left edge stays aligned with the rest of the
-     composer column. */
-  padding: 10px 10px 0 0;
+     composer column.
+
+     The left edge needs the same care for a different overhang: each
+     thumbnail's own focus ring (`.composer__attachment-open:focus-visible`,
+     2px at 2px) reaches 4px past the first column, and with no left pad the
+     scroller sliced it flat — visible every time the lightbox closed and
+     handed focus back. The left pad is paid back by moving the box 4px left,
+     and the right margin returns the same 4px so the margin box stays the
+     width `.composer > *` centres. A left margin alone shifts the centred box
+     by half of it and puts the thumbnails 2px right of the Reply box. */
+  padding: 10px 10px 0 4px;
   margin-top: -10px;
+  margin-right: 4px;
+  margin-left: -4px;
 }
 
 .composer__attachment {
