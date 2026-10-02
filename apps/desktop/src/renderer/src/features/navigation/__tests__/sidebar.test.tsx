@@ -1,6 +1,7 @@
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
@@ -248,6 +249,39 @@ function createDataTransfer(threadKey: string) {
 }
 
 const THREAD_PIN_POINTER_ID = 41;
+
+/** Keep the selected root in its exact query, outside the loaded pin range. */
+function offPageSelectedPinNavigation(
+  threads: NavigationThreadSummary[],
+  selected: NavigationThreadSummary,
+) {
+  const directory = { ...directories[0]!, threadKeys: threads.map(threadSummaryIdentityKey) };
+  const resources = new Map<string, NavigationWindowResource>();
+  const add = (id: string, query: NavigationQueryRequest["query"], population = threads) => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query };
+    const page = navigationQueryFixture(request, { directories: [directory], threads: population });
+    resources.set(id, { id, loading: false, state: { ...createNavigationPageState(request), page } });
+    return page;
+  };
+  const directoryRows = add("directory-index", { kind: "directory-index" }).directories ?? [];
+  const pins = add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" },
+    threads.filter((thread) => threadSummaryIdentityKey(thread) !== threadSummaryIdentityKey(selected)));
+  pins.complete = false;
+  pins.nextCursor = "more-pins";
+  add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" });
+  const ownerInstanceId = selected.federation?.ref.target.scope === "remote"
+    ? selected.federation.ref.target.instanceId : undefined;
+  const exact = add(ownerInstanceId ? "selected-viewer-mount" : "selected-context", {
+    kind: "exact", includeAncestry: true,
+    identities: [{ backend: selected.source, threadId: selected.id, ownerInstanceId }],
+  });
+  exact.selectionDirectory = directoryRows[0];
+  return {
+    presentationReady: true, resources, directories: directoryRows, selectedDirectoryKeys: undefined, connected: true,
+    invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+    rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined,
+  };
+}
 
 function startThreadPinPointerDrag(
   element: Element,
@@ -6154,14 +6188,14 @@ describe("Sidebar", () => {
     );
   });
 
-  it.each(["local", "mounted remote"] as const)("stops keeping a %s pin dropped after the pins when every pin is kept", async (owner) => {
+  it.each(["local", "mounted remote", "off-page local", "off-page mounted remote"] as const)("stops keeping a %s pin dropped after the pins when every pin is kept", async (owner) => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const keptFirst: NavigationThreadSummary = {
       ...sharedThread,
       id: "thread-kept-first",
       title: "Release manager",
       pinnedRank: String(-(2 ** 40)),
-      ...(owner === "mounted remote" ? {
+      ...(owner.includes("mounted remote") ? {
         linkedDirectories: [{ id: "owner-repo", label: "PwrAgent", path: "/owner/github/PwrAgent", kind: "local" as const }],
         federation: {
           ref: { backend: "codex" as const, target: { scope: "remote" as const, instanceId: "peer" }, threadId: "thread-kept-first" },
@@ -6203,6 +6237,8 @@ describe("Sidebar", () => {
         creatingThread={undefined}
         selectedItemKey={threadSummaryIdentityKey(keptFirst)}
         threads={[keptFirst, keptSecond, unpinned]}
+        pagedNavigation={owner.startsWith("off-page")
+          ? offPageSelectedPinNavigation([keptFirst, keptSecond, unpinned], keptFirst) : undefined}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
@@ -6247,7 +6283,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it.each(["local", "mounted remote"] as const)("opens a ghost Keep at top slot for a %s pin while the lane is empty", async (owner) => {
+  it.each(["local", "mounted remote", "off-page local", "off-page mounted remote"] as const)("opens a ghost Keep at top slot for a %s pin while the lane is empty", async (owner) => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const first = {
       ...sharedThread,
@@ -6260,7 +6296,7 @@ describe("Sidebar", () => {
       id: "thread-second",
       title: "Release manager",
       pinnedRank: "2048",
-      ...(owner === "mounted remote" ? {
+      ...(owner.includes("mounted remote") ? {
         linkedDirectories: [{ id: "owner-repo", label: "PwrAgent", path: "/owner/github/PwrAgent", kind: "local" as const }],
         federation: {
           ref: { backend: "codex" as const, target: { scope: "remote" as const, instanceId: "peer" }, threadId: "thread-second" },
@@ -6282,8 +6318,10 @@ describe("Sidebar", () => {
         inboxThreads={[first, second]}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey="codex:thread-first"
+        selectedItemKey={owner.startsWith("off-page") ? threadSummaryIdentityKey(second) : threadSummaryIdentityKey(first)}
         threads={[first, second]}
+        pagedNavigation={owner.startsWith("off-page")
+          ? offPageSelectedPinNavigation([first, second], second) : undefined}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
