@@ -15181,7 +15181,8 @@ describe("useThreadSessionState", () => {
       result.current.setActiveTurnId("turn-1");
     });
     expect(result.current.activeTurnId).toBeUndefined();
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBe(true);
     expect(logRendererDiagnostic).toHaveBeenCalledWith({
       level: "info",
       message: "renderer received terminal turn notification",
@@ -15199,7 +15200,7 @@ describe("useThreadSessionState", () => {
     })]);
     act(() => { result.current.setActiveTurnId("turn-1"); });
     expect(result.current.activeTurnId).toBeUndefined();
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBe(true);
     act(() => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turnId: "turn-1",
@@ -15213,7 +15214,7 @@ describe("useThreadSessionState", () => {
         item: { id: "tool-1", type: "commandExecution", status: "completed", command: "fixture" },
       } } });
     });
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBeUndefined();
     act(() => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turnId: "turn-2",
@@ -16205,7 +16206,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
   });
 
-  it("recovers background command activity after reload without occupying the turn slot", async () => {
+  it("recovers agent commands after reload without Thinking or occupying the turn slot", async () => {
     const desktopApi: DesktopApi = {
       readThread: async ({ threadId }) => readThreadResponse({ threadId, entries: [], hasPreviousPage: false, threadStatus: "idle" }),
       listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [
@@ -16215,8 +16216,10 @@ describe("useThreadSessionState", () => {
     const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) }));
     await waitForThreadHydration(result);
     await waitFor(() => expect(result.current.backgroundTerminals).toHaveLength(1));
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
-    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.agentCommandsStatus).toEqual({ count: 1, command: "pnpm dev" });
     expect(result.current.activeTurnId).toBeUndefined();
     expect(result.current.threadBusy).toBe(false);
   });
@@ -16280,8 +16283,12 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.activeTurnId).toBeUndefined();
     expect(result.current.threadBusy).toBe(false);
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
-    expect(result.current.pendingStatusText).toBe("Thinking");
+    // The turn is over: no Thinking, and the surviving command is reported
+    // separately so the transcript and navigation can point at it.
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBe(true);
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.agentCommandsStatus).toEqual({ count: 1 });
     expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
       .find((detail) => detail.id === "tool-1")?.status).toBe("in_progress");
 
@@ -16331,6 +16338,8 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
     expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.agentCommandsStatus).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
   it("clears a tracked command when it finishes after its thread loses focus", async () => {
@@ -16366,7 +16375,9 @@ describe("useThreadSessionState", () => {
         turn: { id: "turn-1", status: "completed", output: [] },
       } } });
     });
-    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+    // A command that outlived its turn is not Thinking; navigation marks it.
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBe(true);
 
     act(() => { rerender({ threadId: "thread-2" }); });
     act(() => {
@@ -16376,6 +16387,7 @@ describe("useThreadSessionState", () => {
       } } });
     });
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
   it("clears a tracked command when its Codex app server exits", async () => {

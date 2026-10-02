@@ -26,20 +26,26 @@ export const ActionRunsPanel = memo(function ActionRunsPanel(props: ActionRunsPa
           <h3>Actions</h3>
           {count > 0 ? <span className="env-actions-panel__count">{count}</span> : null}
         </div>
-        {props.dock === "sidebar" && props.runs.length > 0 ? (
-          <button type="button" className="env-actions-panel__dock-toggle"
-            onClick={() => props.onDockChange("above")}>
-            Show above composer
-          </button>
-        ) : null}
       </header>
       <div className="actions-panel__body">
         <BackgroundTerminalsView terminals={props.terminals} error={props.error}
           stopping={props.stopping} onStop={props.onStop} />
         {props.runs.length > 0 ? (
-          <>
-            <header className="env-actions-panel__header">
-              <div className="env-actions-panel__title-group"><h3>Environment actions</h3></div>
+          <div className="actions-panel__group">
+            <header className="actions-panel__group-header">
+              <div className="actions-panel__group-title">
+                <h4>Environment</h4>
+                <span className="actions-panel__group-count">{props.runs.length}</span>
+              </div>
+              {/* The dock moves only these rows, so the toggle sits beside
+                  them rather than in the panel header above agent commands. */}
+              {props.dock === "sidebar" ? (
+                <button type="button" className="env-actions-panel__dock-toggle"
+                  onClick={() => props.onDockChange("above")}
+                  title="Also show action runs above the composer">
+                  Show above composer
+                </button>
+              ) : null}
             </header>
             <EnvActionRunsView
               environmentName={props.environmentName}
@@ -49,10 +55,10 @@ export const ActionRunsPanel = memo(function ActionRunsPanel(props: ActionRunsPa
               hideHeader
               runs={props.runs}
             />
-          </>
+          </div>
         ) : !commandCount && !props.error ? (
           <div className="env-actions-panel__body">
-            <p className="context-empty">No actions or background commands are running for this thread.</p>
+            <p className="context-empty">No environment actions have run for this thread, and no agent commands are running.</p>
           </div>
         ) : null}
       </div>

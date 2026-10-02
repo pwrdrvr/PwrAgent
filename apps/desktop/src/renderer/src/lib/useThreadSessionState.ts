@@ -4648,6 +4648,13 @@ function didHydrateCompletedTurn(
   );
 }
 
+/** Commands still running for the selected thread after its turn ended. */
+export type AgentCommandsStatus = {
+  count: number;
+  /** Set only when exactly one listed command is running. */
+  command?: string;
+};
+
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   initialHistoryLimit?: number;
@@ -4710,6 +4717,8 @@ export function useThreadSessionState(params: {
   setRenderedTranscriptEntryLimit: (limit: number) => void;
   threadBusy: boolean;
   thinkingThreadKeys: Record<string, boolean>;
+  agentCommandThreadKeys: Record<string, boolean>;
+  agentCommandsStatus?: AgentCommandsStatus;
   setViewport: (viewport?: ThreadViewportState) => void;
   viewport?: ThreadViewportState;
 } {
@@ -7859,13 +7868,22 @@ export function useThreadSessionState(params: {
           ...Object.entries(sessions)
             .filter(([, session]) => hasThinkingState(session))
             .map(([sessionThreadKey]) => [sessionThreadKey, true] as const),
-          ...Object.keys(background.byThread)
-            .map((sessionThreadKey) => [sessionThreadKey, true] as const),
-          ...Object.keys(liveToolItemsByThread)
-            .map((sessionThreadKey) => [sessionThreadKey, true] as const),
         ],
       ),
-    [sessions, liveToolItemsByThread, background.byThread]
+    [sessions]
+  );
+  // A command that outlives its turn (a dev server, a watcher) is not the
+  // agent thinking. Counting it as Thinking kept an Attention scanner lit
+  // and held the turn's review promotion until the command exited, which
+  // for a dev server can be hours. Navigation marks these threads
+  // separately; quit protection reads the main-process registry instead.
+  const agentCommandThreadKeys = useMemo(
+    () =>
+      Object.fromEntries(
+        [...Object.keys(background.byThread), ...Object.keys(liveToolItemsByThread)]
+          .map((sessionThreadKey) => [sessionThreadKey, true] as const),
+      ),
+    [liveToolItemsByThread, background.byThread]
   );
   const approvalRequestThreadKeys = useMemo(
     () =>
@@ -7893,10 +7911,22 @@ export function useThreadSessionState(params: {
         ? undefined
         : selectedSession?.pendingStatusText ??
           (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
-            || (threadKey && liveToolItemsByThread[threadKey])
-            || background.terminals.length > 0
             ? "Thinking"
             : undefined);
+  // The list read names the command. Live tool items cover the window
+  // before that read lands and backends without the list API.
+  const liveAgentCommandCount = Math.max(
+    background.terminals.length,
+    threadKey ? Object.keys(liveToolItemsByThread[threadKey] ?? {}).length : 0,
+  );
+  const singleAgentCommand =
+    background.terminals.length === 1 ? background.terminals[0].command : undefined;
+  const agentCommandsStatus = useMemo<AgentCommandsStatus | undefined>(
+    () => liveAgentCommandCount > 0
+      ? { count: liveAgentCommandCount, command: singleAgentCommand }
+      : undefined,
+    [liveAgentCommandCount, singleAgentCommand]
+  );
   // A surviving command (for example a dev server) remains visible and
   // tracked for shutdown, but does not occupy Codex's turn slot. Making it
   // busy here would queue every new message until that command exits.
@@ -7955,6 +7985,8 @@ export function useThreadSessionState(params: {
     setRenderedTranscriptEntryLimit,
     threadBusy,
     thinkingThreadKeys,
+    agentCommandThreadKeys,
+    agentCommandsStatus,
     backgroundTerminals: background.terminals,
     backgroundTerminalsError: background.error,
     stoppingBackgroundTerminal: background.stopping,

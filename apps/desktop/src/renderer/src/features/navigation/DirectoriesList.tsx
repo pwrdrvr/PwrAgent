@@ -122,6 +122,7 @@ type DirectoriesListProps = {
   selectedDirectoryKeys?: ReadonlySet<string>;
   selectedThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
+  agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
@@ -1494,6 +1495,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={props.selectedThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
+                agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
                 onDragStartThread={(event) => {
                   setDraggedSubthreadKey(childKey);
@@ -1699,6 +1701,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             subthreadCount={subthreadCount}
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
+            agentCommandThreadKeys={props.agentCommandThreadKeys}
             thread={thread}
             threadPinState="unpinned"
             retainedForSelection={selectedUnpinnedThreads.includes(thread)}
@@ -2154,6 +2157,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}
+	                          agentCommandThreadKeys={props.agentCommandThreadKeys}
                           thread={thread}
                           threadPinState="pinned"
                               onToggleSubthreads={

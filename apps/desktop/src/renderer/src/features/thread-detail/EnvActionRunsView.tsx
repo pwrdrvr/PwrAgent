@@ -180,9 +180,15 @@ export function EnvActionRunEntry(props: {
         : status === "exited"
           ? "Env action exited"
           : "Env action failed";
+  // In the Actions rail the group label already says Environment, so the
+  // row keeps only the state. The full label stays the accessible name.
+  const stateLabel = label.slice("Env action ".length);
+  const visibleLabel = props.placement === "sidebar"
+    ? stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1)
+    : label;
 
   const meta: string[] = [];
-  if (run.pid) meta.push(`pid ${run.pid}`);
+  if (run.pid) meta.push(`PID ${run.pid}`);
   if (status === "started" && typeof run.startedAt === "number") {
     meta.push(
       `running for ${formatRunningDurationMs(Date.now() - run.startedAt)}`,
@@ -235,7 +241,7 @@ export function EnvActionRunEntry(props: {
           />
         ) : null}
         <span className="composer__queued-env-action-summary-text">
-          <span className="composer__queued-label">{label}</span>
+          <span className="composer__queued-label">{visibleLabel}</span>
           <span className="composer__queued-text">
             {run.actionName}
             {props.environmentName ? ` · ${props.environmentName}` : ""}

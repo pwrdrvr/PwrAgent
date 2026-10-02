@@ -47,6 +47,7 @@ import {
   subscribeSidebarResizing,
 } from "../../lib/sidebar-resize-signal";
 import { ThinkingScanner } from "./ThinkingScanner";
+import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { PendingMcpInteraction } from "./PendingMcpInteraction";
 import { TranscriptActivity } from "./TranscriptActivity";
@@ -106,6 +107,12 @@ type TranscriptListProps = {
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  /**
+   * Commands that outlived their turn. Shown in place of the thinking line
+   * when no turn is running, with a link to the Actions rail.
+   */
+  agentCommandsStatus?: AgentCommandsStatus;
+  onShowAgentCommands?: () => void;
   /**
    * The live turn belongs to another instance, so the pending line's scanner
    * sweeps in neutral rather than accent — the same vocabulary as the
@@ -704,6 +711,9 @@ function ApprovalDiffDisclosures(props: {
 
 export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? EMPTY_SKILLS;
+  const agentCommandsStatus = props.pendingStatusText
+    ? undefined
+    : props.agentCommandsStatus;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const bottomFollowFrameRef = useRef<number | undefined>(undefined);
@@ -859,7 +869,8 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingMcpInteraction ||
       props.pendingUserInput ||
       props.pendingStatusText ||
-      props.runningTurnUsageText
+      props.runningTurnUsageText ||
+      agentCommandsStatus
   );
   const pendingRequestActions = useMemo(
     () =>
@@ -985,6 +996,7 @@ export function TranscriptList(props: TranscriptListProps) {
   const visibleItemCount =
     transcriptEntries.length +
     (props.pendingStatusText || props.runningTurnUsageText ? 1 : 0) +
+    (agentCommandsStatus ? 1 : 0) +
     (props.pendingRequest ? 1 : 0) +
     (props.pendingMcpInteraction ? 1 : 0) +
     (props.pendingUserInput ? 1 : 0);
@@ -1671,6 +1683,39 @@ export function TranscriptList(props: TranscriptListProps) {
                   <span className="transcript-list__pending-usage">
                     {props.runningTurnUsageText}
                   </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {agentCommandsStatus ? (
+            // Static on purpose: the turn is over, so no scanner and no live
+            // region. The wrapper keeps the pending line's bottom-padding hook.
+            <div
+              className="transcript-list__item transcript-list__pending-item"
+              role="listitem"
+            >
+              <div className="transcript-list__pending transcript-list__agent-commands">
+                <span className="transcript-list__agent-commands-glyph" aria-hidden="true">&gt;_</span>
+                <span>
+                  {agentCommandsStatus.command ? (
+                    <>
+                      <code className="transcript-list__agent-commands-command">
+                        {agentCommandsStatus.command}
+                      </code>
+                      {" is still running"}
+                    </>
+                  ) : agentCommandsStatus.count === 1
+                    ? "An agent command is still running"
+                    : `${agentCommandsStatus.count} agent commands are still running`}
+                </span>
+                {props.onShowAgentCommands ? (
+                  <button
+                    className="transcript-list__agent-commands-link"
+                    type="button"
+                    onClick={props.onShowAgentCommands}
+                  >
+                    Actions
+                  </button>
                 ) : null}
               </div>
             </div>

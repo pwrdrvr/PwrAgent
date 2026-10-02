@@ -663,7 +663,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const TabIcon = tab.Icon;
     const commandCount = tab.id === "actions" ? props.backgroundTerminals?.terminals?.length ?? 0 : 0;
     const label = commandCount
-      ? `${tab.label} · ${commandCount} background command${commandCount === 1 ? "" : "s"}`
+      ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
       : tab.label;
     return (
       <button
