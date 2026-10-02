@@ -340,8 +340,8 @@ describe("AppUpdateBanner", () => {
   });
 
   it("swaps the offer into the live card, close for close and link for link", async () => {
-    // The stack is bottom-anchored and holds a card's size while the pointer
-    // is on it, so a click aimed at Cancel as the download finishes lands on
+    // The stack is bottom-anchored and keeps a card from shrinking while the
+    // pointer is on it, so a click aimed at Cancel as the download finishes lands on
     // the same card's close, which now dismisses the offer: never Restart.
     // Release notes trails both footers, so it keeps its slot too. This pins
     // the shape; update-check.spec.ts measures the result.

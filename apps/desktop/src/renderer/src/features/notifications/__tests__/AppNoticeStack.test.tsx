@@ -230,7 +230,7 @@ describe("AppNoticeStack", () => {
     expect(screen.getByText("1 of 1")).toBeInTheDocument();
   });
 
-  it("holds the card at the closed notice's size while the pointer stays on the stack", () => {
+  it("never shrinks the card below the closed notice while the pointer stays on the stack", () => {
     const layOut = stubCardLayout();
     const { container } = render(<DurableHarness initial={SHORT_THEN_TALL} />);
     const stack = container.querySelector(".app-toast-stack")!;
@@ -240,25 +240,29 @@ describe("AppNoticeStack", () => {
     fireEvent.pointerEnter(stack);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
 
-    // The next notice draws in the same card, at the size of the one that
-    // closed, so the close button stays under the pointer.
+    // The next notice draws in the same card, at no less than the size of
+    // the one that closed, so a shorter one leaves the close button under
+    // the pointer. Only a floor: a taller one still grows to fit.
     expect(screen.getByText("Tall")).toBeInTheDocument();
     expect(container.querySelector(".app-notice-toast")).toBe(card);
     expect(card).toHaveAttribute("data-held", "true");
-    expect(card.style.width).toBe("300px");
-    expect(card.style.height).toBe("92px");
+    expect(card.style.minWidth).toBe("300px");
+    expect(card.style.minHeight).toBe("92px");
+    expect(card.style.width).toBe("");
+    expect(card.style.height).toBe("");
 
-    // Through a run of closes, not just the first.
-    layOut(card, 300, 92);
+    // Through a run of closes, not just the first, from the largest the
+    // card has been: the tall notice grew it.
+    layOut(card, 300, 140);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(screen.getByText("Last")).toBeInTheDocument();
-    expect(card.style.height).toBe("92px");
+    expect(card.style.minHeight).toBe("140px");
 
     // Leaving the stack lets the card fit its own notice again.
     fireEvent.pointerLeave(stack);
     expect(card).not.toHaveAttribute("data-held");
-    expect(card.style.width).toBe("");
-    expect(card.style.height).toBe("");
+    expect(card.style.minWidth).toBe("");
+    expect(card.style.minHeight).toBe("");
   });
 
   it("holds the card through paging too, and not for a pointer elsewhere", () => {
@@ -278,8 +282,8 @@ describe("AppNoticeStack", () => {
     fireEvent.pointerEnter(stack);
     fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
     expect(screen.getByText("Short")).toBeInTheDocument();
-    expect(card.style.width).toBe("320px");
-    expect(card.style.height).toBe("140px");
+    expect(card.style.minWidth).toBe("320px");
+    expect(card.style.minHeight).toBe("140px");
   });
 
   it("stops holding once the pointer is somewhere a removed card cannot report", () => {

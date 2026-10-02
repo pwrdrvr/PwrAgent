@@ -70,11 +70,11 @@ Cancel (`dismissLabel: "Cancel update download"`); before there is a download
 it only stops watching. On the offer, closing dismisses it.
 
 That shared close is a safety rule, not a style choice. A download can finish
-between the operator aiming at Cancel and clicking. The stack holds a card
-at its old size while the pointer stays on the stack when the card's notice
-changes (`AppNoticeToast.tsx`), so the click lands on the same card's close,
-which by then dismisses the offer. Restart lives in the footer and never sits
-under that pointer. Release notes trails both footers, after Restart on the
+between the operator aiming at Cancel and clicking. The offer has no bar or
+meter, and the stack keeps a card from shrinking while the pointer stays on
+the stack when the card's notice changes (`AppNoticeToast.tsx`), so the
+click lands on the same card's close, which by then dismisses the offer.
+Restart lives in the footer and never sits under that pointer. Release notes trails both footers, after Restart on the
 offer, so it keeps its slot too. In v1.1.0-beta.3 the live card was 266px,
 420px and 303px wide across one check; checking and downloading now share
 the notice's minimum width. `update-check.spec.ts` measures all of this, and

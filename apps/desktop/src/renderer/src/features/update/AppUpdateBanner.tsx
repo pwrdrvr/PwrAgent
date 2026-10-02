@@ -266,9 +266,10 @@ export function AppUpdateBanner(props: {
     version === undefined ? undefined : releaseNotesUrl(version);
 
   // One card for every phase of a check, so the offer takes the live card's
-  // place rather than raising a second one. The stack holds the card's size
-  // through that swap while the pointer is on it (AppNoticeToast.tsx), which
-  // is what makes the close button below a safe target: a click aimed at it
+  // place rather than raising a second one. The offer has no bar or meter,
+  // and the stack keeps a card from shrinking through that swap while the
+  // pointer is on it (AppNoticeToast.tsx), which is what makes the close
+  // button below a safe target: a click aimed at it
   // as Cancel, landing just after the download finished, dismisses the offer
   // and leaves the update uninstalled. Restart sits in the footer, never
   // under that pointer, and Release notes trails both cards' footers, so it

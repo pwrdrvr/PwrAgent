@@ -160,8 +160,8 @@ test("a menu check reports itself live and ends on an actionable offer", async (
     expect(Math.round(checkingWidth)).toBe(Math.round(downloadingWidth));
 
     // The operator reaches for Cancel as the download finishes. The offer
-    // takes the live card's place in the same card, held at its size while
-    // the pointer is on it, so the click lands on that card's close, which
+    // takes the live card's place in the same card, which does not shrink
+    // while the pointer is on it, so the click lands on that card's close, which
     // now dismisses the offer and leaves the update uninstalled. It must
     // never land on Restart.
     const aim = {

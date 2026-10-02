@@ -21,8 +21,8 @@ export function AppNoticeStack(props: {
   }[];
 }) {
   const [activeId, setActiveId] = useState<string>();
-  // Holds a card at the size of the notice it replaced until the pointer
-  // leaves the stack, not just the card (AppNoticeToast.tsx).
+  // Keeps a card from shrinking below the notice it replaced until the
+  // pointer leaves the stack, not just the card (AppNoticeToast.tsx).
   const [hovered, setHovered] = useState(false);
 
   // A card removed from under the pointer, as a closed toast is, fires no

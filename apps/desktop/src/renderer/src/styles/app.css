@@ -8086,10 +8086,9 @@ a.button {
   user-select: text;
 }
 
-/* Held at the size of the notice it replaced while the pointer stays on the
-   stack (AppNoticeToast.tsx). The text takes up the slack, or scrolls when
-   it needs more, so the title row and the footer both stay where the
-   pointer left them. */
+/* Held at no less than the size of the notice it replaced while the pointer
+   stays on the stack (AppNoticeToast.tsx). The text takes up the slack, so
+   the title row and the footer both stay where the pointer left them. */
 .app-notice-toast[data-held="true"] .app-notice-toast__content {
   flex-grow: 1;
 }

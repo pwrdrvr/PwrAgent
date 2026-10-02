@@ -152,8 +152,9 @@ export function AppNoticeToast(props: {
   // when its download lands. The stack is anchored at its bottom and the
   // close button sits top-right, so a next notice of another size would
   // move that button out from under a pointer about to click it again.
-  // While the pointer stays, the card keeps the size of the notice it
-  // replaced, as a browser tab strip does through a run of closes. Runs
+  // While the pointer stays, the card never shrinks below the notice it
+  // replaced, as a browser tab strip holds its tabs through a run of closes.
+  // It still grows for a larger notice, so nothing is ever clipped. Runs
   // before paint, so the next notice never draws at its own size first.
   useLayoutEffect(() => {
     const previousId = shownIdRef.current;
@@ -256,7 +257,9 @@ export function AppNoticeToast(props: {
       data-tone={props.notice.tone ?? "neutral"}
       role="status"
       aria-live="polite"
-      style={held ? { width: held.width, height: held.height } : undefined}
+      style={held
+        ? { minWidth: held.width, minHeight: held.height }
+        : undefined}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onPointerEnter={() => setSelfHovered(true)}

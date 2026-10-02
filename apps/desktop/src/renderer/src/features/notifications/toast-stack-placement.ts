@@ -20,7 +20,7 @@ import { useEffect, useState, type RefObject } from "react";
  *   different heights, a notice arriving, and a window resize leave it put.
  * - It never slides out from under the pointer, or from under its own
  *   focused buttons. Nor does a card's close button: a card whose notice
- *   changes under the pointer keeps its size until the pointer leaves the
+ *   changes under the pointer does not shrink until the pointer leaves the
  *   stack (`AppNoticeToast.tsx`).
  *
  * It stays on whichever edge it moved to until keyboard focus lands on a
