@@ -13,6 +13,7 @@ export function useCodexBackgroundTerminals(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
   suspended?: boolean;
+  retainedRemoteThreadKeys?: ReadonlySet<string>;
 }) {
   const { desktopApi, suspended } = params;
   const threadKey = params.thread ? threadSummaryIdentityKey(params.thread) : undefined;
@@ -24,6 +25,27 @@ export function useCodexBackgroundTerminals(params: {
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState<string>();
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+  const retainedRemoteKeysJson = params.retainedRemoteThreadKeys === undefined
+    ? undefined : JSON.stringify([...params.retainedRemoteThreadKeys].sort());
+  const previousRemoteKeysRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (retainedRemoteKeysJson === undefined) return;
+    const keys = new Set<string>(JSON.parse(retainedRemoteKeysJson));
+    const target = threadRef.current?.federation?.ref.target ?? readRendererFederationTarget();
+    // The selected thread still has transcript interest even if it cannot
+    // enter the recent-thread LRU. Local terminal caches keep their lifetime.
+    if (target?.scope === "remote" && threadKey) keys.add(threadKey);
+    const evicted = [...previousRemoteKeysRef.current].filter((key) => !keys.has(key));
+    previousRemoteKeysRef.current = keys;
+    if (!evicted.length) return;
+    setByThread((current) => {
+      if (!evicted.some((key) => key in current)) return current;
+      const next = { ...current };
+      for (const key of evicted) delete next[key];
+      return next;
+    });
+  }, [retainedRemoteKeysJson, threadKey]);
 
   useEffect(() => {
     setError(undefined);
@@ -70,12 +92,26 @@ export function useCodexBackgroundTerminals(params: {
         if (!cancelled) setError(failure instanceof Error ? failure.message : String(failure));
       } finally {
         inFlight = false;
+        // A recovery notification may race with the old disconnected read
+        // rejecting. Honor that queued refresh even when the read failed.
+        if (dirty && !cancelled && supported) void refresh();
       }
     };
     refreshRef.current = refresh;
     void refresh();
     const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
       const notification = event.notification;
+      if (notification.method === "federation/eventStream/changed"
+        || (notification.method === "federation/peerStatus/changed" && notification.params.status === "connected")) {
+        const target = request?.federationTarget;
+        if (target?.scope === "remote" && target.instanceId === notification.params.instanceId) {
+          // Recovery can be the first chance to discover a session. Do not
+          // depend on an existing cache entry or a thread-scoped event.
+          revision += 1;
+          void refresh();
+        }
+        return;
+      }
       const eventParams = notification.params;
       if (!("threadId" in eventParams) || typeof eventParams.threadId !== "string") return;
       const key = agentEventThreadIdentityKey(event, eventParams.threadId);

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ListBackgroundTerminalsResponse, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useCodexBackgroundTerminals } from "../useCodexBackgroundTerminals";
+import { threadSummaryIdentityKey } from "../federated-thread-events";
 
 const terminal = {
   itemId: "item-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project", osPid: 456,
@@ -10,9 +11,90 @@ const terminal = {
 const thread = (id = "thread-1"): NavigationThreadSummary => ({
   id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
 });
+const remoteThread = (): NavigationThreadSummary => ({
+  ...thread(),
+  federation: {
+    ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" } },
+    instanceLabel: "Owner",
+  },
+});
 afterEach(cleanup);
 
 describe("useCodexBackgroundTerminals", () => {
+  it.each(["federation/peerStatus/changed", "federation/eventStream/changed"] as const)(
+    "rediscovers terminals after an empty failed read on %s for the owning peer", async (method) => {
+      let emit!: (event: AgentEvent) => void;
+      const list = vi.fn()
+        .mockRejectedValueOnce(new Error("peer disconnected"))
+        .mockResolvedValue({ supported: true, terminals: [terminal] });
+      const desktopApi: DesktopApi = {
+        listBackgroundTerminals: list,
+        onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      };
+      const { result } = renderHook(() => useCodexBackgroundTerminals({ desktopApi, thread: remoteThread() }));
+      await waitFor(() => expect(result.current.error).toBe("peer disconnected"));
+      const recoveryEvent = (instanceId: string): AgentEvent => ({
+        backend: "codex",
+        notification: method === "federation/peerStatus/changed"
+          ? { method, params: { instanceId, status: "connected" } }
+          : { method, params: { instanceId, epoch: "recovered" } },
+      });
+      act(() => {
+        emit(recoveryEvent("other-owner"));
+        emit({ backend: "codex", notification: {
+          method: "federation/peerStatus/changed", params: { instanceId: "owner", status: "disconnected" },
+        } });
+      });
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(result.current.terminals).toEqual([]);
+      act(() => emit(recoveryEvent("owner")));
+      await waitFor(() => expect(result.current.terminals).toHaveLength(1));
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ federationTarget: { scope: "remote", instanceId: "owner" } }));
+      expect(result.current.error).toBeUndefined();
+    },
+  );
+
+  it("retries discovery when reconnect arrives before the disconnected read rejects", async () => {
+    let emit!: (event: AgentEvent) => void;
+    let rejectRead!: (error: Error) => void;
+    const list = vi.fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }))
+      .mockResolvedValue({ supported: true, terminals: [terminal] });
+    const desktopApi: DesktopApi = {
+      listBackgroundTerminals: list,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    };
+    const { result } = renderHook(() => useCodexBackgroundTerminals({ desktopApi, thread: remoteThread() }));
+    await act(async () => {
+      emit({ backend: "codex", notification: {
+        method: "federation/peerStatus/changed", params: { instanceId: "owner", status: "connected" },
+      } });
+      rejectRead(new Error("peer disconnected"));
+    });
+    await waitFor(() => expect(result.current.terminals).toHaveLength(1));
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it("retains the selected remote terminal outside the LRU and preserves local caches on remote eviction", async () => {
+    const desktopApi: DesktopApi = {
+      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [terminal] })),
+    };
+    const { result, rerender } = renderHook(({ selected }) => useCodexBackgroundTerminals({
+      desktopApi, thread: selected, retainedRemoteThreadKeys: new Set(),
+    }), { initialProps: { selected: thread() } });
+    await waitFor(() => expect(result.current.terminals).toHaveLength(1));
+    const localKey = threadSummaryIdentityKey(thread());
+    const remoteKey = threadSummaryIdentityKey(remoteThread());
+    rerender({ selected: remoteThread() });
+    await waitFor(() => expect(result.current.byThread[remoteKey]).toHaveLength(1));
+    expect(result.current.byThread[localKey]).toHaveLength(1);
+    rerender({ selected: thread() });
+    expect(result.current.byThread[remoteKey]).toBeUndefined();
+    expect(result.current.byThread[localKey]).toHaveLength(1);
+  });
+
   it("recovers live sessions on selection, captures bounded output, and stops the session handle", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const list = vi.fn(async () => ({ supported: true, terminals: [terminal] }));

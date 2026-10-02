@@ -7847,7 +7847,10 @@ export function useThreadSessionState(params: {
     ]
   );
 
-  const background = useCodexBackgroundTerminals({ desktopApi, thread, suspended });
+  const background = useCodexBackgroundTerminals({
+    desktopApi, thread, suspended,
+    retainedRemoteThreadKeys: params.retainedRemoteThreads === undefined ? undefined : retainedRemoteKeys,
+  });
 
   const thinkingThreadKeys = useMemo(
     () =>

@@ -5,7 +5,7 @@ import type { DesktopApi } from "../desktop-api";
 import { useRecentRemoteThreads } from "../useRecentRemoteThreads";
 import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { useThreadSessionState } from "../useThreadSessionState";
-import { threadOwnerPlatform } from "../federated-thread-events";
+import { threadOwnerPlatform, threadSummaryIdentityKey } from "../federated-thread-events";
 import { useFederationPeerConnectivity } from "../useFederationPeerConnectivity";
 
 function remoteThread(id: string, instanceId = "owner"): NavigationThreadSummary {
@@ -165,6 +165,44 @@ describe("recent remote threads", () => {
     rendered.rerender({ thread: threads[0]! });
     await waitFor(() => expect(readThread).toHaveBeenCalledTimes(7));
     expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "0", knownRevision: "" }));
+  });
+
+  it("drops recovered terminal activity when its remote transcript interest is evicted", async () => {
+    const threads = Array.from({ length: 6 }, (_, index) => remoteThread(String(index)));
+    const originalKey = threadSummaryIdentityKey(threads[0]!);
+    const readThread = vi.fn(async ({ threadId }: { threadId: string }) => snapshot(threadId));
+    const listBackgroundTerminals = vi.fn(async ({ threadId }: { threadId: string }) => ({
+      supported: true,
+      terminals: threadId === "0" ? [{ itemId: "server", processId: "session", command: "pnpm dev", cwd: "/fixture" }] : [],
+    }));
+    const setFederationEventSubscriptions = vi.fn(async ({ subscriptions }) => ({ subscriptions }));
+    const desktopApi: DesktopApi = {
+      readThread, listBackgroundTerminals, setFederationEventSubscriptions, onAgentEvent: () => () => undefined,
+    };
+    const rendered = renderHook(({ thread }) => {
+      const retainedRemoteThreads = useRecentRemoteThreads({ selectedThread: thread, threads });
+      useFederationThreadEventSubscriptions({ desktopApi, enabled: true, selectedThread: thread, threads, retainedRemoteThreads });
+      return useThreadSessionState({ desktopApi, thread, retainedRemoteThreads });
+    }, { initialProps: { thread: threads[0]! } });
+    await waitFor(() => expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBe(true));
+    for (const thread of threads.slice(1, 5)) {
+      rendered.rerender({ thread });
+      await waitFor(() => expect(rendered.result.current.response?.threadId).toBe(thread.id));
+      expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBe(true);
+    }
+    rendered.rerender({ thread: threads[5]! });
+    await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("5"));
+    const ownerSubscription = setFederationEventSubscriptions.mock.lastCall![0].subscriptions[0];
+    const transcriptSelection = ownerSubscription.eventClassSelections?.transcript ?? ownerSubscription.threadSelection;
+    expect(transcriptSelection.threads.some((ref: { threadId: string }) => ref.threadId === "0")).toBe(false);
+    // No completion can arrive once the transcript subscription has gone away.
+    expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBeUndefined();
+    listBackgroundTerminals.mockResolvedValue({ supported: true, terminals: [] });
+    rendered.rerender({ thread: threads[0]! });
+    await waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(7));
+    expect(rendered.result.current.backgroundTerminals).toEqual([]);
+    expect(rendered.result.current.thinkingThreadKeys[originalKey]).toBeUndefined();
+    rendered.unmount();
   });
 });
 
