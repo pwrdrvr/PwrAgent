@@ -1,4 +1,5 @@
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
+import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
@@ -727,12 +728,12 @@ async function hydrateRetainedThreadOverlayData(
 
   return threads.map((thread) => {
     const overlay = overlaysByBackend.get(thread.source)?.[thread.id];
-    if (!overlay?.worktreeSnapshots?.length) {
-      return thread;
-    }
+    if (!overlay) return thread;
     return {
       ...thread,
-      worktreeSnapshots: overlay.worktreeSnapshots,
+      ...(overlay.worktreeSnapshots?.length ? { worktreeSnapshots: overlay.worktreeSnapshots } : {}),
+      archiveRetentionStartedAt: overlay.archiveRetentionStartedAt,
+      archiveRetentionProtectedReason: archiveCandidateProtectionReason({ thread, overlay }),
     };
   });
 }
@@ -1548,6 +1549,11 @@ class DesktopAppServerService {
       forceRefresh: request.archived === true,
       filter: request.filter,
     });
+    if (request.archived) {
+      await this.getOverlayStore().observeArchivedThreads?.(
+        threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), Date.now(),
+      );
+    }
     const hydratedThreads = await hydrateRetainedThreadOverlayData(
       this.getOverlayStore(),
       threads,

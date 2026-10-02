@@ -1,3 +1,4 @@
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -2809,7 +2810,7 @@ function createKimiAcpRegistry(options?: {
       ? { offersThoughtLevel: options.offersThoughtLevel }
       : {}),
   };
-  const registry = new DesktopBackendRegistry({
+  const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
     acpAgentStore: createAcpAgentStoreMock([
@@ -50297,6 +50298,68 @@ script = "printf setup"
     await registry.close();
   });
 
+  it.each(["delete", "pin", "view", "restore", "activity", "policy"])("revalidates expired archive deletion at the provider boundary: %s", async (action) => {
+    const day = 86_400_000;
+    const thread: AppServerThreadSummary = {
+      id: "expired", title: "Expired archive", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 40 * day,
+      archivedAt: Date.now() - 31 * day,
+    };
+    const overlay: ThreadOverlayState = {
+      backend: "codex", threadId: thread.id, extraLinkedDirectories: [],
+      archiveRetentionStartedAt: Date.now() - 31 * day,
+    };
+    let states = [overlay];
+    const overlayStore = Object.assign(createOverlayStoreMock({ overlays: { "codex:expired": overlay } }), {
+      listThreadArchiveStates: vi.fn(async () => states),
+      observeArchivedThreads: vi.fn(async () => {}),
+      forgetThreadArchiveStates: vi.fn(async () => { states = []; }),
+    });
+    const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false, retentionDays: 30 };
+    let mutation: Promise<void> | undefined;
+    let registry!: DesktopBackendRegistry;
+    const deleteThread = vi.fn(async () => ({ threadId: thread.id }));
+    const client = Object.assign(new MockBackendClient({ threads: [], archivedThreads: [thread] }), {
+      deleteThread,
+      readThreadSummary: vi.fn(async () => {
+        if (["pin", "view", "restore"].includes(action)) {
+          mutation = registry.withThreadLifecycleMutation({ backend: "codex", threadId: thread.id }, async () => {});
+        }
+        if (action === "policy") policy.retentionDays = 0;
+        return action === "activity" ? { ...thread, threadStatus: "active" as const, updatedAt: Date.now() } : thread;
+      }),
+    });
+    registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, getThreadArchivePolicy: () => ({ ...policy }) });
+    try {
+      await registry.sweepInactiveThreads();
+      await mutation;
+      if (action === "delete") {
+        expect(deleteThread).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
+        expect(overlayStore.forgetThreadArchiveStates).toHaveBeenCalledTimes(1);
+      } else {
+        expect(deleteThread).not.toHaveBeenCalled();
+        expect(overlayStore.forgetThreadArchiveStates).not.toHaveBeenCalled();
+      }
+    } finally { await registry.close(); }
+  });
+
+  it("protects a thread appearing in both active and archived inventories", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "moving", title: "Moving thread", titleSource: "explicit", source: "codex",
+      threadStatus: "idle", linkedDirectories: [], updatedAt: Date.now() - 40 * 86_400_000,
+    };
+    const overlay = { backend: "codex" as const, threadId: thread.id, extraLinkedDirectories: [], archiveRetentionStartedAt: 1 };
+    const deleteThread = vi.fn(async () => ({ threadId: thread.id }));
+    const client = Object.assign(new MockBackendClient({ threads: [{ ...thread, archivedAt: 1 }], archivedThreads: [thread] }), { deleteThread });
+    const overlayStore = Object.assign(createOverlayStoreMock({ overlays: { "codex:moving": overlay } }), {
+      listThreadArchiveStates: async () => [overlay], observeArchivedThreads: vi.fn(async () => {}), forgetThreadArchiveStates: vi.fn(async () => {}),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false, retentionDays: 30 }) });
+    try { await registry.sweepInactiveThreads(); expect(deleteThread).not.toHaveBeenCalled(); }
+    finally { await registry.close(); }
+  });
+
   it("sweeps inactive threads through the archive path and protects a subsequent restore", async () => {
     const thread: AppServerThreadSummary = {
       id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
@@ -50306,7 +50369,7 @@ script = "printf setup"
       readThreadSummary: vi.fn(async () => thread),
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore });
     const archive = vi.spyOn(client, "archiveThread");
     const nativeDiscovery = vi.spyOn(client, "listNativeSubAgentThreads");
     try {
@@ -50350,7 +50413,7 @@ script = "printf setup"
     const client = Object.assign(new MockBackendClient({ threads: [thread], archivedThreads: [thread] }), {
       readThreadSummary: vi.fn(async () => thread),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, messagingStore: null });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore, messagingStore: null });
     try {
       await writeFile(path.join(worktree, "file.txt"), "local work\n");
       const { writes: dirtyWrites } = await measureSqliteWrites(async () => { await registry.sweepInactiveThreads(); });
@@ -50425,7 +50488,7 @@ script = "printf setup"
     const sessionStore = new AcpSessionStore(db);
     const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
     sessionStore.upsertSession({ backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" });
-    const registry = new DesktopBackendRegistry({
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: new SqliteOverlayStore(db), messagingStore: null,
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord()]),
@@ -50436,7 +50499,7 @@ script = "printf setup"
         for (let hour = 0; hour < 24; hour++) await registry.sweepInactiveThreads();
       });
       expect(sessionStore.getSession("acp:kimi", "old-idle")?.archivedAt).toEqual(expect.any(Number));
-      expectSqliteWriteBudget({ scenario: "inactive-acp-thread-archive-day", note: "One stale ACP session archive followed by 23 idle hourly sweeps. One boundary commit per archive; no heartbeat writes.", writes });
+      expectSqliteWriteBudget({ scenario: "inactive-acp-thread-archive-day", note: "One stale ACP session archive followed by 23 idle hourly sweeps. Two boundary commits per archive (ACP metadata and retention observation); no heartbeat writes.", writes });
     } finally {
       await registry.close();
       db.close();
@@ -50454,7 +50517,7 @@ script = "printf setup"
     const readThreadSummary = vi.fn(async () => ({ ...thread, updatedAt: Date.now() }));
     readThreadSummary.mockResolvedValueOnce({ ...thread, updatedAt: thread.updatedAt! });
     const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
     const archive = vi.spyOn(registry, "archiveThread");
     try {
       await registry.sweepInactiveThreads();
@@ -50472,7 +50535,7 @@ script = "printf setup"
     const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
       readThreadSummary: vi.fn(async () => thread),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock({ overlays: { "codex:stale-thread": overlay } }) });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock({ overlays: { "codex:stale-thread": overlay } }) });
     let release!: () => void;
     let started!: () => void;
     const cleanupBlocked = new Promise<void>((resolve) => { release = resolve; });
@@ -50511,7 +50574,7 @@ script = "printf setup"
       threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
     };
     const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
     let pin: Promise<void> | undefined;
     client.readThreadSummary.mockImplementation(async () => {
       if (client.readThreadSummary.mock.calls.length === 3) {
@@ -50563,7 +50626,7 @@ script = "printf setup"
       readThreadSummary: vi.fn(async () => thread),
       archiveThread: vi.fn(async () => { started(); await providerBlocked; return { threadId: thread.id }; }),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
     try {
       const sweep = registry.sweepInactiveThreads();
       await providerStarted;
@@ -50584,7 +50647,7 @@ script = "printf setup"
       threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
     };
     const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
     const identity = { backend: "codex" as const, threadId: thread.id };
     const archive = vi.spyOn(client, "archiveThread");
     try {
@@ -50610,7 +50673,7 @@ script = "printf setup"
       listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: running
         ? [{ itemId: "item-1", processId: "session-1", command: "long-running command", cwd: "/repo" }] : [] })),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore: createOverlayStoreMock() });
     const archive = vi.spyOn(client, "archiveThread");
     try {
       await registry.listBackgroundTerminals({ backend: "codex", threadId: thread.id });

@@ -9,7 +9,7 @@ export const NAVIGATION_DIRECTORY_SET_CHANGED_METHOD = "navigation/directorySet/
 
 const ROW_CHANGE_METHODS = new Set([
   "navigation/invalidated", "federation/eventStream/changed",
-  "thread/started", "thread/archived", "thread/unarchived", "thread/status/changed",
+  "thread/started", "thread/archived", "thread/deleted", "thread/unarchived", "thread/status/changed",
   "navigation/thread/seen", "thread/name/updated", "thread/rewound",
   "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered",

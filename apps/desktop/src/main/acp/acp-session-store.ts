@@ -89,6 +89,10 @@ export class AcpSessionStore {
     });
   }
 
+  deleteSession(backendId: AcpBackendId, sessionId: string): void {
+    this.stateDb.raw.prepare("DELETE FROM acp_sessions WHERE backend_id = ? AND session_id = ?").run(backendId, sessionId);
+  }
+
   getSession(
     backendId: AcpBackendId,
     sessionId: string,

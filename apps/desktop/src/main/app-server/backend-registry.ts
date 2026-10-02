@@ -1,3 +1,6 @@
+import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
+import { runGitCommand } from "./git-executable";
+import { DEFAULT_THREAD_ARCHIVE_POLICY, type DesktopThreadArchivePolicy } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -612,7 +615,7 @@ import {
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
-import { ThreadArchiveSweeper, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import {
   createCompositeJsonRpcObserver,
@@ -852,6 +855,7 @@ type BackendClient = {
       filter?: string;
       limit?: number;
       all?: boolean;
+      archived?: boolean;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
@@ -859,6 +863,7 @@ type BackendClient = {
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
   ): Promise<AppServerThreadSummary[]>;
+  deleteThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
@@ -8774,6 +8779,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   private threadArchiveSweeper?: ThreadArchiveSweeper;
+  private readonly readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
   private readonly runtimeInstanceId: string;
   private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
@@ -9174,6 +9180,7 @@ export class DesktopBackendRegistry {
   private readonly isBootstrapModeFn: () => boolean;
 
   constructor(options?: {
+    getThreadArchivePolicy?: () => DesktopThreadArchivePolicy;
     codexClient?: BackendClient;
     overlayStore?: BackendRegistryOverlayStoreLike;
     correspondenceStore?: ThreadCorrespondenceStore;
@@ -9265,6 +9272,10 @@ export class DesktopBackendRegistry {
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
+    this.readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
+      try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
+      catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
+    });
     const processRuntimeIdentity = getProcessRuntimeIdentity();
     this.configStore = options?.configStore;
     this.runtimeInstanceId =
@@ -13618,6 +13629,21 @@ export class DesktopBackendRegistry {
 
   private getThreadArchiveSweeper(): ThreadArchiveSweeper {
     return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
+      getPolicy: () => this.readThreadArchivePolicy(),
+      cleanupRetention: async () => await this.sweepArchivedThreadRetention(),
+      resolveProject: async ({ thread, overlay }) => {
+        const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
+        const cwd = directory?.worktreePath ?? directory?.path;
+        if (!cwd) return thread.projectKey;
+        try {
+          const { stdout } = await runGitCommand(cwd, ["worktree", "list", "--porcelain"], { timeout: 10_000 });
+          return stdout.split("\n").find((line) => line.startsWith("worktree "))?.slice(9);
+        } catch {
+          // The managed checkout may already be gone; its linked repository
+          // still identifies the project without making each old worktree a quota.
+          return directory?.path ?? thread.projectKey;
+        }
+      },
       listCandidates: async () => {
         await this.subAgentStartupReconciliation;
         if (this.closed || this.isBootstrapModeFn()) return [];
@@ -13650,10 +13676,110 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async listThreadsForArchiveRetention(): Promise<AppServerThreadSummary[]> {
+    await this.subAgentStartupReconciliation;
+    if (this.closed || this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn()) {
+      throw new Error("Archive retention discovery is unavailable during startup.");
+    }
+    if (!this.codexClient.listNativeSubAgentThreads) throw new Error("Complete descendant discovery is unavailable.");
+    const groups = await Promise.all([false, true].map(async (archived) => {
+      const lists = await Promise.all([
+        this.codexClient.listThreads({ archived, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true }, { callerReason: "auto-archive" }),
+        this.codexClient.listNativeSubAgentThreads!({ all: true, archived }, { callerReason: "auto-archive" }),
+        this.listAllInstalledAcpThreads(undefined, archived),
+      ]);
+      return lists.flat().map((thread) => ({ ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined }));
+    }));
+    // A thread can move between the two reads. Active membership wins: an
+    // ambiguous inventory must never authorize permanent deletion.
+    return [...new Map([...groups[1]!, ...groups[0]!].map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread])).values()];
+  }
+
+  private async sweepArchivedThreadRetention(): Promise<void> {
+    if (!this.overlayStore.listThreadArchiveStates || !this.overlayStore.observeArchivedThreads
+      || !this.overlayStore.forgetThreadArchiveStates) return;
+    await sweepThreadArchiveRetention({
+      getPolicy: () => this.readThreadArchivePolicy(),
+      listThreads: async () => await this.listThreadsForArchiveRetention(),
+      listStates: async () => await this.overlayStore.listThreadArchiveStates!(),
+      shouldStop: () => this.closed || this.stoppingRunningTurnsForShutdown,
+      observeArchives: async (threads, now) => await this.overlayStore.observeArchivedThreads!(
+        threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), now),
+      confirmAbsent: async (state) => {
+        if (isAcpBackendId(state.backend)) return !this.acpBackend.getSession(state.backend, state.threadId);
+        return await this.withCodexThreadClient(state.threadId, async (client) => {
+          if (!client.readThreadSummary) return false;
+          try { await client.readThreadSummary(state.threadId); return false; }
+          catch (error) {
+            // Only an explicit provider not-found response confirms deletion.
+            // Transport errors, unloaded threads and profile changes retain refs.
+            return error instanceof Error && error.message.toLowerCase().includes("thread not found:");
+          }
+        });
+      },
+      deleteFamily: async (family, policy) => await this.deleteExpiredThreadFamily(family, policy),
+      deleteSnapshot: async (snapshot) => await this.worktreeArchiveService.deleteSnapshot(snapshot),
+      forgetStates: async (states) => await this.overlayStore.forgetThreadArchiveStates!(states),
+      isBusy: (candidate) => this.autoArchiveCandidateIsBusy(candidate),
+      onError: (error, threadId) => {
+        if (!(error instanceof AutomaticArchiveCancelledError)) backendRegistryLog.warn("archived thread retention cleanup failed", {
+          threadId, error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
+  }
+
+  private async deleteExpiredThreadFamily(candidates: ThreadArchiveCandidate[], policy: DesktopThreadArchivePolicy): Promise<void> {
+    const reservation = { cancelled: false };
+    const keys = candidates.map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)).sort();
+    for (const key of keys) this.automaticArchiveReservations.set(key, reservation);
+    const withLocks = async (index: number): Promise<void> => {
+      if (index < keys.length) return await this.threadLifecycleLocks.run(keys[index]!, async () => await withLocks(index + 1));
+      const root = candidates[0]!.thread;
+      const run = async (remove: (threadId: string) => Promise<unknown>) => {
+        const threads = await this.listThreadsForArchiveRetention();
+        const currentRoot = threads.find((thread) => thread.source === root.source && thread.id === root.id);
+        if (!currentRoot) throw new AutomaticArchiveCancelledError();
+        const family = archivedThreadFamily(currentRoot, threads);
+        if (family.map((thread) => buildThreadIdentityKey(thread.source, thread.id)).sort().join("\n") !== keys.join("\n")) {
+          throw new AutomaticArchiveCancelledError();
+        }
+        const current = await Promise.all(family.map(async (thread) => {
+          const fresh = await this.refreshAutoArchiveCandidate({ thread });
+          if ((fresh.thread.updatedAt ?? 0) > (thread.updatedAt ?? 0)) throw new AutomaticArchiveCancelledError();
+          return fresh;
+        }));
+        if (reservation.cancelled || JSON.stringify(this.readThreadArchivePolicy()) !== JSON.stringify(policy)
+          || !archiveRetentionFamilyEligible(current, policy, (candidate) => this.autoArchiveCandidateIsBusy(candidate), Date.now())) {
+          throw new AutomaticArchiveCancelledError();
+        }
+        await remove(root.id);
+        this.invalidateThreadListCache(root.source);
+        this.invalidateArchiveCleanupReads(root.source);
+      };
+      if (isAcpBackendId(root.source)) {
+        const backend = root.source;
+        await run(async (threadId) => {
+          this.acpBackend.deleteStoredSession(backend, threadId);
+          await this.emit({ backend, notification: { method: "thread/deleted", params: { threadId } } });
+        });
+      } else {
+        await this.withCodexThreadClient(root.id, async (client) => {
+          if (!client.deleteThread) throw new Error("This provider does not support permanent thread deletion.");
+          await run(async (threadId) => await client.deleteThread!({ threadId }));
+        });
+      }
+    };
+    try { await withLocks(0); }
+    finally { for (const key of keys) this.automaticArchiveReservations.delete(key); }
+  }
+
   private async autoArchiveCandidatesAreEligible(candidates: ThreadArchiveCandidate[]): Promise<boolean> {
     for (const candidate of candidates) {
       const current = await this.refreshAutoArchiveCandidate(candidate);
-      if (!isStaleArchiveCandidate(current, Date.now()) || this.autoArchiveCandidateIsBusy(current)) return false;
+      if (!isStaleArchiveCandidate(current, Date.now(), this.readThreadArchivePolicy()) || this.autoArchiveCandidateIsBusy(current)) return false;
+      if (this.readThreadArchivePolicy().mode === "count"
+        && archiveCandidateLastActivity(current) > archiveCandidateLastActivity(candidate)) return false;
       const paths = (item: ThreadArchiveCandidate) => JSON.stringify(
         [...item.thread.linkedDirectories, ...item.overlay?.extraLinkedDirectories ?? []]
           .map((directory) => directory.worktreePath ?? directory.path).sort(),
@@ -13696,16 +13822,18 @@ export class DesktopBackendRegistry {
   }
 
   private async archiveInactiveThreadFamily(candidates: ThreadArchiveCandidate[]): Promise<void> {
+    const policy = JSON.stringify(this.readThreadArchivePolicy());
     const reservation = { cancelled: false };
     const keys = candidates.map(({ thread }) => buildThreadIdentityKey(thread.source, thread.id)).sort();
     for (const key of keys) this.automaticArchiveReservations.set(key, reservation);
     const beforeMutation = async () => {
       if (reservation.cancelled || !await this.autoArchiveCandidatesAreEligible(candidates)
-        || reservation.cancelled) throw new AutomaticArchiveCancelledError();
+        || reservation.cancelled || JSON.stringify(this.readThreadArchivePolicy()) !== policy) throw new AutomaticArchiveCancelledError();
       // The awaited admission result itself yields. Check the reservation
       // again synchronously at the call site that sends the mutation.
       return () => {
-        if (reservation.cancelled || candidates.some((candidate) => this.autoArchiveCandidateIsBusy(candidate))) {
+        if (reservation.cancelled || JSON.stringify(this.readThreadArchivePolicy()) !== policy
+          || candidates.some((candidate) => this.autoArchiveCandidateIsBusy(candidate))) {
           throw new AutomaticArchiveCancelledError();
         }
       };
@@ -13759,8 +13887,8 @@ export class DesktopBackendRegistry {
       || this.threadHasActiveTurn(thread.id, thread.source)
       || this.threadHasBlockingWorkspaceMove(identity)
       || this.threadTurnQueue.getQueuedEntries(identity).length > 0
-      || info?.archived === true
-      || (info?.updatedAt ?? 0) > (thread.updatedAt ?? 0)
+      || (info?.archived === true && thread.archivedAt === undefined)
+      || (thread.archivedAt === undefined && (info?.updatedAt ?? 0) > (thread.updatedAt ?? 0))
       || [...this.pendingServerRequests.values()].some((pending) =>
         pending.backend === thread.source && pending.notification.params.threadId === thread.id,
       );
@@ -13838,6 +13966,7 @@ export class DesktopBackendRegistry {
       });
       result = { threadId: request.threadId };
     }
+    await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: result.threadId }], archivedAt);
     this.invalidateThreadListCache(backend);
     this.invalidateArchiveCleanupReads(backend);
     if (backend === "codex") await this.archiveTokenMiserThread(result.threadId);
@@ -14056,6 +14185,7 @@ export class DesktopBackendRegistry {
       archivedAt,
       updatedAt: Math.max(session.updatedAt, archivedAt),
     });
+    await this.overlayStore.observeArchivedThreads?.([{ backend: params.backend, threadId: params.threadId }], archivedAt);
     this.invalidateThreadListCache(params.backend);
     // Archival on ACP is a local store write, with no provider to announce it.
     // Say it in the same words Codex uses, because everything downstream is
@@ -41431,6 +41561,7 @@ export class DesktopBackendRegistry {
   ): void {
     if (
       (notification.method === "thread/archived"
+        || notification.method === "thread/deleted"
         || notification.method === "thread/unarchived"
         || notification.method === "account/updated")
       && !this.archiveCleanupNotifications.has(notification)
@@ -41444,6 +41575,10 @@ export class DesktopBackendRegistry {
 
   private emit(event: AgentEvent): Promise<void> {
     this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
+    if (event.notification.method === "thread/deleted") {
+      this.invalidateThreadListCache(event.backend);
+      if (!this.closed) void this.sweepInactiveThreads();
+    }
     const emitted = this.emitEvent(event);
     const method = event.notification.method;
     if (

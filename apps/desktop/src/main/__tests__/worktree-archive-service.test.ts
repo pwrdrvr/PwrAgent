@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, stat, writeFile, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -209,4 +209,56 @@ describe("WorktreeArchiveService", () => {
     );
     expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
   });
+
+  it("keeps the checkout and its files if the recovery ref cannot be written", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-snapshot-failure-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["config", "user.email", "test@example.com"]);
+      await git(repoPath, ["config", "user.name", "Test User"]);
+      await writeFile(path.join(repoPath, "file.txt"), "base\n");
+      await git(repoPath, ["add", "."]);
+      await git(repoPath, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
+      await git(repoPath, ["worktree", "add", "-b", "local-work", worktreePath]);
+      await writeFile(path.join(worktreePath, "file.txt"), "local changes\n");
+      await mkdir(path.join(repoPath, ".git", "refs", "codex"));
+      await writeFile(path.join(repoPath, ".git", "refs", "codex", "snapshots"), "blocked namespace");
+      await expect(new WorktreeArchiveService().archive({ backend: "codex", threadId: "test", worktreePath, repositoryPath: repoPath })).rejects.toThrow();
+      expect(await pathExists(worktreePath)).toBe(true);
+      expect(await readFile(path.join(worktreePath, "file.txt"), "utf8")).toBe("local changes\n");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("expires only the recorded recovery ref and preserves branches and newer snapshots", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-snapshot-expiry-"));
+    const worktreePath = path.join(root, "worktree");
+    const repoPath = path.join(root, "repo");
+    try {
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["config", "user.email", "test@example.com"]);
+      await git(repoPath, ["config", "user.name", "Test User"]);
+      await writeFile(path.join(repoPath, "file.txt"), "base\n");
+      await git(repoPath, ["add", "."]);
+      await git(repoPath, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
+      await git(repoPath, ["worktree", "add", "-b", "local-work", worktreePath]);
+      const service = new WorktreeArchiveService();
+      const snapshot = await service.archive({ backend: "codex", threadId: "test", worktreePath, repositoryPath: repoPath });
+      await service.deleteSnapshot(snapshot);
+      await expect(git(repoPath, ["rev-parse", "--verify", snapshot.snapshotRef])).rejects.toThrow();
+      await service.deleteSnapshot(snapshot);
+      await service.deleteSnapshot({ ...snapshot, snapshotRef: "refs/heads/local-work" });
+      expect(await git(repoPath, ["branch", "--list", "local-work"])).toContain("local-work");
+      await writeFile(path.join(repoPath, "file.txt"), "newer\n");
+      await git(repoPath, ["-c", "commit.gpgsign=false", "commit", "-am", "newer"]);
+      const newer = await git(repoPath, ["rev-parse", "HEAD"]);
+      await git(repoPath, ["update-ref", snapshot.snapshotRef, newer]);
+      await service.deleteSnapshot(snapshot);
+      expect(await git(repoPath, ["rev-parse", snapshot.snapshotRef])).toBe(newer);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
 });

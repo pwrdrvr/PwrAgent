@@ -1,3 +1,4 @@
+import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -207,5 +208,61 @@ describe("workspaceIsSafeForAutoArchive", () => {
     expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
     expect(await workspaceIsSafeForAutoArchive(path.join(root, "deleted-worktree"), signal)).toBe(true);
     await expect(workspaceIsSafeForAutoArchive(root, signal)).rejects.toThrow();
+  });
+});
+
+
+describe("archive policy selection", () => {
+  it("keeps 20 eligible chats separately per project, plus pins, Agents and active work", async () => {
+    const candidates: ThreadArchiveCandidate[] = [];
+    for (const [project, count] of [["one", 23], ["two", 21]] as const) {
+      for (let i = 0; i < count; i++) {
+        const item = candidate(`${project}-${i}`);
+        item.thread.projectKey = project;
+        item.thread.updatedAt! -= i * 1000;
+        candidates.push(item);
+      }
+    }
+    const pinned = candidate("pinned"); pinned.thread.projectKey = "one"; pinned.thread.isPinned = true;
+    const active = candidate("active"); active.thread.projectKey = "one"; active.thread.threadStatus = "active";
+    const agent = candidate("agent"); agent.thread.projectKey = "one";
+    agent.overlay = { backend: "codex", threadId: "agent", executionMode: "default", extraLinkedDirectories: [], agent: {} as never };
+    candidates.push(pinned, active, agent);
+    const { deps } = harness(candidates);
+    await new ThreadArchiveSweeper({ ...deps, getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY }) }).sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id).sort()).toEqual(["one-20", "one-21", "one-22", "two-20"]);
+  });
+
+  it("keeps dirty workspaces in addition to the eligible project limit", async () => {
+    const candidates = [candidate("clean-new"), candidate("dirty-new"), candidate("clean-old")];
+    for (const item of candidates) item.thread.projectKey = "project";
+    candidates[2]!.thread.updatedAt! -= 1000;
+    candidates[1]!.thread.linkedDirectories = [{ id: "dirty", label: "dirty", kind: "local", path: "/dirty" }];
+    const { deps } = harness(candidates);
+    deps.workspaceIsSafe.mockImplementation(async (cwd) => cwd !== "/dirty");
+    await new ThreadArchiveSweeper({ ...deps, getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, keepPerProject: 2 }) }).sweep();
+    expect(deps.archive).not.toHaveBeenCalled();
+  });
+
+  it("defers an old count candidate that became active after the project ranking", async () => {
+    const old = candidate("old"); old.thread.projectKey = "project";
+    const newer = candidate("newer"); newer.thread.projectKey = "project"; newer.thread.updatedAt! += 1000;
+    const { deps } = harness([old, newer]);
+    deps.refreshCandidate.mockImplementation(async (item) => ({ ...item, thread: { ...item.thread, updatedAt: Date.now() } }));
+    await new ThreadArchiveSweeper({ ...deps, getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, keepPerProject: 1 }) }).sweep();
+    expect(deps.archive).not.toHaveBeenCalled();
+  });
+
+  it("uses seven days of inactivity in age mode and supports turning archival off", async () => {
+    const old = candidate("old"); old.thread.updatedAt = Date.now() - 8 * 86_400_000;
+    const recent = candidate("recent"); recent.thread.updatedAt = Date.now() - 6 * 86_400_000;
+    const { deps } = harness([old, recent]);
+    let policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const };
+    const sweeper = new ThreadArchiveSweeper({ ...deps, getPolicy: () => policy });
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["old"]);
+    policy = { ...policy, enabled: false };
+    await sweeper.sweep();
+    expect(deps.archive).toHaveBeenCalledTimes(1);
   });
 });

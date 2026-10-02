@@ -568,6 +568,8 @@ export type AppServerThreadSummary = {
   createdAt?: number;
   updatedAt?: number;
   archivedAt?: number;
+  archiveRetentionStartedAt?: number;
+  archiveRetentionProtectedReason?: string;
   linkedDirectories: LinkedDirectorySummary[];
   gitBranch?: string;
   gitOriginUrl?: string;
@@ -1866,6 +1868,12 @@ export type AppServerNotification =
     }
   | {
       method: "thread/unarchived";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "thread/deleted";
       params: {
         threadId: string;
       };

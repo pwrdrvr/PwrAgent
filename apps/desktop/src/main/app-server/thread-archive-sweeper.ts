@@ -1,9 +1,9 @@
 import { stat } from "node:fs/promises";
 import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { DEFAULT_THREAD_ARCHIVE_POLICY, type DesktopThreadArchivePolicy, buildThreadIdentityKey } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 
-export const THREAD_AUTO_ARCHIVE_AGE_MS = 30 * 24 * 60 * 60_000;
+export const THREAD_AUTO_ARCHIVE_AGE_MS = 7 * 24 * 60 * 60_000;
 export const THREAD_ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60_000;
 export const THREAD_ARCHIVE_SWEEP_START_DELAY_MS = 60_000;
 
@@ -13,6 +13,9 @@ export type ThreadArchiveCandidate = {
 };
 
 type SweeperDeps = {
+  getPolicy?: () => DesktopThreadArchivePolicy;
+  resolveProject?: (candidate: ThreadArchiveCandidate) => Promise<string | undefined>;
+  cleanupRetention?: () => Promise<void>;
   listCandidates: () => Promise<ThreadArchiveCandidate[]>;
   refreshCandidate: (candidate: ThreadArchiveCandidate) => Promise<ThreadArchiveCandidate>;
   isBusy: (candidate: ThreadArchiveCandidate) => boolean;
@@ -46,30 +49,38 @@ export async function workspaceIsSafeForAutoArchive(
   return retained.stdout.trim() === "0";
 }
 
-export function isStaleArchiveCandidate(candidate: ThreadArchiveCandidate, now: number): boolean {
-  const { thread, overlay } = candidate;
-  if (thread.archivedAt !== undefined
-    || thread.isPinned
-    || overlay?.archiveTombstonedAt !== undefined
-    || overlay?.pinnedRank !== undefined
-    || overlay?.agent
-    || overlay?.queuedAgentChange
-    || overlay?.scheduledStart?.state === "scheduled"
-    || overlay?.prAutoDispatchPending
-    || (overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote"
-    || overlay?.subAgents?.some((agent) => ["running", "pending", "cancelling", "blocked"].includes(agent.status))
-    || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded")) {
-    return false;
+export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveCandidate): number {
+  return Math.max(thread.updatedAt ?? 0, overlay?.lastSeenAt ?? 0, overlay?.archiveRestoredAt ?? 0,
+    ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
+}
+
+export function archiveCandidateProtectionReason({ thread, overlay }: ThreadArchiveCandidate): string | undefined {
+  if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
+  if (overlay?.agent) return "Agent thread";
+  if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
+  if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
+  if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
+  if (overlay?.subAgents?.some((agent) => ["running", "pending", "cancelling", "blocked"].includes(agent.status))) return "Active subagent";
+  if (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded") {
+    return thread.threadStatus === undefined ? "Provider status unavailable" : "Active or blocked chat";
   }
-  // A missing activity timestamp is not evidence that a thread is abandoned.
+  return undefined;
+}
+
+export function isProtectedArchiveCandidate(candidate: ThreadArchiveCandidate): boolean {
+  return archiveCandidateProtectionReason(candidate) !== undefined;
+}
+
+export function isStaleArchiveCandidate(
+  candidate: ThreadArchiveCandidate,
+  now: number,
+  policy: DesktopThreadArchivePolicy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" },
+): boolean {
+  const { thread, overlay } = candidate;
+  if (!policy.enabled || thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined
+    || isProtectedArchiveCandidate(candidate)) return false;
   if (!Number.isFinite(thread.updatedAt) || (thread.updatedAt ?? 0) <= 0) return false;
-  const lastActivityAt = Math.max(
-    thread.updatedAt!,
-    overlay?.lastSeenAt ?? 0,
-    overlay?.archiveRestoredAt ?? 0,
-    ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0),
-  );
-  return now - lastActivityAt >= THREAD_AUTO_ARCHIVE_AGE_MS;
+  return policy.mode === "count" || now - archiveCandidateLastActivity(candidate) >= policy.inactivityDays * 86_400_000;
 }
 
 /** Main-process housekeeping. Only explicit start() schedules it, so registry
@@ -108,6 +119,10 @@ export class ThreadArchiveSweeper {
   }
 
   private async run(): Promise<void> {
+    const policy = this.deps.getPolicy?.() ?? { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" as const };
+    try { await this.deps.cleanupRetention?.(); }
+    catch (error) { if (!this.abort.signal.aborted) this.deps.onError(error); }
+    if (!policy.enabled || this.abort.signal.aborted) return;
     const candidates = await this.deps.listCandidates();
     const children = new Map<string, ThreadArchiveCandidate[]>();
     for (const candidate of candidates) {
@@ -129,15 +144,56 @@ export class ThreadArchiveSweeper {
       visit(root);
       return group;
     };
+    const eligibleRoots = candidates.filter((candidate) => !candidate.thread.codexNativeSubAgent
+      && groupFor(candidate).every((item) => isStaleArchiveCandidate(item, Date.now(), policy) && !this.deps.isBusy(item)));
+    const selected = new Set<ThreadArchiveCandidate>();
+    if (policy.mode === "count") {
+      const projects = new Map<string, ThreadArchiveCandidate[]>();
+      for (const candidate of eligibleRoots) {
+        if (this.abort.signal.aborted) return;
+        // Workspaces that cannot be safely archived are kept in addition to
+        // the quota, just like pins and active work.
+        try {
+          let safe = true;
+          const paths = new Set(groupFor(candidate).flatMap(({ thread, overlay }) =>
+            [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
+              .map((directory) => directory.worktreePath ?? directory.path)));
+          for (const cwd of paths) {
+            if (!cwd.trim() || !await (this.deps.workspaceIsSafe ?? workspaceIsSafeForAutoArchive)(cwd, this.abort.signal)) {
+              safe = false;
+              break;
+            }
+          }
+          if (!safe) continue;
+        } catch (error) {
+          if (!this.abort.signal.aborted) this.deps.onError(error, candidate.thread.id);
+          continue;
+        }
+        const key = this.deps.resolveProject
+          ? await this.deps.resolveProject(candidate)
+          : candidate.thread.projectKey ?? candidate.thread.linkedDirectories[0]?.path;
+        // Unknown project identity must not combine unrelated worktrees into one quota.
+        if (!key) continue;
+        projects.set(key, [...projects.get(key) ?? [], candidate]);
+      }
+      for (const group of projects.values()) {
+        group.sort((a, b) => archiveCandidateLastActivity(b) - archiveCandidateLastActivity(a)
+          || a.thread.id.localeCompare(b.thread.id));
+        for (const candidate of group.slice(policy.keepPerProject)) selected.add(candidate);
+      }
+    } else {
+      for (const candidate of eligibleRoots) selected.add(candidate);
+    }
     for (const candidate of candidates) {
       if (this.abort.signal.aborted) return;
-      if (candidate.thread.codexNativeSubAgent) continue;
+      if (!selected.has(candidate)) continue;
       const group = groupFor(candidate);
-      if (!group.every((item) => isStaleArchiveCandidate(item, Date.now()) && !this.deps.isBusy(item))) continue;
+      if (!group.every((item) => isStaleArchiveCandidate(item, Date.now(), policy) && !this.deps.isBusy(item))) continue;
       try {
         const refreshed = await Promise.all(group.map((item) => this.deps.refreshCandidate(item)));
         if (this.abort.signal.aborted) return;
-        if (!refreshed.every((item) => isStaleArchiveCandidate(item, Date.now()) && !this.deps.isBusy(item))) continue;
+        if (policy.mode === "count" && archiveCandidateLastActivity(refreshed[0]!) > archiveCandidateLastActivity(candidate)) continue;
+        if (!refreshed.every((item) => isStaleArchiveCandidate(item, Date.now(), policy) && !this.deps.isBusy(item))) continue;
         const paths = new Set(refreshed.flatMap(({ thread, overlay }) =>
           [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
             .map((directory) => directory.worktreePath ?? directory.path),
@@ -152,6 +208,7 @@ export class ThreadArchiveSweeper {
         if (!safe || this.abort.signal.aborted) continue;
         if (!refreshed.every((item) => !this.deps.isBusy(item)) || !await this.deps.canArchive(refreshed)) continue;
         if (this.abort.signal.aborted) return;
+        if (JSON.stringify(this.deps.getPolicy?.() ?? policy) !== JSON.stringify(policy)) return;
         await this.deps.archive(refreshed[0]!, refreshed);
       } catch (error) {
         if (!this.abort.signal.aborted) this.deps.onError(error, candidate.thread.id);

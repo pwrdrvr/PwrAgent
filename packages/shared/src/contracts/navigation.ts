@@ -2696,6 +2696,8 @@ export type ThreadOverlayState = {
   archiveTombstonedAt?: number;
   /** A restore counts as activity even when the provider keeps its old timestamp. */
   archiveRestoredAt?: number;
+  /** Durable start of the current archived retention period. */
+  archiveRetentionStartedAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];

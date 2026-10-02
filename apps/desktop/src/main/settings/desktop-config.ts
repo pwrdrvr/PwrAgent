@@ -1,3 +1,4 @@
+import type { DesktopThreadArchivePolicy } from "@pwragent/shared";
 import { validateLocalModelIds } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
@@ -340,6 +341,7 @@ export type DesktopSettingsConfig = {
     };
   };
   worktrees?: {
+    archive?: Partial<DesktopThreadArchivePolicy>;
     storage?: DesktopWorktreeStorageLocation;
   };
 };
@@ -1772,6 +1774,17 @@ export function desktopSettingsPatchToEdits(
     set(["applications", "git", "path"], patch.applications.git.path);
   }
 
+  if (patch.worktrees?.archive) {
+    const archive = patch.worktrees.archive;
+    for (const [property, key] of [
+      ["enabled", "enabled"], ["mode", "mode"],
+      ["inactivityDays", "inactivity_days"], ["keepPerProject", "keep_per_project"],
+      ["retentionDays", "retention_days"],
+    ] as const) {
+      if (archive[property] !== undefined) set(["worktrees", "archive", key], archive[property]);
+    }
+  }
+
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
   }
@@ -1825,6 +1838,7 @@ function normalizeDesktopConfig(
   const glab = tables["applications.glab"];
   const gitApplication = tables["applications.git"];
   const worktrees = tables["worktrees"];
+  const archive = tables["worktrees.archive"];
 
   return pruneEmptyConfig({
     general: {
@@ -2240,6 +2254,13 @@ function normalizeDesktopConfig(
       },
     },
     worktrees: {
+      archive: archive ? {
+        enabled: readBoolean(archive?.enabled),
+        mode: archive?.mode === "age" || archive?.mode === "count" ? archive.mode : undefined,
+        inactivityDays: readNumber(archive?.inactivity_days),
+        keepPerProject: readNumber(archive?.keep_per_project),
+        retentionDays: readNumber(archive?.retention_days),
+      } : undefined,
       storage: readWorktreeStorage(worktrees?.storage),
     },
   });

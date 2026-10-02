@@ -1189,6 +1189,11 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/delete") {
+      this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: {} }));
+      return;
+    }
+
     if (payload.method === "thread/archive") {
       this.messageHandler(
         JSON.stringify({
@@ -11265,6 +11270,19 @@ describe("CodexAppServerClient", () => {
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("permanently deletes threads through the provider protocol", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.deleteThread({ threadId: "expired" })).resolves.toEqual({ threadId: "expired" });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      expect(requests).toContainEqual(expect.objectContaining({ method: "thread/delete", params: { threadId: "expired" } }));
+      await client.listNativeSubAgentThreads({ all: true, archived: true });
+      expect(MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message)))
+        .toContainEqual(expect.objectContaining({ method: "thread/list", params: expect.objectContaining({ archived: true, sourceKinds: expect.arrayContaining(["subAgentThreadSpawn"]) }) }));
+    } finally { await client.close(); }
   });
 
   it("archives threads through the Codex app server", async () => {

@@ -3719,6 +3719,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ...current,
       archiveTombstonedAt: params.archivedAt,
       archiveRestoredAt: params.restoredAt ?? current.archiveRestoredAt,
+      archiveRetentionStartedAt: params.restoredAt === undefined ? current.archiveRetentionStartedAt : undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -7740,6 +7741,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return results;
   }
 
+  async listThreadArchiveStates(): Promise<ThreadOverlayState[]> {
+    const rows = this.stateDb.raw.prepare(
+      `SELECT payload FROM threads WHERE payload LIKE '%"archiveRetentionStartedAt"%' OR payload LIKE '%"worktreeSnapshots"%'`,
+    ).all() as Array<{ payload: string }>;
+    // Fail closed: malformed metadata must not hide another thread sharing a recovery ref.
+    return rows.map((row) => JSON.parse(row.payload) as ThreadOverlayState);
+  }
+
+  async observeArchivedThreads(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>, now: number): Promise<void> {
+    const updates = records.flatMap(({ backend, threadId }) => {
+      const key = buildThreadIdentityKey(backend, threadId);
+      const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
+      if (current.archiveRetentionStartedAt !== undefined) return [];
+      return [{ key, state: { ...current, archiveRetentionStartedAt: now } }];
+    });
+    if (!updates.length) return;
+    this.stateDb.raw.transaction(() => {
+      for (const { key, state } of updates) this.putThread(key, state);
+    })();
+  }
+
+  async forgetThreadArchiveStates(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>): Promise<void> {
+    if (!records.length) return;
+    this.stateDb.raw.transaction(() => {
+      const remove = this.stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?");
+      for (const record of records) remove.run(encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+    })();
+    this.navigationOverlayCache = undefined;
+  }
+
   private putThread(threadKey: string, state: ThreadOverlayState): void {
     // Execution-mode queue fields are registry-memory state. PR auto-dispatch
     // pending state is durable too, but its transactional claim table is the
@@ -9381,6 +9412,9 @@ export type OverlayStoreLike = Pick<
 > & {
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
+  listThreadArchiveStates?: SqliteOverlayStore["listThreadArchiveStates"];
+  observeArchivedThreads?: SqliteOverlayStore["observeArchivedThreads"];
+  forgetThreadArchiveStates?: SqliteOverlayStore["forgetThreadArchiveStates"];
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
 };

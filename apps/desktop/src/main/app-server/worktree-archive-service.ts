@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -219,6 +219,28 @@ export class WorktreeArchiveService {
       state: "archived",
       ignoredFilesExcluded: true,
     };
+  }
+
+  async deleteSnapshot(snapshot: WorktreeSnapshotSummary): Promise<void> {
+    if (!/^refs\/(?:codex|pwragent)\/snapshots\//.test(snapshot.snapshotRef)) {
+      // Branch-backed restore fallbacks and provider-owned refs are retained.
+      return;
+    }
+    // A removed repository no longer contains any refs to release. Other
+    // filesystem or Git failures retain metadata for a later cleanup attempt.
+    try { await stat(snapshot.repositoryPath); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const result = await this.runGit(snapshot.repositoryPath, [
+      "for-each-ref", "--format=%(refname) %(objectname)", snapshot.snapshotRef,
+    ]);
+    const retainedCommit = result.stdout.split("\n")
+      .find((line) => line.startsWith(`${snapshot.snapshotRef} `))?.slice(snapshot.snapshotRef.length + 1).trim();
+    if (!retainedCommit || retainedCommit !== snapshot.snapshotCommit) return;
+    // Compare-and-delete protects a newer snapshot written under the same ref.
+    await this.runGit(snapshot.repositoryPath, ["update-ref", "-d", snapshot.snapshotRef, snapshot.snapshotCommit]);
   }
 
   async restore(params: RestoreWorktreeParams): Promise<WorktreeSnapshotSummary> {

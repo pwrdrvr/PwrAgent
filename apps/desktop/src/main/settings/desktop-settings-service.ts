@@ -1,3 +1,4 @@
+import { normalizeThreadArchivePolicy } from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { getAppStateDb } from "../state/app-state";
@@ -1617,8 +1618,15 @@ export class DesktopSettingsService {
           DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
         ),
       },
-      worktrees: this.resolveWorktrees(config.worktrees?.storage),
+      worktrees: {
+        ...this.resolveWorktrees(config.worktrees?.storage),
+        archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
+      },
     };
+  }
+
+  resolveThreadArchivePolicy() {
+    return normalizeThreadArchivePolicy(this.configStore.read("worktrees")?.archive);
   }
 
   readMessagingConfig(): ConfigDomainMap["messaging"] {

@@ -513,6 +513,7 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "serverRequest/resolved",
   "thread/compacted",
   "thread/archived",
+  "thread/deleted",
   "thread/unarchived",
   "skills/changed",
   "thread/name/updated",
@@ -8844,12 +8845,13 @@ export class CodexAppServerClient {
     limit?: number;
     /** Housekeeping needs every descendant before archiving a parent. */
     all?: boolean;
+    archived?: boolean;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     const nativeThreads = await requestThreadListPages({
       textCache: this.threadListTextCache,
-      archived: false,
+      archived: params?.archived === true,
       client: this.connection,
       diagnostics,
       filter: params?.filter,
@@ -10429,6 +10431,15 @@ export class CodexAppServerClient {
     return {
       threadId: params.threadId,
     };
+  }
+
+  async deleteThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+    await requestWithFallbacks({
+      client: this.connection, methods: ["thread/delete"], payloads: [params],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    return { threadId: params.threadId };
   }
 
   async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
