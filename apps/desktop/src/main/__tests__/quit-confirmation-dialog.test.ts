@@ -91,14 +91,45 @@ function sendDialogAction(window: FakeDialogWindow, action: string): void {
   willNavigate({ preventDefault: vi.fn() }, `${prefix}${action}`);
 }
 
+/** The app's own windows, as the dialog's parent lookup sees them. */
+const electronWindows = vi.hoisted(() => ({
+  focused: null as unknown,
+  fromWebContents: vi.fn((_contents: unknown): unknown => null),
+}));
+
+const dialogPlacement = vi.hoisted(() => ({
+  cursorDisplayArea: { x: 0, y: 0, width: 1440, height: 900 },
+  parentDisplayArea: { x: 0, y: 0, width: 1440, height: 900 },
+}));
+
 vi.mock("electron", () => ({
+  app: { focus: vi.fn() },
   // `new BrowserWindow(...)`: an arrow function is not constructible.
-  BrowserWindow: vi.fn(function BrowserWindowMock() {
-    const window = createFakeDialogWindow();
-    dialogWindows.push(window);
-    return window;
-  }),
+  BrowserWindow: Object.assign(
+    vi.fn(function BrowserWindowMock() {
+      const window = createFakeDialogWindow();
+      dialogWindows.push(window);
+      return window;
+    }),
+    {
+      getFocusedWindow: () => electronWindows.focused,
+      fromWebContents: electronWindows.fromWebContents,
+    },
+  ),
   nativeTheme: { shouldUseDarkColors: true },
+  screen: {
+    getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+    getDisplayNearestPoint: () => ({
+      workArea: dialogPlacement.cursorDisplayArea,
+    }),
+    getDisplayMatching: () => ({
+      workArea: dialogPlacement.parentDisplayArea,
+    }),
+  },
+}));
+
+vi.mock("../primary-main-window", () => ({
+  primaryMainWindowWebContents: vi.fn(() => undefined),
 }));
 
 vi.mock("../log", () => ({
@@ -121,8 +152,9 @@ vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
 }));
 
-import type { WebContents } from "electron";
+import { app, BrowserWindow, type WebContents } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
+import { primaryMainWindowWebContents } from "../primary-main-window";
 import { revealIntegratedTerminal } from "../ipc/integrated-terminal";
 import { requestShowThread } from "../window-show-thread";
 import { requestShowQuitBlockers } from "../window-show-quit-blockers";
@@ -564,6 +596,219 @@ describe("clicking a quit dialog row", () => {
       { preferWebContents: undefined },
     );
     expect(requestShowQuitBlockers).not.toHaveBeenCalled();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+});
+
+/**
+ * A window the dialog can attach to. Records the order of the calls that bring
+ * it forward, because the parent has to be up before its sheet is.
+ */
+function createFakeParentWindow(
+  bounds = { x: 2560, y: 120, width: 1600, height: 1000 },
+) {
+  const calls: string[] = [];
+  const parent = {
+    calls,
+    minimized: false,
+    webContents: { id: 1 },
+    getBounds: () =>
+      parent.minimized ? { x: -32000, y: -32000, width: 160, height: 28 } : bounds,
+    getNormalBounds: () => bounds,
+    isDestroyed: () => false,
+    isMinimized: () => parent.minimized,
+    restore: () => {
+      parent.minimized = false;
+      calls.push("restore");
+    },
+    show: () => {
+      calls.push("show");
+    },
+    focus: () => {
+      calls.push("focus");
+    },
+  };
+  return parent;
+}
+
+describe("where the quit dialog opens", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(async () => {
+    for (const window of dialogWindows) {
+      if (!window.destroyed) {
+        window.listeners.get("closed")?.();
+      }
+    }
+    await Promise.resolve();
+    dialogWindows.length = 0;
+    electronWindows.focused = null;
+    electronWindows.fromWebContents.mockReset();
+    electronWindows.fromWebContents.mockReturnValue(null);
+    vi.mocked(primaryMainWindowWebContents).mockReturnValue(undefined);
+    vi.mocked(BrowserWindow).mockClear();
+    vi.mocked(app.focus).mockClear();
+    dialogPlacement.parentDisplayArea = { x: 0, y: 0, width: 1440, height: 900 };
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  });
+
+  function openDialog() {
+    const pending = showQuitConfirmationDialog({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 1,
+    });
+    const window = dialogWindows.at(-1)!;
+    const constructorOptions = vi.mocked(BrowserWindow).mock.calls.at(-1)?.[0];
+    return { pending, window, constructorOptions };
+  }
+
+  function useMainWindow(parent: ReturnType<typeof createFakeParentWindow>) {
+    vi.mocked(primaryMainWindowWebContents).mockReturnValue(
+      parent.webContents as unknown as WebContents,
+    );
+    electronWindows.fromWebContents.mockImplementation((contents: unknown) =>
+      contents === parent.webContents ? parent : null,
+    );
+  }
+
+  // A quit from the Dock, from Ctrl+C in the terminal running the app, or from
+  // any moment another app has focus finds no focused PwrAgent window. The
+  // dialog used to open unparented then, wherever the OS centred a new window,
+  // which on a multi-monitor desk is often a screen nobody is looking at.
+  it("attaches to the main window when no PwrAgent window has focus", async () => {
+    // The main window sits on a second display, right of the primary one.
+    dialogPlacement.parentDisplayArea = { x: 2560, y: 0, width: 2560, height: 1440 };
+    const main = createFakeParentWindow();
+    useMainWindow(main);
+
+    const { pending, window, constructorOptions } = openDialog();
+
+    expect(constructorOptions).toMatchObject({ parent: main, modal: true });
+    // Centred over the main window, on the main window's display. macOS draws
+    // a modal child as a sheet and ignores this; Windows and Linux do not.
+    const width = constructorOptions?.width as number;
+    const height = constructorOptions?.height as number;
+    expect(constructorOptions?.x).toBe(2560 + Math.round((1600 - width) / 2));
+    expect(constructorOptions?.y).toBe(120 + Math.round((1000 - height) / 2));
+
+    window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  it("prefers the window the user is looking at over the main window", async () => {
+    const main = createFakeParentWindow();
+    const settings = createFakeParentWindow({ x: 0, y: 0, width: 900, height: 700 });
+    useMainWindow(main);
+    electronWindows.focused = settings;
+
+    const { pending, window, constructorOptions } = openDialog();
+
+    expect(constructorOptions).toMatchObject({ parent: settings, modal: true });
+
+    window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  // The window the dialog belongs to may be minimized, hidden, or behind
+  // another app. A sheet on a window nobody can see is as lost as a dialog on
+  // the wrong monitor, so bring the parent up and the app forward first.
+  it("raises the parent and activates the app before showing the dialog", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const main = createFakeParentWindow();
+    main.minimized = true;
+    useMainWindow(main);
+
+    const { pending, window } = openDialog();
+    window.listeners.get("ready-to-show")?.();
+
+    expect(app.focus).toHaveBeenCalledWith({ steal: true });
+    expect(main.calls).toEqual(["restore", "show"]);
+    expect(window.shown).toBe(1);
+    expect(window.focused).toBe(1);
+
+    // A repeat quit request raises the open prompt the same way.
+    main.minimized = true;
+    expect(focusActiveQuitConfirmationDialog()).toBe(true);
+    expect(main.calls).toEqual(["restore", "show", "restore", "show"]);
+    expect(window.shown).toBe(2);
+
+    window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  // On Windows and Linux app.focus() focuses the first window, which would
+  // pull an unrelated window over the one the dialog is attached to.
+  it("does not ask for app focus off macOS", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const main = createFakeParentWindow();
+    useMainWindow(main);
+
+    const { pending, window } = openDialog();
+    window.listeners.get("ready-to-show")?.();
+
+    expect(app.focus).not.toHaveBeenCalled();
+    expect(main.calls).toEqual(["show"]);
+
+    window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  // With no window at all to attach to, open where the pointer is: that is the
+  // screen the user is on.
+  it("opens on the pointer's display when there is no window to attach to", async () => {
+    dialogPlacement.cursorDisplayArea = { x: -1920, y: 0, width: 1920, height: 1080 };
+    try {
+      const { pending, window, constructorOptions } = openDialog();
+
+      expect(constructorOptions?.parent).toBeUndefined();
+      expect(constructorOptions?.modal).toBe(false);
+      const width = constructorOptions?.width as number;
+      const height = constructorOptions?.height as number;
+      expect(constructorOptions?.x).toBe(-1920 + Math.round((1920 - width) / 2));
+      expect(constructorOptions?.y).toBe(Math.round((1080 - height) / 2));
+
+      window.listeners.get("closed")?.();
+      await expect(pending).resolves.toBe("manual-cancel");
+    } finally {
+      dialogPlacement.cursorDisplayArea = { x: 0, y: 0, width: 1440, height: 900 };
+    }
+  });
+
+  // A parent straddling the edge of its display must not push the dialog off
+  // that display.
+  // Windows parks a minimized window at (-32000, -32000). Placing the dialog
+  // by those bounds put it in a corner of the nearest display, while the
+  // parent was then restored on its own.
+  it("centres over a minimized parent where it will be restored", async () => {
+    dialogPlacement.parentDisplayArea = { x: 2560, y: 0, width: 2560, height: 1440 };
+    const main = createFakeParentWindow();
+    main.minimized = true;
+    useMainWindow(main);
+
+    const { pending, window, constructorOptions } = openDialog();
+
+    const width = constructorOptions?.width as number;
+    const height = constructorOptions?.height as number;
+    expect(constructorOptions?.x).toBe(2560 + Math.round((1600 - width) / 2));
+    expect(constructorOptions?.y).toBe(120 + Math.round((1000 - height) / 2));
+
+    window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  it("keeps the dialog on the parent's display", async () => {
+    const main = createFakeParentWindow({ x: 1300, y: 800, width: 400, height: 300 });
+    useMainWindow(main);
+
+    const { pending, window, constructorOptions } = openDialog();
+
+    const width = constructorOptions?.width as number;
+    const height = constructorOptions?.height as number;
+    expect(constructorOptions?.x).toBe(1440 - width);
+    expect(constructorOptions?.y).toBe(900 - height);
+
+    window.listeners.get("closed")?.();
     await expect(pending).resolves.toBe("manual-cancel");
   });
 });

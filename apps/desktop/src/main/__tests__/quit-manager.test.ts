@@ -14,9 +14,6 @@ vi.mock("electron", () => ({
   app: {
     quit: vi.fn(),
   },
-  BrowserWindow: {
-    getFocusedWindow: vi.fn(() => null),
-  },
 }));
 
 vi.mock("../app-server/backend-registry", () => ({

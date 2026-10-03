@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app } from "electron";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
@@ -72,7 +72,6 @@ export type QuitManagerDependencies = {
     terminalSessionCount: number;
     actionRunCount?: number;
     items?: QuitBlockerItem[];
-    parent?: BrowserWindow | null;
     refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
   }) => Promise<QuitConfirmationDialogResult>;
   /**
@@ -85,7 +84,6 @@ export type QuitManagerDependencies = {
   cancelShutdown?: () => void;
   commitShutdown?: () => void;
   getConfirmationEnabled: () => boolean;
-  getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
   /** Hold new automation launches until quitting proceeds or the prompt closes. */
   quiesceAutomationDispatch?: () => () => Promise<void> | void;
@@ -231,7 +229,6 @@ export function createQuitManager(
           terminalSessionCount: snapshot.terminalSessionCount,
           actionRunCount: snapshot.actionRunCount,
           items,
-          parent: dependencies.getFocusedWindow?.(),
           refresh: async () =>
             await buildQuitConfirmationSnapshot(
               dependencies.getQuitBlockers(),
@@ -671,7 +668,6 @@ export const appQuitManager = createQuitManager({
   focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
-  getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
   getQuitBlockers: getCurrentQuitBlockers,
   quiesceAutomationDispatch: () =>
     getDesktopAutomationService().quiesceDispatch(),
