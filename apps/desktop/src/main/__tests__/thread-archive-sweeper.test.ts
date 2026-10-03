@@ -6,6 +6,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  archiveCandidateProtectionReason,
+  isProtectedArchiveCandidate,
   isStaleArchiveCandidate,
   ThreadArchiveSweeper,
   THREAD_AUTO_ARCHIVE_AGE_MS,
@@ -139,6 +141,34 @@ describe("ThreadArchiveSweeper", () => {
     await sweeper.sweep();
     expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["old"]);
     await sweeper.stop();
+  });
+
+  it("never archives or deletes threads in Codex chat folders", async () => {
+    const linked = candidate("codex-chat");
+    linked.thread.linkedDirectories = [
+      { id: "chat", kind: "local", label: "chat", path: "/Users/tester/Documents/Codex/2026-05-08/chat" },
+    ];
+    const extra = candidate("codex-chat-extra");
+    extra.overlay = { backend: "codex", threadId: "codex-chat-extra", extraLinkedDirectories: [
+      { id: "chat", kind: "local", label: "chat", path: "C:\\Users\\tester\\Documents\\Codex\\2026-05-08\\chat" },
+    ] };
+    const lookalike = candidate("lookalike");
+    lookalike.thread.linkedDirectories = [
+      { id: "repo", kind: "local", label: "repo", path: "/Users/tester/Documents/Codex-tools/repo" },
+    ];
+    expect(archiveCandidateProtectionReason(linked)).toBe("Codex chat folder");
+    expect(isProtectedArchiveCandidate(extra)).toBe(true);
+    expect(isProtectedArchiveCandidate(lookalike)).toBe(false);
+    for (const mode of ["age", "count"] as const) {
+      const items = [linked, extra, lookalike].map((item) => ({ ...item, thread: { ...item.thread, projectKey: "project" } }));
+      const { deps, sweeper } = harness(items);
+      const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode, keepPerProject: 0 };
+      const swept = new ThreadArchiveSweeper({ ...deps, getPolicy: () => policy });
+      await swept.sweep();
+      expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["lookalike"]);
+      await swept.stop();
+      await sweeper.stop();
+    }
   });
 
   it("uses the 30-day boundary and protects recent views and restores", () => {

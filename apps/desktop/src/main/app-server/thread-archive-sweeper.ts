@@ -5,6 +5,7 @@ import {
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
   buildThreadIdentityKey,
+  isCodexChatsDirectory,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 
@@ -86,6 +87,8 @@ export function archiveCandidateProtectionReason({ thread, overlay }: ThreadArch
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
   if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
+  // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
+  if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
   if (overlay?.subAgents?.some((agent) => ["running", "pending", "cancelling", "blocked"].includes(agent.status))) return "Active subagent";
   if (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded") {
     return thread.threadStatus === undefined ? "Provider status unavailable" : "Active or blocked chat";
