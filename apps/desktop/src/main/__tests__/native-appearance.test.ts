@@ -9,6 +9,7 @@ const electronMocks = vi.hoisted(() => ({
 const appearanceMocks = vi.hoisted(() => ({
   appearance: {
     density: "mission-control" as const,
+    palette: "tangerine" as "tangerine" | "catppuccin",
     sidebarTextSize: "md" as const,
     theme: "system" as "system" | "dark" | "light",
     transcriptTextSize: "md" as const,
@@ -48,6 +49,7 @@ beforeEach(() => {
   electronMocks.nativeThemeOn.mockReset();
   electronMocks.systemUsesDarkColors = false;
   appearanceMocks.appearance.theme = "system";
+  appearanceMocks.appearance.palette = "tangerine";
   vi.resetModules();
 });
 
@@ -96,6 +98,29 @@ describe("native appearance", () => {
     appearanceMocks.appearance.theme = "dark";
     expect(themedTitleBarOverlay(appearanceMocks.appearance).color).toBe(
       "#050505",
+    );
+  });
+
+  it("paints Catppuccin base and mantle in both schemes", async () => {
+    const {
+      themedTitleBarOverlay,
+      themedWindowBackgroundColor,
+    } = await import("../native-appearance");
+
+    appearanceMocks.appearance.palette = "catppuccin";
+    expect(themedWindowBackgroundColor(appearanceMocks.appearance)).toBe(
+      "#eff1f5",
+    );
+    expect(themedTitleBarOverlay(appearanceMocks.appearance).color).toBe(
+      "#e6e9ef",
+    );
+
+    electronMocks.systemUsesDarkColors = true;
+    expect(themedWindowBackgroundColor(appearanceMocks.appearance)).toBe(
+      "#1e1e2e",
+    );
+    expect(themedTitleBarOverlay(appearanceMocks.appearance).color).toBe(
+      "#181825",
     );
   });
 

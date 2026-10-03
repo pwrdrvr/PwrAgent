@@ -10,6 +10,7 @@ import {
 import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopTextSize,
   DesktopSpendAlertPolicy,
@@ -65,6 +66,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
@@ -319,6 +321,7 @@ type DesktopSettingsServiceOptions = {
    */
   onAppearanceChange?: (appearance: {
     theme: DesktopAppearanceTheme;
+    palette: DesktopAppearancePalette;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -1024,6 +1027,9 @@ export class DesktopSettingsService {
         appearance: {
           theme: this.resolveAppearanceTheme(
             config.general?.appearance?.theme,
+          ),
+          palette: this.resolveAppearancePalette(
+            config.general?.appearance?.palette,
           ),
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
@@ -2163,6 +2169,7 @@ export class DesktopSettingsService {
     if (
       appearancePatch
       && (appearancePatch.theme !== undefined
+        || appearancePatch.palette !== undefined
         || appearancePatch.density !== undefined
         || appearancePatch.sidebarTextSize !== undefined
         || appearancePatch.transcriptTextSize !== undefined)
@@ -2170,6 +2177,7 @@ export class DesktopSettingsService {
       const next = update.values.general?.appearance;
       this.options.onAppearanceChange?.({
         theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+        palette: next?.palette ?? DESKTOP_APPEARANCE_PALETTE_DEFAULT,
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
         sidebarTextSize:
           next?.sidebarTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
@@ -3493,6 +3501,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopAppearanceTheme> {
     return {
       value: configValue ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveAppearancePalette(
+    configValue: DesktopAppearancePalette | undefined,
+  ): DesktopSettingsValue<DesktopAppearancePalette> {
+    return {
+      value: configValue ?? DESKTOP_APPEARANCE_PALETTE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

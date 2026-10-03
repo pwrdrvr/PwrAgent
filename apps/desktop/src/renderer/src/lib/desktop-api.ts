@@ -448,6 +448,7 @@ import type {
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
   DesktopAppearanceDensity,
+  DesktopAppearancePalette,
   DesktopAppearanceTheme,
   DesktopTextSize,
   DesktopMessagingContactLookupRequest,
@@ -1513,6 +1514,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onAppearanceChanged?: (
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
+      palette: DesktopAppearancePalette;
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;

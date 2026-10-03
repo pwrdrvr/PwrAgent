@@ -307,6 +307,17 @@ export const DESKTOP_UI_LAYOUT_DEFAULTS: {
 
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
 
+/**
+ * Color palette, a separate axis from theme. Theme picks the scheme (dark,
+ * light, or follow the OS); palette picks whose colors fill it. Tangerine is
+ * PwrAgent's own palette. Catppuccin renders Mocha in the dark scheme and
+ * Latte in the light one, so "system" + "catppuccin" follows the OS between
+ * the two flavors.
+ */
+export const DESKTOP_APPEARANCE_PALETTES = ["tangerine", "catppuccin"] as const;
+export type DesktopAppearancePalette = (typeof DESKTOP_APPEARANCE_PALETTES)[number];
+export const DESKTOP_APPEARANCE_PALETTE_DEFAULT: DesktopAppearancePalette = "tangerine";
+
 export const DESKTOP_APPEARANCE_DENSITIES = [
   "mission-control",
   "compact",
@@ -685,6 +696,7 @@ export type DesktopIntegratedTerminalSettingsSnapshot = {
 
 export type DesktopAppearanceSnapshot = {
   theme: DesktopSettingsValue<DesktopAppearanceTheme>;
+  palette: DesktopSettingsValue<DesktopAppearancePalette>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1441,6 +1453,7 @@ export type DesktopSettingsConfigPatch = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
+      palette?: DesktopAppearancePalette;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1716,6 +1729,7 @@ export type DesktopConfigBootstrapSnapshot = {
   configError?: string;
   appearance: {
     theme: DesktopAppearanceTheme;
+    palette: DesktopAppearancePalette;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -2268,6 +2282,14 @@ export function isDesktopAppearanceTheme(
   value: string,
 ): value is DesktopAppearanceTheme {
   return DESKTOP_APPEARANCE_THEMES.includes(value as DesktopAppearanceTheme);
+}
+
+export function isDesktopAppearancePalette(
+  value: string,
+): value is DesktopAppearancePalette {
+  return DESKTOP_APPEARANCE_PALETTES.includes(
+    value as DesktopAppearancePalette,
+  );
 }
 
 export function isDesktopAppearanceDensity(

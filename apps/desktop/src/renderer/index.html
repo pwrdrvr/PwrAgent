@@ -64,6 +64,12 @@
           if (resolvedTheme === "light") {
             document.documentElement.setAttribute("data-theme", "light");
           }
+          // Palette recolors the tokens on top of the scheme. Tangerine is
+          // the default the bare :root carries; the preload has already
+          // validated the bridged value against the shared enum.
+          if (bridged.palette && bridged.palette !== "tangerine") {
+            document.documentElement.setAttribute("data-palette", bridged.palette);
+          }
           // Mission-control is also the default; only set the attribute
           // when compact is selected.
           if (density === "compact") {

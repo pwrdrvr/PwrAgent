@@ -80,7 +80,9 @@ Status colors should not compete with tangerine as the main action and focus sig
 ### Theme Variants
 
 The renderer ships two themes (dark + light) plus a system mode that
-follows `prefers-color-scheme`. Theme selection lives in per-profile
+follows `prefers-color-scheme`. Each theme renders in the selected
+palette (see [Palettes](#palettes)). The token tables below are the
+Tangerine palette. Theme selection lives in per-profile
 `config.toml` under `[general.appearance]` and is applied via a
 `data-theme` attribute on `<html>`. The dark palette is the unscoped
 `:root` block; the light palette is opt-in under
@@ -298,6 +300,55 @@ alphas. Illustration assets that intentionally don't theme-flip
 (currently only the lunar-phase context-window indicator) are
 substring-allowlisted in
 [`scripts/lint-renderer-colors.mjs`](../scripts/lint-renderer-colors.mjs).
+
+### Palettes
+
+Palette is a separate axis from theme. Theme picks the scheme (dark, light,
+or follow the OS). Palette picks the colors that fill it.
+`[general.appearance] palette` in `config.toml` holds the choice. The
+default is `tangerine`, which is not written to the file. Settings →
+General → Appearance → Palette sets it.
+
+| Palette | Dark scheme | Light scheme | Selector |
+|---|---|---|---|
+| Tangerine (default) | Tangerine Terminal | Tangerine light | bare `:root` / `:root[data-theme="light"]` |
+| Catppuccin | Mocha | Latte | `:root[data-palette="catppuccin"]` / `:root[data-theme="light"][data-palette="catppuccin"]` |
+
+`data-theme` stays the scheme whatever the palette. Rules and scripts that
+key on `data-theme="light"`, such as brand marks and Mermaid, need no
+palette knowledge. The dark palette block also matches a light-scheme
+window, so the light block must override every token the dark block sets.
+The theme contract test enforces this. A palette never sets the
+theme-neutral tokens listed above. Those follow the scheme block.
+
+#### Catppuccin: lowest compliant contrast
+
+Catppuccin is tuned to sit as close to the contrast floor as this document
+allows:
+
+- Every token read as text measures at least 4.55:1. That is AA plus 0.05
+  of margin for rendering. Each is measured against the lowest-contrast
+  background it can land on: the flat surfaces, the 12% and 16% accent
+  tints over panel, sidebar, and hover, and, for semantic text, its own
+  soft tint.
+- The text ladder is primary 7.5, secondary 5.75, and muted 4.55
+  (worst case).
+- `--accent` is floored against the accent tints too. That keeps the
+  `--accent` on `--accent-soft` debt above out of this palette.
+  `--text-subtle` clears AA here as well.
+- Mocha colors dim toward its base, so the pastels keep their hue. Latte
+  colors move in lightness only. Hue and saturation are held, as for the
+  Tangerine light accent.
+- Non-text marks sit at 3.05:1 on the flat surfaces. These are
+  `--danger-base`, `--status-suspended`, and the usage chart series.
+- Mocha's terminal ANSI colors are Catppuccin's own. In Latte, each ANSI
+  color that misses 4.5:1 on the canvas is darkened to it.
+
+The theme contract test measures all of this and fails if `--text-muted`
+or `--accent` drifts to 4.7:1 or above. Retune by moving a value back to
+the floor, not by eye. The native window colors in `native-appearance.ts`
+and the quit dialog palette in `quit-confirmation-dialog.ts` carry
+literal copies. Keep them in lockstep.
 
 ### Status indicator dots
 
