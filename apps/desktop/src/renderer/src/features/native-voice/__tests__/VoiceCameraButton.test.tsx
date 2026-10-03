@@ -12,6 +12,7 @@ vi.mock("../NativeVoice", () => ({ useNativeVoice: () => mocks }));
 import { VoiceCameraButton } from "../VoiceCameraButton";
 
 beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 10, y: 10, left: 10, right: 42, top: 10, bottom: 42, width: 32, height: 32, toJSON: () => ({}) });
 });
 afterEach(() => {
@@ -44,5 +45,18 @@ describe("camera voice control", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Clef unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(mocks.controller.dismissCameraError).toHaveBeenCalledOnce();
+  });
+  it("keeps the local preview and opt-out available while the first decision warms", () => {
+    mocks.view.camera = "on";
+    mocks.view.cameraWarming = true;
+    const result = render(<VoiceCameraButton api={{} as NativeVoiceApi} />);
+    expect(document.querySelector("video")).not.toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("warming up");
+    expect(screen.getByText("Model loading can take a few minutes.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Turn off camera cues" }));
+    expect(mocks.controller.setCamera).toHaveBeenCalledWith(false);
+    mocks.view.cameraWarming = false;
+    result.rerender(<VoiceCameraButton api={{} as NativeVoiceApi} />);
+    expect(screen.getByRole("status")).toHaveTextContent("observing");
   });
 });

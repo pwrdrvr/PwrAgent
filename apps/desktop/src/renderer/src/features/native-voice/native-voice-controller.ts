@@ -1,4 +1,4 @@
-import { CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
+import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
 
 export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "stopping" | "stop-error" | "error";
@@ -14,6 +14,7 @@ export type VoiceView = {
   /** The operator muted their microphone; the session stays open. */
   muted: boolean;
   camera?: "starting" | "on";
+  cameraWarming?: boolean;
   cameraCue?: string;
   cameraError?: string;
   endedAfterAway?: boolean;
@@ -213,7 +214,7 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraCue: undefined, cameraError: undefined, transcript: [], actions: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, transcript: [], actions: [],
     });
     this.watchTurns(resources, threadId);
     try {
@@ -403,7 +404,7 @@ export class NativeVoiceController {
     clearTimeout(camera.timer);
     camera.capture?.close();
     resources.camera = undefined;
-    this.publish({ camera: undefined, cameraCue: undefined });
+    this.publish({ camera: undefined, cameraCue: undefined, cameraWarming: undefined });
     void this.api.setNativeVoiceCamera?.({ sessionId: resources.id, enabled: false }).catch(() => undefined);
   }
 
@@ -432,7 +433,7 @@ export class NativeVoiceController {
       const capture = await this.platform.camera();
       if (!current()) { capture.close(); return; }
       camera.capture = capture;
-      this.publish({ camera: "on" });
+      this.publish({ camera: "on", cameraWarming: true });
       const sample = async () => {
         if (!current()) return;
         const started = Date.now();
@@ -441,7 +442,16 @@ export class NativeVoiceController {
           if (image) {
             const observation = await this.api.analyzeNativeVoiceCamera!({ sessionId: resources.id, image });
             if (!current()) return;
-            const decision = filter.observe(observation, Date.now());
+            if (this.view.cameraWarming) this.publish({ cameraWarming: false });
+            // A cold-model response describes the old captured frame. Waiting
+            // never establishes absence or permits a stale expression cue.
+            const now = Date.now();
+            if (now - started > CAMERA_SAMPLE_GAP_MS) {
+              filter.resetContinuity();
+              if (current()) camera.timer = setTimeout(() => { void sample(); }, 500);
+              return;
+            }
+            const decision = filter.observe(observation, now);
             if (decision.end) {
               this.publish({ endedAfterAway: true });
               void this.stop();

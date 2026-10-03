@@ -342,6 +342,15 @@ requests require the owning, established voice session and a separate camera
 opt-in. Frames and decisions remain in memory; this integration adds no
 PwrAgent SQLite writes or image files.
 
+The local preview shows "warming up" until the first valid decision. That
+request has a five-minute deadline and waits for one response at a time,
+retrying connection failures and temporary HTTP 429/5xx responses after a
+one-second pause. Opt-out, voice stop and backend closure abort both the
+request and retry pause immediately. After the first decision, ordinary
+inference retains its eight-second deadline and failures stop camera cues
+while voice continues. Responses to frames older than ten seconds are
+discarded and reset continuity; model-loading time cannot count as absence.
+
 The filter requires presence confidence of at least 80% and reaction
 confidence of at least 70%, three consecutive samples spanning 1.5 seconds,
 and an eight-second cooldown between reaction changes. Repeated cues are

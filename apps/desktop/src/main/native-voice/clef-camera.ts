@@ -29,17 +29,48 @@ export function parseClefObservation(value: unknown): VoiceCameraObservation {
   };
 }
 
-export async function classifyVoiceCamera(image: string, signal: AbortSignal): Promise<VoiceCameraObservation> {
-  const response = await fetch("http://127.0.0.1:8787/decide", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image, questions: VOICE_CAMERA_QUESTIONS,
-      state: "A laptop webcam frame during a voice conversation. Classify visible presence and expression only; use neutral when ambiguous.",
-    }),
-    signal,
-    redirect: "error",
+export async function classifyVoiceCamera(image: string, signal: AbortSignal, warming = false): Promise<VoiceCameraObservation> {
+  // clef-webcam warms the model before opening its API. Keep one request
+  // outstanding and tolerate temporary unavailability within the caller's
+  // deadline, while opt-out/teardown cancels both fetch and backoff.
+  while (true) {
+    signal.throwIfAborted();
+    let response: Response | undefined;
+    try {
+      response = await fetch("http://127.0.0.1:8787/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image, questions: VOICE_CAMERA_QUESTIONS,
+          state: "A laptop webcam frame during a voice conversation. Classify visible presence and expression only; use neutral when ambiguous.",
+        }),
+        signal,
+        redirect: "error",
+      });
+    } catch (error) {
+      if (signal.aborted || !warming) throw error;
+    }
+    if (response?.ok) return parseClefObservation(await response.json());
+    if (response && (!warming || (response.status !== 429 && response.status < 500))) {
+      throw new Error(`Clef returned HTTP ${response.status}.`);
+    }
+    // Release the failed response before the next attempt.
+    await response?.body?.cancel();
+    await waitForClefRetry(signal);
+  }
+}
+
+function waitForClefRetry(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const aborted = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", aborted);
+      resolve();
+    }, 1000);
+    signal.addEventListener("abort", aborted, { once: true });
   });
-  if (!response.ok) throw new Error(`Clef returned HTTP ${response.status}.`);
-  return parseClefObservation(await response.json());
 }

@@ -212,6 +212,28 @@ describe("voice camera ownership", () => {
     expect(f.api.analyzeNativeVoiceCamera).not.toHaveBeenCalled();
   });
 
+  it("keeps preview and a single request during cold warmup without counting its stale frame toward absence", async () => {
+    const f = await liveCamera();
+    const pending = deferred<Awaited<ReturnType<NonNullable<NativeVoiceApi["analyzeNativeVoiceCamera"]>>>>();
+    const away = { present: false, presenceConfidence: 0.99, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 };
+    f.api.analyzeNativeVoiceCamera = vi.fn().mockImplementationOnce(() => pending.promise).mockResolvedValue(away);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.controller.getView()).toMatchObject({ status: "listening", camera: "on", cameraWarming: true });
+    expect(f.controller.cameraStream()).toBe(f.capture.stream);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledOnce();
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    expect(f.capture.close).not.toHaveBeenCalled();
+    pending.resolve(away);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.controller.getView().cameraWarming).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+    expect(f.capture.close).toHaveBeenCalledOnce();
+  });
+
   it("ignores a late decision after opt-out and keeps voice running if Clef fails", async () => {
     const f = await liveCamera();
     const pending = deferred<Awaited<ReturnType<NonNullable<NativeVoiceApi["analyzeNativeVoiceCamera"]>>>>();

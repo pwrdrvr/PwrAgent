@@ -18,8 +18,13 @@ import { isOperatorFocusSnapshot, publishOperatorFocus } from "../native-voice/o
 import { isLocalMainWindowWebContents } from "../window-channels";
 
 const sessions = new NativeVoiceSessionManager((threadId) => getDesktopBackendRegistry().acquireNativeVoiceBackend(threadId));
+// Cold model loading can take a minute or more. Opt-out still aborts immediately.
+const CAMERA_WARMUP_TIMEOUT_MS = 5 * 60_000;
+const CAMERA_ANALYSIS_TIMEOUT_MS = 8000;
 const cameraRequests = new Map<number, { sessionId: string; abort: AbortController }>();
+const cameraReadySessions = new Map<number, string>();
 function abortCamera(owner: number, sessionId?: string): void {
+  if (sessionId === undefined || cameraReadySessions.get(owner) === sessionId) cameraReadySessions.delete(owner);
   const request = cameraRequests.get(owner);
   if (!request || (sessionId !== undefined && request.sessionId !== sessionId)) return;
   request.abort.abort();
@@ -121,9 +126,24 @@ export function registerNativeVoiceIpcHandlers(): void {
     const abort = new AbortController();
     const pending = { sessionId: request.sessionId, abort };
     cameraRequests.set(event.sender.id, pending);
-    const timeout = setTimeout(() => abort.abort(), 8000);
-    try { return await classifyVoiceCamera(request.image, abort.signal); }
-    catch (error) { throw new Error("Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.", { cause: error }); }
+    const warming = cameraReadySessions.get(event.sender.id) !== request.sessionId;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; abort.abort(); }, warming ? CAMERA_WARMUP_TIMEOUT_MS : CAMERA_ANALYSIS_TIMEOUT_MS);
+    try {
+      const observation = await classifyVoiceCamera(request.image, abort.signal, warming);
+      if (!abort.signal.aborted && sessions.allowsCameraSession(event.sender.id, request.sessionId)) {
+        cameraReadySessions.set(event.sender.id, request.sessionId);
+      }
+      return observation;
+    }
+    catch (error) {
+      const message = timedOut
+        ? warming
+          ? "Clef did not respond within five minutes. Camera cues stopped; voice is still available."
+          : "Clef analysis timed out after eight seconds. Camera cues stopped; voice is still available."
+        : "Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.";
+      throw new Error(message, { cause: error });
+    }
     finally {
       clearTimeout(timeout);
       if (cameraRequests.get(event.sender.id) === pending) cameraRequests.delete(event.sender.id);
