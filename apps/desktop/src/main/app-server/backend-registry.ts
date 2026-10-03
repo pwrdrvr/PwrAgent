@@ -15686,7 +15686,19 @@ export class DesktopBackendRegistry {
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
-    return { ...await this.overlayStore.readUsageActivity(request), readAt: Date.now(),
+    const activity = await this.overlayStore.readUsageActivity(request);
+    return { ...activity,
+      // Navigation indexing can lag a live thread or rename. The information
+      // store retains titles independently of query caches; consult it on the
+      // owner before relaying rows over local IPC or federation. Durable titles
+      // still name historical threads this process has never observed.
+      rows: activity.rows.map((row) => ({
+        ...row,
+        title: this.getThreadInfo({
+          backend: row.line.backend as AppServerBackendKind, threadId: row.line.threadId,
+        })?.title ?? row.title,
+      })),
+      readAt: Date.now(),
       rateLimits: this.codexBackendSummary?.rateLimits ?? [],
       limitObservation: this.codexLimitObservation(),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
