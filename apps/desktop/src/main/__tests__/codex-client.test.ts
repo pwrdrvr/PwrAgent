@@ -14248,6 +14248,60 @@ describe("CodexAppServerClient", () => {
       } finally { await client.close(); }
     });
 
+    it.each([
+      ["catalog", "input"], ["catalog", "turn"],
+      ["environment", "input"], ["environment", "turn"],
+    ] as const)("invalidates fresh voice proof before a first-turn %s refresh when %s fails", async (refresh, failure) => {
+      MockTransport.serverCapabilitiesResult = {
+        codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
+      };
+      const runtime = {
+        environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local" as const,
+        cwd: settings.cwd, shellEnvironment: { SAMPLE_TOOLCHAIN: "original" },
+      };
+      const changedTools: DynamicToolSpec[] = [{ ...dynamicTools[0], name: "fixture_changed" }];
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools, codexEnvironmentRuntime: runtime });
+        const transport = MockTransport.instances.at(-1)!;
+        const send = transport.send.bind(transport);
+        if (failure === "turn") {
+          vi.spyOn(transport, "send").mockImplementation((message) => {
+            const request = JSON.parse(message);
+            if (request.method === "turn/start") {
+              transport.sentMessages.push(message);
+              transport.emitInbound({ id: request.id, error: { code: -32000, message: "Sample turn rejected." } });
+            } else {
+              send(message);
+            }
+          });
+        }
+        await expect(client.startTurn({
+          ...settings, threadId, input: [{ type: "text", text: "Contrived first turn" }],
+          codexEnvironmentRuntime: refresh === "environment"
+            ? { ...runtime, shellEnvironment: { SAMPLE_TOOLCHAIN: "changed" } }
+            : runtime,
+          ...(refresh === "catalog" ? { dynamicTools: changedTools } : {}),
+          ...(failure === "input" ? { onInputTextPrepared: () => { throw new Error("Sample input preparation failed."); } } : {}),
+        })).rejects.toThrow(failure === "input" ? "Sample input preparation failed" : "Sample turn rejected");
+
+        const requests = transport.sentMessages.map((message) => JSON.parse(message));
+        expect(requests.filter((request) => request.method === "thread/resume")).toHaveLength(1);
+        expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject(refresh === "catalog"
+          ? { dynamicTools: changedTools }
+          : { config: { "shell_environment_policy.set.SAMPLE_TOOLCHAIN": "changed" } });
+        expect(requests.some((request) => request.method === "turn/start")).toBe(failure === "turn");
+        // Reverting the selection cannot resurrect the pre-resume catalog or
+        // environment proof, even though no coding turn was acknowledged.
+        expect(await client.prepareFreshNativeVoiceThread({
+          ...settings, threadId, dynamicTools, codexEnvironmentRuntime: runtime,
+        })).toBe(false);
+        expect(transport.sentMessages.map((message) => JSON.parse(message))
+          .some((request) => request.method === "thread/settings/update")).toBe(false);
+      } finally { await client.close(); }
+    });
+
     it("invalidates first-turn ownership on app-server reset even for the same ID", async () => {
       const { CodexAppServerClient } = await import("../codex-app-server/client");
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });

@@ -9910,6 +9910,9 @@ export class CodexAppServerClient {
     }
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
+      // Resume can replace the catalog or environment even if input
+      // preparation or turn/start later fails. Drop proof before sending it.
+      this.freshNativeVoiceThreads.delete(params.threadId);
       const resume = requestWithFallbacks({
         client: connection,
         methods: ["thread/resume"],
