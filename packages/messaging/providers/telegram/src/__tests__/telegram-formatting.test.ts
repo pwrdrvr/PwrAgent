@@ -59,6 +59,35 @@ describe("telegram formatting", () => {
     );
   });
 
+  it("omits chunks with only whitespace or empty formatting", () => {
+    const chunks = splitTelegramHtml(`${"x".repeat(4090)}\n${" ".repeat(30)}`);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toContain("x".repeat(4090));
+    expect(splitTelegramHtml(`<b>${" ".repeat(5000)}</b>`)).toEqual([]);
+    expect(splitTelegramHtml("<pre><code>\n\t </code></pre>")).toEqual([]);
+    expect(splitTelegramHtml("<i>&#32;&#x20;</i>")).toEqual([]);
+    expect(splitTelegramHtml(" \n\t")).toEqual([]);
+    expect(splitTelegramHtml("<code>&lt; &amp;</code>")).toEqual(["<code>&lt; &amp;</code>"]);
+  });
+
+  it("preserves fenced code indentation inside nested list items", () => {
+    const text = [
+      "- Example",
+      "  - YAML config",
+      "",
+      "    ```yaml",
+      "    first: 1",
+      "    second:",
+      "      child: 2",
+      "    ```",
+      "",
+      "    Continue after the code.",
+    ].join("\n");
+    const html = renderTelegramHtml(text, "markdown");
+    expect(html).toContain("<pre><code class=\"language-yaml\">first: 1\nsecond:\n  child: 2</code></pre>");
+    expect(html).toContain("\n    Continue after the code.");
+  });
+
   it.each(["markdown", "light"] as const)("renders CommonMark inline formatting with the %s policy", (policy) => {
     expect(renderTelegramHtml(
       "**43 more downloads**, *italic*, __bold _nested___, ~~removed~~ and [release](https://example.com/?a=1&b=2)",

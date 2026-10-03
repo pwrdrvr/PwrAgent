@@ -225,6 +225,11 @@ export type TelegramEditMessageTextRequest = TelegramSendMessageRequest & {
   message_id: number;
 };
 
+export type TelegramDeleteMessageRequest = {
+  chat_id: number | string;
+  message_id: number;
+};
+
 export type TelegramSendRichMessageRequest = {
   chat_id: number | string;
   disable_notification?: boolean;
@@ -313,6 +318,7 @@ export type TelegramBotApi = {
   createForumTopic(request: TelegramCreateForumTopicRequest): Promise<TelegramForumTopic>;
   deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
   deleteForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
+  deleteMessage?(request: TelegramDeleteMessageRequest): Promise<boolean>;
   editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
   getChatMember(
     chatId: number | string,
@@ -368,6 +374,7 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       messageThreadId: number,
     ): Promise<boolean>;
+    deleteMessage?(chatId: number | string, messageId: number): Promise<boolean>;
     editForumTopic(
       chatId: number | string,
       messageThreadId: number,
@@ -1158,7 +1165,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const chunks = splitTelegramHtml(
       renderTelegramHtml(intent.text, intent.markdown ?? "plain") || " ",
     );
-    if (chunks.length === 0) {
+    // Seed anchor 0 from a caller-supplied surface (restart-safety).
+    const anchors =
+      this.streamSurfaces.get(intent.stream.key) ??
+      (target.messageId ? [{ ...target, text: "" }] : []);
+    if (chunks.length === 0 && anchors.length === 0) {
       return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
     }
 
@@ -1179,10 +1190,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       }
     }
 
-    // Seed anchor 0 from a caller-supplied surface (restart-safety).
-    const anchors =
-      this.streamSurfaces.get(intent.stream.key) ??
-      (target.messageId ? [{ ...target, text: "" }] : []);
+    // Own every persisted chunk before mutating it. A failed send or cleanup
+    // must leave the remaining anchors available to the next stream update.
+    this.streamSurfaces.set(intent.stream.key, anchors);
+    evictStaleStreamAnchors(this.streamSurfaces);
     let firstOutcome: "presented" | "updated" | undefined;
     try {
       for (let index = 0; index < chunks.length; index += 1) {
@@ -1241,7 +1252,48 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           });
         }
       }
-      const head = anchors[0]!;
+      // Completing Markdown can shorten the rendered text. Retire surplus
+      // messages before forgetting anchors, including on the final update.
+      while (anchors.length > chunks.length) {
+        const obsolete = anchors.at(-1)!;
+        if (obsolete.messageId !== undefined) {
+          if (this.bot.api.deleteMessage) {
+            try {
+              const deleted = await this.bot.api.deleteMessage({
+                chat_id: obsolete.chatId,
+                message_id: obsolete.messageId,
+              });
+              if (!deleted) throw new Error("Telegram did not delete the obsolete stream message.");
+            } catch (error) {
+              // A previous delete can succeed remotely before its response is
+              // lost; an already absent message also completes reconciliation.
+              if (!telegramErrorIncludes(error, "message to delete not found")) throw error;
+            }
+          } else {
+            // Custom injected APIs may expose only the original edit seam.
+            // Clear the stale content with readable text when deletion is absent.
+            try {
+              await this.bot.api.editMessageText({
+                chat_id: obsolete.chatId,
+                message_id: obsolete.messageId,
+                message_thread_id: obsolete.messageThreadId,
+                text: "Response updated above.",
+              });
+            } catch (error) {
+              if (!isTelegramMessageNotModifiedError(error)) throw error;
+            }
+          }
+          this.recordStreamRateLimitDelivery(obsolete);
+        }
+        anchors.pop();
+      }
+      const head = anchors[0];
+      if (!head) {
+        // Keep an empty anchor set for a partial stream so a later update
+        // cannot seed itself from a caller's now-deleted head surface.
+        if (intent.stream.isFinal) this.streamSurfaces.delete(intent.stream.key);
+        return { channel: this.channel, deliveredAt: this.now(), outcome: "updated" };
+      }
       const surfaceTarget = {
         chatId: head.chatId,
         messageId: head.messageId!,
@@ -1258,9 +1310,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           );
         }
         this.streamSurfaces.delete(intent.stream.key);
-      } else {
-        this.streamSurfaces.set(intent.stream.key, anchors);
-        evictStaleStreamAnchors(this.streamSurfaces);
       }
       this.options.logger?.debug(
         `telegram stream update final=${intent.stream.isFinal} sequence=${intent.stream.sequence} chunks=${chunks.length} target=${this.compactTypingTarget(surfaceTarget)} stream=${intent.stream.key}`,
@@ -3047,6 +3096,9 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
           request.chat_id,
           request.message_thread_id,
         ),
+      deleteMessage: bot.api.deleteMessage
+        ? async (request) => await bot.api.deleteMessage!(request.chat_id, request.message_id)
+        : undefined,
       editForumTopic: async (request) =>
         await bot.api.editForumTopic(
           request.chat_id,
@@ -3302,6 +3354,10 @@ function errorMessage(error: unknown): string {
 }
 
 function isTelegramMessageNotModifiedError(error: unknown): boolean {
+  return telegramErrorIncludes(error, "message is not modified");
+}
+
+function telegramErrorIncludes(error: unknown, description: string): boolean {
   const text = [
     errorMessage(error),
     diagnosticErrorMessage(readErrorProperty(error)),
@@ -3311,7 +3367,7 @@ function isTelegramMessageNotModifiedError(error: unknown): boolean {
     .filter((message): message is string => Boolean(message))
     .join("\n")
     .toLowerCase();
-  return text.includes("message is not modified");
+  return text.includes(description);
 }
 
 function telegramRetryAfterMs(error: unknown): number | undefined {

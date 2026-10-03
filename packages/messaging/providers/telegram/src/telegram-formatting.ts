@@ -48,7 +48,7 @@ export function renderTelegramHtml(
 
 export function splitTelegramHtml(text: string): string[] {
   if (Buffer.byteLength(text, "utf8") <= TELEGRAM_MESSAGE_TEXT_LIMIT) {
-    return [text];
+    return hasVisibleTelegramHtml(text) ? [text] : [];
   }
 
   const chunks: string[] = [];
@@ -80,7 +80,16 @@ export function splitTelegramHtml(text: string): string[] {
     closingBytes = nextClosingBytes;
   }
   if (current) chunks.push(current);
-  return chunks;
+  return chunks.filter(hasVisibleTelegramHtml);
+}
+
+function hasVisibleTelegramHtml(text: string): boolean {
+  return text.replace(/<[^>]*>/g, "").replace(/&#(x[\da-f]+|\d+);/gi, (_match, value: string) => {
+    const point = value[0]?.toLowerCase() === "x"
+      ? Number.parseInt(value.slice(1), 16)
+      : Number.parseInt(value, 10);
+    return point <= 0x10ffff ? String.fromCodePoint(point) : "\ufffd";
+  }).trim().length > 0;
 }
 
 /** Rich content is supplementary: clients have no capability handshake. */
@@ -356,7 +365,11 @@ function renderList(list: Tokens.List, mode: TelegramHtmlMode, inQuote: boolean)
     }
     const marker = item.task ? (item.checked ? "☑" : "☐")
       : list.ordered ? `${Number(list.start) + index}.` : "•";
-    return `${marker} ${text.replace(/\n/g, "\n  ")}`;
+    // Layout indentation belongs to the list, not to the copyable code.
+    const indented = text.split(/(<pre>[\s\S]*?<\/pre>)/g).map((part, index) =>
+      index % 2 === 1 ? part : part.replace(/\n/g, "\n  "),
+    ).join("");
+    return `${marker} ${indented}`;
   });
   if (mode === "regular") return items.join("\n");
   const tag = list.ordered ? "ol" : "ul";

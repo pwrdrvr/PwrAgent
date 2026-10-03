@@ -4,6 +4,7 @@ export type {
   TelegramBotLike,
   TelegramCallbackQuery,
   TelegramChat,
+  TelegramDeleteMessageRequest,
   TelegramEditForumTopicRequest,
   TelegramEditMessageTextRequest,
   TelegramMessage,

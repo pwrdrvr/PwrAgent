@@ -65,6 +65,7 @@ describe("adaptGrammyBot", () => {
       chat_id: 42,
       message_thread_id: 9,
     });
+    await bot.api.deleteMessage!({ chat_id: 42, message_id: 8 });
     await bot.api.getChatMember(42, 123);
     await bot.api.editMessageText({
       chat_id: 42,
@@ -133,6 +134,7 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.closeForumTopic).toHaveBeenCalledWith(42, 9);
     expect(grammyBot.api.reopenForumTopic).toHaveBeenCalledWith(42, 9);
     expect(grammyBot.api.deleteForumTopic).toHaveBeenCalledWith(42, 9);
+    expect(grammyBot.api.deleteMessage).toHaveBeenCalledWith(42, 8);
     expect(grammyBot.api.getChatMember).toHaveBeenCalledWith(42, 123);
     expect(grammyBot.api.editMessageText).toHaveBeenCalledWith(
       42,
@@ -278,6 +280,19 @@ describe("TelegramAdapter rich messages", () => {
     expect(rich).not.toHaveBeenCalled();
   });
 
+  it("delivers a long regular response without attempting an empty trailing chunk", async () => {
+    const { adapter, send } = harness();
+    send.mockImplementation(async (request) => {
+      if (!request.text.trim()) throw new Error("Telegram rejects empty text.");
+      return { chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: 200 };
+    });
+    const result = await adapter.deliver({
+      ...intent, parts: [{ type: "text", text: `${"x".repeat(4090)}\n${" ".repeat(30)}`, markdown: "plain" }],
+    });
+    expect(result.outcome).toBe("presented");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("updates the readable surface without appending another rich supplement", async () => {
     const { adapter, edit, rich } = harness();
     const result = await adapter.deliver(intent);
@@ -316,6 +331,130 @@ describe("TelegramAdapter rich messages", () => {
     }
     expect(send).toHaveBeenCalledTimes(20);
     expect(rich).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("deletes obsolete streamed messages when a link completes (final=%s)", async (isFinal) => {
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" },
+      message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true);
+    api.deleteMessage = remove;
+    const text = `${"x".repeat(4080)}\n\n[file](${"f".repeat(100)}`;
+    const stream = {
+      id: "contracting-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text, markdown: "markdown" as const,
+      stream: { key: "contracting-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    expect(send).toHaveBeenCalledTimes(2);
+    now += 5000;
+    const result = await adapter.deliver({
+      ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal },
+    });
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(remove).toHaveBeenCalledExactlyOnceWith({ chat_id: -100123, message_id: 201 });
+    expect(edit.mock.calls.at(-1)?.[0]).toMatchObject({ message_id: 200, text: `${"x".repeat(4080)}\n\nfile` });
+    if (!isFinal) {
+      now += 5000;
+      await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
+    }
+  });
+
+  it.each([false, true])("retries cleanup without duplicate sends after failed deletion (already absent=%s)", async (alreadyAbsent) => {
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    if (alreadyAbsent) remove.mockRejectedValueOnce({ description: "Bad Request: message to delete not found" });
+    api.deleteMessage = remove;
+    const text = `${"x".repeat(4080)}\n\n[file](${"f".repeat(100)}`;
+    const stream = {
+      id: "retry-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text, markdown: "markdown" as const,
+      stream: { key: "retry-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    now += 5000;
+    const final = { ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true } };
+    expect((await adapter.deliver(final)).outcome).toBe("failed");
+    expect((await adapter.deliver(final)).outcome).toBe("updated");
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears stale text through the edit seam when an injected API cannot delete messages", async () => {
+    let now = 1000;
+    const { adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const text = `${"x".repeat(4080)}\n\n[file](${"f".repeat(100)}`;
+    const stream = {
+      id: "edit-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text, markdown: "markdown" as const,
+      stream: { key: "edit-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    now += 5000;
+    const result = await adapter.deliver({
+      ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result.outcome).toBe("updated");
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({ message_id: 201, text: "Response updated above." }));
+  });
+
+  it.each([false, true])("removes all previous stream messages when the response becomes blank (final=%s)", async (isFinal) => {
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true);
+    api.deleteMessage = remove;
+    const stream = {
+      id: "blank-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "blank-stream", sequence: 1, isFinal: false },
+    };
+    const first = await adapter.deliver(stream);
+    now += 5000;
+    const result = await adapter.deliver({
+      ...stream, text: " \n\t", targetSurface: first.surface,
+      stream: { ...stream.stream, sequence: 2, isFinal },
+    });
+    expect(result).toMatchObject({ outcome: "updated" });
+    expect(result.surface).toBeUndefined();
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 200 }],
+    ]);
+    expect(edit).not.toHaveBeenCalled();
+    if (!isFinal) {
+      now += 5000;
+      const resumed = await adapter.deliver({
+        ...stream, text: "Fresh content", targetSurface: first.surface,
+        stream: { ...stream.stream, sequence: 3, isFinal: false },
+      });
+      expect(resumed.surface?.id).toBe("202");
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(edit).not.toHaveBeenCalled();
+    }
   });
 });
 
@@ -972,6 +1111,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     createForumTopic: ReturnType<typeof vi.fn>;
     deleteWebhook: ReturnType<typeof vi.fn>;
     deleteForumTopic: ReturnType<typeof vi.fn>;
+    deleteMessage: ReturnType<typeof vi.fn>;
     editForumTopic: ReturnType<typeof vi.fn>;
     editMessageText: ReturnType<typeof vi.fn>;
     getFile: ReturnType<typeof vi.fn>;
@@ -999,6 +1139,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
       })),
       deleteWebhook: vi.fn(async () => true),
       deleteForumTopic: vi.fn(async () => true),
+      deleteMessage: vi.fn(async () => true),
       editForumTopic: vi.fn(async () => true),
       editMessageText: vi.fn(
         async (
