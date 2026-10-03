@@ -87,10 +87,14 @@ describe("useCodexBackgroundTerminals", () => {
     await waitFor(() => expect(result.current.terminals).toHaveLength(1));
     const localKey = threadSummaryIdentityKey(thread());
     const remoteKey = threadSummaryIdentityKey(remoteThread());
-    rerender({ selected: remoteThread() });
+    await act(async () => {
+      rerender({ selected: remoteThread() });
+    });
     await waitFor(() => expect(result.current.byThread[remoteKey]).toHaveLength(1));
     expect(result.current.byThread[localKey]).toHaveLength(1);
-    rerender({ selected: thread() });
+    await act(async () => {
+      rerender({ selected: thread() });
+    });
     expect(result.current.byThread[remoteKey]).toBeUndefined();
     expect(result.current.byThread[localKey]).toHaveLength(1);
   });
