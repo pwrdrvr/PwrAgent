@@ -8,9 +8,6 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const POSIX_SETUP_COMMAND = "printf setup-output && sleep 2";
 const WINDOWS_SETUP_COMMAND = "Write-Output setup-output; Start-Sleep -Seconds 2";
-const setupCommand = process.platform === "win32"
-  ? WINDOWS_SETUP_COMMAND
-  : POSIX_SETUP_COMMAND;
 const captureCwdCommand = process.platform === "win32"
   ? "[System.IO.File]::WriteAllText('.pwragent-e2e-action-cwd', (Get-Location).Path)"
   : "pwd -P > .pwragent-e2e-action-cwd";
@@ -36,6 +33,8 @@ async function createCodexEnvironmentSetupFixture(params?: {
   finishSetup: () => Promise<void>;
   fixturePath: string;
   repoDir: string;
+  /** The command the selected environment runs on this platform. */
+  setupCommand: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-setup-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
@@ -261,6 +260,7 @@ command = ${JSON.stringify(captureCwdCommand)}
   return {
     repoDir,
     fixturePath,
+    setupCommand: process.platform === "win32" ? windowsSetupCommand : posixSetupCommand,
     finishSetup: () => writeFile(setupGatePath, "ready", "utf8"),
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
@@ -429,15 +429,18 @@ test("selected environments run setup and show transcript output", async () => {
     ).toContainText("Running the Fixture Env setup first.");
     const setupRow = app.window.getByLabel("Env setup running");
     await expect(setupRow).toBeVisible();
-    await expect(app.window.getByLabel("Env setup output")).toHaveCount(0);
+    // `exact`: getByLabel matches a substring, and the row's "Copy env setup
+    // output" button carries the output's label inside its own.
+    await expect(app.window.getByLabel("Env setup output", { exact: true })).toHaveCount(0);
     await setupRow.getByRole("button", { expanded: false }).click();
-    await expect(setupRow.getByText(`$ ${setupCommand}`)).toBeVisible();
+    // Held, so the fixture runs its gated command, not POSIX_SETUP_COMMAND.
+    await expect(setupRow.getByText(`$ ${fixture.setupCommand}`)).toBeVisible();
     // The first Windows Job host can still be compiling when the pending UI
     // appears. Wait for the actual output before asserting its contents.
-    await app.window.getByLabel("Env setup output")
+    await app.window.getByLabel("Env setup output", { exact: true })
       .getByText("setup-output")
       .waitFor();
-    await expect(app.window.getByLabel("Env setup output")).toContainText(
+    await expect(app.window.getByLabel("Env setup output", { exact: true })).toContainText(
       "setup-output",
     );
     await expect(
@@ -482,7 +485,7 @@ test("typing continues in the focused composer after environment setup completes
     await app.window.getByLabel("Env setup running")
       .getByRole("button", { expanded: false })
       .click();
-    await expect(app.window.getByLabel("Env setup output")).toContainText("setup-output");
+    await expect(app.window.getByLabel("Env setup output", { exact: true })).toContainText("setup-output");
 
     const input = app.window.getByRole("textbox", { name: "New thread" });
     await input.fill("Still typing");
