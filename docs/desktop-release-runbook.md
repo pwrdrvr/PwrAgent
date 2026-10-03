@@ -534,8 +534,10 @@ and native code are outside these Vite maps.
 Do not rebuild an old tag and assume its offsets match an installed app.
 Dependency resolution, platform, and repeated build attempts can change
 output; the generated file hash is the deciding match. This retention starts
-with releases built by the updated workflow and cannot recover maps for
-previously shipped builds such as v1.1.5.
+with releases built by the updated workflow and does not add maps to previous
+releases. A separately rebuilt map is usable only after the generated
+JavaScript's byte count and SHA-256 match the installed file exactly; a matching
+tag, version, or chunk name alone is insufficient.
 
 For a local build without packaging, run `pnpm --filter @pwragent/desktop build`
 then `node apps/desktop/scripts/desktop-debug-artifacts.mjs darwin universal`
