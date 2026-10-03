@@ -1,4 +1,4 @@
-import { BrowserWindow, nativeTheme } from "electron";
+import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import type {
   QuitBlockerItem,
@@ -6,6 +6,7 @@ import type {
 } from "../shared/quit-blockers";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
+import { primaryMainWindowWebContents } from "./primary-main-window";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
 import { requestShowQuitBlockers } from "./window-show-quit-blockers";
 import { requestShowThread } from "./window-show-thread";
@@ -30,7 +31,6 @@ export type QuitConfirmationDialogOptions = {
   terminalSessionCount: number;
   actionRunCount?: number;
   items?: QuitBlockerItem[];
-  parent?: BrowserWindow | null;
   refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
 };
 
@@ -123,6 +123,7 @@ function resolveQuitDialogTheme(): "dark" | "light" {
  */
 type ActiveQuitDialog = {
   window: BrowserWindow;
+  parent: BrowserWindow | undefined;
   ready: boolean;
 };
 
@@ -140,12 +141,84 @@ export function focusActiveQuitConfirmationDialog(): boolean {
   if (!active.ready) {
     return true;
   }
-  if (active.window.isMinimized()) {
-    active.window.restore();
-  }
-  active.window.show();
-  active.window.focus();
+  raiseQuitDialog(active);
   return true;
+}
+
+/**
+ * The window the prompt attaches to: the one the user is in, else the main
+ * window. Not just the focused window: a quit from the Dock, from Ctrl+C in the
+ * terminal running the app, or from anywhere while another app is active finds
+ * no focused PwrAgent window, and an unparented prompt opens wherever the OS
+ * centres new windows — on a multi-monitor desk, often a screen nobody is
+ * looking at.
+ */
+function resolveQuitDialogParent(): BrowserWindow | undefined {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed()) {
+    return focused;
+  }
+  const mainContents = primaryMainWindowWebContents();
+  const main = mainContents ? BrowserWindow.fromWebContents(mainContents) : null;
+  return main && !main.isDestroyed() ? main : undefined;
+}
+
+/**
+ * Centre the prompt over its parent, kept on the parent's display; with no
+ * parent, on the display under the pointer. macOS draws a modal child as a
+ * sheet and ignores this, but Windows and Linux centre an unpositioned window
+ * on the primary display, parent or not.
+ */
+function resolveQuitDialogPosition(
+  parent: BrowserWindow | undefined,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  const anchor = parent?.getBounds();
+  const area = anchor
+    ? screen.getDisplayMatching(anchor).workArea
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const target = anchor ?? area;
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(value, max));
+  return {
+    x: clamp(
+      target.x + Math.round((target.width - width) / 2),
+      area.x,
+      area.x + area.width - width,
+    ),
+    y: clamp(
+      target.y + Math.round((target.height - height) / 2),
+      area.y,
+      area.y + area.height - height,
+    ),
+  };
+}
+
+/**
+ * Bring the prompt, and the window it is attached to, in front of the user.
+ * A sheet on a minimized or buried window is as lost as a dialog on the wrong
+ * monitor. On macOS the app is activated outright: every path here is a quit
+ * the user (or the OS, for a logout) asked for, and it is waiting on an answer.
+ * Off macOS `app.focus()` focuses the first window instead, which could pull an
+ * unrelated window over this one, so the window calls alone do it there.
+ */
+function raiseQuitDialog(active: ActiveQuitDialog): void {
+  if (process.platform === "darwin") {
+    app.focus({ steal: true });
+  }
+  const { parent, window } = active;
+  if (parent && !parent.isDestroyed()) {
+    if (parent.isMinimized()) {
+      parent.restore();
+    }
+    parent.show();
+  }
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
 }
 
 export async function showQuitConfirmationDialog(
@@ -155,8 +228,7 @@ export async function showQuitConfirmationDialog(
     .toString(36)
     .slice(2)}`;
   const navigationPrefix = `pwragent-quit-confirmation://${token}/`;
-  const parent =
-    options.parent && !options.parent.isDestroyed() ? options.parent : undefined;
+  const parent = resolveQuitDialogParent();
   const colorScheme = resolveQuitDialogTheme();
   const palette = QUIT_DIALOG_PALETTES[colorScheme];
   const items = options.items ?? [];
@@ -164,12 +236,16 @@ export async function showQuitConfirmationDialog(
     options.countdownSeconds,
     items.length,
   );
+  const width = 460;
+  // The list is scrollable, but a dialog that always reserves room for ten
+  // rows would look absurd when nothing is running. Grow with the content up
+  // to a ceiling, then let the list scroll inside it.
+  const height =
+    quitDialogHeight(items.length) + (options.federationPeerCount ? 72 : 0);
   const window = new BrowserWindow({
-    width: 460,
-    // The list is scrollable, but a dialog that always reserves room for ten
-    // rows would look absurd when nothing is running. Grow with the content up
-    // to a ceiling, then let the list scroll inside it.
-    height: quitDialogHeight(items.length) + (options.federationPeerCount ? 72 : 0),
+    width,
+    height,
+    ...resolveQuitDialogPosition(parent, width, height),
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -197,7 +273,7 @@ export async function showQuitConfirmationDialog(
     },
   });
 
-  const active: ActiveQuitDialog = { window, ready: false };
+  const active: ActiveQuitDialog = { window, parent, ready: false };
   activeDialog = active;
 
   /** Drop the shared handle and the window, whichever way this call ends. */
@@ -429,8 +505,7 @@ export async function showQuitConfirmationDialog(
     });
     window.once("ready-to-show", () => {
       active.ready = true;
-      window.show();
-      window.focus();
+      raiseQuitDialog(active);
       if (options.refresh) {
         void refreshDialog();
         refreshTimer = setInterval(
