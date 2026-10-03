@@ -1,3 +1,4 @@
+import { VoiceCameraButton, VoiceCameraPanel } from "./VoiceCameraButton";
 import { useEffect, useRef, useState } from "react";
 import {
   isRemoteFederationTarget,
@@ -475,7 +476,7 @@ function DirectorVoiceState({ controller, ended, view }: {
   const live = !ended && view.status === "listening" && !view.muted;
   const muted = !ended && view.status === "listening" && view.muted;
   const label = ended
-    ? view.endedAfterReply ? "Ended after the reply" : "Voice ended"
+    ? view.endedAfterAway ? "Ended while you were away" : view.endedAfterReply ? "Ended after the reply" : "Voice ended"
     : live ? "Microphone live" : muted ? "Muted" : voiceStateLabel(view);
   return (
     <p
@@ -559,6 +560,7 @@ function OpenDirectorVoicePanel({
               </button>
             )
           ) : <VoiceMicToggle controller={controller} tooltipClassName={PANEL_TOOLTIP_CLASS} view={view} />}
+          {!ended ? <VoiceCameraButton controller={controller} view={view} /> : null}
           <button
             className="app-notice-toast__icon-button"
             type="button"
@@ -596,7 +598,8 @@ function OpenDirectorVoicePanel({
         />
       ) : null}
       <div className="director-voice-panel__feed">
-        <VoiceFeed view={view} />
+        <VoiceFeed view={view} scrollParent />
+        <VoiceCameraPanel controller={controller} view={view} />
       </div>
       {listening ? <VoiceTextInput controller={controller} /> : null}
       <button

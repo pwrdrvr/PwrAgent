@@ -1,3 +1,4 @@
+import type { VoiceCameraRequest, VoiceCameraFrame, VoiceCameraObservation, VoiceCameraCue } from "./native-voice-camera";
 import type { AgentEvent, OperatorFocusSnapshot } from "@pwragent/shared";
 
 /** Window-local voice ownership. No credentials or service URLs cross IPC. */
@@ -50,6 +51,9 @@ export type NativeVoiceApi = {
   stopNativeVoice: (request: NativeVoiceTarget) => Promise<void>;
   sendNativeVoiceText: (request: NativeVoiceText) => Promise<void>;
   onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => () => void;
+  sendNativeVoiceCameraCue?: (request: VoiceCameraCue) => Promise<void>;
+  setNativeVoiceCamera?: (request: VoiceCameraRequest) => Promise<void>;
+  analyzeNativeVoiceCamera?: (request: VoiceCameraFrame) => Promise<VoiceCameraObservation | undefined>;
   openVoiceManager?: () => Promise<OpenVoiceManagerResponse>;
   publishOperatorFocus?: (focus: OperatorFocusSnapshot) => Promise<void>;
   /**

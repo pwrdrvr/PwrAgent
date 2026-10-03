@@ -305,10 +305,12 @@
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
+  overflow-y: auto;
 }
 /* The rule keeps scrolled transcript text from running into the lines above. */
 .director-voice-panel__feed .native-voice-feed {
-  flex: 1 1 auto;
+  flex: none;
+  overflow: visible;
   max-height: none;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
@@ -403,3 +405,32 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* Full-width camera preview follows the transcript inside the voice panel. */
+.voice-camera__panel {
+  padding: 8px 0;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  white-space: normal;
+}
+.voice-camera__preview { width: 100%; aspect-ratio: 4 / 3; max-height: 240px; object-fit: contain; border-radius: 6px; transform: scaleX(-1); background: var(--bg-panel-elevated); }
+.voice-camera__status { color: var(--text-primary); }
+.voice-camera__hint { color: var(--text-muted); }
+.voice-camera__debug { font-size: 11px; }
+.voice-camera__debug summary { cursor: pointer; padding: 6px 0; list-style: none; color: var(--text-primary); }
+.voice-camera__debug summary::-webkit-details-marker { display: none; }
+.voice-camera__debug summary::before { content: "›"; display: inline-block; width: 12px; }
+.voice-camera__debug[open] summary::before { content: "⌄"; }
+.voice-camera__debug dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; }
+.voice-camera__debug dt { color: var(--text-muted); }
+.voice-camera__debug dd { margin: 0; overflow-wrap: anywhere; }
+.voice-camera__debug table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.voice-camera__debug th, .voice-camera__debug td { padding: 3px 0; text-align: left; border-bottom: 1px solid var(--border-subtle); }
+.voice-camera__debug th:last-child, .voice-camera__debug td:last-child { text-align: right; }
+.voice-camera__debug p { margin: 8px 0 0; color: var(--text-muted); }
+.voice-camera__debug .voice-camera__debug-error { color: var(--danger-text); }

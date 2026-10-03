@@ -166,3 +166,133 @@ describe("native voice browser lifecycle", () => {
     expect(f.views.at(-1)?.status).toBe("idle");
   });
 });
+
+
+describe("voice camera ownership", () => {
+  async function liveCamera() {
+    const f = fixture();
+    const capture = { stream: f.stream as unknown as MediaStream, frame: vi.fn(() => "data:image/jpeg;base64,fixture"), close: vi.fn() };
+    f.platform.camera = vi.fn(async () => capture);
+    f.api.sendNativeVoiceCameraCue = vi.fn(async () => {});
+    f.api.setNativeVoiceCamera = vi.fn(async () => {});
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: true, presenceConfidence: 0.95, reaction: "exasperated" as const, reactionConfidence: 0.9, latencyMs: 400 }));
+    const start = f.controller.start("fixture-thread");
+    await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce());
+    f.connect();
+    await start;
+    vi.useFakeTimers();
+    return { ...f, capture };
+  }
+
+  it("opts in separately and sends only a debounced text cue, then releases capture on stop", async () => {
+    const f = await liveCamera();
+    expect(f.platform.camera).not.toHaveBeenCalled();
+    await f.controller.setCamera(true);
+    expect(f.api.setNativeVoiceCamera).toHaveBeenCalledWith({ sessionId: "fixture-session", enabled: true });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledWith({ sessionId: "fixture-session", cue: "exasperated" });
+    await f.controller.stop();
+    expect(f.capture.close).toHaveBeenCalledOnce();
+    expect(f.api.setNativeVoiceCamera).toHaveBeenLastCalledWith({ sessionId: "fixture-session", enabled: false });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+  });
+
+  it("counts results/rate and marks delivery only after the cue RPC acknowledges", async () => {
+    const f = await liveCamera();
+    const pending = deferred<void>();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: true, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 }));
+    f.api.sendNativeVoiceCameraCue = vi.fn(() => pending.promise);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({
+      threadId: "fixture-thread", sessionId: "fixture-session", observations: 4, rateHz: 2,
+      delivery: "pending", lastCue: "neutral", cuesAcknowledged: 0,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(4);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ delivery: "acknowledged", cuesAcknowledged: 1 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+    expect(f.controller.getView().cameraDiagnostics?.filter).toBe("Repeated cue suppressed");
+    await f.controller.stop();
+  });
+
+  it("exposes a rejected cue route while releasing the camera and keeping voice live", async () => {
+    const f = await liveCamera();
+    f.api.sendNativeVoiceCameraCue = vi.fn(async () => { throw new Error("appendText rejected"); });
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.controller.getView()).toMatchObject({ status: "listening", cameraError: "appendText rejected",
+      cameraDiagnostics: { delivery: "failed", cuesAcknowledged: 0, error: "appendText rejected" } });
+    expect(f.controller.getView().camera).toBeUndefined();
+    expect(f.capture.close).toHaveBeenCalledOnce();
+    await f.controller.stop();
+  });
+
+  it("closes a camera that finishes opening after voice ends", async () => {
+    const f = await liveCamera();
+    const pending = deferred<typeof f.capture>();
+    f.platform.camera = vi.fn(() => pending.promise);
+    const enabling = f.controller.setCamera(true);
+    await Promise.resolve();
+    await f.controller.stop();
+    pending.resolve(f.capture);
+    await enabling;
+    expect(f.capture.close).toHaveBeenCalledOnce();
+    expect(f.api.analyzeNativeVoiceCamera).not.toHaveBeenCalled();
+  });
+
+  it("keeps preview and a single request during cold warmup without counting its stale frame toward absence", async () => {
+    const f = await liveCamera();
+    const pending = deferred<Awaited<ReturnType<NonNullable<NativeVoiceApi["analyzeNativeVoiceCamera"]>>>>();
+    const away = { present: false, presenceConfidence: 0.99, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 };
+    f.api.analyzeNativeVoiceCamera = vi.fn().mockImplementationOnce(() => pending.promise).mockResolvedValue(away);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.controller.getView()).toMatchObject({ status: "listening", camera: "on", cameraWarming: true });
+    expect(f.controller.cameraStream()).toBe(f.capture.stream);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledOnce();
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    expect(f.capture.close).not.toHaveBeenCalled();
+    pending.resolve(away);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.controller.getView().cameraWarming).toBe(false);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ observations: 1, staleObservations: 1 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+    expect(f.capture.close).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a late decision after opt-out and keeps voice running if Clef fails", async () => {
+    const f = await liveCamera();
+    const pending = deferred<Awaited<ReturnType<NonNullable<NativeVoiceApi["analyzeNativeVoiceCamera"]>>>>();
+    f.api.analyzeNativeVoiceCamera = vi.fn(() => pending.promise);
+    await f.controller.setCamera(true);
+    await f.controller.setCamera(false);
+    pending.resolve({ present: false, presenceConfidence: 0.99, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 });
+    await Promise.resolve();
+    expect(f.api.sendNativeVoiceCameraCue).not.toHaveBeenCalled();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => { throw new Error("Clef unavailable"); });
+    await f.controller.setCamera(true);
+    await Promise.resolve();
+    expect(f.controller.getView()).toMatchObject({ status: "listening", cameraError: "Clef unavailable" });
+    expect(f.controller.getView().camera).toBeUndefined();
+    await f.controller.stop();
+  });
+
+  it("ends voice and camera after sustained absence", async () => {
+    const f = await liveCamera();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: false, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 }));
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+    expect(f.capture.close).toHaveBeenCalledOnce();
+    expect(f.controller.getView()).toMatchObject({ status: "idle", endedAfterAway: true });
+  });
+});

@@ -49,11 +49,11 @@ export function useNativeVoiceNotices(
       previous = view.status;
       // Director voice keeps its panel open after the session, and the
       // panel says how it ended; the notice is for thread voice's bar.
-      if (ended && view.endedAfterReply && view.mode !== "director") {
+      if (ended && (view.endedAfterReply || view.endedAfterAway) && view.mode !== "director") {
         showNotice({
           id: NATIVE_VOICE_ENDED_NOTICE_ID,
           title: "Live voice",
-          message: "Voice ended after its reply because the microphone was muted.",
+          message: view.endedAfterAway ? "Voice ended because the camera detected 30 seconds away." : "Voice ended after its reply because the microphone was muted.",
           tone: "neutral",
         });
       } else if (view.status === "error") {
@@ -207,7 +207,7 @@ function micHint(muted: boolean): string {
 }
 
 /** Transcript rows and tool receipts, in the order they happened. */
-export function VoiceFeed({ view, limit }: { view: VoiceView; limit?: number }) {
+export function VoiceFeed({ view, limit, scrollParent = false }: { view: VoiceView; limit?: number; scrollParent?: boolean }) {
   const rows = useMemo(() => {
     const merged = [
       ...view.transcript.map((row) => ({ kind: "say" as const, ...row })),
@@ -218,8 +218,12 @@ export function VoiceFeed({ view, limit }: { view: VoiceView; limit?: number }) 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const node = ref.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [rows]);
+    if (!node) return;
+    if (scrollParent && node.parentElement) {
+      const parent = node.parentElement;
+      parent.scrollTop = Math.max(0, node.offsetTop - parent.offsetTop + node.offsetHeight - parent.clientHeight);
+    } else node.scrollTop = node.scrollHeight;
+  }, [rows, scrollParent]);
   if (!rows.length) return null;
   return (
     <div className="native-voice-feed" ref={ref} role="log" aria-label="Voice transcript">
