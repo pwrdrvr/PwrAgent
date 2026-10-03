@@ -7268,6 +7268,36 @@ describe("DesktopBackendRegistry", () => {
     expect(cleared.display?.pricingPage?.rows.every((row) => row.line.priceStatus === "unpriced")).toBe(true);
   });
 
+  it("loads an unobserved thread pricing snapshot only on pricing demand and replaces it with observed usage", async () => {
+    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] }), {
+      readThreadPricingSnapshot: vi.fn(async () => ({ model: "gpt-6.1-sol", tokens })),
+    });
+    const lines: ThreadUsageLineRecord[] = [];
+    const overlayStore = { ...createOverlayStoreMock(), readThreadPricing: vi.fn(async () => ({ lines, summaries: [] })) };
+    const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    onTestFinished(() => registry.close());
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "tools" } });
+    expect(codexClient.readThreadPricingSnapshot).not.toHaveBeenCalled();
+    const response = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(response.display?.pricingPage?.fallbackEstimate).toMatchObject({ model: "gpt-6.1-sol", modelLabel: "GPT-6.1 Sol", tokens });
+    expect(response.display?.pricingPage?.rows).toEqual([]);
+    expect(response.display?.pricingPage?.summary).toBeUndefined();
+    expect(writes).not.toHaveBeenCalled();
+    lines.push({
+      backend: "codex", threadId: "thread-1", usageLineId: "observed-turn", turnId: "turn-1", model: "gpt-6.1-sol",
+      provider: "openai", currency: "USD", createdAt: 1000, scope: "turn", source: "live", status: "finalized", priceStatus: "priced",
+      inputTokens: 100, uncachedInputTokens: 20, cachedInputTokens: 80, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110,
+      uncachedInputCostMicros: 40, cachedInputCostMicros: 8, outputCostMicros: 100, totalCostMicros: 148,
+    });
+    const observed = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(observed.display?.pricingPage?.fallbackEstimate).toBeUndefined();
+    expect(observed.display?.pricingPage?.summary?.totalCostMicros).toBe(148);
+    expect(codexClient.readThreadPricingSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
     const titleHelperCompleted = createDeferred<string>();
     const codexClient = new MockBackendClient({
