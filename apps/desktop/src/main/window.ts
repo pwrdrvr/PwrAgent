@@ -33,6 +33,7 @@ import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
 import { mainWindowChromeOptions } from "./main-window-chrome";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
+import { attachRendererProcessRecovery } from "./renderer-process-recovery";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
 import {
@@ -900,6 +901,7 @@ export function createMainWindow(options?: {
   }
 
   applyWindowSecurityHardening(window);
+  attachRendererProcessRecovery(window);
   // Local main windows receive CPU capture notices. Federation viewers
   // also host the app shell, but must not receive local CPU notices.
   // Secondary windows register a narrower

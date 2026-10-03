@@ -11,9 +11,13 @@ export type RendererErrorReport = {
   lineno?: number;
   message: string;
   name?: string;
+  recovery?: {
+    action: "automatic-remount" | "manual-remount" | "stopped";
+    attempt: number;
+    limit: number;
+  };
   source: RendererErrorSource;
   stack?: string;
   timestamp: string;
   userAgent: string;
 };
-
