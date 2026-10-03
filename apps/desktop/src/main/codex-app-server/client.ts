@@ -16,6 +16,7 @@ import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
   readCodexNativeSubAgentName,
@@ -7594,6 +7595,14 @@ export class CodexAppServerClient {
       request: AppServerPendingRequestNotification
     ) => Promise<unknown> | unknown
   >();
+  // Only thread/start in this live process proves the initial catalog. Forks
+  // and persisted IDs do not. Settings are acknowledged again at admission.
+  private readonly freshNativeVoiceThreads = new Map<string, {
+    dynamicTools: unknown;
+    cwd?: string;
+    runtime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
+  }>();
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
   private readonly helperThreadIds = new Set<string>();
@@ -7744,6 +7753,9 @@ export class CodexAppServerClient {
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && (normalized.method === "turn/started" || method === "thread/closed")) {
+        this.freshNativeVoiceThreads.delete(helperThreadId);
+      }
       if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
         this.handleHelperThreadNotification(normalized.method, normalized);
         if (isLiveTurnActivityMethod(method, normalized.method)) {
@@ -8005,6 +8017,7 @@ export class CodexAppServerClient {
     this.rejectHelperTurnWaiters(helperTurnError);
     this.invalidateThreadListings();
     this.threadListTextCache.clear();
+    this.freshNativeVoiceThreads.clear();
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
@@ -9642,6 +9655,37 @@ export class CodexAppServerClient {
   }
 
   /**
+   * A stock runtime can use the catalog it just acknowledged at thread/start.
+   * Never resume an unmaterialized thread or infer ownership from its ID.
+   * Catalog/environment drift still requires the negotiated refresh path.
+   */
+  async prepareFreshNativeVoiceThread(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean> {
+    await this.ensureInitialized();
+    const fresh = this.freshNativeVoiceThreads.get(params.threadId);
+    if (!fresh || !this.pendingFirstTurnThreadResults.has(params.threadId)) return false;
+    const payload = buildThreadStartPayload({
+      ...params, pwrdrvrTokenMiser: params.pwrdrvrTokenMiser ?? undefined,
+      bundledToolsDirectory: this.options.bundledToolsDirectory,
+    }, this.getProtocolCompatibility());
+    if (!isDeepStrictEqual(fresh.dynamicTools, payload.dynamicTools ?? [])
+      || fresh.cwd !== payload.cwd
+      || !isDeepStrictEqual(fresh.runtime, params.codexEnvironmentRuntime)
+      || fresh.defaultModeRequestUserInput !== params.defaultModeRequestUserInput) return false;
+
+    // thread/start has no effort field. Even an unchanged overlay can require
+    // an effort update; await all effective settings, including permissions,
+    // before automatic realtime handoffs can run a coding turn.
+    await this.connection.request("thread/settings/update", {
+      ...buildThreadSettingsUpdatePayload(params),
+      threadId: params.threadId,
+      approvalPolicy: payload.approvalPolicy,
+      approvalsReviewer: payload.approvalsReviewer,
+      sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+    }, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    return this.freshNativeVoiceThreads.get(params.threadId) === fresh;
+  }
+
+  /**
    * Refresh the catalog without starting inference. The registry negotiates
    * dynamicToolsResumeField and reserves the idle thread before calling this.
    */
@@ -9649,6 +9693,7 @@ export class CodexAppServerClient {
     dynamicTools: CodexDynamicToolSpec[];
   }): Promise<void> {
     await this.ensureInitialized();
+    this.freshNativeVoiceThreads.delete(params.threadId);
     const connection = this.createThreadOperationConnection();
     const current = await requestWithFallbacks({
       client: connection,
@@ -9722,18 +9767,13 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
+    const startPayload = buildThreadStartPayload({
+      ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+    }, this.getProtocolCompatibility());
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/start"],
-      payloads: [
-        buildThreadStartPayload(
-          {
-            ...params,
-            bundledToolsDirectory: this.options.bundledToolsDirectory,
-          },
-          this.getProtocolCompatibility(),
-        ),
-      ],
+      payloads: [startPayload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
@@ -9742,6 +9782,12 @@ export class CodexAppServerClient {
       throw new Error("codex app server thread/start did not return threadId");
     }
 
+    this.freshNativeVoiceThreads.set(threadId, {
+      dynamicTools: structuredClone(startPayload.dynamicTools ?? []),
+      cwd: params.cwd?.trim() || undefined,
+      runtime: structuredClone(params.codexEnvironmentRuntime),
+      defaultModeRequestUserInput: params.defaultModeRequestUserInput,
+    });
     this.pendingFirstTurnThreadResults.set(threadId, result);
     this.pendingFirstTurnShellEnvironments.set(
       threadId,
@@ -9864,6 +9910,9 @@ export class CodexAppServerClient {
     }
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
+      // Resume can replace the catalog or environment even if input
+      // preparation or turn/start later fails. Drop proof before sending it.
+      this.freshNativeVoiceThreads.delete(params.threadId);
       const resume = requestWithFallbacks({
         client: connection,
         methods: ["thread/resume"],
@@ -9950,6 +9999,7 @@ export class CodexAppServerClient {
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    this.freshNativeVoiceThreads.delete(params.threadId);
     this.pendingFirstTurnThreadResults.delete(params.threadId);
     this.pendingFirstTurnShellEnvironments.delete(params.threadId);
     await this.recordDerivedThreadNameWithCodex({
@@ -10444,6 +10494,7 @@ export class CodexAppServerClient {
     if (!turnId) {
       throw new Error("codex app server review/start did not return turnId");
     }
+    this.freshNativeVoiceThreads.delete(params.threadId);
     this.pendingFirstTurnThreadResults.delete(params.threadId);
     this.pendingFirstTurnShellEnvironments.delete(params.threadId);
 

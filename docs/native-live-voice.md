@@ -249,6 +249,31 @@ Voice transcripts are bounded, memory-only UI state. They are cleared for the
 next session and are not added to PwrAgent persistence or federation traffic.
 Codex may retain its own canonical conversation according to its protocol.
 
+### Idle-thread admission
+
+Stock Codex 0.160.0 supports dynamic tools at `thread/start` but does not
+advertise the PwrAgent dynamic-tools refresh extension on `thread/resume`.
+A freshly created thread can start voice with the exact catalog acknowledged
+in the current App Server process. PwrAgent compares the serialized catalog,
+workspace, environment and input policy, then awaits `thread/settings/update`
+for the effective model, effort, service tier, approval and sandbox settings.
+`thread/start` does not carry an effort field, so creation alone is insufficient
+proof of the selected effort. The fresh director's generic discovery catalog
+is sufficient; eager director tools optimize latency but do not add authority.
+
+An App Server reset, a coding turn, thread closure or catalog refresh
+invalidates this proof. A persisted thread or changed catalog/environment
+still requires negotiated refresh. If the runtime lacks that extension,
+select a supported PwrAgent managed Codex runtime in Settings. Restarting the
+app or recreating the manager cannot add refresh support. Active coding
+threads keep their existing catalog ownership path.
+
+A separate local stock 0.160.0 process acknowledged an ephemeral
+`thread/start` with a contrived dynamic tool and a subsequent
+`thread/settings/update` with model, effort, approval and sandbox settings.
+Its `server/capabilities/read` call returned an unsupported-method error.
+This probe sent no inference, realtime or microphone request.
+
 ## Validation
 
 Focused tests cover version gating, protocol fields, ordinary-notification

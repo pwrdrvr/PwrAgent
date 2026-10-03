@@ -963,6 +963,7 @@ type BackendClient = {
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
+  prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
@@ -11800,6 +11801,7 @@ export class DesktopBackendRegistry {
     client: BackendClient,
     threadId: string,
     overlay: ThreadOverlayState | undefined,
+    forVoice = false,
   ) {
     const tools = await this.buildSupportedCodexDynamicToolsRefresh({
       client,
@@ -11807,7 +11809,9 @@ export class DesktopBackendRegistry {
       tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
     });
     if (tools === undefined || !client.refreshThreadTools) {
-      throw new Error("This Codex runtime cannot refresh tools on an existing thread. Update to a supported PwrAgent managed Codex runtime, or create a new Agent thread.");
+      throw new Error(forVoice
+        ? "Live voice cannot verify the current tool catalog for this idle thread. Select a supported PwrAgent managed Codex runtime in Settings. Restarting the app or recreating the Voice manager does not add tool-refresh support."
+        : "This Codex runtime cannot refresh tools on an existing thread. Update to a supported PwrAgent managed Codex runtime, or create a new Agent thread.");
     }
     return tools;
   }
@@ -31826,15 +31830,14 @@ export class DesktopBackendRegistry {
           throw new Error("This backend does not support live voice.");
         }
         // A running coding task already owns the loaded thread and catalog.
-        // An idle thread must be resumed with the current PwrAgent tools before
-        // realtime can delegate to it. This uses the existing admission path.
+        // An idle thread must prove its initial catalog in this process or
+        // refresh it before realtime delegates. A thread ID alone is not proof.
         const running = this.threadHasActiveTurn(threadId);
         const ownsReservation = !this.reservedCodexStartThreadIds.has(threadId);
         if (ownsReservation) this.reservedCodexStartThreadIds.add(threadId);
         try {
           if (!running) {
             const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
-            const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay);
             const cwd = await this.resolveThreadEnvironmentCwd("codex", threadId, overlay);
             const settings = await this.resolveModelSettings("codex", {
               model: overlay?.model,
@@ -31843,15 +31846,25 @@ export class DesktopBackendRegistry {
               fastMode: overlay?.fastMode,
             });
             const modeSettings = EXECUTION_MODE_SUMMARIES[mode];
-            await client.refreshThreadTools!({
-              threadId, dynamicTools, ...settings,
+            const admission = {
+              threadId, ...settings,
               ...(cwd ? { cwd } : {}),
               codexEnvironmentRuntime: overlay?.codexEnvironmentRuntime,
               approvalPolicy: modeSettings.approvalPolicy,
               approvalsReviewer: modeSettings.approvalsReviewer,
               sandbox: modeSettings.sandbox,
               defaultModeRequestUserInput: this.resolveCodexDefaultModeRequestUserInputFn(),
-            });
+            };
+            // A newly created director has the ordinary discovery catalog.
+            // Eager director tools are a latency optimization, not authority.
+            const initialTools = this.buildCodexParentDynamicTools(
+              this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+            );
+            const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
+            if (!fresh) {
+              const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
+              await client.refreshThreadTools!({ ...admission, dynamicTools });
+            }
           }
           this.nativeVoiceLeases += 1;
           let released = false;
