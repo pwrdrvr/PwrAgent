@@ -2,28 +2,35 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturePath = path.resolve(specDir, "fixtures/turn-lifecycle/replay.fixture.json");
 
 // Test-only fault injection into the real production boundary. No app API or
 // shipped environment flag can induce a crash. The fixture contains no user data.
-async function injectBoundaryFault(page: Page, persistent = false): Promise<void> {
-  await page.evaluate((keepFailing) => {
+async function injectBoundaryFault(page: Page): Promise<void> {
+  await page.evaluate(() => {
     type ElementShape = { props: { children: ElementShape }; type: unknown };
     type Boundary = {
       props: { children: ElementShape };
       retryManually?: () => void;
       forceUpdate: () => void;
     };
-    type Fiber = { child?: Fiber; sibling?: Fiber; stateNode?: Boundary };
+    type Fiber = { child?: Fiber; sibling?: Fiber; stateNode?: Boundary | { current?: Fiber } };
     const root = document.getElementById("root")!;
     const key = Object.keys(root).find((name) => name.startsWith("__reactContainer$"))!;
-    const pending: Fiber[] = [(root as unknown as Record<string, Fiber>)[key]];
+    const container = (root as unknown as Record<string, Fiber>)[key];
+    // The DOM container can retain the alternate HostRoot. Its owner points
+    // to the currently committed tree, including immediately after mounting.
+    const current = container.stateNode && "current" in container.stateNode
+      ? container.stateNode.current
+      : undefined;
+    const pending: Fiber[] = [current ?? container];
     let boundary: Boundary | undefined;
     while (pending.length) {
       const fiber = pending.pop()!;
-      if (fiber.stateNode?.retryManually) {
+      if (fiber.stateNode && "retryManually" in fiber.stateNode && fiber.stateNode.retryManually) {
         boundary = fiber.stateNode;
         break;
       }
@@ -39,13 +46,15 @@ async function injectBoundaryFault(page: Page, persistent = false): Promise<void
       if (fault.failing) throw new Error("Contrived renderer recovery fault");
       return content;
     }
-    boundary.props = {
-      ...boundary.props,
-      children: { ...suspense, props: { ...suspense.props, children: { ...content, type: RecoveryTestFault } } },
+    // Keep the props object shared with the fiber: forceUpdate restores the
+    // instance's props from that fiber before rendering. This production build
+    // does not freeze props. Replacing only instance.props discards the fault.
+    boundary.props.children = {
+      ...suspense,
+      props: { ...suspense.props, children: { ...content, type: RecoveryTestFault } },
     };
     boundary.forceUpdate();
-    if (!keepFailing) setTimeout(() => { fault.failing = false; }, 100);
-  }, persistent);
+  });
 }
 
 test("remounts the UI with its unsent draft while the main-owned turn completes", async () => {
@@ -55,6 +64,7 @@ test("remounts the UI with its unsent draft while the main-owned turn completes"
     await expect(app.window.getByText("lifecycle baseline ready", { exact: true })).toBeVisible();
     await app.window.getByLabel("Reply").fill("Start the contrived recovery turn.");
     await app.window.getByRole("button", { name: "Send", exact: true }).click();
+    await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await app.window.getByLabel("Reply").fill("Keep this unsent draft through recovery.");
@@ -62,9 +72,25 @@ test("remounts the UI with its unsent draft while the main-owned turn completes"
     const timeOrigin = await app.window.evaluate(() => performance.timeOrigin);
     await injectBoundaryFault(app.window);
     await expect(app.window.getByRole("alert")).toContainText("Restoring this window");
+    await app.window.evaluate(() => {
+      (window as unknown as { recoveryTestFault: { failing: boolean } }).recoveryTestFault.failing = false;
+    });
     // The UI is still in its fallback while main consumes and persists the
     // provider's completion. Recovery must hydrate that work, without re-send.
-    await app.advance({ stepId: "turn-completed-1" });
+    await app.electronApp.evaluate(async () => {
+      for (const stepId of [
+        "token-usage-1",
+        "rate-limits-1",
+        "command-output-1",
+        "status-idle-midturn",
+        "assistant-delta-1",
+        "assistant-delta-2",
+        "status-idle-1",
+        "turn-completed-1",
+      ]) {
+        await globalThis.__PWRAGENT_REPLAY_DRIVER__!.advance({ stepId });
+      }
+    });
     await expect(app.window.getByRole("alert")).toHaveCount(0);
     await expect(app.window.getByRole("heading", { level: 2, name: "Turn lifecycle replay" })).toBeVisible();
     await expect(app.window.getByLabel("Reply")).toContainText("Keep this unsent draft through recovery.");
@@ -82,7 +108,7 @@ test("stops repeated boundary failures and allows a manual remount", async ({ br
   try {
     await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
     await expect(app.window.getByText("lifecycle baseline ready", { exact: true })).toBeVisible();
-    await injectBoundaryFault(app.window, true);
+    await injectBoundaryFault(app.window);
     await expect(app.window.getByRole("alert")).toContainText("Automatic recovery stopped");
     await app.window.screenshot({ path: testInfo.outputPath("renderer-recovery-fallback.png") });
     await app.window.evaluate(() => {
@@ -114,15 +140,24 @@ test("reloads after actual renderer termination while retaining the main process
       return { pid: process.pid, windowId: window.id, webContentsId: window.webContents.id };
     });
     const timeOrigin = await app.window.evaluate(() => performance.timeOrigin);
-    await app.electronApp.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer();
+    await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents;
+      // Establish termination before checking readiness. forcefullyCrashRenderer
+      // returns before the crash event, so polling immediately can see the old,
+      // still healthy document and incorrectly pass the barrier.
+      const gone = new Promise<void>((resolve) => {
+        contents.once("render-process-gone", () => resolve());
+      });
+      contents.forcefullyCrashRenderer();
+      await gone;
     });
-    // Inspect via main while the old page is crashed. did-finish-load means
-    // the replacement document exists; the visible shell assertion gates React.
-    await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) => {
+    // Inspect via main while the old page is crashed. The replacement must
+    // finish loading before the visible shell assertion gates React readiness.
+    const restored = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents;
       return !contents.isCrashed() && !contents.isLoading();
-    })).toBe(true);
+    }));
+    await expect.poll(restored.read).toBe(true).catch(restored.rethrowWithLastFailure);
     await expect(app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first()).toBeVisible();
     await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
     await expect(app.window.getByLabel("Reply")).toContainText("Saved before renderer termination.");

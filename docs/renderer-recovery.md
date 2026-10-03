@@ -44,6 +44,8 @@ Budgets deliberately have no healthy-period reset. A recurring persistent fault
 cannot establish an endless periodic retry cycle. The counters and checkpoints
 are window-local memory; this feature adds no SQLite writes or idle timers.
 Main's existing `render-process-gone` handler still stops its window diagnostics.
+Renderer termination no longer invokes the main-window shutdown path; only an
+actual window close participates in the existing quit-confirmation flow.
 This feature does not add minidump collection or uploads.
 
 The same React boundary protects auxiliary routes. Automatic native termination
@@ -93,6 +95,8 @@ loop is not reproduced or claimed fixed by recovery.
 - Main tests cover termination evidence before reload, lifetime limits, native
   fallback, close/clean-exit handling, and an actual `ThreadTurnQueue` completing
   its running entry and admitting its queued successor after recovery.
+  Bootstrap tests verify that termination retains agent, messaging, and
+  federation resources and cannot approve an unanswered quit confirmation.
 - `renderer-recovery.spec.ts` uses contrived replay data to test an actual root
   boundary remount with an unsent composer draft while main consumes a turn's
   completion, persistent boundary fallback/manual recovery, and real Electron
