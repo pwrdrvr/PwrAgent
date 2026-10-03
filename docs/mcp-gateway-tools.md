@@ -54,6 +54,10 @@ PwrAgent reviewer instead. `auto` requires a reviewer decision for each call;
 `allow` pre-approves allowed tools; `deny` disables native MCP tools and rejects
 gateway invocations, even in Full Access. Disabling the profile reviewer retains
 existing automation pre-approval unless a run explicitly chooses another policy.
+Startup requires an inherited-server inventory when applying server/tool
+restrictions or `backend`, `auto`, or `deny` approval policies. If the runtime
+cannot report that inventory, startup fails before creating the execution thread
+and releases any prepared bridges.
 
 `mcpApproval.questions` chooses `inherit`, `auto`, or `reject`. Review is limited
 to the allowed servers, and accepted content must validate against the original
@@ -73,8 +77,11 @@ The applied grants are installed before `turn/start`. Current selection, actor
 permissions, connection authorization, schema revision and arguments still apply
 to gateway calls. Grants and pending reviews are cancelled on interruption,
 completion, failed startup and shutdown. User steering invalidates in-flight
-reviews and updates the intent for subsequent reviews. No wrapper approval is
-cached and no new SQLite writes are introduced by host review dispatch.
+reviews and updates the shared task context used by subsequent invocation,
+question, and escalation reviews. That context is initialized before
+`turn/start` and cleared when the run finishes or fails. Accepted escalation
+decisions are translated through the protocol response builder. No wrapper
+approval is cached and no new SQLite writes are introduced by host review dispatch.
 
 ### Reviewer adapters and settings
 

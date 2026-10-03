@@ -9103,7 +9103,6 @@ export class DesktopBackendRegistry {
       suppressBindingBroadcast?: boolean;
       mcpApproval?: AutomationMcpApprovalPolicy;
       mcpAllowedServerNames?: string[];
-      taskPrompt?: string;
       mcpConnectionIds?: string[];
       mcpServerAliases?: Record<string, string[]>;
       toolAllowlist?: string[];
@@ -11009,7 +11008,6 @@ export class DesktopBackendRegistry {
       suppressBindingBroadcast: params.suppressBindingBroadcast,
       mcpApproval,
       mcpAllowedServerNames: mcp?.allowedServerNames,
-      taskPrompt: params.mcpReviewTask ?? submittedPrompt,
       mcpConnectionIds: mcp?.connectionIds,
       mcpServerAliases: mcp?.serverAliases,
       toolAllowlist: params.toolAllowlist,
@@ -11018,6 +11016,8 @@ export class DesktopBackendRegistry {
     };
     // Tool calls can arrive before turn/start returns. Install the scoped
     // authorization before allowing the runtime to execute any tools.
+    const reviewTaskKey = buildTitleGenerationKey(params.backend, headlessThread.threadId);
+    this.activeMcpReviewTasks.set(reviewTaskKey, (params.mcpReviewTask ?? submittedPrompt ?? "").slice(0, 16000));
     this.headlessAutomationTurns.set(pendingKey, record);
     for (const registration of mcp?.registrations ?? []) registration.bindThread(headlessThread.threadId);
     let turn: Awaited<ReturnType<BackendClient["startTurn"]>>;
@@ -11032,6 +11032,7 @@ export class DesktopBackendRegistry {
         sandbox,
       });
     } catch (error) {
+      this.cancelMcpReviews(params.backend, headlessThread.threadId);
       this.headlessAutomationTurns.delete(pendingKey);
       for (const registration of mcp?.registrations ?? []) registration.revoke();
       throw error;
@@ -17981,8 +17982,9 @@ export class DesktopBackendRegistry {
       }
       const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
       const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
-      if (inheritedNames === undefined && (params.mcpAllowlist?.length || params.toolAllowlist?.length || !providerEnabled)) {
-        throw new Error("The Codex runtime cannot report configured MCP servers, so the automation's MCP allowlist cannot be applied.");
+      if (inheritedNames === undefined
+        && (params.mcpAllowlist?.length || params.toolAllowlist?.length || !providerEnabled || params.mcpToolApproval !== "allow")) {
+        throw new Error("The Codex runtime cannot report configured MCP servers, so the automation's MCP allowlist or approval policy cannot be applied.");
       }
       let inventory: ListThreadMcpServersResponse["servers"] = [];
       if (params.client.listMcpServers && (inheritedNames?.length || registrations.length)) {
@@ -22329,7 +22331,7 @@ export class DesktopBackendRegistry {
   async setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
-    this.cancelMcpReviews(request.backend, request.threadId);
+    this.cancelMcpReviews(request.backend, request.threadId, undefined, false);
     this.mcpGatewayTools?.cancel(request.backend, request.threadId);
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
@@ -26362,6 +26364,7 @@ export class DesktopBackendRegistry {
       ),
     );
     this.headlessAutomationTurns.delete(pendingKey);
+    this.cancelMcpReviews(backend, notification.params.threadId, turnId);
     for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     backendRegistryLog.info("automation headless turn reached terminal status", {
       agentThreadId: run.agentThreadId,
@@ -26430,7 +26433,6 @@ export class DesktopBackendRegistry {
         queueEntryId: string;
         mcpApproval?: AutomationMcpApprovalPolicy;
         mcpAllowedServerNames?: string[];
-        taskPrompt?: string;
         mcpConnectionIds?: string[];
         mcpServerAliases?: Record<string, string[]>;
         toolAllowlist?: string[];
@@ -35356,13 +35358,15 @@ export class DesktopBackendRegistry {
       && (request.method === "item/commandExecution/requestApproval" || request.method === "item/fileChange/requestApproval")
       && (headlessAutomation ? headlessAutomation.executionMode === "default" : this.isLiveDynamicToolCall(backend, { threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }) && await this.shouldReviewEscalationForThread({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }))) {
       const response = await this.reviewMcpRequest({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }, {
-        kind: "escalation", serverName: String(backend), message: request.method, task: headlessAutomation?.taskPrompt,
+        kind: "escalation", serverName: String(backend), message: request.method,
         context: { request: this.withEmbeddedFileChangeApprovalContext({ backend, notification: request }).notification.params },
       });
       const stillRunning = headlessAutomation
         ? this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
         : this.isLiveDynamicToolCall(backend, { threadId: request.params.threadId, turnId: request.params.turnId ?? undefined });
-      return { decision: !stillRunning || response.action === "cancel" ? "cancel" : response.action === "accept" ? "approve" : "decline" };
+      return buildPendingRequestResponse(request,
+        !stillRunning || response.action === "cancel" ? "cancel" : response.action === "accept" ? "approve" : "decline",
+      );
     }
     if (request.method === "mcpServer/elicitation/request") {
       const serverName = String(request.params.serverName ?? "");
@@ -35376,7 +35380,7 @@ export class DesktopBackendRegistry {
       if (allowed && live && (!headlessAutomation || await this.isAutomationMcpServerSelected(backend, headlessAutomation, serverName))) {
         const response = await this.reviewMcpRequest({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }, {
           kind: "question", serverName, message: String(request.params.message ?? ""),
-          mode: String(request.params.mode ?? "form"), schema: readRecord(request.params.requestedSchema), task: headlessAutomation?.taskPrompt,
+          mode: String(request.params.mode ?? "form"), schema: readRecord(request.params.requestedSchema),
           context: { automationRunId: headlessAutomation?.automationRunId },
         });
         const stillRunning = headlessAutomation
@@ -35498,7 +35502,7 @@ export class DesktopBackendRegistry {
       if (policy === "auto" || policy === "backend" && automation.executionMode !== "full-access") {
         const decision = await this.reviewMcpRequest(context, {
           kind: "invocation", serverName: invocation.serverName, message: notification.params.message as string,
-          task: automation.taskPrompt, context: { invocation, automationRunId: automation.automationRunId },
+          context: { invocation, automationRunId: automation.automationRunId },
         }, signal);
         return decision.action === "accept";
       }
@@ -35625,7 +35629,7 @@ export class DesktopBackendRegistry {
   }
 
   private async reviewMcpRequest(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }, input: McpReviewInput, signal?: AbortSignal) {
-    input = { ...input, task: input.task ?? this.activeMcpReviewTasks.get(buildTitleGenerationKey(context.backend, context.threadId)) };
+    input = { ...input, task: this.activeMcpReviewTasks.get(buildTitleGenerationKey(context.backend, context.threadId)) ?? input.task };
     const key = randomUUID();
     const controller = new AbortController();
     this.mcpReviews.set(key, { ...context, controller });
@@ -35643,17 +35647,19 @@ export class DesktopBackendRegistry {
     if (!text) return;
     const key = buildTitleGenerationKey(backend, threadId);
     const previous = this.activeMcpReviewTasks.get(key) ?? "";
-    this.cancelMcpReviews(backend, threadId, turnId);
+    this.cancelMcpReviews(backend, threadId, turnId, false);
     this.activeMcpReviewTasks.set(key, `${previous}\nUser steering:\n${text}`.slice(-16000));
   }
 
-  private cancelMcpReviews(backend?: AppServerBackendKind, threadId?: string, turnId?: string): void {
+  private cancelMcpReviews(backend?: AppServerBackendKind, threadId?: string, turnId?: string, forgetTask = true): void {
     const hasOtherTurn = backend && threadId && turnId && [...this.activeTurnKeys].some((key) => {
       const turn = parseActiveTurnKey(key);
       return turn?.backend === backend && turn.threadId === threadId && turn.turnId !== turnId;
     });
-    if (backend && threadId && !hasOtherTurn) this.activeMcpReviewTasks.delete(buildTitleGenerationKey(backend, threadId));
-    else if (!backend && !threadId) this.activeMcpReviewTasks.clear();
+    if (forgetTask) {
+      if (backend && threadId && !hasOtherTurn) this.activeMcpReviewTasks.delete(buildTitleGenerationKey(backend, threadId));
+      else if (!backend && !threadId) this.activeMcpReviewTasks.clear();
+    }
     for (const [key, review] of this.mcpReviews) {
       if (backend && review.backend !== backend || threadId && review.threadId !== threadId || turnId && review.turnId && review.turnId !== turnId) continue;
       review.controller.abort();

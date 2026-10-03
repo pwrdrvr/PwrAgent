@@ -20,6 +20,8 @@ describe("backend MCP gateway dispatch", () => {
   let registry: DesktopBackendRegistry;
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
+  let startThread: ReturnType<typeof vi.fn<() => Promise<{ threadId: string }>>>;
+  let readConfiguredMcpServerNames: ReturnType<typeof vi.fn<() => Promise<string[]>>>;
   let reviewerSettings: DesktopMcpAutoApprovalSettings;
   const reviewModel = vi.fn(async (_request: unknown) => ({ status: "ok", object: { action: "decline", content: null as Record<string, unknown> | null, reason: "Unauthorized." } }));
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
@@ -29,6 +31,7 @@ describe("backend MCP gateway dispatch", () => {
     activeMcpReviewTasks: Map<string, string>;
     rememberMcpReviewSteering(backend: "codex", threadId: string, turnId: string, input: readonly AppServerTurnInputItem[]): void;
     acpBackend: AcpBackendAdapter;
+    codexClient: { readConfiguredMcpServerNames?: () => Promise<string[]> };
     approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal): Promise<boolean>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
@@ -63,6 +66,8 @@ describe("backend MCP gateway dispatch", () => {
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
+    startThread = vi.fn(async () => ({ threadId: "headless-1" }));
+    readConfiguredMcpServerNames = vi.fn(async () => []);
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
       server: { name: "one", command: "fixture", args: [], env: {} },
       bindThread: vi.fn(), revoke: vi.fn(),
@@ -71,7 +76,7 @@ describe("backend MCP gateway dispatch", () => {
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
-        readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
+        readConfiguredMcpServerNames, startThread,
         startTurn, generateStructuredObject: reviewModel,
       } as never,
       overlayStore: store, isBootstrapMode: () => false,
@@ -139,6 +144,56 @@ describe("backend MCP gateway dispatch", () => {
     expect(await internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "cmd-review", command: "rm fixture.txt" } })).toEqual({ decision: "decline" });
     expect(reviewModel.mock.calls[0][0]).toMatchObject({ system: expect.stringContaining("Check exact shell and file effects") });
     expect(JSON.stringify(reviewModel.mock.calls[0][0])).not.toContain("Monitoring policy");
+  });
+
+  it.each(["item/commandExecution/requestApproval", "item/fileChange/requestApproval"] as const)("returns the protocol acceptance value for %s", async (method) => {
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized." } });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "accepted-escalation", executionMode: "default", input: [{ type: "text", text: "Inspect fixture files." }] });
+    expect(await internals.handleServerRequest("codex", { method, params: { threadId: "headless-1", turnId: "turn-1", requestId: "accepted-escalation", command: "cat fixture.txt" } })).toEqual({ decision: "accept" });
+  });
+
+  it.each(["invocation", "question", "escalation"] as const)("uses current automation intent for subsequent %s reviews after steering", async (kind) => {
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
+    const task = "Read fixture health.";
+    const steering = "Do not read fixture health.";
+    reviewModel.mockImplementation(async (request) => {
+      const input = JSON.parse((request as { prompt: string }).prompt) as { task?: string };
+      return { status: "ok", object: { action: input.task?.includes(steering) ? "decline" : "accept", content: kind === "question" ? {} : null, reason: "Current task policy." } };
+    });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "updated-intent", executionMode: "default", mcpReviewTask: task, mcpAllowlist: ["one"], mcpApproval: { tools: "auto", questions: "auto" }, input: [{ type: "text", text: "Incoming monitoring alert." }] });
+    expect(internals.activeMcpReviewTasks.get("codex:headless-1")).toBe(task);
+    internals.rememberMcpReviewSteering("codex", "headless-1", "turn-1", [{ type: "text", text: steering }]);
+    if (kind === "invocation") {
+      expect(await internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, { backend: "codex", threadId: "headless-1", turnId: "turn-1", transport: "codex_dynamic_tool" }, new AbortController().signal)).toBe(false);
+    } else if (kind === "question") {
+      expect(await internals.handleServerRequest("codex", { method: "mcpServer/elicitation/request", params: { threadId: "headless-1", turnId: "turn-1", requestId: "updated-intent", serverName: "one", mode: "form", message: "Read health?", requestedSchema: { type: "object", properties: {} }, _meta: null } })).toEqual({ action: "decline", content: null, _meta: null });
+    } else {
+      expect(await internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "updated-intent", command: "cat fixture.txt" } })).toEqual({ decision: "decline" });
+    }
+    expect(reviewModel).toHaveBeenCalledOnce();
+    const input = JSON.parse((reviewModel.mock.calls[0][0] as { prompt: string }).prompt) as { task: string };
+    expect(input.task).toContain(task);
+    expect(input.task).toContain(steering);
+    expect(input.task).not.toContain("Incoming monitoring alert.");
+  });
+
+  it.each([
+    ["deny", "failed"], ["auto", "failed"], ["backend", "failed"],
+    ["deny", "unavailable"], ["auto", "unavailable"], ["backend", "unavailable"],
+  ] as const)("rejects %s policy startup when inherited server inventory is %s", async (tools, availability) => {
+    if (availability === "failed") readConfiguredMcpServerNames.mockRejectedValue(new Error("Inventory failed."));
+    else delete internals.codexClient.readConfiguredMcpServerNames;
+    await expect(registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "inventory-failed", mcpApproval: { tools }, input: [{ type: "text", text: "Inspect fixture health." }] })).rejects.toThrow("cannot report configured MCP servers");
+    expect(startThread).not.toHaveBeenCalled();
+    expect(startTurn).not.toHaveBeenCalled();
+    expect((await registerBridge.mock.results[0].value)?.revoke).toHaveBeenCalledOnce();
+  });
+
+  it("retains unrestricted legacy startup when inherited inventory is unavailable", async () => {
+    delete internals.codexClient.readConfiguredMcpServerNames;
+    await expect(registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "legacy-inventory", input: [{ type: "text", text: "Inspect fixture health." }] })).resolves.toMatchObject({ headlessThreadId: "headless-1" });
+    expect(startTurn).toHaveBeenCalledOnce();
   });
 
   it("rejects a helper answer produced by a model other than the selected reviewer", async () => {
@@ -293,6 +348,7 @@ describe("backend MCP gateway dispatch", () => {
     const bridge = await registerBridge.mock.results[0].value;
     expect(bridge.revoke).toHaveBeenCalledOnce();
     expect(internals.headlessAutomationTurns.size).toBe(0);
+    expect(internals.activeMcpReviewTasks.has("codex:headless-1")).toBe(false);
   });
 
   it("cancels upstream MCP questions even when the automation pre-approves that server", async () => {
