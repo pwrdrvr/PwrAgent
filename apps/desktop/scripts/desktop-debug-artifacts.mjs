@@ -6,7 +6,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const RELEASE_DEBUG_TARGETS = [
@@ -45,6 +45,13 @@ function run(command, args, cwd) {
 
 function hash(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function desktopDebugTarCommand(platform = process.platform, systemRoot = process.env.SystemRoot || "C:\\Windows") {
+  // Git's GNU tar can precede Windows' bsdtar in PATH and interpret an
+  // absolute archive path's drive letter as a remote host. Select the native
+  // executable explicitly for both creation and extraction.
+  return platform === "win32" ? win32.join(systemRoot, "System32", "tar.exe") : "tar";
 }
 
 function walk(root, prefix = "") {
@@ -156,7 +163,7 @@ export function createDesktopDebugArtifact({
     }
     writeFileSync(join(staging, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     writeFileSync(join(staging, "README.md"), instructions);
-    run("tar", ["-czf", archive, "-C", staging, "manifest.json", "README.md", "out"], repoRoot);
+    run(desktopDebugTarCommand(), ["-czf", archive, "-C", staging, "manifest.json", "README.md", "out"], repoRoot);
     writeFileSync(`${archive}.sha256`, `${hash(readFileSync(archive))}  ${name}\n`);
   } finally {
     rmSync(staging, { recursive: true, force: true });
@@ -175,7 +182,7 @@ export function verifyReleaseDebugArtifacts(directory, version, commit) {
     if (recorded !== `${hash(readFileSync(archive))}  ${name}`) {
       throw new Error(`Debug artifact checksum mismatch: ${name}`);
     }
-    const manifest = JSON.parse(run("tar", ["-xOf", archive, "manifest.json"], directory));
+    const manifest = JSON.parse(run(desktopDebugTarCommand(), ["-xOf", archive, "manifest.json"], directory));
     if (manifest.schemaVersion !== 1 || manifest.version !== version
       || manifest.commit !== commit || manifest.releaseTag !== `v${version}`
       || `${manifest.platform}-${manifest.arch}` !== target || manifest.trackedChanges) {

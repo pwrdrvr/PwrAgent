@@ -815,7 +815,7 @@ if (!signStageOnly) {
     desktopRoot,
     repoRoot,
     platform: win ? "win32" : linux ? "linux" : "darwin",
-    arch: win ? "x64" : linux ? linuxArch : macArch,
+    arch: win ? "x64" : linux ? currentLinuxBuilderArch() : macArch,
   });
   console.log(`  debug artifact: ${debug.archive}`);
 

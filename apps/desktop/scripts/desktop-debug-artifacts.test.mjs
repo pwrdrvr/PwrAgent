@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import {
   createDesktopDebugArtifact, inspectDebugOutput, RELEASE_DEBUG_TARGETS,
+  desktopDebugTarCommand,
   verifyReleaseDebugArtifacts,
   verifyPublishedDebugArtifacts,
 } from "./desktop-debug-artifacts.mjs";
@@ -57,7 +59,7 @@ it("retains exact JS, workers, lazy chunks, maps and build identity for all rele
         version: "1.2.3", platform, arch, trackedChanges: false,
         ci: { runId: "42", runAttempt: "2" },
       });
-      const result = spawnSync("tar", ["-xOf", archive, "out/main/workers/index.js"], { encoding: "utf8" });
+      const result = spawnSync(desktopDebugTarCommand(), ["-xOf", archive, "out/main/workers/index.js"], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe(readFileSync(join(desktopRoot, "out/main/workers/index.js"), "utf8"));
       expect(manifest.files).toEqual(expect.arrayContaining([
@@ -75,6 +77,39 @@ it("retains exact JS, workers, lazy chunks, maps and build identity for all rele
     expect(() => verifyReleaseDebugArtifacts(directory, "1.2.3", commit)).toThrow();
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("selects Windows native tar rather than a PATH entry from Git", () => {
+  expect(desktopDebugTarCommand("win32", "D:\\Windows")).toBe("D:\\Windows\\System32\\tar.exe");
+  expect(desktopDebugTarCommand("linux")).toBe("tar");
+  expect(desktopDebugTarCommand("darwin")).toBe("tar");
+});
+
+it("captures the configured Linux architecture from release orchestration before packaging", () => {
+  // Execute the actual capture call with the architecture resolver in scope.
+  // Generator-only tests cannot catch a missing binding in release.mjs.
+  const release = readFileSync(new URL("./release.mjs", import.meta.url), "utf8");
+  const resolver = release.slice(
+    release.indexOf("function currentLinuxBuilderArch()"),
+    release.indexOf("function findLinuxUnpackedDir"),
+  );
+  const capture = release.slice(
+    release.indexOf("  const debug = createDesktopDebugArtifact("),
+    release.indexOf("  console.log(`  debug artifact:"),
+  );
+  for (const arch of ["x64", "arm64"]) {
+    let options;
+    runInNewContext(`${resolver}\n${capture}`, {
+      process: { env: { PWRAGENT_LINUX_ARCH: arch }, arch: "x64" },
+      linux: true, win: false, macArch: "universal",
+      desktopRoot: "/fixture/desktop", repoRoot: "/fixture",
+      createDesktopDebugArtifact: (captured) => {
+        options = captured;
+        return { archive: "/fixture/debug.tar.gz" };
+      },
+    });
+    expect(options).toMatchObject({ platform: "linux", arch });
   }
 });
 
