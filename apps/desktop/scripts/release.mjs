@@ -58,6 +58,7 @@ import {
 } from "./update-channel-files.mjs";
 import { handoffPreloadedCodesignIdentity } from "./release-signing-environment.mjs";
 import { packageMacDryrun } from "./macos-dryrun-signing.mjs";
+import { createDesktopDebugArtifact } from "./desktop-debug-artifacts.mjs";
 // The checksum manifest is written here and parsed by the signing job when it
 // cuts the stable aliases; one module owns both halves of that format.
 import { writeWindowsChecksums } from "./windows-release-artifacts.mjs";
@@ -808,6 +809,15 @@ if (!signStageOnly) {
 
   step("electron-vite build");
   runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
+
+  step("retain exact JavaScript and hidden source maps");
+  const debug = createDesktopDebugArtifact({
+    desktopRoot,
+    repoRoot,
+    platform: win ? "win32" : linux ? "linux" : "darwin",
+    arch: win ? "x64" : linux ? currentLinuxBuilderArch() : macArch,
+  });
+  console.log(`  debug artifact: ${debug.archive}`);
 
   if (!linux && !win) {
     step("native Dock tile plug-in build");

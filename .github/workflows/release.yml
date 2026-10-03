@@ -83,8 +83,21 @@ jobs:
 
       - name: Prepare release stage
         env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only
+
+      - name: Retain darwin-universal debug artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-debug-darwin-universal
+          path: |
+            apps/desktop/.local/debug-artifacts/*-darwin-universal-debug.tar.gz
+            apps/desktop/.local/debug-artifacts/*-darwin-universal-debug.tar.gz.sha256
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
 
       - name: Stage pinned Grok ACP runtime for Apple Silicon
         env:
@@ -93,8 +106,21 @@ jobs:
 
       - name: Prepare Apple Silicon release stage
         env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only --mac-arch=arm64
+
+      - name: Retain darwin-arm64 debug artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-debug-darwin-arm64
+          path: |
+            apps/desktop/.local/debug-artifacts/*-darwin-arm64-debug.tar.gz
+            apps/desktop/.local/debug-artifacts/*-darwin-arm64-debug.tar.gz.sha256
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
 
       - name: Archive signing input
         id: archive
@@ -249,9 +275,22 @@ jobs:
 
       - name: Package Linux
         env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --linux --no-publish
+
+      - name: Retain linux-${{ matrix.builder_arch }} debug artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-debug-linux-${{ matrix.builder_arch }}
+          path: |
+            apps/desktop/.local/debug-artifacts/*-linux-${{ matrix.builder_arch }}-debug.tar.gz
+            apps/desktop/.local/debug-artifacts/*-linux-${{ matrix.builder_arch }}-debug.tar.gz.sha256
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
 
       # `latest-linux.yml` (x64) and `latest-linux-arm64.yml` (arm64) are the
       # channel files electron-updater fetches from the release feed. The two
@@ -303,8 +342,21 @@ jobs:
 
       - name: Prepare Windows release stage
         env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --win --prepare-only
+
+      - name: Retain win32-x64 debug artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-debug-win32-x64
+          path: |
+            apps/desktop/.local/debug-artifacts/*-win32-x64-debug.tar.gz
+            apps/desktop/.local/debug-artifacts/*-win32-x64-debug.tar.gz.sha256
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
 
       - name: Archive Windows signing input
         id: archive
@@ -464,6 +516,21 @@ jobs:
           path: linux-dist
           merge-multiple: true
 
+      - name: Download exact-build debug artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-debug-*
+          path: debug-dist
+          merge-multiple: true
+
+      - name: Verify debug artifact targets, identities, and checksums
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          node apps/desktop/scripts/desktop-debug-artifacts.mjs verify-release \
+            debug-dist "${RELEASE_TAG#v}" "$(git rev-parse HEAD)"
+
       - name: Verify Linux packages and generate checksums
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -531,7 +598,8 @@ jobs:
             linux-dist/*.pacman \
             linux-dist/*.tar.gz \
             linux-dist/latest-linux*.yml \
-            linux-dist/SHA256SUMS
+            linux-dist/SHA256SUMS \
+            debug-dist/*
 
           is_prerelease="$(gh release view "$RELEASE_TAG" \
             --repo pwrdrvr/PwrAgent \
@@ -552,6 +620,8 @@ jobs:
             > "$RUNNER_TEMP/release-asset-names.txt"
           node apps/desktop/scripts/update-channel-files.mjs \
             verify-published "$RUNNER_TEMP/release-asset-names.txt"
+          node apps/desktop/scripts/desktop-debug-artifacts.mjs \
+            verify-published "$RUNNER_TEMP/release-asset-names.txt" "${RELEASE_TAG#v}"
 
       - name: Upload assembled release artifacts (debug retention)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -568,6 +638,7 @@ jobs:
             linux-dist/*.tar.gz
             linux-dist/latest-linux*.yml
             linux-dist/SHA256SUMS
+            debug-dist/*
           retention-days: 30
 
   publish-release-notes:
