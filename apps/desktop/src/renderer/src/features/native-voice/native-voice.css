@@ -191,6 +191,13 @@
   box-shadow: var(--shadow-popover);
   -webkit-app-region: no-drag;
 }
+
+/* Its tooltips portal to the body, outside the panel's layer, so the default
+   viewport-tooltip layer (90) would paint them under the panel. Both classes
+   in the selector so it wins whichever stylesheet the bundle loads last. */
+.viewport-tooltip.director-voice-panel__tooltip {
+  z-index: 140;
+}
 .director-voice-panel__head {
   display: flex;
   flex: none;
@@ -332,10 +339,12 @@
 }
 
 /* Hover card for the director mic, on the measurements of
-   `.context-usage-card` so the app's hover cards read as one family. */
+   `.context-usage-card` so the app's hover cards read as one family. It
+   portals to the body and can drop over the director panel (135), so it
+   takes the panel's tooltip layer. */
 .director-voice-card {
   position: fixed;
-  z-index: 90;
+  z-index: 140;
   display: flex;
   flex-direction: column;
   gap: 6px;

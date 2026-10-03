@@ -168,8 +168,15 @@ const MUTED_IDLE_END_SECONDS = Math.round(MUTED_IDLE_END_MS / 1000);
  * answering, and once it has finished and its turn is done the session ends
  * itself, so "ask, mute, listen" does not leave voice open.
  */
-export function VoiceMicToggle({ controller, view }: { controller: NativeVoiceController; view: VoiceView }) {
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+export function VoiceMicToggle({
+  controller, tooltipClassName = "viewport-tooltip", view,
+}: {
+  controller: NativeVoiceController;
+  /** A floating host passes its own layer: the tooltip portals out of it. */
+  tooltipClassName?: string;
+  view: VoiceView;
+}) {
+  const tooltip = useViewportTooltip({ className: tooltipClassName });
   if (view.status !== "listening") return null;
   return (
     <>

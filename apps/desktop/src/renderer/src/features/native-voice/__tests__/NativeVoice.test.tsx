@@ -1,10 +1,12 @@
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
@@ -494,6 +496,35 @@ it("resizes the director panel from its grip and remembers the size", async () =
   fireEvent.keyDown(screen.getByRole("button", { name: "Resize director voice" }), { key: "ArrowLeft" });
   expect(Number.parseFloat(panel.style.width)).toBe(before - 16);
   expect(JSON.parse(window.localStorage.getItem("pwragent:director-voice-panel")!)).toMatchObject({ width: before - 16 });
+});
+
+// The panel floats at its own layer and its tooltips portal to the body, so
+// a tooltip left on the default viewport-tooltip layer paints under the
+// panel it describes. Resolved through the real stylesheets, not a copy.
+it("draws the director panel's tooltips above the panel", async () => {
+  const styles = document.createElement("style");
+  styles.textContent = ["../../../styles/app.css", "../native-voice.css"]
+    .map((file) => readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"))
+    .join("\n");
+  document.head.append(styles);
+  try {
+    const f = voiceFixture();
+    // The masthead mic's hover card can drop over the panel too.
+    render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /></>);
+    await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+    await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+    const panelLayer = Number(getComputedStyle(directorPanel()!).zIndex);
+    expect(panelLayer).toBeGreaterThan(0);
+    for (const name of ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
+      fireEvent.mouseEnter(screen.getByRole("button", { name }));
+      const tooltip = await screen.findByRole("tooltip");
+      expect(Number(getComputedStyle(tooltip).zIndex), name).toBeGreaterThan(panelLayer);
+      fireEvent.mouseLeave(screen.getByRole("button", { name }));
+      await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    }
+  } finally {
+    styles.remove();
+  }
 });
 
 // Thread voice opens only on a local Codex thread. Everywhere else the mic
