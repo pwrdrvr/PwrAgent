@@ -1507,6 +1507,7 @@ export class DesktopSettingsService {
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
+        mcpAutoApproval: config.models?.mcpAutoApproval,
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),

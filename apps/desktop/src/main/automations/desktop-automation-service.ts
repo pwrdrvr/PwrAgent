@@ -1,3 +1,4 @@
+import { normalizeAutomationMcpApprovalPolicy } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerNotification,
@@ -531,7 +532,7 @@ export class DesktopAutomationService {
       triggers: request.triggers,
       schedule,
       backlogPolicy: request.backlogPolicy,
-      executionProfile: request.executionProfile,
+      executionProfile: request.executionProfile ? { ...request.executionProfile, mcpApproval: normalizeAutomationMcpApprovalPolicy(request.executionProfile.mcpApproval) } : request.executionProfile,
       priorRunLookback: request.priorRunLookback,
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
@@ -597,7 +598,7 @@ export class DesktopAutomationService {
       triggers: request.triggers,
       schedule: request.schedule,
       backlogPolicy: request.backlogPolicy,
-      executionProfile: request.executionProfile,
+      executionProfile: request.executionProfile ? { ...request.executionProfile, mcpApproval: normalizeAutomationMcpApprovalPolicy(request.executionProfile.mcpApproval) } : request.executionProfile,
       priorRunLookback: request.priorRunLookback,
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,

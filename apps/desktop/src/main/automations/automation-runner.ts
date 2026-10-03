@@ -59,7 +59,9 @@ export type HeadlessAutomationLauncher = {
     model?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    mcpReviewTask?: string;
     mcpAllowlist?: string[];
+    mcpApproval?: import("@pwragent/shared").AutomationMcpApprovalPolicy;
     toolAllowlist?: string[];
     /**
      * When true, the run delivers via explicit messaging actions, so the
@@ -108,7 +110,9 @@ export class HeadlessAutomationRunner implements AutomationRunner {
       model: params.automation.executionProfile?.model,
       reasoningEffort: params.automation.executionProfile?.reasoningEffort,
       serviceTier: params.automation.executionProfile?.serviceTier,
+      mcpReviewTask: params.automation.taskPrompt,
       mcpAllowlist: params.automation.executionProfile?.mcpAllowlist,
+      mcpApproval: params.automation.executionProfile?.mcpApproval,
       toolAllowlist: params.automation.executionProfile?.toolAllowlist,
       suppressBindingBroadcast: automationSuppressesBindingBroadcast(
         params.automation,

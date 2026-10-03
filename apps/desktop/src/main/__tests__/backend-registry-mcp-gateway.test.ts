@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
+import { DEFAULT_MCP_AUTO_APPROVAL_SETTINGS, type DesktopMcpAutoApprovalSettings, type AppServerPendingRequestNotification, type AppServerTurnInputItem, type AgentEvent, type ThreadExecutionMode } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -20,10 +20,14 @@ describe("backend MCP gateway dispatch", () => {
   let registry: DesktopBackendRegistry;
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
+  let reviewerSettings: DesktopMcpAutoApprovalSettings;
+  const reviewModel = vi.fn(async (_request: unknown) => ({ status: "ok", object: { action: "decline", content: null as Record<string, unknown> | null, reason: "Unauthorized." } }));
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
+    activeMcpReviewTasks: Map<string, string>;
+    rememberMcpReviewSteering(backend: "codex", threadId: string, turnId: string, input: readonly AppServerTurnInputItem[]): void;
     acpBackend: AcpBackendAdapter;
     approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal): Promise<boolean>;
     headlessAutomationTurns: Map<string, {
@@ -46,6 +50,9 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   beforeEach(async () => {
+    reviewerSettings = { ...DEFAULT_MCP_AUTO_APPROVAL_SETTINGS };
+    reviewModel.mockReset();
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "decline", content: null, reason: "Unauthorized." } });
     directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-gateway-dispatch-"));
     db = StateDb.open(path.join(directory, "state.db"));
     store = new SqliteOverlayStore(db);
@@ -65,9 +72,10 @@ describe("backend MCP gateway dispatch", () => {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
         readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
-        startTurn,
+        startTurn, generateStructuredObject: reviewModel,
       } as never,
       overlayStore: store, isBootstrapMode: () => false,
+      resolveMcpAutoApprovalSettings: () => reviewerSettings,
       mcpConnectionService: { registerBridge, requestGatewayToolOperation: operation },
     });
     internals = registry as unknown as typeof internals;
@@ -100,6 +108,101 @@ describe("backend MCP gateway dispatch", () => {
     });
     return events;
   }
+
+  it("uses the reviewer for automation tool calls and honors rejection before invocation", async () => {
+    reviewerSettings.enabled = true;
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "auto-review", input: [{ type: "text", text: "Read fixture health." }], mcpAllowlist: ["one"], mcpApproval: { tools: "auto" } });
+    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    await internals.handleServerRequest("codex", { ...request("search_mcp_tools", {}, "review-search"), params: { ...request("search_mcp_tools", {}, "review-search").params, threadId: "headless-1" } });
+    const result = await internals.handleServerRequest("codex", { ...request("call_mcp_tool", args), params: { ...request("call_mcp_tool", args).params, threadId: "headless-1" } });
+    expect(result.success).toBe(false);
+    expect(reviewModel, JSON.stringify(result)).toHaveBeenCalledOnce();
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+    expect(reviewModel.mock.calls[0][0]).toMatchObject({ model: reviewerSettings.model, disableExecution: true, prompt: expect.stringContaining("Read fixture health.") });
+  });
+
+  it("answers an allowed automation MCP question using the configured reviewer", async () => {
+    reviewerSettings.enabled = true;
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: { region: "us" }, reason: "Task specifies US." } });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "question-review", input: [{ type: "text", text: "Investigate US health." }], mcpAllowlist: ["one"], mcpApproval: { questions: "auto" } });
+    const result = await internals.handleServerRequest("codex", {
+      method: "mcpServer/elicitation/request",
+      params: { threadId: "headless-1", turnId: "turn-1", requestId: "review-question", serverName: "one", mode: "form", message: "Choose region", requestedSchema: { type: "object", properties: { region: { type: "string", enum: ["us", "eu"] } }, required: ["region"] }, _meta: null },
+    });
+    expect(result).toEqual({ action: "accept", content: { region: "us" }, _meta: null });
+    expect(reviewModel).toHaveBeenCalledOnce();
+  });
+
+  it("uses the escalation prompt for Default Access command approvals", async () => {
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true, prompt: "Monitoring policy", escalationPrompt: "Check exact shell and file effects" };
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "escalation", executionMode: "default", input: [{ type: "text", text: "Inspect fixture files." }] });
+    expect(await internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "cmd-review", command: "rm fixture.txt" } })).toEqual({ decision: "decline" });
+    expect(reviewModel.mock.calls[0][0]).toMatchObject({ system: expect.stringContaining("Check exact shell and file effects") });
+    expect(JSON.stringify(reviewModel.mock.calls[0][0])).not.toContain("Monitoring policy");
+  });
+
+  it("rejects a helper answer produced by a model other than the selected reviewer", async () => {
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized." }, model: "another-model" } as never);
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "model-mismatch", executionMode: "default", input: [{ type: "text", text: "Inspect fixture files." }] });
+    expect(await internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "model-mismatch", command: "cat fixture.txt" } })).toEqual({ decision: "decline" });
+  });
+
+  it("cancels an in-flight approval when steering changes the task", async () => {
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
+    let finish!: (answer: Awaited<ReturnType<typeof reviewModel>>) => void;
+    let started!: () => void;
+    const reviewing = new Promise<void>((resolve) => { started = resolve; });
+    reviewModel.mockImplementation(() => {
+      started();
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "steering", executionMode: "default", input: [{ type: "text", text: "Inspect fixture files." }] });
+    const response = internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "steering", command: "cat fixture.txt" } });
+    await reviewing;
+    internals.rememberMcpReviewSteering("codex", "headless-1", "turn-1", [{ type: "text", text: "Stop inspecting files." }]);
+    expect(await response).toEqual({ decision: "cancel" });
+    finish({ status: "ok", object: { action: "accept", content: null, reason: "Old task." } });
+    expect(internals.activeMcpReviewTasks.get("codex:headless-1")).toContain("Stop inspecting files.");
+  });
+
+  it("does not review a question from a server outside the automation allowlist", async () => {
+    reviewerSettings.enabled = true;
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "scope", input: [{ type: "text", text: "Inspect fixture health." }], mcpAllowlist: ["one"] });
+    expect(await internals.handleServerRequest("codex", { method: "mcpServer/elicitation/request", params: { threadId: "headless-1", turnId: "turn-1", requestId: "out-of-scope", serverName: "other", mode: "form", message: "Approve this unrelated action?", requestedSchema: { type: "object", properties: {} }, _meta: null } })).toMatchObject({ action: "cancel" });
+    expect(reviewModel).not.toHaveBeenCalled();
+  });
+
+  it("discards an accepted answer when the selected connection is removed during review", async () => {
+    reviewerSettings.enabled = true;
+    reviewModel.mockImplementation(async () => {
+      await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+      return { status: "ok", object: { action: "accept", content: {}, reason: "OK" } };
+    });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "revoke", input: [{ type: "text", text: "Inspect fixture health." }], mcpAllowlist: ["one"] });
+    expect(await internals.handleServerRequest("codex", { method: "mcpServer/elicitation/request", params: { threadId: "headless-1", turnId: "turn-1", requestId: "revoked", serverName: "one", mode: "form", message: "Continue?", requestedSchema: { type: "object", properties: {} }, _meta: null } })).toMatchObject({ action: "cancel" });
+    expect(reviewModel).toHaveBeenCalledOnce();
+  });
+
+  it("honors an automation's reject tool policy even in Full Access", async () => {
+    reviewerSettings.enabled = true;
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "deny", executionMode: "full-access", input: [{ type: "text", text: "Inspect fixture health." }], mcpAllowlist: ["one"], mcpApproval: { tools: "deny" } });
+    expect(await internals.approveGatewayInvocation({ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", arguments: {} }, { backend: "codex", threadId: "headless-1", turnId: "turn-1", transport: "codex_dynamic_tool" }, new AbortController().signal)).toBe(false);
+    expect(reviewModel).not.toHaveBeenCalled();
+  });
+
+  it("reviews ordinary Auto gateway calls and adds no SQLite writes", async () => {
+    reviewerSettings.enabled = true;
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized read." } });
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      await internals.handleServerRequest("codex", request("search_mcp_tools", {}, "auto-discover"));
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "auto-call"))).success).toBe(true);
+    });
+    expect(reviewModel).toHaveBeenCalledOnce();
+    expectSqliteWriteBudget({ scenario: "mcp-gateway-discovery-and-invocation", note: "MCP review uses an isolated model adapter and in-memory pending decisions without additional SQLite commits.", writes });
+  });
 
   it("invokes a selected MCP tool without a prompt in Full Access", async () => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
@@ -245,6 +348,25 @@ describe("backend MCP gateway dispatch", () => {
       new AbortController().signal,
     )).toBe(approved);
     expect(events).toHaveLength(approved ? 0 : 1);
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
+  it("uses the enabled reviewer for an ACP harness without native Auto", async () => {
+    reviewerSettings.enabled = true;
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized read." } });
+    const backend = "acp:fixture" as const;
+    vi.spyOn(internals.acpBackend, "getSession").mockReturnValue({
+      backendId: backend, sessionId: "thread-1", title: "Fixture", cwd: directory,
+      createdAt: 1, updatedAt: 1, status: "active", executionMode: "default",
+    });
+    vi.spyOn(internals.acpBackend, "getInstalledAgent").mockReturnValue(undefined);
+    vi.spyOn(registry, "listBackends").mockResolvedValue({ backends: [{ kind: backend, executionModes: [] }] } as never);
+    expect(await internals.approveGatewayInvocation(
+      { ...args, serverName: "Fixture" },
+      { backend, threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
+      new AbortController().signal,
+    )).toBe(true);
+    expect(reviewModel).toHaveBeenCalledOnce();
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 

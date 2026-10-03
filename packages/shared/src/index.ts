@@ -51,6 +51,7 @@ export * from "./inbox";
 export * from "./navigation-state";
 export * from "./navigation-snapshot-transport";
 export * from "./helper-models";
+export * from "./mcp-auto-approval";
 export * from "./pending-request-response";
 export * from "./path-display";
 export * from "./release-notes";

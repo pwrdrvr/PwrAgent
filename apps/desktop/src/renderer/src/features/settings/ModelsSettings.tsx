@@ -39,6 +39,7 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
+import { McpAutoApprovalSettings } from "./McpAutoApprovalSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
 import {
   ManagedRuntimeProgressStrip,
@@ -134,6 +135,7 @@ export function ModelsSettings(props: {
   onSaveHelperModels?: (
     helperModels: DesktopHelperModelSettings,
   ) => Promise<unknown>;
+  onSaveMcpAutoApproval?: (settings: import("@pwragent/shared").DesktopMcpAutoApprovalSettings) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
@@ -621,6 +623,8 @@ export function ModelsSettings(props: {
         onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
       />
 
+      <McpAutoApprovalSettings settings={props.snapshot.models.mcpAutoApproval} backends={backends} saving={props.saving} onSave={async (settings) => await props.onSaveMcpAutoApproval?.(settings)} />
+
       <HelperModelSettings
         backends={backends}
         settings={props.snapshot.models.helperModels ?? { helpers: {} }}
@@ -762,6 +766,7 @@ function ProviderModelDefaultsSettings(props: {
   onSaveMigrations: (
     migrations: Record<string, DesktopProviderThreadModelMigration>,
   ) => Promise<boolean>;
+  onSaveMcpAutoApproval?: (settings: import("@pwragent/shared").DesktopMcpAutoApprovalSettings) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
 }) {
   const previews = useNavigationSettingsPreview(props.desktopApi);

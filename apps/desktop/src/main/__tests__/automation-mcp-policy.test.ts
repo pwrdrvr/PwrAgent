@@ -45,6 +45,17 @@ describe("automation MCP policy", () => {
     expect(result.config).toMatchObject({ mcp_servers: { pwragent_datadog_new: { command: "fixture", enabled: true, default_tools_approval_mode: "approve" } } });
   });
 
+  it("delegates native MCP approvals to the harness when requested", () => {
+    expect(buildAutomationMcpPolicy({ servers, mcpAllowlist: ["datadog"], toolApproval: "backend" }).config).toMatchObject({
+      mcp_servers: { datadog: { default_tools_approval_mode: "auto", tools: { get_metrics: { approval_mode: "auto" } } } },
+    });
+  });
+
+  it("requests review for native calls and disables native tools for deny", () => {
+    expect(buildAutomationMcpPolicy({ servers, mcpAllowlist: ["datadog"], toolApproval: "auto" }).config).toMatchObject({ mcp_servers: { datadog: { default_tools_approval_mode: "prompt" } } });
+    expect(buildAutomationMcpPolicy({ servers, mcpAllowlist: ["datadog"], toolApproval: "deny" }).config).toMatchObject({ mcp_servers: { datadog: { enabled: false } } });
+  });
+
   it("reports an unknown saved server without inventing a transport-less config", () => {
     expect(() => buildAutomationMcpPolicy({ servers, mcpAllowlist: ["missing"] })).toThrow("missing");
   });

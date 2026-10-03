@@ -1,5 +1,5 @@
 import type { DesktopThreadArchivePolicy } from "@pwragent/shared";
-import { validateLocalModelIds } from "@pwragent/shared";
+import { validateLocalModelIds, normalizeMcpAutoApprovalSettings, type DesktopMcpAutoApprovalSettings } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
@@ -283,6 +283,7 @@ export type DesktopSettingsConfig = {
       DesktopProviderThreadModelMigration
     >;
     helperModels?: DesktopHelperModelSettings;
+    mcpAutoApproval?: DesktopMcpAutoApprovalSettings;
     codex?: {
       path?: string;
       profile?: string;
@@ -1602,6 +1603,13 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.mcpAutoApproval !== undefined) {
+    const value = normalizeMcpAutoApprovalSettings(patch.models.mcpAutoApproval);
+    for (const [key, field] of Object.entries(value)) {
+      const tomlKey = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+      set(["models", "mcp_auto_approval", tomlKey], field);
+    }
+  }
   if (patch.models?.helperModels !== undefined) {
     const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
     if (helperModels.defaultModel) {
@@ -2198,6 +2206,7 @@ function normalizeDesktopConfig(
       providerThreadMigrations: readProviderThreadModelMigrations(
         models?.provider_thread_migrations,
       ),
+      mcpAutoApproval: readMcpAutoApprovalSettings(tables["models.mcp_auto_approval"]),
       helperModels: readHelperModelSettings(
         models?.helper_default_model,
         models?.helper_default_reasoning_effort,
@@ -2518,6 +2527,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const codex = config.models?.codex;
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
+  const mcpAutoApproval = config.models?.mcpAutoApproval;
   const helperModels = config.models?.helperModels;
   const hasHelperModels = Boolean(
     helperModels
@@ -2535,9 +2545,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       && Object.keys(providerThreadMigrations).length > 0
     )
     || hasHelperModels
+    || mcpAutoApproval
   ) {
     pruned.models = {
       ...(hasHelperModels ? { helperModels } : {}),
+      ...(mcpAutoApproval ? { mcpAutoApproval } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),
@@ -2896,6 +2908,12 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
     return undefined;
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function readMcpAutoApprovalSettings(value: unknown): DesktopMcpAutoApprovalSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const fields = Object.fromEntries(Object.entries(value).map(([key, field]) => [key.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase()), field]));
+  try { return normalizeMcpAutoApprovalSettings(fields); } catch { return undefined; }
 }
 
 function normalizeHelperModelChoice(

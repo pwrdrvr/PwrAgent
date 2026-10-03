@@ -24,6 +24,7 @@ export function buildAutomationMcpPolicy(params: {
   servers: AutomationMcpServer[];
   mcpAllowlist?: string[];
   toolAllowlist?: string[];
+  toolApproval?: "allow" | "backend" | "auto" | "deny";
 }): { config: ThreadStartParams["config"]; connectionIds: string[] } {
   const allowed = new Set(params.mcpAllowlist?.map((name) => name.trim()).filter(Boolean));
   const identities = (server: AutomationMcpServer) => [server.name, ...(server.aliases ?? [])];
@@ -41,6 +42,8 @@ export function buildAutomationMcpPolicy(params: {
       return [server.name, { ...server.config, enabled: false }];
     }
     if (server.connectionId) connectionIds.push(server.connectionId);
+    if (params.toolApproval === "deny") return [server.name, { ...server.config, enabled: false }];
+    const approvalMode = params.toolApproval === "auto" ? "prompt" : params.toolApproval === "backend" ? "auto" : "approve";
     const tools = (server.tools ?? []).map((name) => {
       const prefix = identities(server).find((identity) => name.startsWith(`mcp__${identity}__`));
       return prefix ? name.slice(`mcp__${prefix}__`.length) : name;
@@ -56,9 +59,9 @@ export function buildAutomationMcpPolicy(params: {
       ...(allowed.size || server.connectionId ? { enabled: true } : {}),
       // Wait for this server rather than silently omitting it from the run.
       ...(allowed.size ? { required: true } : {}),
-      default_tools_approval_mode: "approve",
+      default_tools_approval_mode: approvalMode,
       ...(enabledTools ? { enabled_tools: enabledTools } : {}),
-      ...(tools.length ? { tools: Object.fromEntries(tools.map((name) => [name, { approval_mode: "approve" }])) } : {}),
+      ...(tools.length ? { tools: Object.fromEntries(tools.map((name) => [name, { approval_mode: approvalMode }])) } : {}),
     }];
   });
   return { config: { mcp_servers: Object.fromEntries(entries) } as ThreadStartParams["config"], connectionIds };

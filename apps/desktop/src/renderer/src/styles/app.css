@@ -41197,3 +41197,11 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   line-height: 17px;
   white-space: nowrap;
 }
+
+/* Operator approval policies are prose, with enough room to read before saving. */
+.settings-mcp-reviewer__prompt {
+  height: auto;
+  min-height: 112px;
+  resize: vertical;
+  font-family: var(--font-sans);
+}

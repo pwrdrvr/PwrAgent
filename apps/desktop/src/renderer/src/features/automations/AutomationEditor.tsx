@@ -1,3 +1,4 @@
+import type { AutomationMcpApprovalPolicy } from "@pwragent/shared";
 import { matchesAutomationConversation } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -480,6 +481,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [profileMcpAllowlist, setProfileMcpAllowlist] = useState<string[]>(
     initialAutomation?.executionProfile?.mcpAllowlist ?? [],
   );
+  const [profileMcpToolsPolicy, setProfileMcpToolsPolicy] = useState<NonNullable<AutomationMcpApprovalPolicy["tools"]>>(initialAutomation?.executionProfile?.mcpApproval?.tools ?? "inherit");
+  const [profileMcpQuestionsPolicy, setProfileMcpQuestionsPolicy] = useState<NonNullable<AutomationMcpApprovalPolicy["questions"]>>(initialAutomation?.executionProfile?.mcpApproval?.questions ?? "inherit");
+  const [profileEscalationsPolicy, setProfileEscalationsPolicy] = useState<NonNullable<AutomationMcpApprovalPolicy["escalations"]>>(initialAutomation?.executionProfile?.mcpApproval?.escalations ?? "inherit");
   const initialLookback = initialAutomation?.priorRunLookback;
   const [lookbackEnabled, setLookbackEnabled] = useState(Boolean(initialLookback));
   const [lookbackRuns, setLookbackRuns] = useState(
@@ -1599,6 +1603,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       model: profileModel,
       reasoningEffort: profileReasoning,
       toolAllowlist: profileToolAllowlist,
+      mcpApproval: { tools: profileMcpToolsPolicy, questions: profileMcpQuestionsPolicy, escalations: profileEscalationsPolicy },
     });
     const priorRunLookback = lookbackEnabled
       ? {
@@ -2738,6 +2743,31 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </p>
             </div>
             <div className="automation-field-group">
+              <label className="automation-field"><span>MCP tool approval</span>
+                <Select aria-label="Automation MCP tool approval" value={profileMcpToolsPolicy} onChange={setProfileMcpToolsPolicy} options={[
+                  { value: "inherit", label: "Use profile default" }, { value: "backend", label: "Use harness approval mode" }, { value: "auto", label: "Review each call" },
+                  { value: "allow", label: "Pre-approve allowed tools" }, { value: "deny", label: "Reject tool calls" },
+                ]} />
+              </label>
+              <p className="automation-field__hint">Review uses the model configured in AI Providers. Server and tool allowlists apply to every policy.</p>
+            </div>
+            <div className="automation-field-group">
+              <label className="automation-field"><span>MCP questions</span>
+                <Select aria-label="Automation MCP questions" value={profileMcpQuestionsPolicy} onChange={setProfileMcpQuestionsPolicy} options={[
+                  { value: "inherit", label: "Use profile default" }, { value: "auto", label: "Review and answer" }, { value: "reject", label: "Reject questions" },
+                ]} />
+              </label>
+              <p className="automation-field__hint">The reviewer answers from the task and context. Unknown answers and login flows are cancelled.</p>
+            </div>
+            <div className="automation-field-group">
+              <label className="automation-field"><span>Default Access escalations</span>
+                <Select aria-label="Automation Default Access escalations" value={profileEscalationsPolicy} onChange={setProfileEscalationsPolicy} options={[
+                  { value: "inherit", label: "Use profile default" }, { value: "auto", label: "Review escalations" }, { value: "reject", label: "Reject escalations" },
+                ]} />
+              </label>
+              <p className="automation-field__hint">Codex Auto handles native tool approvals. Default Access escalation review uses its own prompt in AI Providers.</p>
+            </div>
+            <div className="automation-field-group">
               <label className="automation-field">
                 <span>Allowed tools</span>
                 <input
@@ -3433,6 +3463,7 @@ function buildExecutionProfile(params: {
   model: string;
   reasoningEffort: string;
   toolAllowlist: string;
+  mcpApproval: AutomationMcpApprovalPolicy;
 }): CreateAutomationRequest["executionProfile"] {
   const cwd = params.cwd.trim();
   const model = params.model.trim();
@@ -3448,7 +3479,10 @@ function buildExecutionProfile(params: {
     !model &&
     !reasoningEffort &&
     mcpAllowlist.length === 0 &&
-    toolAllowlist.length === 0
+    toolAllowlist.length === 0 &&
+    (!params.mcpApproval.tools || params.mcpApproval.tools === "inherit") &&
+    (!params.mcpApproval.questions || params.mcpApproval.questions === "inherit") &&
+    (!params.mcpApproval.escalations || params.mcpApproval.escalations === "inherit")
   ) {
     return undefined;
   }
@@ -3460,6 +3494,7 @@ function buildExecutionProfile(params: {
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(mcpAllowlist.length > 0 ? { mcpAllowlist } : {}),
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(params.mcpApproval.tools !== "inherit" || params.mcpApproval.questions !== "inherit" || params.mcpApproval.escalations !== "inherit" ? { mcpApproval: params.mcpApproval } : {}),
   };
 }
 

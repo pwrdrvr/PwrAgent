@@ -1481,6 +1481,7 @@ function SettingsSectionBody(props: {
           models: { providerThreadMigrations },
         });
       }}
+      onSaveMcpAutoApproval={async (mcpAutoApproval) => await props.settings.writeConfig({ models: { mcpAutoApproval } })}
       onSaveHelperModels={async (helperModels) => {
         return await props.settings.writeConfig({
           models: { helperModels },

@@ -870,7 +870,7 @@ describe("AutomationEditor", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("includes an MCP allowlist in the execution profile", async () => {
+  it("includes MCP allowlists and approval policies in the execution profile", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
     render(
@@ -905,13 +905,16 @@ describe("AutomationEditor", () => {
     fireEvent.keyDown(mcpInput, { key: "Enter" });
     fireEvent.change(mcpInput, { target: { value: "aws-readonly" } });
     fireEvent.keyDown(mcpInput, { key: "Enter" });
+    chooseSelectOption(screen.getByLabelText("Automation MCP tool approval"), "Use harness approval mode");
+    chooseSelectOption(screen.getByLabelText("Automation MCP questions"), "Review and answer");
+    chooseSelectOption(screen.getByLabelText("Automation Default Access escalations"), "Reject escalations");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith({
       kind: "create",
       request: expect.objectContaining({
-        executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"] },
+        executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"], mcpApproval: { tools: "backend", questions: "auto", escalations: "reject" } },
       }),
     });
   });

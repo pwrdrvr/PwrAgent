@@ -18,6 +18,7 @@ export const HELPER_MODEL_IDS = [
   "automation_prompts",
   "star_map_intake",
   "usage_analysis",
+  "mcp_auto_review",
   "federation_instance_names",
 ] as const;
 
@@ -84,6 +85,12 @@ export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
   {
     id: "usage_analysis",
     label: "Usage analysis",
+    defaultReasoningEffort: "low",
+    backends: ["codex", "acp:grok"],
+  },
+  {
+    id: "mcp_auto_review",
+    label: "MCP Auto review",
     defaultReasoningEffort: "low",
     backends: ["codex", "acp:grok"],
   },

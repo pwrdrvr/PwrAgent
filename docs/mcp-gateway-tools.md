@@ -28,42 +28,79 @@ its runtime mode selector when present, otherwise its session execution mode.
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
-Default and Auto access request once-only confirmation showing the original
-connection, tool and complete arguments. Codex's App Server does not expose an
-API for submitting host-owned dynamic calls to its Auto reviewer. Until that
-integration exists, Auto gateway calls still require human confirmation.
-Headless calls without Full Access or an automation MCP grant decline because
-they cannot obtain it.
-Native invocation remains available under the backend's own policy; inherited
-provider MCP servers are not exposed through this gateway.
+Default access requests once-only confirmation showing the original connection,
+tool and complete arguments. Auto gateway calls use the profile's MCP reviewer
+when enabled. Codex's native Auto reviewer handles its native tool decisions;
+App Server has no API for submitting host-owned dynamic calls to that reviewer.
+ACP harnesses without a native Auto mode can use the enabled profile reviewer
+for host-owned MCP requests. With the reviewer disabled, ordinary Auto gateway
+calls retain human confirmation.
 
-Only the gateway's host-created invocation approval follows this policy.
-Upstream MCP forms, including empty forms, and URL flows remain interactive:
-their shape alone does not distinguish tool approval from a question or login.
+### Automation MCP grants and review
 
-### Automation MCP grants
+Saved server and tool allowlists are hard limits. The headless runner forwards
+them and `executionProfile.mcpApproval` to the registry. Each ephemeral Codex
+thread gets per-run native MCP configuration and fresh managed connection
+bridges. Explicitly selected servers are required at startup. Unknown or
+ambiguous saved identities fail explicitly. An empty list inherits the Agent's
+servers and preserves their enabled/optional settings.
 
-An automation's saved MCP server and tool allowlists are advance approval for
-those operations, including in Default and Auto access. The headless runner
-forwards them to the registry. Each ephemeral Codex thread receives per-run
-MCP configuration that disables servers outside the list, pre-approves the
-allowed tools, and applies any tool restriction through `enabled_tools`. An
-explicitly allowed server is required at startup so its tools are not silently
-omitted. A blank server list inherits the Agent's servers and preserves their
-enabled/optional settings. Shell access remains governed by the run's execution
-mode; MCP authorization does not change the sandbox.
+`mcpApproval.tools` chooses `inherit`, `backend`, `auto`, `allow`, or `deny`.
+`backend` uses the harness's native MCP approval mode. With the profile reviewer
+enabled, an Auto run inherits native approval, a Full Access run inherits
+pre-approval, and a Default run inherits PwrAgent review. Host-owned gateway
+calls cannot be submitted to Codex's native reviewer and use the configured
+PwrAgent reviewer instead. `auto` requires a reviewer decision for each call;
+`allow` pre-approves allowed tools; `deny` disables native MCP tools and rejects
+gateway invocations, even in Full Access. Disabling the profile reviewer retains
+existing automation pre-approval unless a run explicitly chooses another policy.
 
-Managed connections receive fresh bridges bound to the execution thread. The
-registry resolves the allowlist against connection IDs, the Agent's server
-aliases, and unambiguous connection display names. It retains the allowed IDs
-and tool restrictions in memory before `turn/start`, so early gateway calls can
-use that grant. Every gateway operation rechecks the Agent's current selection.
-Grants are revoked on failed startup, turn completion, and shutdown. Unknown or
-ambiguous saved server names fail explicitly without creating a transport-less
-Codex configuration entry.
+`mcpApproval.questions` chooses `inherit`, `auto`, or `reject`. Review is limited
+to the allowed servers, and accepted content must validate against the original
+MCP form schema. The registry rechecks the Agent's current managed selection
+before and after review. URL/login flows are cancelled rather than followed.
+Unknown answers, invalid schemas, provider failures, and review deadlines cannot
+produce approval. Full Access does not answer a question automatically.
 
-This authorization applies to invocation approvals. Upstream MCP questions and
-URL/login flows still need interaction and are cancelled in headless runs.
+`mcpApproval.escalations` chooses `inherit`, `auto`, or `reject` for Default
+Access command/file-change escalation requests. Opting into review uses
+`on-request` approval policy with the same workspace-write sandbox. These
+requests use a separate escalation prompt; MCP requests use the MCP prompt.
+Codex Auto retains its native `on-request`/Auto reviewer path. Full Access
+retains its native permission policy.
+
+The applied grants are installed before `turn/start`. Current selection, actor
+permissions, connection authorization, schema revision and arguments still apply
+to gateway calls. Grants and pending reviews are cancelled on interruption,
+completion, failed startup and shutdown. User steering invalidates in-flight
+reviews and updates the intent for subsequent reviews. No wrapper approval is
+cached and no new SQLite writes are introduced by host review dispatch.
+
+### Reviewer adapters and settings
+
+`models.mcpAutoApproval` is an additive profile setting, written under
+`[models.mcp_auto_approval]`. It stores enabled state, model type, provider,
+model, reasoning effort, MCP prompt, escalation prompt and opt-in, endpoint,
+API key environment-variable name, deadline, and future classifier confidence
+threshold. API keys are read only in the main process and never stored here.
+
+Harness review uses existing isolated Codex and Grok structured helpers with
+execution and MCP tools removed. Direct adapters support Chat Completions,
+Responses, and Claude Messages APIs. They make one bounded request, follow no
+redirects, reject incomplete responses, and validate the resulting decision.
+A helper that ignores cancellation may finish within its original deadline;
+its late result cannot authorize a stopped request.
+
+`system-one` settings and shared `noul`/`choice` response types are present for
+future decision adapters. That adapter is intentionally not implemented here;
+choosing it yields an explicit unavailable/reject decision. System One's
+[typed primitives](https://docs.typesafe.ai/introduction) require a distinct
+adapter rather than parsing generated text.
+
+Automation MCP configuration currently requires the Codex backend. Reviewer
+provider selection is independent of the execution backend. This is a
+contributor contract; operator configuration documentation belongs in the docs
+repository.
 
 Arguments are validated before requesting approval. After approval, the owner
 broker lists the tools again, compares the revision, validates the arguments and

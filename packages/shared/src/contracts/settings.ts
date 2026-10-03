@@ -3,6 +3,7 @@ import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 import type { DesktopHelperModelSettings } from "../helper-models";
+import type { DesktopMcpAutoApprovalSettings } from "../mcp-auto-approval";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -1316,6 +1317,7 @@ export type DesktopSettingsSnapshot = {
     >;
     /** Models for work PwrAgent starts on its own. Absent on older builds. */
     helperModels?: DesktopHelperModelSettings;
+    mcpAutoApproval?: DesktopMcpAutoApprovalSettings;
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -1613,6 +1615,7 @@ export type DesktopSettingsConfigPatch = {
     >;
     /** Replaces every helper model choice; omit a helper to use Helper default. */
     helperModels?: DesktopHelperModelSettings;
+    mcpAutoApproval?: DesktopMcpAutoApprovalSettings;
     codex?: {
       path?: string;
       profile?: string;

@@ -246,6 +246,7 @@ describe("DesktopAutomationService", () => {
         serviceTier: "priority",
         fastMode: true,
         mcpAllowlist: ["datadog"],
+        mcpApproval: { tools: "auto", questions: "reject" },
         toolAllowlist: ["get_metrics"],
       },
     });
@@ -261,6 +262,7 @@ describe("DesktopAutomationService", () => {
         serviceTier: "priority",
         fastMode: true,
         mcpAllowlist: ["datadog"],
+        mcpApproval: { tools: "auto", questions: "reject" },
         toolAllowlist: ["get_metrics"],
       }),
     );

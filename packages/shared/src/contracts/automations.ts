@@ -1,3 +1,4 @@
+import type { AutomationMcpApprovalPolicy } from "../mcp-auto-approval";
 import type {
   AppServerBackendKind,
   AppServerThreadReplay,
@@ -916,6 +917,7 @@ export type AutomationExecutionProfile = {
   fastMode?: boolean;
   cwd?: string;
   mcpAllowlist?: string[];
+  mcpApproval?: AutomationMcpApprovalPolicy;
   skillAllowlist?: string[];
   toolAllowlist?: string[];
 };

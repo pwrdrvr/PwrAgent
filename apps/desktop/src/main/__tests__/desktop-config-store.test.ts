@@ -1,3 +1,4 @@
+import { DEFAULT_MCP_AUTO_APPROVAL_SETTINGS } from "@pwragent/shared";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,17 @@ afterEach(() => {
 });
 
 describe("DesktopConfigStore", () => {
+  it("persists MCP reviewer settings in the models domain across restart", async () => {
+    const fixture = createFixture("");
+    const store = fixture.createStore();
+    const mcpAutoApproval = { ...DEFAULT_MCP_AUTO_APPROVAL_SETTINGS, enabled: true, model: "gpt-6.1-sol", prompt: "Read monitoring state only." };
+    const result = await store.write({ models: { mcpAutoApproval } }, ["models"]);
+    expect(result.changedDomains).toContain("models");
+    expect(store.read("models").mcpAutoApproval).toEqual(mcpAutoApproval);
+    store.dispose();
+    expect(fixture.createStore().read("models").mcpAutoApproval).toEqual(mcpAutoApproval);
+  });
+
   it("serves immutable domain reads without filesystem or sqlite work", () => {
     const fixture = createFixture(`
 [general.appearance]
