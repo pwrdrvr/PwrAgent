@@ -1,4 +1,4 @@
-import { VoiceCameraButton } from "./VoiceCameraButton";
+import { VoiceCameraButton, VoiceCameraPanel } from "./VoiceCameraButton";
 import { useEffect, useRef, useState } from "react";
 import {
   isRemoteFederationTarget,
@@ -160,7 +160,6 @@ export function DirectorVoiceButton({ api }: { api: NativeVoiceApi }) {
         <MicIcon size={16} aria-hidden="true" />
       </button>
       {tooltip.tooltipNode}
-      <VoiceCameraButton api={api} />
     </>
   );
 }
@@ -558,6 +557,7 @@ function OpenDirectorVoicePanel({
               </button>
             )
           ) : <VoiceMicToggle controller={controller} view={view} />}
+          {!ended ? <VoiceCameraButton controller={controller} view={view} /> : null}
           <button
             className="app-notice-toast__icon-button"
             type="button"
@@ -595,7 +595,8 @@ function OpenDirectorVoicePanel({
         />
       ) : null}
       <div className="director-voice-panel__feed">
-        <VoiceFeed view={view} />
+        <VoiceFeed view={view} scrollParent />
+        <VoiceCameraPanel controller={controller} view={view} />
       </div>
       {listening ? <VoiceTextInput controller={controller} /> : null}
       <button

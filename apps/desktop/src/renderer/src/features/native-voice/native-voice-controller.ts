@@ -1,5 +1,24 @@
 import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
+import type { CameraCue, VoiceCameraObservation } from "../../../../shared/native-voice-camera";
+
+export type VoiceCameraDiagnostics = {
+  sessionId: string;
+  threadId: string;
+  startedAt: number;
+  observations: number;
+  staleObservations: number;
+  rateHz: number;
+  lastObservedAt?: number;
+  frameAgeMs?: number;
+  observation?: VoiceCameraObservation;
+  filter: string;
+  cuesAcknowledged: number;
+  lastCue?: CameraCue;
+  delivery?: "pending" | "acknowledged" | "failed";
+  acknowledgedAt?: number;
+  error?: string;
+};
 
 export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "stopping" | "stop-error" | "error";
 /** `seq` orders transcript rows and action receipts against each other. */
@@ -17,6 +36,7 @@ export type VoiceView = {
   cameraWarming?: boolean;
   cameraCue?: string;
   cameraError?: string;
+  cameraDiagnostics?: VoiceCameraDiagnostics;
   endedAfterAway?: boolean;
   /** When the session went live, for the elapsed-time label. Billing runs from here. */
   liveSince?: number;
@@ -214,7 +234,7 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, transcript: [], actions: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraDiagnostics: undefined, transcript: [], actions: [],
     });
     this.watchTurns(resources, threadId);
     try {
@@ -421,9 +441,19 @@ export class NativeVoiceController {
     resources.camera = camera;
     const current = () => this.current(resources) && resources.camera === camera && !camera.cancelled;
     const filter = new CameraCueFilter();
-    this.publish({ camera: "starting", cameraError: undefined });
+    const completed: number[] = [];
+    let diagnostics: VoiceCameraDiagnostics = {
+      sessionId: resources.id, threadId: this.view.threadId!, startedAt: Date.now(),
+      observations: 0, staleObservations: 0, rateHz: 0, cuesAcknowledged: 0, filter: "Waiting for first decision",
+    };
+    const debug = (change: Partial<VoiceCameraDiagnostics>) => {
+      diagnostics = { ...diagnostics, ...change };
+      this.publish({ cameraDiagnostics: diagnostics });
+    };
+    this.publish({ camera: "starting", cameraError: undefined, cameraDiagnostics: diagnostics });
     const failed = (error: unknown) => {
       if (!current()) return;
+      debug({ error: error instanceof Error ? error.message : "Camera cues failed.", filter: "Camera stopped after failure" });
       this.closeCamera(resources);
       this.publish({ cameraError: error instanceof Error ? error.message : "Camera cues failed." });
     };
@@ -442,16 +472,30 @@ export class NativeVoiceController {
           if (image) {
             const observation = await this.api.analyzeNativeVoiceCamera!({ sessionId: resources.id, image });
             if (!current()) return;
+            if (!observation) {
+              this.closeCamera(resources);
+              debug({ filter: "Analysis cancelled" });
+              return;
+            }
             if (this.view.cameraWarming) this.publish({ cameraWarming: false });
             // A cold-model response describes the old captured frame. Waiting
             // never establishes absence or permits a stale expression cue.
             const now = Date.now();
+            completed.push(now);
+            while (completed.length > 1 && now - completed[0] > 10_000) completed.shift();
+            const interval = now - completed[0];
+            debug({
+              observations: diagnostics.observations + 1, observation, lastObservedAt: now, frameAgeMs: now - started,
+              rateHz: interval > 0 ? (completed.length - 1) * 1000 / interval : 0,
+            });
             if (now - started > CAMERA_SAMPLE_GAP_MS) {
+              debug({ staleObservations: diagnostics.staleObservations + 1, filter: "Stale frame discarded; waiting for a fresh decision" });
               filter.resetContinuity();
               if (current()) camera.timer = setTimeout(() => { void sample(); }, 500);
               return;
             }
             const decision = filter.observe(observation, now);
+            debug({ filter: filter.status });
             if (decision.end) {
               this.publish({ endedAfterAway: true });
               void this.stop();
@@ -459,8 +503,16 @@ export class NativeVoiceController {
             }
             if (decision.cue) {
               this.publish({ cameraCue: decision.cue });
+              debug({ lastCue: decision.cue, delivery: "pending" });
               // Do not reset muted-idle timers: a camera cue is not user activity.
-              await this.api.sendNativeVoiceCameraCue!({ sessionId: resources.id, cue: decision.cue });
+              try {
+                await this.api.sendNativeVoiceCameraCue!({ sessionId: resources.id, cue: decision.cue });
+                if (!current()) return;
+                debug({ delivery: "acknowledged", acknowledgedAt: Date.now(), cuesAcknowledged: diagnostics.cuesAcknowledged + 1 });
+              } catch (error) {
+                if (current()) debug({ delivery: "failed" });
+                throw error;
+              }
             }
           }
           if (current()) camera.timer = setTimeout(() => { void sample(); }, Math.max(0, 500 - (Date.now() - started)));

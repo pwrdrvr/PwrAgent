@@ -8,6 +8,7 @@ import {
   OPERATOR_FOCUS_PUBLISH_CHANNEL,
 } from "../../shared/native-voice";
 const mocks = vi.hoisted(() => ({
+  info: vi.fn(), warn: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
   classify: vi.fn<(image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   mainWindowIds: new Set<number>(), text: vi.fn(async () => {}),
   openManager: vi.fn(async () => ({ status: "ready", threadId: "sample-voice-manager", created: false })),
 }));
+vi.mock("../log", () => ({ getMainLogger: () => ({ info: mocks.info, warn: mocks.warn }) }));
 vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify }));
 vi.mock("electron", () => ({
   ipcMain: { handle: (name: string, handler: (...args: unknown[]) => Promise<void>) => { mocks.handlers.set(name, handler); } },
@@ -64,6 +66,9 @@ describe("native voice IPC permission boundary", () => {
     await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).rejects.toThrow("already being analyzed");
     finish({ present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 60_000 });
     await pending;
+    expect(mocks.info).toHaveBeenCalledWith("camera first decision waiting", { sessionId: target.sessionId });
+    expect(mocks.info).toHaveBeenCalledWith("camera first decision received", { sessionId: target.sessionId, elapsedMs: 60_000, modelLatencyMs: 60_000 });
+    expect(JSON.stringify(mocks.info.mock.calls)).not.toContain(frame.image);
 
     mocks.classify.mockImplementationOnce((_image, abort, warming) => {
       expect(warming).toBe(false);
@@ -157,11 +162,13 @@ describe("native voice IPC permission boundary", () => {
       return await new Promise<never>((_resolve, reject) => abort.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
     });
     const analyzing = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" });
-    const rejected = expect(analyzing).rejects.toThrow("Camera cues unavailable");
+    const cancelled = expect(analyzing).resolves.toBeUndefined();
     await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, { sessionId: "stale-session" });
     expect(signal.aborted).toBe(false);
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });
-    await rejected;
+    await cancelled;
+    expect(mocks.info).toHaveBeenCalledWith("camera analysis cancelled", expect.objectContaining({ sessionId: target.sessionId }));
+    expect(mocks.warn).not.toHaveBeenCalled();
     expect(signal.aborted).toBe(true);
     expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
@@ -181,10 +188,12 @@ describe("native voice IPC permission boundary", () => {
       signal = abort;
       return await new Promise<never>((_resolve, reject) => abort.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
     });
-    const rejected = expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" })).rejects.toThrow("Camera cues unavailable");
+    const cancelled = expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" })).resolves.toBeUndefined();
     if (ending === "stop") await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
     else for (const disconnect of [...mocks.disconnects]) disconnect();
-    await rejected;
+    await cancelled;
+    expect(mocks.info).toHaveBeenCalledWith("camera analysis cancelled", expect.objectContaining({ sessionId: target.sessionId }));
+    expect(mocks.warn).not.toHaveBeenCalled();
     expect(signal.aborted).toBe(true);
     expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
   });

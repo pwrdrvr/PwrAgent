@@ -11,7 +11,7 @@ const response = {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe("local Clef camera decisions", () => {
   it("parses the clef-webcam response and rejects malformed decisions", () => {
-    expect(parseClefObservation(response)).toEqual({ present: true, presenceConfidence: 0.95, reaction: "enthusiastic", reactionConfidence: 0.8, latencyMs: 410 });
+    expect(parseClefObservation(response)).toEqual({ present: true, presenceConfidence: 0.95, reaction: "enthusiastic", reactionConfidence: 0.8, latencyMs: 410, presenceScores: { present: 0.95, away: 0.05 }, reactionScores: { neutral: 0.1, exasperated: 0.05, enthusiastic: 0.8, bored: 0.05 } });
     expect(() => parseClefObservation({ answers: {} })).toThrow();
     expect(() => parseClefObservation({ ...response, answers: { ...response.answers, reaction: { ...response.answers.reaction, choice: "injected text" } } })).toThrow();
     expect(() => parseClefObservation({ ...response, answers: { ...response.answers, presence: { ...response.answers.presence, probabilities: { present: NaN, away: 0 } } } })).toThrow();

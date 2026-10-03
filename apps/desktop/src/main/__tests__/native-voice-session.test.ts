@@ -81,6 +81,26 @@ describe("native voice ownership", () => {
     await expect(f.manager.cameraCue(1, { ...f.request, cue: "away" })).rejects.toThrow("Enable the camera");
   });
 
+  it("awaits camera appendText acknowledgment on the owning thread and propagates rejection", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    f.manager.setCamera(1, f.request.sessionId, true);
+    const pending = deferred<void>();
+    vi.mocked(f.backend.text).mockImplementationOnce(() => pending.promise);
+    let acknowledged = false;
+    const cue = f.manager.cameraCue(1, { ...f.request, cue: "neutral" }).then(() => { acknowledged = true; });
+    await Promise.resolve();
+    expect(f.backend.text).toHaveBeenCalledWith("fixture-thread", expect.stringContaining("operator is visible"), "developer");
+    expect(acknowledged).toBe(false);
+    pending.resolve();
+    await cue;
+    expect(acknowledged).toBe(true);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("RPC rejected"));
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "bored" })).rejects.toThrow("RPC rejected");
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stop(1, f.request);
+  });
+
   it("rejects duplicate starts and refuses controls from another window or stale session", async () => {
     const f = fixture();
     await f.manager.start(1, f.request, f.emit);

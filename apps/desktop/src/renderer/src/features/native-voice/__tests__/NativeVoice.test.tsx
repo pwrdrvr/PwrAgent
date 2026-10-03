@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
@@ -551,4 +551,16 @@ it("publishes a launchpad's project and settings, never its draft, and only with
     launchpad,
     thread: { id: "sample-thread", source: "codex", title: "Sample thread" },
   }).launchpad).toBeUndefined();
+});
+
+it("places the camera beside the Director panel mic, outside the thread-list toolbar", async () => {
+  const f = voiceFixture();
+  const toolbar = render(<DirectorVoiceButton api={f.api} />);
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const camera = within(directorPanel()!).getByRole("button", { name: "Turn on camera cues" });
+  expect(camera.closest("header")).toBeInTheDocument();
+  expect(camera.previousElementSibling).toHaveAttribute("aria-label", "Mute microphone");
+  expect(within(toolbar.container).queryByRole("button", { name: /camera cues/ })).not.toBeInTheDocument();
 });

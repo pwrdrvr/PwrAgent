@@ -1,62 +1,60 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NativeVoiceApi } from "../../../../../shared/native-voice";
-import type { VoiceView } from "../native-voice-controller";
+import type { NativeVoiceController, VoiceView } from "../native-voice-controller";
+import { VoiceCameraButton, VoiceCameraPanel } from "../VoiceCameraButton";
 
-const mocks = vi.hoisted(() => ({
-  view: { status: "listening", muted: false, transcript: [], actions: [] } as VoiceView,
-  controller: { setCamera: vi.fn(), cameraStream: vi.fn(), dismissCameraError: vi.fn() },
-}));
-vi.mock("../NativeVoice", () => ({ useNativeVoice: () => mocks }));
-import { VoiceCameraButton } from "../VoiceCameraButton";
-
+const controller = { setCamera: vi.fn(), cameraStream: vi.fn(), dismissCameraError: vi.fn() } as unknown as NativeVoiceController;
+let view: VoiceView;
 beforeEach(() => {
+  view = { status: "listening", muted: false, transcript: [], actions: [] };
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 10, y: 10, left: 10, right: 42, top: 10, bottom: 42, width: 32, height: 32, toJSON: () => ({}) });
 });
-afterEach(() => {
-  cleanup();
-  mocks.view = { status: "listening", muted: false, transcript: [], actions: [] };
-  vi.clearAllMocks();
-  vi.restoreAllMocks();
-});
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); });
 describe("camera voice control", () => {
   it("shows only during live voice and requests explicit opt-in on click", () => {
-    const result = render(<VoiceCameraButton api={{} as NativeVoiceApi} />);
+    const result = render(<VoiceCameraButton controller={controller} view={view} />);
     fireEvent.click(screen.getByRole("button", { name: "Turn on camera cues" }));
-    expect(mocks.controller.setCamera).toHaveBeenCalledWith(true);
-    mocks.view.status = "idle";
-    result.rerender(<VoiceCameraButton api={{} as NativeVoiceApi} />);
+    expect(controller.setCamera).toHaveBeenCalledWith(true);
+    result.rerender(<VoiceCameraButton controller={controller} view={{ ...view, status: "idle" }} />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
-  it("can cancel a pending camera permission request", () => {
-    mocks.view.camera = "starting";
-    render(<VoiceCameraButton api={{} as NativeVoiceApi} />);
-    const button = screen.getByRole("button", { name: "Turn off camera cues" });
-    expect(button).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(button);
-    expect(mocks.controller.setCamera).toHaveBeenCalledWith(false);
+  it("keeps opt-out available during permission and warmup waiting, with an inline preview", () => {
+    view.camera = "starting";
+    const result = render(<><VoiceCameraButton controller={controller} view={view} /><VoiceCameraPanel controller={controller} view={view} /></>);
+    fireEvent.click(screen.getByRole("button", { name: "Turn off camera cues" }));
+    expect(controller.setCamera).toHaveBeenCalledWith(false);
     expect(screen.getByRole("status")).toHaveTextContent("Starting camera");
+    result.rerender(<VoiceCameraPanel controller={controller} view={{ ...view, camera: "on", cameraWarming: true }} />);
+    expect(result.container.querySelector("video")).not.toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("warming up");
   });
-  it("makes a camera-only failure visible and dismissible", () => {
-    mocks.view.cameraError = "Clef unavailable";
-    render(<VoiceCameraButton api={{} as NativeVoiceApi} />);
+  it("shows all scores and separates received observations from acknowledged voice context", () => {
+    view.camera = "on";
+    view.cameraDiagnostics = {
+      sessionId: "sample-session", threadId: "sample-director", startedAt: Date.now(), observations: 8,
+      staleObservations: 1, rateHz: 1.7, lastObservedAt: Date.now(), frameAgeMs: 410,
+      filter: "Collecting consecutive frames", cuesAcknowledged: 0,
+      observation: { present: true, presenceConfidence: 0.95, reaction: "neutral", reactionConfidence: 0.8, latencyMs: 400,
+        presenceScores: { present: 0.95, away: 0.05 }, reactionScores: { neutral: 0.8, exasperated: 0.05, enthusiastic: 0.1, bored: 0.05 } },
+    };
+    const result = render(<VoiceCameraPanel controller={controller} view={view} />);
+    const summary = screen.getByText(/Camera diagnostics/);
+    expect(summary).toHaveTextContent("8 results · 1.70 Hz");
+    expect(summary.parentElement).not.toHaveAttribute("open");
+    fireEvent.click(summary);
+    expect(summary.parentElement).toHaveAttribute("open");
+    expect(screen.getByRole("table")).toHaveTextContent("neutral · selected80.0%");
+    expect(screen.getByRole("table")).toHaveTextContent("enthusiastic10.0%");
+    expect(screen.getAllByText(/No voice context sent yet/)).toHaveLength(2);
+    result.rerender(<VoiceCameraPanel controller={controller} view={{ ...view, cameraDiagnostics: { ...view.cameraDiagnostics, delivery: "acknowledged", lastCue: "neutral", cuesAcknowledged: 1 } }} />);
+    expect(screen.getAllByText(/Voice context acknowledged · neutral/)).toHaveLength(2);
+    expect(screen.getByText(/does not prove the model used the cue/)).toBeInTheDocument();
+  });
+  it("keeps camera failures visible and dismissible without hiding the receipt", () => {
+    render(<VoiceCameraPanel controller={controller} view={{ ...view, cameraError: "Clef unavailable" }} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Clef unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(mocks.controller.dismissCameraError).toHaveBeenCalledOnce();
-  });
-  it("keeps the local preview and opt-out available while the first decision warms", () => {
-    mocks.view.camera = "on";
-    mocks.view.cameraWarming = true;
-    const result = render(<VoiceCameraButton api={{} as NativeVoiceApi} />);
-    expect(document.querySelector("video")).not.toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("warming up");
-    expect(screen.getByText("Model loading can take a few minutes.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Turn off camera cues" }));
-    expect(mocks.controller.setCamera).toHaveBeenCalledWith(false);
-    mocks.view.cameraWarming = false;
-    result.rerender(<VoiceCameraButton api={{} as NativeVoiceApi} />);
-    expect(screen.getByRole("status")).toHaveTextContent("observing");
+    expect(controller.dismissCameraError).toHaveBeenCalledOnce();
   });
 });

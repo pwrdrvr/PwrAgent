@@ -3,6 +3,7 @@ import {
   NATIVE_VOICE_CAMERA_CUE_CHANNEL, CAMERA_REACTIONS,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue,
 } from "../../shared/native-voice-camera";
+import { getMainLogger } from "../log";
 import { classifyVoiceCamera } from "../native-voice/clef-camera";
 import { ipcMain, session, type WebContents } from "electron";
 import {
@@ -17,6 +18,7 @@ import { isVoiceManagerThread, openVoiceManagerThread } from "../native-voice/vo
 import { isOperatorFocusSnapshot, publishOperatorFocus } from "../native-voice/operator-focus-registry";
 import { isLocalMainWindowWebContents } from "../window-channels";
 
+const cameraLog = getMainLogger("pwragent:voice-camera");
 const sessions = new NativeVoiceSessionManager((threadId) => getDesktopBackendRegistry().acquireNativeVoiceBackend(threadId));
 // Cold model loading can take a minute or more. Opt-out still aborts immediately.
 const CAMERA_WARMUP_TIMEOUT_MS = 5 * 60_000;
@@ -127,16 +129,25 @@ export function registerNativeVoiceIpcHandlers(): void {
     const pending = { sessionId: request.sessionId, abort };
     cameraRequests.set(event.sender.id, pending);
     const warming = cameraReadySessions.get(event.sender.id) !== request.sessionId;
+    if (warming) cameraLog.info("camera first decision waiting", { sessionId: request.sessionId });
+    const started = Date.now();
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; abort.abort(); }, warming ? CAMERA_WARMUP_TIMEOUT_MS : CAMERA_ANALYSIS_TIMEOUT_MS);
     try {
       const observation = await classifyVoiceCamera(request.image, abort.signal, warming);
+      if (abort.signal.aborted || !sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) return undefined;
+      if (warming) cameraLog.info("camera first decision received", { sessionId: request.sessionId, elapsedMs: Date.now() - started, modelLatencyMs: observation.latencyMs });
       if (!abort.signal.aborted && sessions.allowsCameraSession(event.sender.id, request.sessionId)) {
         cameraReadySessions.set(event.sender.id, request.sessionId);
       }
       return observation;
     }
     catch (error) {
+      if (abort.signal.aborted && !timedOut) {
+        cameraLog.info("camera analysis cancelled", { sessionId: request.sessionId, warming });
+        return undefined;
+      }
+      cameraLog.warn("camera analysis failed", { sessionId: request.sessionId, warming, timedOut, elapsedMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
       const message = timedOut
         ? warming
           ? "Clef did not respond within five minutes. Camera cues stopped; voice is still available."

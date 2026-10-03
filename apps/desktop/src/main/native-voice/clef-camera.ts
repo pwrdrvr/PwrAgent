@@ -21,6 +21,8 @@ export function parseClefObservation(value: unknown): VoiceCameraObservation {
   for (const key of ["present", "away"]) probability(presenceProbabilities[key]);
   for (const key of CAMERA_REACTIONS) probability(reactionProbabilities[key]);
   return {
+    presenceScores: { present: probability(presenceProbabilities.present), away: probability(presenceProbabilities.away) },
+    reactionScores: Object.fromEntries(CAMERA_REACTIONS.map((key) => [key, probability(reactionProbabilities[key])])) as NonNullable<VoiceCameraObservation["reactionScores"]>,
     present: presence.choice === "present",
     presenceConfidence: probability(presenceProbabilities[presence.choice]),
     reaction: reaction.choice as VoiceCameraObservation["reaction"],

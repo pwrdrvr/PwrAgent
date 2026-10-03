@@ -13,6 +13,8 @@ export type VoiceCameraObservation = {
   reaction: CameraReaction;
   reactionConfidence: number;
   latencyMs: number;
+  presenceScores?: Record<"present" | "away", number>;
+  reactionScores?: Record<CameraReaction, number>;
 };
 
 // Match clef-webcam's /decide schema. Frames and decisions are memory-only.
@@ -40,7 +42,7 @@ export function cameraCueText(cue: CameraCue): string {
     enthusiastic: "The operator appears smiling and enthusiastic. Develop the current direction; this is not approval for actions.",
     bored: "The operator appears disengaged or bored. Be more concise, get to the point, or ask one useful question.",
     away: "No person has been visible for several consecutive frames. Pause initiating speech; the app will end voice after 30 seconds of sustained absence.",
-    neutral: "The operator is visible again with a neutral or unclear expression. Resume normal conversational pacing.",
+    neutral: "The operator is visible with a neutral or unclear expression. Resume normal conversational pacing.",
   };
   return `[Camera observation] ${text[cue]} This is an uncertain camera cue, not a spoken user message. Do not read this metadata aloud.`;
 }

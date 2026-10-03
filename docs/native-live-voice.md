@@ -330,10 +330,15 @@ external experimental App Server integration.
 
 ## Camera context integration
 
-During a listening thread or director session, the masthead camera button can
-opt into local camera cues. Capture belongs to the window's voice controller
+During a listening director session, the camera button beside the microphone
+in the Director voice panel can opt into local camera cues. Capture belongs to the window's voice controller
 and ends on camera opt-out, voice stop, navigation teardown, or failure. The
-preview and status follow the masthead microphone across its placements.
+larger preview sits below the transcript, inside the panel. Expand Camera
+diagnostics to inspect all presence/reaction scores, completed-decision rate,
+model latency, frame age, stale-result count, filter status, and the owning
+thread/session. Received results and acknowledged context are counted separately.
+An appendText RPC acknowledgment confirms delivery to Codex, not whether the
+realtime model incorporated the observation into its next answer.
 
 Main sends 336-pixel JPEG frames to the fixed loopback Clef `/decide` endpoint
 at `127.0.0.1:8787`, with typed presence and reaction questions. One request
@@ -346,7 +351,10 @@ The local preview shows "warming up" until the first valid decision. That
 request has a five-minute deadline and waits for one response at a time,
 retrying connection failures and temporary HTTP 429/5xx responses after a
 one-second pause. Opt-out, voice stop and backend closure abort both the
-request and retry pause immediately. After the first decision, ordinary
+request and retry pause immediately. Intentional cancellation resolves without
+a Clef-unavailable error. Main logs first-decision waiting/completion, real
+failures, cancellations, and context RPC acknowledgments; it never logs frames
+or raw Clef responses. After the first decision, ordinary
 inference retains its eight-second deadline and failures stop camera cues
 while voice continues. Responses to frames older than ten seconds are
 discarded and reset continuity; model-loading time cannot count as absence.
@@ -354,7 +362,8 @@ discarded and reset continuity; model-loading time cannot count as absence.
 The filter requires presence confidence of at least 80% and reaction
 confidence of at least 70%, three consecutive samples spanning 1.5 seconds,
 and an eight-second cooldown between reaction changes. Repeated cues are
-suppressed. Uncertain presence, a visible return, or a ten-second sampling
+suppressed after the first sustained cue, including initial neutral context.
+Uncertain presence, a visible return, or a ten-second sampling
 gap resets the absence countdown. Thirty seconds of confident absence ends
 voice, leaving coding turns running.
 
