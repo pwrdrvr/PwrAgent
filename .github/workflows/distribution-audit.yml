@@ -1,0 +1,67 @@
+name: Audit Winget and Homebrew sources
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      stage:
+        type: string
+        default: standalone
+    secrets:
+      DISTRIBUTION_READ_TOKEN:
+        required: false
+  pull_request:
+    paths:
+      - .github/workflows/distribution-audit.yml
+      - .github/workflows/release.yml
+      - scripts/package-manager-release*
+      - .agents/skills/release/**
+      - docs/package-manager-distribution.md
+      - docs/desktop-release-runbook.md
+  release:
+    types: [published, edited]
+  schedule:
+    - cron: "17 9 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # Promotion of an older product tag must still use current automation.
+          ref: ${{ github.event_name == 'release' && 'main' || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - name: Test audit failure handling
+        run: node --test scripts/package-manager-release-audit.test.cjs
+      - name: Compare authoritative public sources and submissions
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          DISTRIBUTION_READ_TOKEN_AVAILABLE: ${{ secrets.DISTRIBUTION_READ_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$DISTRIBUTION_READ_TOKEN_AVAILABLE" = true ]; then
+            echo 'Public-source credential: organization DISTRIBUTION_READ_TOKEN (value withheld)'
+          else
+            echo 'Public-source credential: default workflow token fallback'
+          fi
+          mkdir -p .local
+          status=0
+          node scripts/package-manager-release.mjs --audit > .local/distribution-audit.json || status=$?
+          cat .local/distribution-audit.json >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Preserve audit or actionable blocker
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: distribution-audit-${{ inputs.stage || 'standalone' }}
+          path: .local/distribution-audit.json
+          if-no-files-found: error
+          retention-days: 14

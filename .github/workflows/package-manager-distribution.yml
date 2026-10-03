@@ -53,8 +53,10 @@ jobs:
           set -euo pipefail
           echo "Organization distribution read token available: $DISTRIBUTION_READ_TOKEN_AVAILABLE"
           mkdir -p distribution
-          node scripts/package-manager-release.mjs --audit > distribution/preflight.json
+          status=0
+          node scripts/package-manager-release.mjs --audit > distribution/preflight.json || status=$?
           cat distribution/preflight.json >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
           # shellcheck disable=SC2016
           needed="$(node --input-type=module -e '
             import fs from "node:fs";
@@ -68,6 +70,7 @@ jobs:
             node scripts/package-manager-release.mjs --out distribution/current --previous-out distribution/previous
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
         with:
           name: package-manager-inputs
           path: |
@@ -168,7 +171,7 @@ jobs:
       - name: Install Microsoft's WinGet client
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
         run: |
           $ErrorActionPreference = "Stop"
           # Install complete release packages rather than registering the runner's
