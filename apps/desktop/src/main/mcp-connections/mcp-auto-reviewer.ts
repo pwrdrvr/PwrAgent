@@ -67,7 +67,7 @@ export class McpAutoReviewer {
   }) {}
 
   async review(settings: DesktopMcpAutoApprovalSettings, input: McpReviewInput, signal?: AbortSignal): Promise<McpReviewDecision> {
-    if (!settings.enabled) return { action: "decline", content: null, reason: "MCP Auto reviewer is disabled." };
+    if (!settings.enabled) return { action: "decline", content: null, reason: "The approval reviewer is off." };
     if (input.mode === "url") return { action: "cancel", content: null, reason: "Authentication and URL flows require a person." };
     const timeout = AbortSignal.timeout(settings.timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;

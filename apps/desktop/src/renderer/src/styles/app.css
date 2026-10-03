@@ -41202,6 +41202,142 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .settings-mcp-reviewer__prompt {
   height: auto;
   min-height: 112px;
+  padding-block: 8px;
   resize: vertical;
   font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+/* The reviewer's scope is a short list, so the switch says where it answers. */
+.settings-mcp-reviewer__scope {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.settings-mcp-reviewer__escalations {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.settings-mcp-reviewer__escalations .settings-mcp-reviewer__prompt {
+  align-self: stretch;
+}
+
+.settings-mcp-reviewer__seconds {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.settings-mcp-reviewer__seconds .settings-input {
+  width: 72px;
+}
+
+/* An explicit-save form shows its actions only while it holds an edit. */
+.settings-mcp-reviewer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-mcp-reviewer__dirty {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* The Run stage's Approvals group: three label-left rows under one header
+   that says which reviewer answers. Each select is sized to its longest
+   resolved label, as the editor's other controls are sized to their value. */
+.automation-approvals {
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+}
+
+.automation-approvals__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.automation-approvals__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.automation-approvals__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+}
+
+.automation-approvals__dot--on {
+  background: var(--success-text);
+}
+
+.automation-approvals__row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 14px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.automation-approvals__head + .automation-approvals__row {
+  border-top: 0;
+}
+
+.automation-approvals__control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.automation-approvals__control .select-trigger {
+  max-width: 260px;
+}
+
+.automation-approvals__fixed {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.automation-approvals__note {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.automation-approvals__note--warn {
+  color: var(--status-warning);
+}
+
+.automation-approvals > .automation-field__hint {
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
 }

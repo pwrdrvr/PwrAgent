@@ -905,16 +905,16 @@ describe("AutomationEditor", () => {
     fireEvent.keyDown(mcpInput, { key: "Enter" });
     fireEvent.change(mcpInput, { target: { value: "aws-readonly" } });
     fireEvent.keyDown(mcpInput, { key: "Enter" });
-    chooseSelectOption(screen.getByLabelText("Automation MCP tool approval"), "Use harness approval mode");
+    chooseSelectOption(screen.getByLabelText("Automation MCP tool approval"), "Block MCP tools");
     chooseSelectOption(screen.getByLabelText("Automation MCP questions"), "Review and answer");
-    chooseSelectOption(screen.getByLabelText("Automation Default Access escalations"), "Reject escalations");
+    chooseSelectOption(screen.getByLabelText("Automation Default Access escalations"), "Stay in sandbox");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith({
       kind: "create",
       request: expect.objectContaining({
-        executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"], mcpApproval: { tools: "backend", questions: "auto", escalations: "reject" } },
+        executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"], mcpApproval: { tools: "deny", questions: "auto", escalations: "reject" } },
       }),
     });
   });

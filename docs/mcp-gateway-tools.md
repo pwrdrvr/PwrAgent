@@ -29,12 +29,22 @@ Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
 Default access requests once-only confirmation showing the original connection,
-tool and complete arguments. Auto gateway calls use the profile's MCP reviewer
-when enabled. Codex's native Auto reviewer handles its native tool decisions;
-App Server has no API for submitting host-owned dynamic calls to that reviewer.
-ACP harnesses without a native Auto mode can use the enabled profile reviewer
-for host-owned MCP requests. With the reviewer disabled, ordinary Auto gateway
-calls retain human confirmation.
+tool and complete arguments. Auto gateway calls use the profile's approval
+reviewer when enabled. Codex's native Auto reviewer handles its native tool
+decisions; App Server has no API for submitting host-owned dynamic calls to
+that reviewer. With the reviewer disabled, ordinary Auto gateway calls retain
+human confirmation.
+
+The reviewer answers only where nobody is present to: automation runs and
+threads in Auto. An interactive Default Access thread keeps its approval cards
+on every provider, including ACP providers that have no Auto mode, and its
+command and file-change escalations are never sent to the reviewer. Otherwise
+enabling the reviewer would silently turn Default Access into Auto.
+
+A declined or cancelled gateway invocation fails with the reviewer's reason in
+the tool error, so the transcript's tool row shows why. Questions and
+escalations answer their protocol request, which carries no reason; their
+decisions are logged in the main process.
 
 ### Automation MCP grants and review
 
@@ -44,6 +54,12 @@ thread gets per-run native MCP configuration and fresh managed connection
 bridges. Explicitly selected servers are required at startup. Unknown or
 ambiguous saved identities fail explicitly. An empty list inherits the Agent's
 servers and preserves their enabled/optional settings.
+
+The shared resolvers in `packages/shared/src/mcp-auto-approval.ts`
+(`resolveAutomationMcpToolPolicy`, `resolveAutomationMcpQuestionPolicy`,
+`resolveAutomationEscalationPolicy`) decide every `inherit`. The registry
+enforces them and the automation editor labels each Inherit option with their
+result, so the two cannot drift.
 
 `mcpApproval.tools` chooses `inherit`, `backend`, `auto`, `allow`, or `deny`.
 `backend` uses the harness's native MCP approval mode. With the profile reviewer
@@ -67,8 +83,10 @@ Unknown answers, invalid schemas, provider failures, and review deadlines cannot
 produce approval. Full Access does not answer a question automatically.
 
 `mcpApproval.escalations` chooses `inherit`, `auto`, or `reject` for Default
-Access command/file-change escalation requests. Opting into review uses
-`on-request` approval policy with the same workspace-write sandbox. These
+Access command/file-change escalation requests. Review applies only while the
+reviewer is enabled; otherwise the run keeps `never` and stays in its sandbox,
+rather than raising requests that could only be cancelled. Opting into review
+uses `on-request` approval policy with the same workspace-write sandbox. These
 requests use a separate escalation prompt; MCP requests use the MCP prompt.
 Codex Auto retains its native `on-request`/Auto reviewer path. Full Access
 retains its native permission policy.
@@ -90,6 +108,10 @@ approval is cached and no new SQLite writes are introduced by host review dispat
 model, reasoning effort, MCP prompt, escalation prompt and opt-in, endpoint,
 API key environment-variable name, deadline, and future classifier confidence
 threshold. API keys are read only in the main process and never stored here.
+An empty model on the Codex provider follows Settings → Helper model, through
+the `mcp_auto_review` helper id; any other provider names its model. Settings
+offers Codex and Grok catalog models and a direct API, and does not offer
+`system-one` or the confidence threshold while no adapter exists.
 
 Harness review uses existing isolated Codex and Grok structured helpers with
 execution and MCP tools removed. Direct adapters support Chat Completions,
@@ -100,7 +122,7 @@ its late result cannot authorize a stopped request.
 
 `system-one` settings and shared `noul`/`choice` response types are present for
 future decision adapters. That adapter is intentionally not implemented here;
-choosing it yields an explicit unavailable/reject decision. System One's
+a saved `system-one` reviewer yields an explicit unavailable/reject decision. System One's
 [typed primitives](https://docs.typesafe.ai/introduction) require a distinct
 adapter rather than parsing generated text.
 

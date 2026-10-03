@@ -1,4 +1,5 @@
-import type { AutomationMcpApprovalPolicy } from "@pwragent/shared";
+import { DEFAULT_MCP_AUTO_APPROVAL_SETTINGS, type AutomationMcpApprovalPolicy, type DesktopMcpAutoApprovalSettings } from "@pwragent/shared";
+import { AutomationApprovalPolicy, type AutomationApprovalValue } from "./AutomationApprovalPolicy";
 import { matchesAutomationConversation } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -481,9 +482,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [profileMcpAllowlist, setProfileMcpAllowlist] = useState<string[]>(
     initialAutomation?.executionProfile?.mcpAllowlist ?? [],
   );
-  const [profileMcpToolsPolicy, setProfileMcpToolsPolicy] = useState<NonNullable<AutomationMcpApprovalPolicy["tools"]>>(initialAutomation?.executionProfile?.mcpApproval?.tools ?? "inherit");
-  const [profileMcpQuestionsPolicy, setProfileMcpQuestionsPolicy] = useState<NonNullable<AutomationMcpApprovalPolicy["questions"]>>(initialAutomation?.executionProfile?.mcpApproval?.questions ?? "inherit");
-  const [profileEscalationsPolicy, setProfileEscalationsPolicy] = useState<NonNullable<AutomationMcpApprovalPolicy["escalations"]>>(initialAutomation?.executionProfile?.mcpApproval?.escalations ?? "inherit");
+  const [profileMcpApproval, setProfileMcpApproval] = useState<AutomationApprovalValue>(() => ({
+    tools: initialAutomation?.executionProfile?.mcpApproval?.tools ?? "inherit",
+    questions: initialAutomation?.executionProfile?.mcpApproval?.questions ?? "inherit",
+    escalations: initialAutomation?.executionProfile?.mcpApproval?.escalations ?? "inherit",
+  }));
+  // The profile's approval reviewer, so each Inherit can name its result.
+  const [approvalReviewer, setApprovalReviewer] = useState<DesktopMcpAutoApprovalSettings>();
   const initialLookback = initialAutomation?.priorRunLookback;
   const [lookbackEnabled, setLookbackEnabled] = useState(Boolean(initialLookback));
   const [lookbackRuns, setLookbackRuns] = useState(
@@ -519,6 +524,20 @@ export function AutomationEditor(props: AutomationEditorProps) {
       .catch(() => {
         // Selects degrade to free inherit-only choices; saving still works.
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.desktopApi]);
+
+  useEffect(() => {
+    const readSettings = props.desktopApi?.readSettings;
+    if (!readSettings) return;
+    let cancelled = false;
+    void readSettings({})
+      .then((response) => {
+        if (!cancelled) setApprovalReviewer(response.snapshot.models.mcpAutoApproval ?? DEFAULT_MCP_AUTO_APPROVAL_SETTINGS);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -1603,7 +1622,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       model: profileModel,
       reasoningEffort: profileReasoning,
       toolAllowlist: profileToolAllowlist,
-      mcpApproval: { tools: profileMcpToolsPolicy, questions: profileMcpQuestionsPolicy, escalations: profileEscalationsPolicy },
+      mcpApproval: profileMcpApproval,
     });
     const priorRunLookback = lookbackEnabled
       ? {
@@ -2743,31 +2762,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </p>
             </div>
             <div className="automation-field-group">
-              <label className="automation-field"><span>MCP tool approval</span>
-                <Select aria-label="Automation MCP tool approval" value={profileMcpToolsPolicy} onChange={setProfileMcpToolsPolicy} options={[
-                  { value: "inherit", label: "Use profile default" }, { value: "backend", label: "Use harness approval mode" }, { value: "auto", label: "Review each call" },
-                  { value: "allow", label: "Pre-approve allowed tools" }, { value: "deny", label: "Reject tool calls" },
-                ]} />
-              </label>
-              <p className="automation-field__hint">Review uses the model configured in AI Providers. Server and tool allowlists apply to every policy.</p>
-            </div>
-            <div className="automation-field-group">
-              <label className="automation-field"><span>MCP questions</span>
-                <Select aria-label="Automation MCP questions" value={profileMcpQuestionsPolicy} onChange={setProfileMcpQuestionsPolicy} options={[
-                  { value: "inherit", label: "Use profile default" }, { value: "auto", label: "Review and answer" }, { value: "reject", label: "Reject questions" },
-                ]} />
-              </label>
-              <p className="automation-field__hint">The reviewer answers from the task and context. Unknown answers and login flows are cancelled.</p>
-            </div>
-            <div className="automation-field-group">
-              <label className="automation-field"><span>Default Access escalations</span>
-                <Select aria-label="Automation Default Access escalations" value={profileEscalationsPolicy} onChange={setProfileEscalationsPolicy} options={[
-                  { value: "inherit", label: "Use profile default" }, { value: "auto", label: "Review escalations" }, { value: "reject", label: "Reject escalations" },
-                ]} />
-              </label>
-              <p className="automation-field__hint">Codex Auto handles native tool approvals. Default Access escalation review uses its own prompt in AI Providers.</p>
-            </div>
-            <div className="automation-field-group">
               <label className="automation-field">
                 <span>Allowed tools</span>
                 <input
@@ -2782,6 +2776,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 built-ins.
               </p>
             </div>
+            <AutomationApprovalPolicy
+              value={profileMcpApproval}
+              onChange={setProfileMcpApproval}
+              reviewer={approvalReviewer}
+              executionMode={profileExecutionMode || agentThreadSummary?.executionMode || (agentAssignment ? "default" : undefined)}
+              backendKind={effectiveBackendKind}
+              backendLabel={backendLabelFor(effectiveBackendKind)}
+            />
           </div>
 
           <div className="automation-fieldset">

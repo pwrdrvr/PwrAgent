@@ -9,7 +9,7 @@ describe("MCP Auto reviewer", () => {
   it("validates answers against the original schema and forwards provider, model, effort and prompt", async () => {
     const harness = vi.fn(async () => ({ action: "accept", content: { region: "us" }, reason: "The task specifies US." }));
     const reviewer = new McpAutoReviewer({ harness });
-    expect(await reviewer.review(settings, input)).toMatchObject({ action: "accept", content: { region: "us" } });
+    expect(await reviewer.review({ ...settings, model: "gpt-6-luna", reasoningEffort: "low" }, input)).toMatchObject({ action: "accept", content: { region: "us" } });
     expect(harness).toHaveBeenCalledWith(expect.objectContaining({ provider: "codex", model: "gpt-6-luna", reasoningEffort: "low", system: expect.stringContaining(settings.prompt) }), expect.any(AbortSignal));
   });
 

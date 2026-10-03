@@ -623,7 +623,7 @@ export function ModelsSettings(props: {
         onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
       />
 
-      <McpAutoApprovalSettings settings={props.snapshot.models.mcpAutoApproval} backends={backends} saving={props.saving} onSave={async (settings) => await props.onSaveMcpAutoApproval?.(settings)} />
+      <McpAutoApprovalSettings settings={props.snapshot.models.mcpAutoApproval} backends={backends} helperModels={props.snapshot.models.helperModels} saving={props.saving} onSave={async (settings) => await props.onSaveMcpAutoApproval?.(settings)} />
 
       <HelperModelSettings
         backends={backends}

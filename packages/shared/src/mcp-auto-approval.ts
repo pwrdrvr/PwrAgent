@@ -12,6 +12,7 @@ export type DesktopMcpAutoApprovalSettings = {
   enabled: boolean;
   modelType: McpReviewerModelType;
   provider: string;
+  /** Empty on Codex follows Settings → Helper model. Direct APIs name one. */
   model: string;
   reasoningEffort: string;
   prompt: string;
@@ -34,7 +35,7 @@ export const DEFAULT_ESCALATION_REVIEWER_PROMPT = "Review a command or file-chan
   + "Reject destructive or unrelated operations without explicit authorization. Cancel when context is insufficient.";
 
 export const DEFAULT_MCP_AUTO_APPROVAL_SETTINGS: DesktopMcpAutoApprovalSettings = {
-  enabled: false, modelType: "harness", provider: "codex", model: "gpt-6-luna", reasoningEffort: "low",
+  enabled: false, modelType: "harness", provider: "codex", model: "", reasoningEffort: "",
   prompt: DEFAULT_MCP_REVIEWER_PROMPT, escalationPrompt: DEFAULT_ESCALATION_REVIEWER_PROMPT, reviewEscalations: false, endpoint: "", apiKeyEnv: "", confidenceThreshold: 0.9, timeoutMs: 30000,
 };
 
@@ -61,8 +62,10 @@ export function normalizeMcpAutoApprovalSettings(value: unknown): DesktopMcpAuto
     if (typeof record[key] !== "number" || !Number.isFinite(record[key]) || record[key] < min || record[key] > max) throw new Error(`Invalid MCP reviewer ${key}.`);
     result[key] = record[key];
   }
-  if (result.enabled && (!result.model || !result.prompt || result.reviewEscalations && !result.escalationPrompt || (result.modelType === "harness" ? !result.provider : !result.endpoint))) {
-    throw new Error("An enabled MCP reviewer needs a model, prompt, and provider or endpoint.");
+  // Only Codex follows the Helper model. Any other provider names its model.
+  const needsModel = result.modelType !== "harness" || result.provider !== "codex";
+  if (result.enabled && (needsModel && !result.model || !result.prompt || result.reviewEscalations && !result.escalationPrompt || (result.modelType === "harness" ? !result.provider : !result.endpoint))) {
+    throw new Error("An enabled approval reviewer needs a model, a policy, and a provider or endpoint.");
   }
   return result;
 }
@@ -75,6 +78,46 @@ export function normalizeAutomationMcpApprovalPolicy(value: unknown): Automation
   if (record.questions !== undefined && (typeof record.questions !== "string" || !["inherit", "auto", "reject"].includes(record.questions))) throw new Error("Unknown automation MCP question policy.");
   if (record.escalations !== undefined && (typeof record.escalations !== "string" || !["inherit", "auto", "reject"].includes(record.escalations))) throw new Error("Unknown automation escalation policy.");
   return { ...(record.escalations ? { escalations: record.escalations as AutomationMcpApprovalPolicy["escalations"] } : {}), ...(record.tools ? { tools: record.tools as AutomationMcpApprovalPolicy["tools"] } : {}), ...(record.questions ? { questions: record.questions as AutomationMcpApprovalPolicy["questions"] } : {}) };
+}
+
+export type AutomationMcpToolDecision = "allow" | "backend" | "auto" | "deny";
+
+/**
+ * The tool-call policy a run applies. The registry enforces it and the
+ * automation editor labels Inherit with it, so the two cannot disagree.
+ * `executionMode` is the run's effective access, its own or the Agent's.
+ */
+export function resolveAutomationMcpToolPolicy(
+  policy: AutomationMcpApprovalPolicy | undefined,
+  executionMode: string | undefined,
+  reviewerEnabled: boolean,
+): AutomationMcpToolDecision {
+  if (policy?.tools && policy.tools !== "inherit") return policy.tools;
+  if (executionMode === "auto" && reviewerEnabled) return "backend";
+  if (executionMode === "full-access") return "allow";
+  return reviewerEnabled ? "auto" : "allow";
+}
+
+/** Questions are reviewed or cancelled; Full Access never answers one. */
+export function resolveAutomationMcpQuestionPolicy(
+  policy: AutomationMcpApprovalPolicy | undefined,
+  reviewerEnabled: boolean,
+): "auto" | "reject" {
+  if (policy?.questions && policy.questions !== "inherit") return policy.questions;
+  return reviewerEnabled ? "auto" : "reject";
+}
+
+/**
+ * Whether a Default Access run asks for escalations at all. Without a reviewer
+ * nothing could answer them, so the run stays in its sandbox rather than
+ * raising requests that would only be cancelled.
+ */
+export function resolveAutomationEscalationPolicy(
+  policy: AutomationMcpApprovalPolicy | undefined,
+  reviewer: Pick<DesktopMcpAutoApprovalSettings, "enabled" | "reviewEscalations">,
+): "auto" | "reject" {
+  if (!reviewer.enabled || policy?.escalations === "reject") return "reject";
+  return policy?.escalations === "auto" || reviewer.reviewEscalations ? "auto" : "reject";
 }
 
 /** Future decision adapters normalize these values into an approval decision. */

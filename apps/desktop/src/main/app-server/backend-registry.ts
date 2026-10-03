@@ -1,4 +1,4 @@
-import { DEFAULT_MCP_AUTO_APPROVAL_SETTINGS, normalizeAutomationMcpApprovalPolicy, type DesktopMcpAutoApprovalSettings, type AutomationMcpApprovalPolicy } from "@pwragent/shared";
+import { DEFAULT_MCP_AUTO_APPROVAL_SETTINGS, normalizeAutomationMcpApprovalPolicy, resolveAutomationEscalationPolicy, resolveAutomationMcpQuestionPolicy, resolveAutomationMcpToolPolicy, type DesktopMcpAutoApprovalSettings, type AutomationMcpApprovalPolicy } from "@pwragent/shared";
 import { McpAutoReviewer, type McpHarnessReviewRequest, type McpReviewInput } from "../mcp-connections/mcp-auto-reviewer";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
@@ -10918,8 +10918,7 @@ export class DesktopBackendRegistry {
     });
     const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const reviewSettings = this.resolveMcpAutoApprovalSettingsFn();
-    const reviewEscalations = params.mcpApproval?.escalations === "auto" || params.mcpApproval?.escalations !== "reject" && reviewSettings.enabled && reviewSettings.reviewEscalations;
+    const reviewEscalations = resolveAutomationEscalationPolicy(params.mcpApproval, this.resolveMcpAutoApprovalSettingsFn()) === "auto";
     const approvalPolicy = executionMode === "auto" || executionMode === "default" && reviewEscalations ? "on-request" : "never";
     const sandbox = modeSettings.sandbox;
     const modelSettings = await this.resolveModelSettings(params.backend, {
@@ -10954,7 +10953,7 @@ export class DesktopBackendRegistry {
       ? await this.prepareAutomationMcp({ client, agentThreadId: params.agentThreadId, cwd, overlay, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist, mcpToolApproval })
       : undefined;
     if (params.backend !== "codex" && (params.mcpAllowlist?.length || params.toolAllowlist?.length || params.mcpApproval)) {
-      throw new Error("Automation MCP allowlists currently require the Codex backend.");
+      throw new Error("Automation MCP allowlists and approval policies currently require the Codex backend.");
     }
     const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
     backendRegistryLog.info("starting automation headless thread", {
@@ -35351,19 +35350,17 @@ export class DesktopBackendRegistry {
       backend,
       request,
     );
-    const reviewerSettings = this.resolveMcpAutoApprovalSettingsFn();
-    const reviewEscalations = headlessAutomation?.mcpApproval?.escalations === "auto"
-      || headlessAutomation?.mcpApproval?.escalations !== "reject" && reviewerSettings.reviewEscalations;
-    if (reviewerSettings.enabled && reviewEscalations
+    // Escalation review is for runs nobody is watching. An interactive Default
+    // Access thread keeps asking its operator; reviewing there would be Auto
+    // under another name.
+    if (headlessAutomation?.executionMode === "default"
       && (request.method === "item/commandExecution/requestApproval" || request.method === "item/fileChange/requestApproval")
-      && (headlessAutomation ? headlessAutomation.executionMode === "default" : this.isLiveDynamicToolCall(backend, { threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }) && await this.shouldReviewEscalationForThread({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }))) {
+      && resolveAutomationEscalationPolicy(headlessAutomation.mcpApproval, this.resolveMcpAutoApprovalSettingsFn()) === "auto") {
       const response = await this.reviewMcpRequest({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }, {
         kind: "escalation", serverName: String(backend), message: request.method,
         context: { request: this.withEmbeddedFileChangeApprovalContext({ backend, notification: request }).notification.params },
       });
-      const stillRunning = headlessAutomation
-        ? this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
-        : this.isLiveDynamicToolCall(backend, { threadId: request.params.threadId, turnId: request.params.turnId ?? undefined });
+      const stillRunning = this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId;
       return buildPendingRequestResponse(request,
         !stillRunning || response.action === "cancel" ? "cancel" : response.action === "accept" ? "approve" : "decline",
       );
@@ -35374,8 +35371,7 @@ export class DesktopBackendRegistry {
       const live = Boolean(headlessAutomation) || this.isLiveDynamicToolCall(backend, { threadId: request.params.threadId, turnId: request.params.turnId ?? undefined });
       const allowed = headlessAutomation
         ? headlessAutomation.mcpAllowedServerNames?.includes(serverName)
-          && headlessAutomation.mcpApproval?.questions !== "reject"
-          && (headlessAutomation.mcpApproval?.questions === "auto" || settings.enabled)
+          && resolveAutomationMcpQuestionPolicy(headlessAutomation.mcpApproval, settings.enabled) === "auto"
         : settings.enabled && await this.shouldReviewMcpForThread({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined });
       if (allowed && live && (!headlessAutomation || await this.isAutomationMcpServerSelected(backend, headlessAutomation, serverName))) {
         const response = await this.reviewMcpRequest({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }, {
@@ -35504,7 +35500,7 @@ export class DesktopBackendRegistry {
           kind: "invocation", serverName: invocation.serverName, message: notification.params.message as string,
           context: { invocation, automationRunId: automation.automationRunId },
         }, signal);
-        return decision.action === "accept";
+        return this.acceptReviewedInvocation(decision);
       }
       signal.throwIfAborted();
       return true;
@@ -35523,7 +35519,7 @@ export class DesktopBackendRegistry {
     }
     if (this.resolveMcpAutoApprovalSettingsFn().enabled && await this.shouldReviewMcpForThread(context)) {
       const decision = await this.reviewMcpRequest(context, { kind: "invocation", serverName: invocation.serverName, message: notification.params.message as string, context: { invocation } }, signal);
-      return decision.action === "accept";
+      return this.acceptReviewedInvocation(decision);
     }
     if (automation) return false;
     const key = buildPendingRequestKey({ ...context, requestId });
@@ -35552,38 +35548,38 @@ export class DesktopBackendRegistry {
   }
 
   private automationMcpToolPolicy(policy?: AutomationMcpApprovalPolicy, executionMode?: ThreadExecutionMode): "allow" | "backend" | "auto" | "deny" {
-    return policy?.tools && policy.tools !== "inherit" ? policy.tools
-      : executionMode === "auto" && this.resolveMcpAutoApprovalSettingsFn().enabled ? "backend"
-        : executionMode === "full-access" ? "allow"
-          : this.resolveMcpAutoApprovalSettingsFn().enabled ? "auto" : "allow";
+    return resolveAutomationMcpToolPolicy(policy, executionMode, this.resolveMcpAutoApprovalSettingsFn().enabled);
   }
 
+  /**
+   * A declined call reaches the agent as the tool's error, so the transcript's
+   * tool row carries the reviewer's reason. Nothing new is stored.
+   */
+  private acceptReviewedInvocation(decision: { action: "accept" | "decline" | "cancel"; reason: string }): boolean {
+    if (decision.action === "accept") return true;
+    throw new Error(`The approval reviewer ${decision.action === "cancel" ? "cancelled" : "declined"} this MCP tool call: ${decision.reason}`);
+  }
+
+  /**
+   * Interactive threads use the reviewer only in Auto, where the operator has
+   * already delegated approvals. Default Access keeps its approval cards on
+   * every provider, including those without a native Auto mode.
+   */
   private async shouldReviewMcpForThread(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<boolean> {
     if (context.backend === "codex") {
       const mode = context.turnId ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId)) : undefined;
       return (mode ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId)) === "auto";
     }
     if (!isAcpBackendId(context.backend)) return false;
-    const session = this.acpBackend.getSession(context.backend, context.threadId);
-    if (session?.executionMode === "auto") return true;
-    // MCP gateway and elicitation callbacks are host-owned. A harness without
-    // native Auto can use the explicitly enabled profile reviewer for them.
-    const summary = (await this.listBackends({ includeUnavailable: true })).backends.find((backend) => backend.kind === context.backend);
-    return Boolean(session && !summary?.executionModes.some((mode) => mode.mode === "auto" && mode.available));
-  }
-
-  private async shouldReviewEscalationForThread(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<boolean> {
-    if (await this.isMcpGatewayFullAccess(context)) return false;
-    if (context.backend !== "codex") return true;
-    const active = context.turnId ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId)) : undefined;
-    return (active ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId)) === "default";
+    return this.acpBackend.getSession(context.backend, context.threadId)?.executionMode === "auto";
   }
 
   private async runMcpApprovalHarness(request: McpHarnessReviewRequest, signal: AbortSignal): Promise<unknown> {
     signal.throwIfAborted();
     let result: ThreadTitleAdapterResult;
+    // An empty Codex model follows Settings → Helper model, resolved below.
     if (request.provider === "codex" && this.codexClient.generateStructuredObject) {
-      if (this.codexClient.resolveHelperModelSelection) {
+      if (request.model && this.codexClient.resolveHelperModelSelection) {
         const selection = await this.codexClient.resolveHelperModelSelection({
           helper: "mcp_auto_review",
           model: request.model,
@@ -35596,12 +35592,13 @@ export class DesktopBackendRegistry {
         }
       }
       result = await this.codexClient.generateStructuredObject({
-        helper: "mcp_auto_review", model: request.model, reasoningEffort: request.reasoningEffort,
+        helper: "mcp_auto_review", model: request.model || undefined, reasoningEffort: request.reasoningEffort || undefined,
         system: request.system, prompt: request.prompt, schema: request.schema, disableExecution: true,
         isMatch: (answer) => ["accept", "decline", "cancel"].includes(String(answer.action)),
         timeoutMs: request.timeoutMs, turnTimeoutMs: request.timeoutMs,
       });
     } else if (hasAcpStructuredHelper(request.provider)) {
+      if (!request.model) throw new Error(`Choose a model for the ${request.provider} approval reviewer.`);
       result = await generateAcpStructuredObject({
         backend: request.provider, cwd: await this.resolveAcpHelperWorkspace(),
         run: (prompt) => this.acpBackend.runEphemeralPrompt(request.provider as AcpBackendId, prompt),
@@ -35613,7 +35610,7 @@ export class DesktopBackendRegistry {
     }
     signal.throwIfAborted();
     if (result.status !== "ok") throw new Error(result.reason);
-    if (result.model && result.model !== request.model
+    if (request.model && result.model && result.model !== request.model
       || request.reasoningEffort && result.reasoningEffort && result.reasoningEffort !== request.reasoningEffort) {
       throw new Error("MCP reviewer used a different model or effort than selected.");
     }

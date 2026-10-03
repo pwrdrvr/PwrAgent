@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveAutomationEscalationPolicy, resolveAutomationMcpQuestionPolicy, resolveAutomationMcpToolPolicy } from "@pwragent/shared";
 import { buildAutomationMcpPolicy } from "../automations/automation-mcp-policy";
 
 describe("automation MCP policy", () => {
@@ -74,5 +75,33 @@ describe("automation MCP policy", () => {
     }).config;
     expect(config).toMatchObject({ mcp_servers: { datadog: { enabled_tools: ["get_metrics"], tools: { get_metrics: { approval_mode: "approve" } } } } });
     expect(config).not.toHaveProperty("mcp_servers.datadog.tools.write_monitor");
+  });
+});
+
+describe("automation approval resolution", () => {
+  it.each([
+    ["default", false, "allow"], ["auto", false, "allow"], ["full-access", false, "allow"],
+    ["default", true, "auto"], ["auto", true, "backend"], ["full-access", true, "allow"],
+  ] as const)("resolves inherited tool calls in %s with the reviewer %s to %s", (mode, enabled, expected) => {
+    expect(resolveAutomationMcpToolPolicy({ tools: "inherit" }, mode, enabled)).toBe(expected);
+  });
+
+  it("keeps an explicit tool choice whatever the access or reviewer", () => {
+    expect(resolveAutomationMcpToolPolicy({ tools: "deny" }, "full-access", true)).toBe("deny");
+    expect(resolveAutomationMcpToolPolicy({ tools: "auto" }, "default", false)).toBe("auto");
+  });
+
+  it("reviews questions only with the reviewer on unless an automation chooses", () => {
+    expect(resolveAutomationMcpQuestionPolicy(undefined, false)).toBe("reject");
+    expect(resolveAutomationMcpQuestionPolicy(undefined, true)).toBe("auto");
+    expect(resolveAutomationMcpQuestionPolicy({ questions: "reject" }, true)).toBe("reject");
+  });
+
+  it("asks for escalations only when a reviewer can answer them", () => {
+    expect(resolveAutomationEscalationPolicy({ escalations: "auto" }, { enabled: false, reviewEscalations: true })).toBe("reject");
+    expect(resolveAutomationEscalationPolicy(undefined, { enabled: true, reviewEscalations: false })).toBe("reject");
+    expect(resolveAutomationEscalationPolicy(undefined, { enabled: true, reviewEscalations: true })).toBe("auto");
+    expect(resolveAutomationEscalationPolicy({ escalations: "auto" }, { enabled: true, reviewEscalations: false })).toBe("auto");
+    expect(resolveAutomationEscalationPolicy({ escalations: "reject" }, { enabled: true, reviewEscalations: true })).toBe("reject");
   });
 });

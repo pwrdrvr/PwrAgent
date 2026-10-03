@@ -123,7 +123,9 @@ describe("backend MCP gateway dispatch", () => {
     expect(result.success).toBe(false);
     expect(reviewModel, JSON.stringify(result)).toHaveBeenCalledOnce();
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
-    expect(reviewModel.mock.calls[0][0]).toMatchObject({ model: reviewerSettings.model, disableExecution: true, prompt: expect.stringContaining("Read fixture health.") });
+    // An empty Codex model follows Settings → Helper model.
+    expect(reviewModel.mock.calls[0][0]).toMatchObject({ helper: "mcp_auto_review", model: undefined, disableExecution: true, prompt: expect.stringContaining("Read fixture health.") });
+    expect(JSON.stringify(result)).toContain("The approval reviewer declined this MCP tool call: Unauthorized.");
   });
 
   it("answers an allowed automation MCP question using the configured reviewer", async () => {
@@ -146,6 +148,23 @@ describe("backend MCP gateway dispatch", () => {
     expect(JSON.stringify(reviewModel.mock.calls[0][0])).not.toContain("Monitoring policy");
   });
 
+  it("leaves an interactive Default Access escalation to its operator", async () => {
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    const pending = new Promise<AgentEvent>((resolve) => {
+      registry.onEvent((event) => { if (event.notification.method === "item/commandExecution/requestApproval") resolve(event); });
+    });
+    void internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "thread-1", turnId: "turn-1", requestId: "interactive-escalation", command: "cat fixture.txt" } });
+    expect((await pending).notification.params).toMatchObject({ requestId: "interactive-escalation" });
+    expect(reviewModel).not.toHaveBeenCalled();
+  });
+
+  it("keeps a run in its sandbox when escalation review is chosen but the reviewer is off", async () => {
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "escalation-off", executionMode: "default", mcpApproval: { escalations: "auto" }, input: [{ type: "text", text: "Inspect fixture files." }] });
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({ approvalPolicy: "never" }));
+  });
+
   it.each(["item/commandExecution/requestApproval", "item/fileChange/requestApproval"] as const)("returns the protocol acceptance value for %s", async (method) => {
     reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
     reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized." } });
@@ -165,7 +184,7 @@ describe("backend MCP gateway dispatch", () => {
     expect(internals.activeMcpReviewTasks.get("codex:headless-1")).toBe(task);
     internals.rememberMcpReviewSteering("codex", "headless-1", "turn-1", [{ type: "text", text: steering }]);
     if (kind === "invocation") {
-      expect(await internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, { backend: "codex", threadId: "headless-1", turnId: "turn-1", transport: "codex_dynamic_tool" }, new AbortController().signal)).toBe(false);
+      await expect(internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, { backend: "codex", threadId: "headless-1", turnId: "turn-1", transport: "codex_dynamic_tool" }, new AbortController().signal)).rejects.toThrow("The approval reviewer declined this MCP tool call: Current task policy.");
     } else if (kind === "question") {
       expect(await internals.handleServerRequest("codex", { method: "mcpServer/elicitation/request", params: { threadId: "headless-1", turnId: "turn-1", requestId: "updated-intent", serverName: "one", mode: "form", message: "Read health?", requestedSchema: { type: "object", properties: {} }, _meta: null } })).toEqual({ action: "decline", content: null, _meta: null });
     } else {
@@ -197,7 +216,7 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   it("rejects a helper answer produced by a model other than the selected reviewer", async () => {
-    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true };
+    reviewerSettings = { ...reviewerSettings, enabled: true, reviewEscalations: true, model: "gpt-6-luna" };
     reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized." }, model: "another-model" } as never);
     await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "model-mismatch", executionMode: "default", input: [{ type: "text", text: "Inspect fixture files." }] });
     expect(await internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "model-mismatch", command: "cat fixture.txt" } })).toEqual({ decision: "decline" });
@@ -407,9 +426,10 @@ describe("backend MCP gateway dispatch", () => {
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
-  it("uses the enabled reviewer for an ACP harness without native Auto", async () => {
+  it("keeps the approval card for an ACP harness without native Auto", async () => {
     reviewerSettings.enabled = true;
     reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized read." } });
+    const events: AgentEvent[] = [];
     const backend = "acp:fixture" as const;
     vi.spyOn(internals.acpBackend, "getSession").mockReturnValue({
       backendId: backend, sessionId: "thread-1", title: "Fixture", cwd: directory,
@@ -417,12 +437,20 @@ describe("backend MCP gateway dispatch", () => {
     });
     vi.spyOn(internals.acpBackend, "getInstalledAgent").mockReturnValue(undefined);
     vi.spyOn(registry, "listBackends").mockResolvedValue({ backends: [{ kind: backend, executionModes: [] }] } as never);
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({ backend, threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: null } });
+    });
+    // Default Access keeps asking its operator, even where the provider has
+    // no Auto mode for the reviewer to stand in for.
     expect(await internals.approveGatewayInvocation(
       { ...args, serverName: "Fixture" },
       { backend, threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
       new AbortController().signal,
     )).toBe(true);
-    expect(reviewModel).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+    expect(reviewModel).not.toHaveBeenCalled();
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
