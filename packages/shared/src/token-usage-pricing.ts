@@ -25,6 +25,8 @@ export type ThreadUsageTokenBreakdown = {
 
 /** Read-only provider totals, kept separate from the observed usage ledger. */
 export type ThreadPricingSnapshot = {
+  /** Current model is declared local in PwrAgent and has zero token cost. */
+  localModel?: boolean;
   model?: string;
   modelLabel?: string;
   serviceTier?: string;

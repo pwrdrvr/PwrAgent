@@ -7536,6 +7536,7 @@ export class CodexAppServerClient {
   private readonly pricingSnapshotCache = new Map<string, { updatedAt?: number; tokens: ThreadUsageTokenBreakdown; serviceTier?: string }>();
   private readonly pricingSnapshotReads = new Map<string, Promise<ThreadPricingSnapshot>>();
   private pricingSnapshotReaderQueue: Promise<void> = Promise.resolve();
+  private cancelPricingSnapshotReader?: () => Promise<void>;
   // Bumped whenever a turn may have ended (a terminal, a thread status change,
   // a helper turn's cleanup, or a close). History recovery waits on it rather
   // than on a clock when another turn still runs on this process.
@@ -7851,6 +7852,10 @@ export class CodexAppServerClient {
     // A restart waiting out its backoff must not hold close open. Its
     // initialization sees the new close generation and gives up.
     this.cancelRestartBackoff?.();
+    // Snapshot resumes own a separate writer. Release its notification waiter
+    // and transport before the lifecycle barrier drains the admitted read.
+    const stoppedReader = this.cancelPricingSnapshotReader?.();
+    void stoppedReader?.catch(() => undefined);
     // Stop the transport now: pending RPC responses must not hold shutdown
     // (or a recovery waiting to drain those RPCs) until their timeouts expire.
     const stopped = this.stopTransport();
@@ -9480,8 +9485,18 @@ export class CodexAppServerClient {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let tokens: ThreadUsageTokenBreakdown | undefined;
         let received = false;
+        let cancelled = false;
+        let readerClose: Promise<void> | undefined;
         let finish!: () => void;
         const receivedUsage = new Promise<void>((resolve) => { finish = resolve; });
+        const closeReader = () => readerClose ??= reader.close();
+        const cancelReader = () => {
+          cancelled = true;
+          if (timer) clearTimeout(timer);
+          finish();
+          return closeReader();
+        };
+        this.cancelPricingSnapshotReader = cancelReader;
         const unsubscribe = reader.onNotification((notification) => {
           if (notification.method !== "thread/tokenUsage/updated" || notification.params.threadId !== threadId) return;
           tokens = readTokenUsageBreakdown(asRecord(asRecord(notification.params.tokenUsage)?.total) ?? {});
@@ -9490,14 +9505,16 @@ export class CodexAppServerClient {
         });
         try {
           await reader.ensureInitialized();
+          if (cancelled) return { model };
           const resumed = asRecord(await reader.connection.request("thread/resume", { threadId, excludeTurns: true },
             this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
-          if (!received) {
+          if (!received && !cancelled) {
             // Bound compatibility with servers that do not emit a snapshot.
             // Supported servers satisfy this through the notification, not a delay.
             timer = setTimeout(finish, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
             await receivedUsage;
           }
+          if (cancelled) return { model };
           const serviceTier = pickString(resumed ?? {}, ["serviceTier"]);
           if (tokens && updatedAt !== undefined) rememberBoundedMap(this.pricingSnapshotCache, threadId, { updatedAt, tokens, serviceTier }, 1_000);
           return { model: pickString(resumed ?? {}, ["model"]) ?? model, tokens, ...(serviceTier ? { serviceTier } : {}) };
@@ -9509,7 +9526,8 @@ export class CodexAppServerClient {
         } finally {
           if (timer) clearTimeout(timer);
           unsubscribe();
-          await reader.close();
+          if (this.cancelPricingSnapshotReader === cancelReader) this.cancelPricingSnapshotReader = undefined;
+          await closeReader();
         }
       });
       this.pricingSnapshotReaderQueue = read.then(() => undefined, () => undefined);

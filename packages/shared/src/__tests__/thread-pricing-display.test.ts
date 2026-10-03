@@ -109,4 +109,12 @@ describe("unobserved thread pricing", () => {
     const estimate = buildThreadPricingSnapshotEstimate({ model: "gpt-6.1-sol", serviceTier: "priority", tokens }, Date.UTC(2026, 9, 3));
     expect(estimate.totalCostMicros).toBe(1_360_000);
   });
+
+  it.each(["gpt-6.1-sol", "unknown-local-model"])("preserves the declared local zero-cost policy for %s", (model) => {
+    for (const counts of [tokens, undefined]) {
+      const estimate = buildThreadPricingSnapshotEstimate({ model, localModel: true, tokens: counts });
+      expect(estimate.totalCostMicros).toBe(0);
+      expect(estimate.tokens).toEqual(counts);
+    }
+  });
 });

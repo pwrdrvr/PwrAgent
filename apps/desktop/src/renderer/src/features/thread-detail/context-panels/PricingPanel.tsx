@@ -389,7 +389,10 @@ function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay
       <RailSummaryRow label="Output" value={count(tokens?.outputTokens)} />
       <RailSummaryRow label="Reasoning" value={count(tokens?.reasoningOutputTokens)} />
       <p className="context-empty context-empty--warning">
-        Estimate assumes all tokens used the current model at today's list prices.
+        {props.estimate.localModel
+          ? "Estimate assumes all tokens used the current model, declared local with zero token cost."
+          : "Estimate assumes all tokens used the current model at today's list prices."}
+        {" "}
         PwrAgent did not observe the turns, so model switches, speed settings, and earlier provider price changes may make it inaccurate.
       </p>
       {!tokens ? <p className="context-empty">Codex has not provided historical token totals for this thread.</p> : null}

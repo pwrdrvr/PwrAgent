@@ -3809,6 +3809,39 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("closes the isolated reader and cancels queued snapshot reads when its parent closes", async () => {
+    for (const id of ["no-usage", "queued-usage"]) {
+      MockTransport.readThreadResultByThreadId.set(id, { thread: { id, model: "gpt-6.1-sol" } });
+    }
+    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    vi.useFakeTimers();
+    const reads = Promise.all([client.readThreadPricingSnapshot("no-usage"), client.readThreadPricingSnapshot("queued-usage")]);
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(MockTransport.instances).toHaveLength(2);
+      const reader = MockTransport.instances[1];
+      expect(reader.loadedThreads.has("no-usage")).toBe(true);
+      let closed = false;
+      closing = client.close().then(() => { closed = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      // No clock advance: shutdown must release the writer and notification
+      // waiter immediately, rather than waiting out the snapshot timeout.
+      expect(reader.closeCount).toBeGreaterThan(0);
+      expect(reader.loadedThreads.size).toBe(0);
+      expect(closed).toBe(true);
+      await reads;
+      expect(MockTransport.instances).toHaveLength(2);
+    } finally {
+      await vi.runAllTimersAsync();
+      await reads;
+      await (closing ?? client.close());
+      vi.useRealTimers();
+    }
+  });
+
   it("uses query payloads when filtering the codex thread list", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

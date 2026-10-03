@@ -7298,6 +7298,27 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.readThreadPricingSnapshot).toHaveBeenCalledOnce();
   });
 
+  it.each(["gpt-6.1-sol", "/models/bonsai.gguf"])("projects zero-cost historical estimates for declared local model %s", async (model) => {
+    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: model, label: "Declared local model" }] }), {
+      readThreadPricingSnapshot: vi.fn(async () => ({ model, tokens })),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    let localIds = [model];
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, resolveCodexLocalModelIds: () => localIds });
+    onTestFinished(() => registry.close());
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const response = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(response.display?.pricingPage?.fallbackEstimate).toMatchObject({ model, modelLabel: "Declared local model", tokens, totalCostMicros: 0 });
+    expect(response.display?.pricingPage?.summary).toBeUndefined();
+    expect(response.display?.pricingPage?.rows).toEqual([]);
+    expect(writes).not.toHaveBeenCalled();
+    localIds = [];
+    const cleared = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(cleared.display?.pricingPage?.fallbackEstimate?.totalCostMicros).toBe(model === "gpt-6.1-sol" ? 1_480 : undefined);
+  });
+
   it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
     const titleHelperCompleted = createDeferred<string>();
     const codexClient = new MockBackendClient({

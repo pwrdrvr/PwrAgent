@@ -15447,7 +15447,8 @@ export class DesktopBackendRegistry {
         await client.readThreadPricingSnapshot?.(request.threadId), undefined, false);
       if (snapshot) {
         const modelLabel = this.codexBackendSummary?.launchpadOptions?.models?.find((model) => model.id === snapshot.model)?.label;
-        pricing.snapshot = { ...snapshot, ...(modelLabel ? { modelLabel } : {}) };
+        const localModel = Boolean(snapshot.model && this.resolveCodexLocalModelIdsFn().includes(snapshot.model));
+        pricing.snapshot = { ...snapshot, ...(modelLabel ? { modelLabel } : {}), localModel };
       }
     }
     const stored = await this.overlayStore.readThreadToolAccounting({

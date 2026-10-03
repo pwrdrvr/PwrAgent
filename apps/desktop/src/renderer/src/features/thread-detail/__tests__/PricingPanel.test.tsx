@@ -59,6 +59,17 @@ it("replaces the fallback card when normal pricing is available", () => {
   expect(view.container.querySelector(".pricing-summary-card")).toBeInTheDocument();
 });
 
+it("shows zero-cost local estimates and describes the local pricing assumption", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: {
+    model: "gpt-6.1-sol", localModel: true,
+    tokens: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, totalTokens: 1_100 },
+  } }} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card).toHaveTextContent("$0.000 estimated");
+  expect(card).toHaveTextContent("declared local with zero token cost");
+  expect(card).not.toHaveTextContent("today's list prices");
+});
+
 it("balances the two summary cards without rounding the usage rows or accounting", () => {
   const { pricing, accounting } = buildTokenMiserPricingFixture();
   pricing.lines[0] = { ...pricing.lines[0]!, totalCostMicros: 30_039_073 };

@@ -587,6 +587,7 @@ export type ThreadPricingDisplay = ReturnType<typeof buildThreadPricingDisplay>;
 
 /** Apply today's rates to the whole thread without manufacturing observed rows. */
 export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapshot, at = Date.now()) {
+  if (snapshot.localModel) return { ...snapshot, totalCostMicros: 0 };
   const { model, tokens } = snapshot;
   const validCount = (count: number | undefined): count is number =>
     count !== undefined && Number.isSafeInteger(count) && count >= 0;
