@@ -26214,6 +26214,47 @@ div.composer-error-row__toggle {
   flex-wrap: wrap;
 }
 
+/* Always allow on the left, alone; the refusals and the primary grant on the
+   right. `margin-left: auto` holds the group right when Always allow is not
+   offered. */
+.transcript-mcp__actions {
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.transcript-mcp__actions-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* `.button` sets no size, so approval rows inherited the 16px document size:
+   larger than the 14px transcript and as large as the card's title. One size
+   for every transcript approval row keeps the cards one family. The MCP
+   login card's Open link sits in its URL row and takes the same size. */
+.transcript-request__actions .button,
+.transcript-questionnaire__actions .button,
+.transcript-mcp__actions .button,
+.transcript-mcp__url .button {
+  min-height: 30px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcript-request__actions .button--ghost,
+.transcript-questionnaire__actions .button--ghost,
+.transcript-mcp__actions .button--ghost {
+  color: var(--text-secondary);
+}
+
+.transcript-request__actions .button--ghost:hover:not([disabled]),
+.transcript-questionnaire__actions .button--ghost:hover:not([disabled]),
+.transcript-mcp__actions .button--ghost:hover:not([disabled]) {
+  color: var(--text-primary);
+}
+
 .transcript-request__actions .button {
   max-width: 100%;
   white-space: normal;
@@ -26273,23 +26314,91 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
-.transcript-mcp__params {
-  display: grid;
+/* The MCP card is denser than the questionnaire it shares a frame with: the
+   title, its warning and its parameters read as one 6px block, and the card
+   spends 10px between header, block, fields and actions. */
+.transcript-mcp {
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.transcript-mcp--risk {
+  border-color: var(--status-warning);
+}
+
+.transcript-mcp__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcript-mcp__connector {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcript-mcp__server {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.transcript-mcp__summary {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+}
+
+.transcript-mcp__prompt h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+/* The server's own warning line. It stays in body text: the light theme's
+   --status-warning is 4.1:1 on this card, under 4.5:1 for 13px text, so a
+   high-risk card carries the warning on its border instead. */
+.transcript-mcp__subtitle {
   margin: 0;
   color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.transcript-mcp--risk .transcript-mcp__subtitle {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* One grid for every row, so labels share the longest label's width and a
+   short key sits next to its value. A per-row 0.3fr column put the value
+   165px from a 25px label at the card's 760px cap; the 200px cap keeps one
+   long raw key from pushing every value off the card. */
+.transcript-mcp__params {
+  display: grid;
+  grid-template-columns: fit-content(200px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0;
   font-size: 13px;
 }
 
 .transcript-mcp__params div {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.3fr) minmax(0, 1fr);
-  gap: 10px;
+  display: contents;
 }
 
 .transcript-mcp__params dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-muted);
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* No display name: the raw parameter key, verbatim. */
+.transcript-mcp__params dt.transcript-mcp__param-key {
+  font-family: var(--font-mono);
 }
 
 .transcript-mcp__params dd {
@@ -26297,6 +26406,7 @@ div.composer-error-row__toggle {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text-primary);
+  line-height: 1.45;
 }
 
 .transcript-mcp__url {

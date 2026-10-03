@@ -25,47 +25,62 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const toolParams = readToolParamsDisplay(props.state._meta);
   const persistModes = readMcpApprovalPersistence(props.state);
   const sessionApproval = persistModes.includes("session");
+  const connectorName = readStringMeta(props.state._meta, "connector_name");
+  const subtitle = readStringMeta(props.state._meta, "subtitle");
+  const highRisk = readStringMeta(props.state._meta, "riskLevel") === "high";
 
   return (
-    <div className="transcript-mcp" role="group" aria-label="Pending MCP interaction">
+    <div
+      className={`transcript-mcp${highRisk ? " transcript-mcp--risk" : ""}`}
+      role="group"
+      aria-label="Pending MCP interaction"
+    >
       <div className="transcript-mcp__header">
-        <span className="chip chip--mode">
-          {props.state.mode === "url" ? "MCP login" : "MCP approval"}
+        <span className="transcript-mcp__identity">
+          <span className="chip chip--mode">
+            {props.state.mode === "url" ? "MCP login" : "MCP approval"}
+          </span>
+          {connectorName ? (
+            <span className="transcript-mcp__connector">{connectorName}</span>
+          ) : null}
         </span>
-        <span className="transcript-message__time">
-          {props.state.serverName} / {props.state.mode}
-        </span>
+        <span className="transcript-mcp__server">{props.state.serverName}</span>
       </div>
 
-      <div className="transcript-mcp__prompt">
-        {toolDescription ? <p className="eyebrow">{toolDescription}</p> : null}
-        <h3>{props.state.message}</h3>
-      </div>
-
-      {toolParams.length > 0 ? (
-        <dl className="transcript-mcp__params">
-          {toolParams.map((param) => (
-            <div key={param.label}>
-              <dt>{param.label}</dt>
-              <dd>{redactDisplayValue(param.value)}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-
-      {props.state.url ? (
-        <div className="transcript-mcp__url">
-          <span>{props.state.url.displayUrl}</span>
-          <a
-            className="button button--ghost"
-            href={props.state.url.url}
-            rel="noreferrer"
-            target="_blank"
-          >
-            Open
-          </a>
+      <div className="transcript-mcp__summary">
+        <div className="transcript-mcp__prompt">
+          {toolDescription ? <p className="eyebrow">{toolDescription}</p> : null}
+          <h3>{props.state.message}</h3>
+          {subtitle ? <p className="transcript-mcp__subtitle">{subtitle}</p> : null}
         </div>
-      ) : null}
+
+        {toolParams.length > 0 ? (
+          <dl className="transcript-mcp__params">
+            {toolParams.map((param) => (
+              <div key={param.label}>
+                <dt className={param.named ? undefined : "transcript-mcp__param-key"}>
+                  {param.label}
+                </dt>
+                <dd>{redactDisplayValue(param.value)}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+
+        {props.state.url ? (
+          <div className="transcript-mcp__url">
+            <span>{props.state.url.displayUrl}</span>
+            <a
+              className="button button--ghost"
+              href={props.state.url.url}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Open
+            </a>
+          </div>
+        ) : null}
+      </div>
 
       {props.state.form && props.state.form.fields.length > 0 ? (
         <div className="transcript-mcp__fields">
@@ -81,21 +96,10 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
         </div>
       ) : null}
 
+      {/* The persistent grant stands apart on the left; the refusals and the
+          primary grant sit together on the right, primary last. DOM order is
+          the visual order, so Tab walks the row left to right. */}
       <div className="transcript-mcp__actions">
-        <button
-          className="button button--primary"
-          disabled={props.busy || !canAccept}
-          type="button"
-          onClick={() => {
-            if (sessionApproval) {
-              void props.onSubmit(props.state, "accept", "session");
-            } else {
-              void props.onSubmit(props.state, "accept");
-            }
-          }}
-        >
-          {sessionApproval ? "Allow this conversation" : "Allow"}
-        </button>
         {persistModes.includes("always") ? (
           <button
             className="button button--ghost"
@@ -108,26 +112,42 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
             Always allow
           </button>
         ) : null}
-        <button
-          className="button button--ghost"
-          disabled={props.busy}
-          type="button"
-          onClick={() => {
-            void props.onSubmit(props.state, "decline");
-          }}
-        >
-          Decline
-        </button>
-        <button
-          className="button button--ghost"
-          disabled={props.busy}
-          type="button"
-          onClick={() => {
-            void props.onSubmit(props.state, "cancel");
-          }}
-        >
-          Cancel turn
-        </button>
+        <div className="transcript-mcp__actions-end">
+          <button
+            className="button button--ghost"
+            disabled={props.busy}
+            type="button"
+            onClick={() => {
+              void props.onSubmit(props.state, "cancel");
+            }}
+          >
+            Cancel turn
+          </button>
+          <button
+            className="button button--ghost"
+            disabled={props.busy}
+            type="button"
+            onClick={() => {
+              void props.onSubmit(props.state, "decline");
+            }}
+          >
+            Decline
+          </button>
+          <button
+            className="button button--primary"
+            disabled={props.busy || !canAccept}
+            type="button"
+            onClick={() => {
+              if (sessionApproval) {
+                void props.onSubmit(props.state, "accept", "session");
+              } else {
+                void props.onSubmit(props.state, "accept");
+              }
+            }}
+          >
+            {sessionApproval ? "Allow this conversation" : "Allow"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -302,7 +322,7 @@ function readStringMeta(
 
 function readToolParamsDisplay(
   meta: Record<string, unknown> | null
-): Array<{ label: string; value: unknown }> {
+): Array<{ label: string; named: boolean; value: unknown }> {
   const raw = meta?.tool_params_display;
   if (!Array.isArray(raw)) {
     return [];
@@ -313,17 +333,18 @@ function readToolParamsDisplay(
       return [];
     }
     const record = entry as Record<string, unknown>;
-    const label =
-      typeof record.label === "string" && record.label.trim()
-        ? record.label.trim()
-        : typeof record.name === "string" && record.name.trim()
-          ? record.name.trim()
-          : typeof record.key === "string" && record.key.trim()
-            ? record.key.trim()
-            : undefined;
+    // `label` and `display_name` are written for people (Computer Use sends
+    // `{ name: "app", display_name: "App" }`); `name` and `key` are the raw
+    // parameter key, drawn verbatim in mono.
+    const named = readTrimmedString(record.label) ?? readTrimmedString(record.display_name);
+    const label = named ?? readTrimmedString(record.name) ?? readTrimmedString(record.key);
     if (!label) {
       return [];
     }
-    return [{ label, value: record.value }];
+    return [{ label, named: named !== undefined, value: record.value }];
   });
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
