@@ -14160,6 +14160,125 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  describe("fresh native voice admission on stock Codex", () => {
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      return { promise, resolve };
+    }
+
+    const dynamicTools: DynamicToolSpec[] = [{
+      type: "function", name: "fixture_status", description: "Contrived status tool", inputSchema: { type: "object" },
+    }];
+    const settings = { cwd: "/sample/voice-manager", approvalPolicy: "on-request", sandbox: "workspace-write" };
+
+    it("uses the acknowledged initial catalog and awaits current effective settings without resume", async () => {
+      MockTransport.serverVersion = "0.160.0";
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        expect(await client.prepareFreshNativeVoiceThread({
+          ...settings, threadId, dynamicTools, model: "sample-model", reasoningEffort: "high", serviceTier: "fast",
+          approvalPolicy: "never", sandbox: "danger-full-access",
+        })).toBe(true);
+        const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.find((request) => request.method === "thread/settings/update")?.params).toMatchObject({
+          threadId, model: "sample-model", effort: "high", serviceTier: "priority", approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" },
+        });
+        expect(requests.some((request) => ["thread/resume", "turn/start", "thread/realtime/start"].includes(request.method))).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it.each([false, true])("awaits settings acknowledgment and rechecks ownership (invalidated: %s)", async (invalidate) => {
+      const updating = deferred();
+      const finishUpdate = deferred();
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex", directoryResolver: async () => [],
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "thread/settings/update") {
+              updating.resolve();
+              await finishUpdate.promise;
+            }
+          },
+        },
+      });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        let settled = false;
+        const admission = client.prepareFreshNativeVoiceThread({ ...settings, threadId, dynamicTools, serviceTier: null });
+        void admission.then(() => { settled = true; });
+        await updating.promise;
+        expect(settled).toBe(false);
+        if (invalidate) {
+          MockTransport.instances.at(-1)!.emitInbound({ method: "turn/started", params: { threadId, turn: { id: "sample-turn", status: "inProgress" } } });
+        }
+        finishUpdate.resolve();
+        expect(await admission).toBe(!invalidate);
+        const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.find((request) => request.method === "thread/settings/update")?.params.serviceTier).toBeNull();
+      } finally { finishUpdate.resolve(); await client.close(); }
+    });
+
+    it("rejects changed catalogs, environment, workspace and input policy without updating settings", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        for (const drift of [
+          { dynamicTools: [] }, { cwd: "/sample/changed" }, { defaultModeRequestUserInput: true },
+          { codexEnvironmentRuntime: { environmentId: "changed", environmentName: "Changed", executionTarget: "local" as const, cwd: settings.cwd, shellEnvironment: { SAMPLE_PATH: "changed" } } },
+        ]) {
+          expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId, dynamicTools, ...drift })).toBe(false);
+        }
+        const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.some((request) => request.method === "thread/settings/update")).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it("fails admission when a settings update is rejected", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        MockTransport.threadSettingsUpdateError = "Sample settings rejected.";
+        await expect(client.prepareFreshNativeVoiceThread({ ...settings, threadId, dynamicTools, reasoningEffort: "high" })).rejects.toThrow("Sample settings rejected");
+      } finally { await client.close(); }
+    });
+
+    it("invalidates first-turn ownership on app-server reset even for the same ID", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        await client.close();
+        expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId, dynamicTools })).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it("does not trust persisted IDs or forked threads", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId: "persisted-manager", dynamicTools })).toBe(false);
+        const { threadId } = await client.forkThread({ threadId: "persisted-manager", ...settings });
+        expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId, dynamicTools })).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it.each(["turn/started", "thread/closed"])("invalidates proof when %s arrives outside a local turn start", async (method) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        MockTransport.instances.at(-1)!.emitInbound({ method, params: { threadId, turn: { id: "sample-turn", status: "inProgress" } } });
+        expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId, dynamicTools })).toBe(false);
+      } finally { await client.close(); }
+    });
+  });
+
   it("refreshes an existing thread catalog without inference or instruction overrides", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });

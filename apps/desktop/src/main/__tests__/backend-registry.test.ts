@@ -3169,6 +3169,54 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("admits a newly created stock 0.160 director with its generic discovery catalog", async () => {
+    const codexClient = voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} });
+    const prepare = vi.fn(async (params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]) => {
+      // The real client's current-process proof is covered by codex-client tests.
+      return params.threadId === "thread-1"
+        && JSON.stringify(params.dynamicTools) === JSON.stringify(codexClient.lastStartThreadParams?.dynamicTools);
+    });
+    const client = Object.assign(codexClient, { prepareFreshNativeVoiceThread: prepare });
+    const overlayStore = { ...createOverlayStoreMock(), getVoiceManagerThread: () => ({ backend: "codex", threadId: "thread-1" }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true, threadTitleGenerationService: null });
+    try {
+      const started = await registry.startThread({ backend: "codex", cwd: "/sample/voice-manager", tokenMiserEnabled: false });
+      const voice = await registry.acquireNativeVoiceBackend(started.threadId);
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: started.threadId, cwd: "/sample/voice-manager", approvalPolicy: "on-request", sandbox: "workspace-write",
+      }));
+      expect(JSON.stringify(prepare.mock.calls[0][0].dynamicTools)).toContain("tool_search");
+      expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      voice.release();
+    } finally { await registry.close(); }
+  });
+
+  it("requires refresh for catalog drift and reports accurate recovery for unknown stock ownership", async () => {
+    const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.acquireNativeVoiceBackend("persisted-manager")).rejects.toThrow("Select a supported PwrAgent managed Codex runtime");
+      await expect(registry.acquireNativeVoiceBackend("changed-catalog")).rejects.toThrow("Restarting the app or recreating the Voice manager does not add tool-refresh support");
+      expect(client.refreshThreadTools).not.toHaveBeenCalled();
+      await emitStartedTurn(registry, "codex", "persisted-manager", "sample-active-turn");
+      const voice = await registry.acquireNativeVoiceBackend("persisted-manager");
+      expect(client.prepareFreshNativeVoiceThread).toHaveBeenCalledTimes(2);
+      voice.release();
+    } finally { await registry.close(); }
+  });
+
+  it("uses negotiated refresh when fresh voice proof no longer matches", async () => {
+    const client = Object.assign(voiceClient(), { prepareFreshNativeVoiceThread: vi.fn(async () => false) });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    try {
+      const voice = await registry.acquireNativeVoiceBackend("changed-catalog");
+      expect(client.refreshThreadTools).toHaveBeenCalledOnce();
+      voice.release();
+    } finally { await registry.close(); }
+  });
+
   it("prepares idle voice handoffs with current model, effort, workspace and environment", async () => {
     const threadId = "sample-voice-settings";
     const cwd = "/sample/project";
