@@ -25411,6 +25411,10 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+.composer-error-rail:empty {
+  display: none;
+}
+
 .composer-error-row__header {
   display: flex;
   align-items: center;

@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerErrorRail, type ComposerErrorEntry } from "../ComposerErrorRail";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../../notifications/turn-failure-acknowledgements";
@@ -95,6 +96,54 @@ describe("ComposerErrorRail", () => {
 
     rerender(<ComposerErrorRail entries={[entry({ message: "Different failure." })]} />);
     expect(screen.getByText("Different failure.")).toBeInTheDocument();
+  });
+
+  it("presents a new error occurrence without a follow-up cleanup commit", () => {
+    const onRender = vi.fn();
+    const rail = (occurrence: number) => (
+      <Profiler id="error-rail" onRender={onRender}>
+        <ComposerErrorRail entries={[entry({ occurrence })]} />
+      </Profiler>
+    );
+    const { rerender } = render(rail(1));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    onRender.mockClear();
+
+    rerender(rail(2));
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(onRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not carry a dismissal into another thread with the same error", () => {
+    const { rerender } = render(
+      <ComposerErrorRail failureScope="codex:thread-one" entries={[entry()]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    rerender(<ComposerErrorRail failureScope="codex:thread-two" entries={[entry()]} />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps a dismissal when unchanged entries are recreated by background updates", () => {
+    const onRender = vi.fn();
+    const rail = () => (
+      <Profiler id="error-rail" onRender={onRender}>
+        <ComposerErrorRail entries={[entry()]} />
+      </Profiler>
+    );
+    const { rerender } = render(rail());
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    onRender.mockClear();
+
+    for (let update = 0; update < 60; update += 1) {
+      rerender(rail());
+    }
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onRender).toHaveBeenCalledTimes(60);
   });
 
   it("shows the same message again after the source cleared in between", () => {
