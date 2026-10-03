@@ -51540,6 +51540,38 @@ script = "printf setup"
     } finally { await registry.close(); }
   });
 
+  it("counts scratch projects against one shared project limit", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-scratch-")));
+    const projects = path.join(root, ".pwragent", "profiles", "default", "projects");
+    const threads: AppServerThreadSummary[] = [];
+    for (const [index, suffix] of ["aaaaaa", "bbbbbb", "cccccc"].entries()) {
+      // Real directories outside any Git repository, like created scratch projects.
+      const cwd = path.join(projects, `2026-01-0${index + 1}-${suffix}`);
+      await mkdir(cwd, { recursive: true });
+      threads.push({
+        id: `scratch-${suffix}`, title: `Scratch ${suffix}`, titleSource: "explicit", source: "codex",
+        threadStatus: "notLoaded", updatedAt: Date.now() - (40 - index) * 86_400_000,
+        linkedDirectories: [{ id: cwd, kind: "local", label: path.basename(cwd), path: cwd }],
+      });
+    }
+    const client = Object.assign(new MockBackendClient({ threads, archivedThreads: [] }), {
+      readThreadSummary: vi.fn(async (threadId: string) => threads.find((thread) => thread.id === threadId)!),
+    });
+    const registry = new DesktopBackendRegistry({
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "count", keepPerProject: 1 }),
+      codexClient: client, overlayStore: createOverlayStoreMock(),
+    });
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.sweepInactiveThreads();
+      expect(archive.mock.calls.map(([request]) => request.threadId).sort()).toEqual(["scratch-aaaaaa", "scratch-bbbbbb"]);
+      expect(registry.getThreadArchiveSweepStatus()).toEqual(expect.objectContaining({ archived: 2, failed: 0 }));
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("auto archives a clean local branch worktree, retains its snapshot, and restores its files", async () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-integration-")));
     const repo = path.join(root, "repo");

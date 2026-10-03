@@ -63,3 +63,15 @@ jobs:
           name: PwrAgent-${{ steps.version.outputs.version }}-preview
           path: apps/desktop/release-stage/dist/*.dmg
           retention-days: 14
+
+      - name: Upload exact-build preview debug artifact
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: PwrAgent-${{ steps.version.outputs.version }}-preview-debug
+          path: |
+            apps/desktop/.local/debug-artifacts/*-darwin-universal-debug.tar.gz
+            apps/desktop/.local/debug-artifacts/*-darwin-universal-debug.tar.gz.sha256
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

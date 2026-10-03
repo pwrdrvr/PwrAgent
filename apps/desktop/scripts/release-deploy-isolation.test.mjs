@@ -24,6 +24,8 @@ it("keeps both release stages out of repeated paired pnpm deployments", () => {
     cpSync(fileURLToPath(new URL("../.npmignore", import.meta.url)), join(desktop, ".npmignore"));
     writeFileSync(join(desktop, "runtime.js"), "export const ready = true;\n");
     const stages = ["release-stage", "release-stage-arm64"];
+    mkdirSync(join(desktop, ".local", "debug-artifacts"), { recursive: true });
+    writeFileSync(join(desktop, ".local", "debug-artifacts", "private-debug.tar.gz"), "outside the app");
     for (const stage of stages) {
       mkdirSync(join(desktop, stage));
       writeFileSync(join(desktop, stage, "previous-build.txt"), "must not be deployed");
@@ -47,6 +49,7 @@ it("keeps both release stages out of repeated paired pnpm deployments", () => {
       expect(result.error).toBeUndefined();
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(readFileSync(join(target, "runtime.js"), "utf8")).toContain("ready = true");
+      expect(existsSync(join(target, ".local"))).toBe(false);
       for (const sibling of stages) {
         expect(existsSync(join(target, sibling))).toBe(false);
       }

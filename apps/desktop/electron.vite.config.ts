@@ -98,8 +98,9 @@ function reactDevtoolsBridge(): Plugin {
 }
 
 // electron-vite defaults `build.minify` to false for all three targets.
-// For shipped builds we want minified main/preload/renderer with sourcemaps
-// stripped. esbuild minification is the right default; switch to terser only
+// Shipped builds retain hidden maps for separate debug artifacts. The maps
+// are excluded from app.asar; hidden maps add no sourceMappingURL to the JS.
+// esbuild minification is the right default; switch to terser only
 // if a measured size win justifies the build-time cost.
 //
 // The function form is needed so we can conditionally define process.env.NODE_ENV
@@ -163,7 +164,7 @@ export default defineConfig(({ command }) => {
           transformMixedEsModules: true
         },
         minify: "esbuild",
-        sourcemap: false,
+        sourcemap: "hidden",
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
@@ -197,7 +198,7 @@ export default defineConfig(({ command }) => {
           exclude: ["@pwragent/shared"]
         },
         minify: "esbuild",
-        sourcemap: false,
+        sourcemap: "hidden",
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/preload/index.ts"),
@@ -228,7 +229,7 @@ export default defineConfig(({ command }) => {
       },
       build: {
         minify: "esbuild",
-        sourcemap: false,
+        sourcemap: "hidden",
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/renderer/index.html"),

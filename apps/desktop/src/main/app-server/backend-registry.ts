@@ -2,6 +2,7 @@ import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFami
 import { runGitCommand } from "./git-executable";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  classifyDirectory,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
 } from "@pwragent/shared";
@@ -13791,6 +13792,11 @@ export class DesktopBackendRegistry {
       cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
       resolveProject: async ({ thread, overlay }) => {
         const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
+        // Scratch projects share one quota per projects root, matching their
+        // single Workspaces row. Each would otherwise be its own project and
+        // never reach the per-project limit.
+        const descriptor = directory ? classifyDirectory(directory) : undefined;
+        if (descriptor?.kind === "workspace") return descriptor.key;
         const cwd = directory?.worktreePath ?? directory?.path;
         if (!cwd) return thread.projectKey;
         try {

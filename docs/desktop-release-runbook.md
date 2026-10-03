@@ -486,6 +486,65 @@ gh release upload v1.0.0-beta.4 PwrAgent.dmg --repo pwrdrvr/PwrAgent --clobber
 
 ---
 
+## Release-matched JavaScript debug artifacts
+
+Every new desktop release retains five separate debug archives, one for each
+packaged build: `darwin-universal`, `darwin-arm64`, `win32-x64`, `linux-x64`,
+and `linux-arm64`. GitHub Release asset names are
+`PwrAgent-<version>-<platform>-<arch>-debug.tar.gz`, each with a `.sha256`
+sidecar. Release CI also retains the intermediate archives for 30 days;
+preview CI retains its universal macOS archive for 14 days alongside the DMG.
+
+`release.mjs` captures each archive immediately after its production Vite
+build, before deployment or signing. Both macOS stages have their own archive,
+even if their JavaScript happens to match. `--sign-stage-only` consumes the
+prepared output without rebuilding or generating maps. Debug archives stay
+under `apps/desktop/.local/debug-artifacts/`, outside the deployed stage and
+installed app. Vite emits hidden maps for main, preload, and renderer; no
+source map URL is added to the JavaScript. The existing builder exclusion and
+ASAR verification continue to reject `.map` files in the app. Signing,
+notarization, fuses, updater metadata, and installed runtime behavior use the
+same packaging path.
+
+Each archive contains:
+
+- `out/`: the exact generated JavaScript and adjacent maps, preserving ASAR
+  paths, including workers and lazy chunks; generated HTML and CSS are also
+  retained. Maps embed the original source text in `sourcesContent`.
+- `manifest.json`: desktop version, release tag, Git commit, tracked tree
+  changes, timestamp, target platform/architecture, build host, Node and tool
+  versions, lockfile hash, CI repository/ref/run/attempt, and SHA-256/size for
+  every retained file. JavaScript entries identify their adjacent map (or
+  `null` for copied vendor assets without a Vite map).
+- `README.md`: matching and stack-frame lookup instructions.
+
+The publication job requires all five archives and their checksums, verifies
+the tag/version/commit/target and clean tracked tree in each manifest, and
+checks the uploaded asset names. Missing or mismatched debug artifacts fail
+publication. Debug archives contain source text and are public release assets.
+
+To investigate a production stack, download the matching version and target
+archive, verify its checksum, then compare the frame's JavaScript SHA-256 from
+the installed `app.asar` with `manifest.json`. Use that file's adjacent map;
+DevTools can load it manually. Stack lines are 1-based. Source map consumers
+take 0-based columns, so subtract one from a browser stack's column. The
+embedded sources allow inspection without a checkout. External npm modules
+and native code are outside these Vite maps.
+
+Do not rebuild an old tag and assume its offsets match an installed app.
+Dependency resolution, platform, and repeated build attempts can change
+output; the generated file hash is the deciding match. This retention starts
+with releases built by the updated workflow and does not add maps to previous
+releases. A separately rebuilt map is usable only after the generated
+JavaScript's byte count and SHA-256 match the installed file exactly; a matching
+tag, version, or chunk name alone is insufficient.
+
+For a local build without packaging, run `pnpm --filter @pwragent/desktop build`
+then `node apps/desktop/scripts/desktop-debug-artifacts.mjs darwin universal`
+(or another supported platform and architecture). Local archives record the
+current tracked tree state; release publication requires a clean tree and
+`RELEASE_TAG=v<version>`.
+
 ## Updater channel files
 
 `configureAutoUpdaterFeedForRelease` points electron-updater at a `generic`

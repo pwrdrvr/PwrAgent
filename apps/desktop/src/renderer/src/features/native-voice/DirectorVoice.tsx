@@ -497,6 +497,9 @@ function DirectorVoiceState({ controller, ended, view }: {
   );
 }
 
+/** The panel's tooltips portal to the body, so they carry the panel's layer. */
+const PANEL_TOOLTIP_CLASS = "viewport-tooltip director-voice-panel__tooltip";
+
 function OpenDirectorVoicePanel({
   api, controller, desktopApi, endedAt, focus, launchpad, onClose, onOpenThread, otherVoiceActive, threadId, view,
 }: DirectorVoicePanelProps & {
@@ -508,7 +511,7 @@ function OpenDirectorVoicePanel({
   view: VoiceView;
 }) {
   const [request, setRequest] = useVoiceManagerRequest(desktopApi, threadId);
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltip = useViewportTooltip({ className: PANEL_TOOLTIP_CLASS });
   const { rect, moveHandleProps, resizeHandleProps } = useFloatingPanelRect({
     storageKey: "pwragent:director-voice-panel",
     limits: PANEL_LIMITS,
@@ -556,7 +559,7 @@ function OpenDirectorVoicePanel({
                 <MicIcon size={16} aria-hidden="true" />
               </button>
             )
-          ) : <VoiceMicToggle controller={controller} view={view} />}
+          ) : <VoiceMicToggle controller={controller} tooltipClassName={PANEL_TOOLTIP_CLASS} view={view} />}
           {!ended ? <VoiceCameraButton controller={controller} view={view} /> : null}
           <button
             className="app-notice-toast__icon-button"
