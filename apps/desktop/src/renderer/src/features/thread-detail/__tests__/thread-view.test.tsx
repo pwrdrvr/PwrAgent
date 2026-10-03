@@ -2516,10 +2516,20 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
+    // The transcript slot keeps the short placeholder; the setup command's
+    // progress is a collapsed row in the launchpad composer's band.
     expect(
-      await screen.findByRole("heading", { name: "Running environment setup" }),
+      await screen.findByRole("heading", { name: "Starting PwrSnap" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByLabelText("Preparing transcript")).toHaveTextContent(
+      "Running the PwrSnap setup first.",
+    );
+    const setupRow = screen.getByLabelText("Env setup running");
+    expect(setupRow.closest(".composer__band")).not.toBeNull();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
+    fireEvent.click(within(setupRow).getByRole("button", { expanded: false }));
+    expect(within(setupRow).getByText(/\$ nvm install/)).toHaveTextContent("pnpm install");
+    expect(within(setupRow).getByText("/repo")).toBeInTheDocument();
     const followup = screen.getByRole("textbox", { name: "New thread" });
     expect(followup).toBeEnabled();
     expect(followup).toHaveValue("");
@@ -2536,8 +2546,7 @@ describe("ThreadView", () => {
     expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
     expect(followup).toHaveValue("");
 
-    expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
-    expect(screen.getByText("/repo")).toBeInTheDocument();
+    expect(screen.getAllByText(/PwrSnap/).length).toBeGreaterThan(0);
     expect(
       screen.queryByRole("button", { name: "Copy setup path" }),
     ).not.toBeInTheDocument();
@@ -2567,22 +2576,92 @@ describe("ThreadView", () => {
       command: "nvm install $nodeVersion", cwd: "C:\\fixture", at: 1,
     };
     act(() => setupProgress({ ...event, directoryKey: "thread:codex:other", phase: "started" }));
-    expect(screen.queryByRole("heading", { name: "Running environment setup" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup running")).not.toBeInTheDocument();
     act(() => setupProgress({ ...event, phase: "started" }));
-    expect(screen.getByRole("heading", { name: "Running environment setup" })).toBeVisible();
-    expect(screen.getByLabelText("Setup command")).toHaveTextContent("nvm install $nodeVersion");
+    // One collapsed row in the composer band — never a panel above the
+    // transcript, which pushed the composer off the window.
+    const running = screen.getByLabelText("Env setup running");
+    expect(running.closest(".composer__band")).not.toBeNull();
+    expect(screen.queryByLabelText("Preparing transcript")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
+    fireEvent.click(within(running).getByRole("button", { expanded: false }));
+    expect(within(running).getByText("$ nvm install $nodeVersion")).toBeVisible();
     act(() => setupProgress({ ...event, phase: "stderr", chunk: "install failed" }));
-    expect(screen.getByLabelText("Setup output")).toHaveTextContent("install failed");
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent("install failed");
     act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "nvm failed" }));
-    expect(screen.getByRole("heading", { name: "Environment setup failed" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Dismiss setup output" })).toBeVisible();
+    const failed = screen.getByLabelText("Env setup failed");
+    expect(failed).toHaveAttribute("role", "alert");
+    expect(failed).toHaveTextContent("exit 1");
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent("nvm failed");
+    expect(within(failed).getByRole("button", { name: "Dismiss" })).toBeVisible();
     act(() => setupProgress({ ...event, phase: "started" }));
-    expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("install failed");
-    expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("nvm failed");
+    expect(screen.getByLabelText("Env setup running")).not.toHaveTextContent("install failed");
+    expect(screen.getByLabelText("Env setup running")).not.toHaveTextContent("nvm failed");
     act(() => setupProgress({ ...event, phase: "completed", exitCode: 0, output: "installed" }));
-    expect(screen.queryByRole("heading", { name: "Environment setup complete" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Dismiss setup output" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Setup output")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup running")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup failed")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
+  });
+
+  it("dismisses a failed environment selection and retries it through the picker's call", async () => {
+    let setupProgress: Parameters<NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>>[0] = () => undefined;
+    const setCodexThreadEnvironment = vi.fn(async () => {
+      throw new Error(
+        "Error invoking remote method: CodexEnvironmentStartupError: Codex environment command exited with 1",
+      );
+    });
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          onCodexEnvironmentSetupProgress: (callback) => { setupProgress = callback; return () => undefined; },
+          setCodexThreadEnvironment,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          ...buildTimestampTargetThread("existing", "Existing thread"),
+          codexEnvironmentRuntime: {
+            environmentId: "env",
+            environmentName: "Fixture environment",
+            executionTarget: "local",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />,
+    );
+    const event = {
+      directoryKey: "thread:codex:existing", environmentId: "env", environmentName: "Fixture environment",
+      command: "pnpm install", cwd: "/fixture", at: 1,
+    };
+    act(() => setupProgress({ ...event, phase: "started" }));
+    act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "ERR_PNPM_IGNORED_BUILDS" }));
+    const failed = screen.getByLabelText("Env setup failed");
+    expect(failed).toHaveTextContent("ERR_PNPM_IGNORED_BUILDS");
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(setCodexThreadEnvironment).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: "existing", environmentId: "env" }),
+      );
+    });
+    // The rejected selection is the same failure the row already reports:
+    // no second "Environment error" row in the band.
+    await waitFor(() => {
+      expect(within(failed).getByRole("button", { name: "Retry" })).toBeEnabled();
+    });
+    expect(screen.queryByLabelText("Environment error")).not.toBeInTheDocument();
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByLabelText("Env setup failed")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Environment error")).not.toBeInTheDocument();
   });
 
   it("shows pending environment setup while a forked worktree is preparing", async () => {
@@ -7209,10 +7288,6 @@ describe("ThreadView", () => {
         removeOptimisticMessage={() => undefined}
       />,
     );
-    // jsdom does not implement the browser's scrollTo method used to reveal
-    // a continuation error above the command output.
-    const failureBody = document.querySelector<HTMLElement>(".environment-setup-choice__body")!;
-    failureBody.scrollTo = vi.fn();
     fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
     await screen.findByText("Thread could not be resumed");
     expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
@@ -7228,7 +7303,7 @@ describe("ThreadView", () => {
     expect(screen.queryByRole("button", { name: "Continue anyway" })).not.toBeInTheDocument();
   });
 
-  it("keeps the environment setup failure actions outside the panel's scroll container", () => {
+  it("puts the new-thread setup failure decision in the composer band, visible while collapsed", () => {
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
@@ -7276,24 +7351,26 @@ describe("ThreadView", () => {
       />
     );
 
-    // `__body` is the panel's scroll container and carries its height bound
-    // (see `environment-setup-choice-bounds.test.ts`); the two buttons are the
-    // operator's only way out of this state, so they have to stay outside that
-    // scroller. jsdom does no layout — the height bound itself is asserted in
-    // the stylesheet test — but it can see this containment, which is the half
-    // a refactor would break.
-    const panel = document.querySelector(".environment-setup-choice");
-    const body = panel?.querySelector(".environment-setup-choice__body");
-    const actions = panel?.querySelector(".environment-setup-choice__actions");
-    expect(panel).not.toBeNull();
-    expect(body).not.toBeNull();
-    expect(actions).not.toBeNull();
-    expect(body!.contains(actions!)).toBe(false);
+    // The decision is the operator's only way out of this state. It used to
+    // be a panel above the transcript; it is now a row in the composer band,
+    // which is height-capped and scrolls (see `composer-band-bounds.test.ts`),
+    // and the buttons sit outside the disclosure so they show while the
+    // output is collapsed.
+    const row = screen.getByLabelText("Env setup failed");
+    expect(row.closest(".composer__band")).not.toBeNull();
+    expect(document.querySelector(".thread-view__primary > [aria-label='Env setup failed']")).toBeNull();
+    expect(within(row).getByRole("button", { expanded: false })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
     for (const name of ["Delete worktree and close", "Continue anyway"]) {
-      expect(actions!.contains(screen.getByRole("button", { name }))).toBe(
-        true,
-      );
+      expect(within(row).getByRole("button", { name })).toBeVisible();
     }
+    expect(row).toHaveTextContent("The new worktree is ready, but its setup command failed.");
+
+    fireEvent.click(within(row).getByRole("button", { expanded: false }));
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent(
+      "nvm is not compatible with the npm config prefix",
+    );
+    expect(within(row).getByText(/\$ nvm install/)).toHaveTextContent("pnpm install");
   });
 
   it("hides the environment setup failure choice after the thread has messages", () => {

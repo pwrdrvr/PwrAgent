@@ -81,6 +81,7 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
+import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
   type LaunchpadMachineControl,
@@ -203,6 +204,28 @@ function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): {
     label: "Failed",
     tone: "failed",
   };
+}
+
+/**
+ * Where a setup run stands, for the composer band's setup row. A clean exit
+ * retires the row (the environment chip already shows the result), so only
+ * a live run and a failure have a state.
+ */
+function describeSetupProgressRowStatus(
+  progress?: LaunchpadEnvironmentSetupProgress,
+): EnvironmentSetupRowModel["status"] | undefined {
+  if (!progress) {
+    return undefined;
+  }
+  if (progress.status === "starting" || progress.status === "running") {
+    return "running";
+  }
+  if (progress.status === "failed") {
+    return "failed";
+  }
+  return progress.exitCode !== undefined && progress.exitCode !== 0
+    ? "failed"
+    : undefined;
 }
 
 function LaunchpadEnvironmentSetupPending(props: {
@@ -340,107 +363,6 @@ function LaunchpadMaterializeFailure(props: {
             <code>{props.error}</code>
           </pre>
         </div>
-      </div>
-    </section>
-  );
-}
-
-function EnvironmentSetupFailureChoice(props: {
-  archiving: boolean;
-  continuing: boolean;
-  disabled?: boolean;
-  command?: string;
-  cwd?: string;
-  error?: string;
-  environmentName: string;
-  exitCode?: number;
-  hasWorktree: boolean;
-  output?: string;
-  phase: "setup" | "action";
-  onCleanup: () => void;
-  onContinue: () => void | Promise<void>;
-}) {
-  const label =
-    props.phase === "action" ? "Environment action failed" : "Environment setup failed";
-  const commandLabel = props.phase === "action" ? "action command" : "setup command";
-  const trimmedOutput = props.output?.trim();
-  const hasDetails =
-    Boolean(props.command?.trim()) ||
-    Boolean(trimmedOutput) ||
-    typeof props.exitCode === "number";
-  const bodyRef = useRef<HTMLDivElement>(null);
-  // The body is the panel's scroll container, and the Continue failure renders
-  // at the top of it. An operator who scrolled down to read the tail of the
-  // output before clicking would otherwise get the error off-screen and a
-  // re-enabled button with no visible feedback.
-  useEffect(() => {
-    if (props.error) {
-      bodyRef.current?.scrollTo({ top: 0 });
-    }
-  }, [props.error]);
-  return (
-    <section className="environment-setup-choice" aria-label={label}>
-      <div className="environment-setup-choice__body" ref={bodyRef}>
-        <div className="environment-setup-choice__heading">
-          <p className="eyebrow">{label}</p>
-          <h3>{props.environmentName}</h3>
-          <p>
-            {props.hasWorktree
-              ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
-              : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
-          </p>
-          {props.error ? (
-            <p className="environment-setup-choice__error">{props.error}</p>
-          ) : null}
-        </div>
-        {hasDetails ? (
-          <details className="environment-setup-choice__details" open>
-            <summary>
-              Show command output
-              {typeof props.exitCode === "number" ? ` (exit ${props.exitCode})` : ""}
-            </summary>
-            {props.command?.trim() ? (
-              <div className="environment-setup-choice__field">
-                <div className="environment-setup-choice__field-label">Command</div>
-                <pre className="environment-setup-choice__pre">
-                  <code>{`$ ${props.command.trim()}`}</code>
-                </pre>
-              </div>
-            ) : null}
-            {props.cwd?.trim() ? (
-              <div className="environment-setup-choice__field">
-                <div className="environment-setup-choice__field-label">Path</div>
-                <code className="environment-setup-choice__path">{props.cwd}</code>
-              </div>
-            ) : null}
-            <div className="environment-setup-choice__field">
-              <div className="environment-setup-choice__field-label">Output</div>
-              <pre className="environment-setup-choice__pre environment-setup-choice__pre--output">
-                <code>{trimmedOutput || "(no output captured)"}</code>
-              </pre>
-            </div>
-          </details>
-        ) : null}
-      </div>
-      <div className="environment-setup-choice__actions">
-        <button
-          className="composer__action-button composer__action-button--danger"
-          disabled={props.disabled || props.archiving || props.continuing}
-          type="button"
-          onClick={props.onCleanup}
-        >
-          {props.hasWorktree ? "Delete worktree and close" : "Close thread"}
-        </button>
-        <button
-          className="composer__action-button"
-          disabled={props.disabled || props.archiving || props.continuing}
-          type="button"
-          onClick={() => {
-            void props.onContinue();
-          }}
-        >
-          {props.continuing ? "Continuing..." : "Continue anyway"}
-        </button>
       </div>
     </section>
   );
@@ -2093,6 +2015,126 @@ export function ThreadView(props: ThreadViewProps) {
     }
   };
 
+  // Environment setup, as one row in the composer band. It covers a live run
+  // on this thread, the failure that run left behind, and, for a thread with
+  // no turns yet, the keep-or-close decision a failed launch still needs.
+  // Memoized because the Composer is: a fresh model on every streamed event
+  // would re-render it for the life of an undismissed failure.
+  const selectedThreadSetupProgress =
+    selectedThread
+    && launchpadSetupProgress?.directoryKey
+      === `thread:${selectedThread.source}:${selectedThread.id}`
+      ? launchpadSetupProgress
+      : undefined;
+  const selectedThreadSetupProgressStatus = describeSetupProgressRowStatus(
+    selectedThreadSetupProgress,
+  );
+  const cleanupAfterSetupFailure = useEventCallback(() => {
+    if (!selectedThread || !props.onArchiveThread) {
+      return;
+    }
+    setSetupFailureArchiving(true);
+    void props.onArchiveThread(selectedThread).finally(() => {
+      setSetupFailureArchiving(false);
+    });
+  });
+  const continueAfterSetupFailureEvent = useEventCallback(() => {
+    void continueAfterSetupFailure();
+  });
+  const dismissSelectedThreadSetupProgress = useEventCallback(() => {
+    setLaunchpadSetupProgress(undefined);
+  });
+  const selectedThreadRuntime = selectedThread?.codexEnvironmentRuntime;
+  const selectedThreadEnvironmentSetup = useMemo<
+    EnvironmentSetupRowModel | undefined
+  >(() => {
+    const progress = selectedThreadSetupProgress;
+    if (progress && selectedThreadSetupProgressStatus === "running") {
+      return {
+        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
+        phase: "setup",
+        status: "running",
+        environmentId: progress.environmentId,
+        environmentName: progress.environmentName,
+        command: progress.command,
+        cwd: progress.cwd,
+        output: progress.output,
+        error: progress.error,
+        startedAt: progress.startedAt,
+      };
+    }
+    if (showSetupFailureChoice && selectedThreadKey) {
+      const phase = selectedThreadEnvironmentFailurePhase;
+      return {
+        key: `decision:${selectedThreadKey}:${phase}`,
+        phase,
+        status: "failed",
+        environmentId: selectedThreadRuntime?.environmentId,
+        environmentName:
+          selectedThreadRuntime?.environmentName ?? progress?.environmentName,
+        command:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.command
+            : selectedThreadRuntime?.setupCommand ?? progress?.command,
+        cwd: selectedThreadRuntime?.cwd ?? progress?.cwd,
+        output:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.output
+            : selectedThreadRuntime?.setupOutput ?? progress?.output,
+        exitCode:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.exitCode
+            : selectedThreadRuntime?.setupExitCode ?? progress?.exitCode,
+        durationMs: phase === "action" ? undefined : progress?.durationMs,
+        decision: {
+          busy: setupFailureArchiving || setupFailureContinuing,
+          continuing: setupFailureContinuing,
+          disabled: props.composerDisabled,
+          // Archive failures go to the durable notice stack (they can also
+          // originate from a context menu with nothing left on screen), so
+          // this reports only the Continue button's own failure.
+          error: setupFailureContinueError,
+          hasWorktree: Boolean(selectedThreadWorktree),
+          onCleanup: cleanupAfterSetupFailure,
+          onContinue: continueAfterSetupFailureEvent,
+        },
+      };
+    }
+    if (progress && selectedThreadSetupProgressStatus === "failed") {
+      return {
+        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
+        phase: "setup",
+        status: "failed",
+        environmentId: progress.environmentId,
+        environmentName: progress.environmentName,
+        command: progress.command,
+        cwd: progress.cwd,
+        output: progress.output,
+        error: progress.error,
+        exitCode: progress.exitCode,
+        durationMs: progress.durationMs,
+        onDismiss: dismissSelectedThreadSetupProgress,
+      };
+    }
+    return undefined;
+  }, [
+    cleanupAfterSetupFailure,
+    continueAfterSetupFailureEvent,
+    dismissSelectedThreadSetupProgress,
+    props.composerDisabled,
+    selectedThreadEnvironmentFailurePhase,
+    selectedThreadKey,
+    selectedThreadLatestFailedActionRun,
+    selectedThreadRuntime,
+    selectedThreadSetupProgress,
+    selectedThreadSetupProgressStatus,
+    selectedThreadWorktree,
+    setupFailureArchiving,
+    setupFailureContinueError,
+    setupFailureContinuing,
+    showSetupFailureChoice,
+  ]);
+
   const branchDriftRetentionKey = (
     thread: NavigationThreadSummary,
     expectedBranch: string,
@@ -3513,6 +3555,41 @@ export function ThreadView(props: ThreadViewProps) {
     const launchpadRunningCodexEnvironmentSetup = Boolean(
       selectedLaunchpadCodexEnvironment?.setupScript,
     );
+    // The setup command's progress rides in the launchpad composer's band,
+    // collapsed, while the transcript slot keeps the short placeholder. A
+    // failure here has no actions: the thread it creates opens next, and its
+    // own row carries the keep-or-close decision.
+    const launchpadSetupRowStatus =
+      launchpadMaterializing
+      && launchpadRunningCodexEnvironmentSetup
+      && !launchpadMaterializeError
+        ? launchpadSetupProgress
+          ? describeSetupProgressRowStatus(launchpadSetupProgress)
+          : "running"
+        : undefined;
+    const launchpadEnvironmentSetup: EnvironmentSetupRowModel | undefined =
+      launchpadSetupRowStatus
+        ? {
+            key: `launchpad:${selectedLaunchpad.directoryKey}`,
+            phase: "setup",
+            status: launchpadSetupRowStatus,
+            environmentId:
+              launchpadSetupProgress?.environmentId
+              ?? selectedLaunchpadCodexEnvironment?.id,
+            environmentName:
+              launchpadSetupProgress?.environmentName
+              ?? selectedLaunchpadCodexEnvironment?.name,
+            command:
+              launchpadSetupProgress?.command
+              ?? selectedLaunchpadCodexEnvironment?.setupScript,
+            cwd: launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath,
+            output: launchpadSetupProgress?.output,
+            error: launchpadSetupProgress?.error,
+            exitCode: launchpadSetupProgress?.exitCode,
+            durationMs: launchpadSetupProgress?.durationMs,
+            startedAt: launchpadSetupProgress?.startedAt,
+          }
+        : undefined;
 
     return (
       <section
@@ -3674,24 +3751,6 @@ export function ThreadView(props: ThreadViewProps) {
                         setLaunchpadMaterializeError(undefined);
                       }}
                     />
-                  ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
-                    <LaunchpadEnvironmentSetupPending
-                      command={
-                        launchpadSetupProgress?.command ??
-                        selectedLaunchpadCodexEnvironment?.setupScript
-                      }
-                      confirmedCwd={launchpadSetupProgress?.cwd}
-                      cwd={
-                        launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
-                      }
-                      desktopApi={props.desktopApi}
-                      directoryLabel={selectedLaunchpad.directoryLabel}
-                      environmentName={
-                        launchpadSetupProgress?.environmentName ??
-                        selectedLaunchpadCodexEnvironment?.name
-                      }
-                      progress={launchpadSetupProgress}
-                    />
                   ) : launchpadMaterializing ? (
                     <section
                       className="transcript-panel transcript-panel--pending"
@@ -3701,8 +3760,11 @@ export function ThreadView(props: ThreadViewProps) {
                         <p className="eyebrow">Preparing transcript</p>
                         <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
                         <p>
-                          Your prompt was sent. The transcript will appear here when
-                          the thread is ready.
+                          {launchpadRunningCodexEnvironmentSetup
+                            ? `Running the ${
+                                selectedLaunchpadCodexEnvironment?.name ?? "environment"
+                              } setup first. The transcript will appear here when the thread is ready.`
+                            : "Your prompt was sent. The transcript will appear here when the thread is ready."}
                         </p>
                       </div>
                     </section>
@@ -3713,6 +3775,7 @@ export function ThreadView(props: ThreadViewProps) {
                 backends={props.backends}
                 applications={props.applications}
                 codexFastAllowed={props.codexFastAllowed}
+                environmentSetup={launchpadEnvironmentSetup}
                 onShowMcpAccess={
                   props.activeFederationTarget
                     ? undefined
@@ -3868,79 +3931,6 @@ export function ThreadView(props: ThreadViewProps) {
               the header moves `.thread-view__layout`, and the context rail
               is anchored to it. See `ThreadWarnings`. */}
           {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
-          {selectedThread
-            && launchpadSetupProgress?.directoryKey === `thread:${selectedThread.source}:${selectedThread.id}`
-            && launchpadSetupProgress.status !== "completed" ? (
-            <div>
-              <LaunchpadEnvironmentSetupPending
-                command={launchpadSetupProgress.command}
-                confirmedCwd={launchpadSetupProgress.cwd}
-                cwd={launchpadSetupProgress.cwd}
-                desktopApi={props.desktopApi}
-                directoryLabel={props.selectedDirectory?.label ?? selectedThread.title}
-                environmentName={launchpadSetupProgress.environmentName}
-                progress={launchpadSetupProgress}
-              />
-              {launchpadSetupProgress.status === "failed" ? (
-                <button className="button button--ghost" onClick={() => setLaunchpadSetupProgress(undefined)} type="button">
-                  Dismiss setup output
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
-            <EnvironmentSetupFailureChoice
-              archiving={setupFailureArchiving}
-              continuing={setupFailureContinuing}
-              disabled={props.composerDisabled}
-              command={
-                selectedThreadEnvironmentFailurePhase === "action"
-                  ? selectedThreadLatestFailedActionRun?.command
-                  : selectedThread.codexEnvironmentRuntime?.setupCommand ??
-                    launchpadSetupProgress?.command
-              }
-              cwd={
-                selectedThread.codexEnvironmentRuntime?.cwd ??
-                launchpadSetupProgress?.cwd
-              }
-              environmentName={
-                selectedThread.codexEnvironmentRuntime?.environmentName ??
-                "Environment"
-              }
-              error={
-                // Archive failures go to the durable notice stack (they can
-                // also originate from a context menu with nothing left on
-                // screen), so this slot reports only the Continue button's
-                // own failure — one surface per error.
-                setupFailureContinueError
-              }
-              exitCode={
-                selectedThreadEnvironmentFailurePhase === "setup"
-                  ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
-                    launchpadSetupProgress?.exitCode
-                  : undefined
-              }
-              hasWorktree={Boolean(selectedThreadWorktree)}
-              output={
-                selectedThreadEnvironmentFailurePhase === "setup"
-                  ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
-                    launchpadSetupProgress?.output
-                  : undefined
-              }
-              phase={selectedThreadEnvironmentFailurePhase}
-              onCleanup={() => {
-                if (!props.onArchiveThread) {
-                  return;
-                }
-                setSetupFailureArchiving(true);
-                void props.onArchiveThread(selectedThread).finally(() => {
-                  setSetupFailureArchiving(false);
-                });
-              }}
-              onContinue={continueAfterSetupFailure}
-            />
-          ) : null}
-
           {props.findOpen ? (
             <ThreadFindBar
               containerRef={transcriptPanelRef}
@@ -4145,6 +4135,7 @@ export function ThreadView(props: ThreadViewProps) {
             onStopEnvActionRun={stopEnvActionRun}
             hiddenEnvActionRunIds={dismissedEnvActionRunIds}
             showEnvActionAnchors={actionRunsDock === "above"}
+            environmentSetup={selectedThreadEnvironmentSetup}
             onSetExecutionMode={props.onSetExecutionMode}
             onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}

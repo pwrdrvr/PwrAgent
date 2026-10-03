@@ -204,6 +204,7 @@ import {
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
@@ -337,6 +338,8 @@ type ComposerProps = {
   ) => void;
   hiddenEnvActionRunIds?: ReadonlySet<string>;
   showEnvActionAnchors?: boolean;
+  /** Environment setup progress or failure, as a row in the band. */
+  environmentSetup?: EnvironmentSetupRowModel;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   /**
@@ -3071,6 +3074,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   }, []);
   const [agentThreadError, setAgentThreadError] = useState<string>();
   const [environmentError, setEnvironmentError] = useState<string>();
+  const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
@@ -10972,6 +10976,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : null;
 
 
+  const environmentSetup = props.environmentSetup;
+  const environmentSetupRetryId =
+    environmentSetup?.status === "failed" && environmentSetup.phase === "setup"
+      ? environmentSetup.environmentId
+      : undefined;
+  const environmentSetupRow = environmentSetup ? (
+    <EnvironmentSetupRow
+      key={environmentSetup.key}
+      desktopApi={props.desktopApi}
+      model={{
+        ...environmentSetup,
+        onDismiss: environmentSetup.onDismiss
+          ? () => {
+              if (environmentError?.includes("CodexEnvironmentStartupError")) {
+                setEnvironmentError(undefined);
+              }
+              environmentSetup.onDismiss?.();
+            }
+          : undefined,
+      }}
+      onRetry={
+        environmentSetupRetryId
+        && props.thread
+        && props.desktopApi?.setCodexThreadEnvironment
+          ? () => {
+              setEnvironmentSetupRetrying(true);
+              void setThreadCodexEnvironment(environmentSetupRetryId).finally(() => {
+                setEnvironmentSetupRetrying(false);
+              });
+            }
+          : undefined
+      }
+      retrying={environmentSetupRetrying}
+    />
+  ) : null;
+
   const composerErrorEntries: readonly ComposerErrorEntry[] = [
     { id: "skills", label: "Couldn't load skills", message: props.skillError },
     { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
@@ -10991,7 +11031,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       message: sendError,
       occurrence: sendErrorState.occurrence,
     },
-    { id: "environment", label: "Environment error", message: environmentError },
+    {
+      id: "environment",
+      label: "Environment error",
+      // A failed setup command rejects `setCodexThreadEnvironment` with a
+      // CodexEnvironmentStartupError, and the setup row already shows that
+      // failure with its full output: one surface per error. The row clears
+      // this error when it is dismissed, so it cannot reappear here. With no
+      // row (no progress stream reached this window), the error row is the
+      // only report and stays.
+      message:
+        props.environmentSetup
+        && environmentError?.includes("CodexEnvironmentStartupError")
+          ? undefined
+          : environmentError,
+    },
     { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
     {
       id: "agent-change",
@@ -11037,6 +11091,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           above an input that already names itself was redundant
           chrome. */}
 
+      {/* The band: every transient row between the transcript and the
+          input. It is the one part of the composer allowed to give up height
+          — capped, scrolling, and shrinkable — so no number of open rows can
+          push the input or its toolbar off the window. See
+          `composer-band-bounds.test.ts`. */}
+      <div className="composer__band">
       {/* Topmost in the band: ambient agent work the operator did not just
           launch. Env action rows sit below it, nearer the input, because they
           carry the Stop the operator is most likely to reach for. */}
@@ -11052,6 +11112,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         desktopApi={props.desktopApi}
         thread={props.thread}
       />
+
+      {environmentSetupRow}
 
       {props.showEnvActionAnchors === false ? null : (
         <EnvActionAnchorList
@@ -11448,6 +11510,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           </div>
         );
       })}
+      </div>
 
       {hasVisibleAttachments ? (
         <div
