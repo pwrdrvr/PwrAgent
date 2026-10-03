@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.6 - 2026-10-02
+
+- Live Voice - Talk to local Codex threads, or use Director voice to check on work, start threads, and steer agents across connected machines, with transcripts and action receipts.
+- Thread Housekeeping - Automatically archive inactive threads by age or project limits while protecting active work and pins. Optional permanent deletion remains disabled by default.
+- Model Controls - Simplified helper defaults to one model and reasoning setting. Added Ultrafast controls when the Codex runtime advertises support.
+- Agent Tools - Fixed Full Access and automation MCP grants, and applied configured MCP defaults consistently to messaging and delegated threads.
+- Work Visibility - Restored Codex sub-agent visibility, cleared phantom background commands, and synchronized turn-error dismissal.
+- Federation - Improved machine identification and remote-thread controls, including keeping mounted remote threads pinned at the top.
+- Everyday Work - Improved automation-editor navigation and attachment browsing.
+- Token Miser - Preserved explicitly requested historical output and added opt-in diagnostic capture for investigating summarization problems.
+
 ## v1.1.5 - 2026-10-02
 
 - Federated Work - Copy or move Codex conversations and their Git workspace between compatible machines, preserving history and uncommitted work; choose where new threads and worktree sub-threads run.
