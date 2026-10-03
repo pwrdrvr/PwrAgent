@@ -14,8 +14,8 @@ binary source; package repositories contain metadata, not rebuilt binaries.
 
 The identifiers above are the registration targets until their initial PRs
 merge. A fork or an open PR is not publication. On the initial audit (2026-10-02),
-neither channel contained PwrAgent, no PwrAgent submissions were found, and the
-existing PwrDrvr tap contained only PwrSnap. No PwrAgent formula or official
+neither channel contained PwrAgent and the existing PwrDrvr tap contained only
+PwrSnap. Initial submissions were opened afterward. No PwrAgent formula or official
 Homebrew cask was found. Recheck live sources on every release; this snapshot
 does not prove their current state.
 
@@ -53,7 +53,20 @@ bytes matched both GitHub asset digests and the publisher's platform SHA256SUMS:
 macOS uses arm64 on Apple Silicon and universal on Intel, with macOS 12 as the
 bundle's minimum. Windows currently ships **x64 only**, with NSIS `/currentuser`
 and `/allusers` installations. Do not declare Windows ARM64 until that signed
-artifact exists. Always pin tag-specific, versioned filenames; never use
+artifact exists. The exact artifact URL templates are:
+
+```text
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-arm64.dmg
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-universal.dmg
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-windows-x64-setup.exe
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-macos-SHA256SUMS
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-windows-SHA256SUMS
+```
+
+Use `pnpm release:channels --out ...` below to download bytes and compare SHA-256
+against the matching publisher checksum file and available GitHub asset digest.
+The audit alone checks source metadata; it does not download installers.
+Always pin tag-specific, versioned filenames; never use
 `releases/latest/download` aliases or placeholder hashes in package metadata.
 Homebrew uninstall preserves `~/.pwragent`, which contains profiles and state.
 
@@ -65,8 +78,21 @@ Run from this checkout with authenticated GitHub CLI and Node 22:
 pnpm release:channels --audit
 ```
 
-Record the checked time, GitHub Latest version, channel versions, source URLs,
-and open submission URLs in the release handoff. Investigate channel versions
+The same helper powers the read-only
+[distribution audit workflow](../.github/workflows/distribution-audit.yml), which
+runs on relevant PRs, published/edited releases, daily and on demand. It needs
+neither installed package clients nor submission credentials. It preserves JSON
+and a job summary on success or an actionable blocker on failure. A complete
+audit means source discovery completed; it does not mean both channels are live.
+
+Record the checked time, GitHub Latest and highest promoted stable versions,
+channel comparisons, authoritative source URLs, architecture-specific artifact
+URLs/hashes, and open/closed submission URLs in the release handoff. The helper
+checks public repository visibility/default branches, searches the tap, Winget,
+official Homebrew casks and formulae by product name and homepage, and compares known source metadata with
+available GitHub asset digests. If a source layout changes, investigate it rather
+than guessing a URL, hash, architecture or identity. Downloaded-byte verification
+remains in the existing generation/platform jobs. Investigate channel versions
 ahead of GitHub Latest, stale versions, failed validation, and unresolved PRs
 before planning an update. API/authentication/rate-limit failures are errors,
 not evidence that a package is missing. Compare versions numerically.
@@ -119,12 +145,32 @@ workflow's permissions and the credential's expiry during release preflight.
 Verify read-token access using only organization secret metadata and its selected
 repository list; never retrieve, print or copy its value. The prepare log reports
 only whether the organization read token is available. A successful remote audit
-in that run verifies authenticated reads. The submission job passes the read token
+in that run verifies authenticated reads. For a non-publishing runtime check:
+
+```bash
+gh api orgs/pwrdrvr/actions/secrets/DISTRIBUTION_READ_TOKEN \
+  --jq '{name, visibility, updated_at, selected_repositories_url}'
+gh api orgs/pwrdrvr/actions/secrets/DISTRIBUTION_READ_TOKEN/repositories \
+  --jq '.repositories[].full_name'
+gh workflow run distribution-audit.yml --repo pwrdrvr/PwrAgent --ref <audit-branch>
+gh run list --repo pwrdrvr/PwrAgent --workflow distribution-audit.yml --limit 5
+gh run view <run-id> --repo pwrdrvr/PwrAgent --log
+```
+
+Only inspect secret metadata; the log should name the organization credential
+source/availability and report completed public reads, with its value withheld.
+If metadata access is forbidden, Harold must verify the selected-repository list.
+A fork PR using the fallback proves fallback reads, not organization-secret sharing.
+Do not dispatch `release.yml` or the install/submission workflow just to check the
+read credential. The submission job passes the read token
 separately to GET requests; only its write operations use `DISTRIBUTION_TOKEN`.
 
 During every release preflight, confirm the read PAT's expiration date with its
-organization owner (Actions secret metadata does not expose that date). Arrange
-rotation before expiry: the owner replaces the organization secret through GitHub's
+organization maintainer Harold (`huntharo`); Actions secret metadata does not
+expose that date. Harold owns an access-controlled expiry inventory containing
+the credential name, expiry date, renewal owner, selected repositories, last
+rotation date and last successful audit URL, with no credential values. Arrange
+renewal/rotation before expiry: the owner replaces the organization secret through GitHub's
 secret settings and preserves the selected PwrAgent/PwrGit/PwrSnap access and
 public-read-only scope. Rerun the audit after rotation. If it expires or is revoked,
 report the failed run and ask the owner to rotate it; do not broaden permissions,
@@ -134,8 +180,11 @@ User authentication still has GitHub code-search and secondary rate limits.
 The GET helper permits at most three attempts with a total wait budget of three
 minutes, respects `Retry-After` and primary reset headers, and stops if a requested
 delay exceeds the budget. Only optional HTTP 404 means absence. Throttling,
-`incomplete_results`, malformed search responses and results beyond the requested
-100-item page fail the audit. Retry later or narrow the search and record the
+`incomplete_results`, malformed search responses and results beyond GitHub's 1,000-result search ceiling fail the audit. Search
+pagination reads all pages (100 items each), requires `incomplete_results=false`
+on every page, and rejects duplicate items or totals that change mid-query.
+Release-history pagination reads up to 2,000 releases; exceeding that bounded
+window is a blocker rather than an invented upgrade baseline. Retry later or narrow the search and record the
 failure as a blocker; do not register a duplicate based on a partial result.
 See GitHub's [rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)
 and [search response guidance](https://docs.github.com/en/rest/search/search).
@@ -159,8 +208,7 @@ and [search response guidance](https://docs.github.com/en/rest/search/search).
    Authenticode signatures, unattended user/machine installs, installed x64
    executable/version/signature, previous-stable upgrade, and uninstall.
    A first stable release without an upgrade baseline needs an explicitly
-   recorded manual baseline; the workflow refuses to invent one. A preceding
-   release outside its 100-release window also requires manual selection.
+   recorded manual baseline; the workflow refuses to invent one. Exhausted release-history pagination also requires manual selection.
 5. Review the submission job's PR URLs. Existing pending PRs are reported and
    reused as the next action; no duplicate is opened. A matching version on the
    authoritative branch is reported as `published-in-repository`, which still
@@ -184,6 +232,33 @@ one package/version per PR. Run `winget validate --manifest <version-folder>`
 and `winget install --manifest <version-folder>` in isolated Windows before
 marking those checks complete. If the host cannot execute Winget, leave those
 boxes unchecked and link the actual upstream or workflow validation.
+
+## Required follow-up after every GitHub publication
+
+Run the read-only audit again after assets and release notes are published,
+including alpha/beta and unpromoted suffix-free releases. `release.yml` calls the
+same audit after its notes job; an edited/published event also catches manual
+promotion. Stable package comparisons still target GitHub Latest, never a beta
+or an unpromoted candidate. Compare the reported highest promoted stable with
+Latest and explain any difference; do not silently repoint Latest.
+
+A failed post-publication audit leaves the GitHub release published. Harold owns
+the retry and must link the failed run and action needed. A successful read-only
+audit cannot close install/upgrade or source/client follow-up work.
+
+| Current handoff item (recheck live) | Owner | Action / evidence required |
+| --- | --- | --- |
+| [Homebrew #9](https://github.com/pwrdrvr/homebrew-tap/pull/9) | Harold / PwrDrvr tap maintainers | Review PwrAgent checks and merge when approved; investigate the separate PwrSnap check failure in that tap without overwriting its work. Fetch main's cask, then refresh an isolated client. |
+| [Winget #445659](https://github.com/microsoft/winget-pkgs/pull/445659) | `huntharo` for CLA and draft readiness; Microsoft reviewers for acceptance/indexing | Account owner handles the CLA bot; retain draft status until Windows evidence is complete. Follow upstream checks/review, accepted master manifest, then refreshed Winget source. |
+| Missing `DISTRIBUTION_TOKEN` | Harold / organization maintainers | Provision a separate authorized submission identity if automatic writes are wanted. `DISTRIBUTION_READ_TOKEN` cannot fill this role. |
+| Read PAT expiry/rotation | Harold / organization maintainers | Maintain the expiry inventory, rotate under the same name/scope/repository selection, rerun the read-only workflow and retain its successful URL. |
+
+The 2026-10-03 remote audit found GitHub Latest/highest promoted stable `v1.1.4`,
+no published PwrAgent entry at either authoritative package path, no alternate
+identity in complete searches, and both initial submissions still open (Winget
+draft). This is a checked snapshot, not a publication claim. Carry each item with
+its last check time, submission/run URL, owner and next action into every handoff.
+Once merged, review/index/cache delays remain open until source and client agree.
 
 ## Verify publication after merge
 

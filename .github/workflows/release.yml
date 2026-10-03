@@ -49,10 +49,14 @@ jobs:
       - name: Compare authoritative Homebrew and Winget channels
         env:
           GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          DISTRIBUTION_READ_TOKEN_AVAILABLE: ${{ secrets.DISTRIBUTION_READ_TOKEN != '' }}
         run: |
           set -euo pipefail
-          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json"
+          echo "Organization distribution read token available: $DISTRIBUTION_READ_TOKEN_AVAILABLE"
+          status=0
+          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json" || status=$?
           cat "$RUNNER_TEMP/package-manager-preflight.json" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Typecheck
         env:
@@ -614,3 +618,14 @@ jobs:
             echo "::error::Release $RELEASE_TAG still has an empty body" >&2
             exit 1
           fi
+
+  audit-published-channels:
+    name: Audit channels after publication (including prereleases)
+    needs: publish-release-notes
+    permissions:
+      contents: read
+    uses: ./.github/workflows/distribution-audit.yml
+    with:
+      stage: post-publication
+    secrets:
+      DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN }}

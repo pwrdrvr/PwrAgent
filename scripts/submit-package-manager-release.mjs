@@ -92,6 +92,7 @@ async function main() {
   if (!process.argv[2]) throw new Error("Usage: node scripts/submit-package-manager-release.mjs <generated-dir>");
   const generated = JSON.parse(await readFile(resolve(dir, "audit.json"), "utf8"));
   const audit = auditChannels();
+  if (audit.status !== "complete") throw new Error(`Channel audit blocked: ${audit.blockers.join("; ")}; do not submit`);
   const version = audit.stable.version;
   if (version !== generated.stable.version) throw new Error("GitHub Latest changed; regenerate and revalidate inputs before submission");
   if (!process.env.DISTRIBUTION_VALIDATION_RUN) throw new Error("Set DISTRIBUTION_VALIDATION_RUN to the successful platform validation run URL");
