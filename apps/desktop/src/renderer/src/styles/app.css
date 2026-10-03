@@ -20947,6 +20947,40 @@ a.button {
   gap: 12px;
 }
 
+.transcript-voice-context__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.transcript-voice-context__toggle:hover {
+  color: var(--text-primary);
+}
+
+.transcript-voice-context__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-voice-context__toggle[aria-expanded="true"] .transcript-work-phase-group__chevron {
+  transform: rotate(45deg);
+}
+
+.transcript-voice-context__text {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--transcript-text-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .transcript-message__header--continuation {
   justify-content: flex-end;
 }

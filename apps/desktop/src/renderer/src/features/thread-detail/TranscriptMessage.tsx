@@ -47,6 +47,7 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
 import { RailStatusChip } from "./context-panels/RailStatusChip";
 import { subAgentTone } from "./context-panels/subagent-format";
+import { parseVoiceRequest } from "./voice-request";
 
 type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -105,13 +106,21 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       : undefined,
     [props.message.role, props.message.text],
   );
+  const voiceRequest = useMemo(() => {
+    if (props.message.role !== "user") return undefined;
+    const textParts = contentParts.filter((part) => part.type === "text");
+    return textParts.length === 1 ? parseVoiceRequest(textParts[0].text) : undefined;
+  }, [contentParts, props.message.role]);
   const messageCopyText = useMemo(
-    () => questionReplies
+    () => voiceRequest
+      ? [voiceRequest.request, voiceRequest.context ? `Voice context\n${voiceRequest.context}` : undefined]
+          .filter(Boolean).join("\n\n")
+      : questionReplies
       ? questionReplies
           .map((reply) => `> ${reply.question}\n\n${reply.answer}`)
           .join("\n\n")
       : buildMessageCopyText(props.message, contentParts),
-    [contentParts, props.message, questionReplies]
+    [contentParts, props.message, questionReplies, voiceRequest]
   );
   const imageParts = useMemo(() => {
     const parts = contentParts.filter(
@@ -124,6 +133,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     [contentParts],
   );
   const [monitorExpanded, setMonitorExpanded] = useState(false);
+  const [voiceContextExpanded, setVoiceContextExpanded] = useState(false);
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
   const monitorOrigin = props.message.origin?.subAgent;
   const prAutomationOrigin = props.message.origin?.prAutomation;
@@ -143,6 +153,54 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     ),
     [monitorOrigin?.monitorId, props.subAgents, loadedMonitor],
   );
+
+  if (voiceRequest) {
+    const parts = contentParts.map((part) => part.type === "text"
+      ? { ...part, text: voiceRequest.request }
+      : part);
+    return (
+      <article className={`transcript-message ${messageToneClass(props.message)}`}>
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          label: "Voice request",
+          sourceThreadLink,
+          threadLinks,
+          text: messageCopyText,
+        })}
+        <div className="transcript-message__text">
+          {groupMessageParts(parts).map((segment, index) => renderMessageSegment({
+            segment,
+            index,
+            applications: props.applications,
+            desktopApi: props.desktopApi,
+            fileViewerContext: props.fileViewerContext,
+            imageParts,
+            onOpenImage: props.onOpenImage,
+            skills: props.skills,
+            threadLinkSource: props.threadLinkSource,
+          }))}
+        </div>
+        {voiceRequest.context ? (
+          <div className="transcript-voice-context">
+            <button
+              type="button"
+              className="transcript-voice-context__toggle"
+              aria-expanded={voiceContextExpanded}
+              onClick={() => setVoiceContextExpanded((current) => !current)}
+            >
+              <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
+              Voice context
+            </button>
+            {voiceContextExpanded ? (
+              <p className="transcript-voice-context__text">{voiceRequest.context}</p>
+            ) : null}
+          </div>
+        ) : null}
+      </article>
+    );
+  }
 
   if (
     props.message.origin?.kind === "pwragent"
@@ -943,6 +1001,7 @@ function renderMessageHeader(params: {
   continuation: boolean;
   desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   message: AppServerThreadMessageEntry;
+  label?: string;
   segmentText?: string;
   sourceThreadLink?: ResolvedThreadLink;
   threadLinks: ReturnType<typeof useThreadLinks>;
@@ -993,7 +1052,7 @@ function renderMessageHeader(params: {
     <header className="transcript-message__header">
       <span className={attributionClassName}>
         <span className="transcript-message__role">
-          {labelForMessage(params.message)}
+          {params.label ?? labelForMessage(params.message)}
         </span>
         {params.sourceThreadLink && params.threadLinks ? (
           <ThreadChip
