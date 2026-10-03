@@ -22,6 +22,8 @@ test("keeps restarted thinking scanners on the shared epoch", async () => {
     const beam = row.locator(".thinking-scanner__beam");
     const beams = app.window.locator(".thinking-scanner__beam");
     await expect(beam).toBeVisible();
+    const mountedBeam = await beam.elementHandle();
+    expect(mountedBeam).not.toBeNull();
     await expect.poll(() => beams.count()).toBeGreaterThan(1);
     const sharedEpochs = Array<number>(await beams.count()).fill(0);
     const readEpochs = () => beams.evaluateAll((elements) => elements.flatMap(
@@ -51,7 +53,12 @@ test("keeps restarted thinking scanners on the shared epoch", async () => {
     // too, and must not require a lens flip to repair their phase.
     const sidebar = app.window.locator(".sidebar");
     await sidebar.evaluate((element) => { element.style.display = "none"; });
-    await expect.poll(() => beam.evaluate((element) => element.getAnimations().length)).toBe(0);
+    // The row locator contains a visible-button role filter, so it no longer
+    // resolves while the sidebar is hidden. Retain the mounted node instead.
+    await expect.poll(() => mountedBeam!.evaluate((element) => ({
+      connected: element.isConnected,
+      animationCount: element.getAnimations().length,
+    }))).toEqual({ connected: true, animationCount: 0 });
     await sidebar.evaluate((element) => { element.style.removeProperty("display"); });
     await expect(beam).toBeVisible();
     await expect.poll(readEpochs).toEqual(sharedEpochs);
