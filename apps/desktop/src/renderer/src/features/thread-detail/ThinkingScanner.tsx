@@ -1,8 +1,19 @@
+import type { AnimationEvent } from "react";
+
 type ThinkingScannerProps = {
   compact?: boolean;
 };
 
+// A canceled CSS animation loses its startTime. Keep its identity weakly so
+// the initial animationstart event can skip a second style query after the
+// ref has already pinned it, while a replacement animation still gets pinned.
+const pinnedAnimations = new WeakMap<Element, Animation>();
+
 function pinToSharedEpoch(element: Element): void {
+  if (pinnedAnimations.get(element)?.startTime === 0) {
+    return;
+  }
+
   if (typeof element.getAnimations !== "function") {
     return;
   }
@@ -13,7 +24,10 @@ function pinToSharedEpoch(element: Element): void {
     // permanently different phases. Pin each animation to the document
     // timeline's origin instead: the compositor advances every scanner from
     // one shared epoch without a React tick or a root-level style mutation.
-    animation.startTime = 0;
+    if (animation.startTime !== 0) {
+      animation.startTime = 0;
+    }
+    pinnedAnimations.set(element, animation);
   }
 }
 
@@ -23,6 +37,16 @@ function syncThinkingScannerAnimation(element: HTMLDivElement | null): void {
   }
 
   pinToSharedEpoch(element);
+}
+
+function syncRestartedThinkingScannerAnimation(event: AnimationEvent<HTMLDivElement>): void {
+  if (event.animationName === "pwragent-thinking-scanner-sweep") {
+    // Moving a keyed row with insertBefore recreates its CSS animation in
+    // Chromium without remounting React or calling the ref again. Hiding an
+    // ancestor with display:none does the same. Repair that new animation on
+    // its start event; iterations need no JS, timer, or React state update.
+    pinToSharedEpoch(event.currentTarget);
+  }
 }
 
 /**
@@ -72,7 +96,11 @@ export function ThinkingScanner(props: ThinkingScannerProps = {}) {
       aria-hidden="true"
       className={`thinking-scanner${props.compact ? " thinking-scanner--mini" : ""}`}
     >
-      <div className="thinking-scanner__beam" ref={syncThinkingScannerAnimation} />
+      <div
+        className="thinking-scanner__beam"
+        onAnimationStart={syncRestartedThinkingScannerAnimation}
+        ref={syncThinkingScannerAnimation}
+      />
     </div>
   );
 }
