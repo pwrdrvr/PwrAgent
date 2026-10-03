@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadMessageEntry } from "@pwragent/shared";
 import { TranscriptMessage } from "../TranscriptMessage";
@@ -39,8 +39,11 @@ describe("voice requests in the chat transcript", () => {
   it("copies the readable request and context without the protocol wrapper", async () => {
     const copyText = vi.fn().mockResolvedValue(undefined);
     renderMessage({}, copyText);
-    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    });
     expect(copyText).toHaveBeenCalledWith(`${request}\n\nVoice context\n${context}`);
+    expect(screen.getByRole("button", { name: "Copied message" })).toBeInTheDocument();
   });
 
   it("handles a request without spoken context", () => {
