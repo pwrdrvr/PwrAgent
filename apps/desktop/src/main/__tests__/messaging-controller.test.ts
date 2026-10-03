@@ -6192,14 +6192,18 @@ describe("MessagingController", () => {
     );
   });
 
-  it("creates a native Telegram topic, attaches a target thread, and posts resume status there", async () => {
-    const now = Date.UTC(2026, 5, 9, 23, 5);
+  it.each([
+    { backend: "codex" as const, active: false },
+    { backend: "codex" as const, active: true },
+    { backend: "acp:grok" as const, active: true },
+  ])("creates a native Telegram topic and restores activity for $backend (active=$active)", async ({ backend, active }) => {
+    let now = Date.UTC(2026, 5, 9, 23, 5);
     const navigation = buildNavigationSnapshot();
     navigation.threads.push({
       id: "thread-2",
       title: "Telegram thread naming issue",
       titleSource: "explicit",
-      source: "codex",
+      source: backend,
       linkedDirectories: [
         {
           id: "directory:pwragent",
@@ -6243,6 +6247,9 @@ describe("MessagingController", () => {
       getManagedConversationRights,
       navigation,
       now: () => now,
+      readActiveTurn: async (request) => active && request.threadId === "thread-2"
+        ? { backend, threadId: "thread-2", turnId: "handoff-turn" }
+        : undefined,
       readThreadLastAssistantReply: async () => ({
         createdAt: now - 30 * 60_000,
         text: "Last completed answer.",
@@ -6268,6 +6275,22 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(event);
     harness.delivered.splice(0);
 
+    if (active) {
+      // Handoff starts the delegated turn before its topic/binding exists.
+      await harness.controller.handleBackendEvent({
+        backend,
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "handoff-turn",
+            turn: { id: "handoff-turn", status: "running" },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(harness.delivered).toEqual([]);
+    }
+
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
         operation: "attach_thread_here",
@@ -6277,7 +6300,7 @@ describe("MessagingController", () => {
           turnId: "turn-1",
         },
         args: {
-          backend: "codex",
+          backend,
           threadId: "thread-2",
           title: "Telegram thread naming issue",
         },
@@ -6286,7 +6309,7 @@ describe("MessagingController", () => {
       ok: true,
       data: {
         binding: {
-          backend: "codex",
+          backend,
           targetKind: "thread",
           threadId: "thread-2",
         },
@@ -6299,11 +6322,23 @@ describe("MessagingController", () => {
         placement: "new_child",
       },
     });
-    expect(harness.delivered).toEqual([
+    const bindingId = `binding:telegram:topic:-1001:500:${backend}:thread-2`;
+    expect(harness.delivered.filter((intent) => intent.kind === "activity")).toEqual(
+      active
+        ? [expect.objectContaining({
+            kind: "activity",
+            activity: "typing",
+            bindingId,
+            sessionState: "processing",
+            state: "active",
+          })]
+        : [],
+    );
+    expect(harness.delivered.filter((intent) => intent.kind !== "activity")).toEqual([
       expect.objectContaining({
         kind: "status",
-        bindingId:
-          "binding:telegram:topic:-1001:500:codex:thread-2",
+        bindingId,
+        status: active ? "working" : "idle",
         delivery: expect.objectContaining({
           mode: "present",
           pin: true,
@@ -6313,8 +6348,7 @@ describe("MessagingController", () => {
       }),
       expect.objectContaining({
         kind: "message",
-        bindingId:
-          "binding:telegram:topic:-1001:500:codex:thread-2",
+        bindingId,
         role: "assistant",
         parts: [
           expect.objectContaining({
@@ -6346,7 +6380,7 @@ describe("MessagingController", () => {
         },
       }),
     ).resolves.toMatchObject({
-      backend: "codex",
+      backend,
       pinnedStatusSurface: {
         id: expect.stringMatching(/^surface:status:/),
       },
@@ -6356,6 +6390,140 @@ describe("MessagingController", () => {
       targetKind: "thread",
       threadId: "thread-2",
     });
+    if (active) {
+      harness.delivered.length = 0;
+      now += 11_000;
+      await harness.controller.handleBackendEvent({
+        backend,
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "handoff-turn",
+            item: { id: "reasoning-1", type: "reasoning" },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "activity",
+        bindingId,
+        state: "active",
+      });
+      await harness.controller.handleBackendEvent({
+        backend,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-2",
+            turnId: "handoff-turn",
+            turn: { id: "handoff-turn", status: "completed", output: [] },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(harness.delivered.filter((intent) => intent.kind === "activity").at(-1)).toMatchObject({
+        state: "idle",
+      });
+    }
+  });
+
+  it.each(["completed", "waiting", "idle", "failed"] as const)(
+    "does not start typing when an attached turn lookup is %s",
+    async (lookup) => {
+      const navigation = buildNavigationSnapshot();
+      navigation.threads.push({ ...navigation.threads[0]!, id: "thread-2" });
+      const harness = await createHarness({ navigation });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("attach another thread"));
+      harness.delivered.length = 0;
+      let lookupHandled = false;
+      harness.getThreadAdmissionState.mockImplementation(async (request) => {
+        if (request.threadId !== "thread-2") return {};
+        const snapshot = {
+          activeTurn: { backend: "codex" as const, threadId: "thread-2", turnId: "handoff-turn" },
+          threadStatus: lookup === "idle" ? "idle" as const : "active" as const,
+          thread: navigation.threads.at(-1),
+        };
+        if (!lookupHandled) {
+          lookupHandled = true;
+          if (lookup === "failed") throw new Error("Owner unavailable");
+          if (lookup === "completed") {
+            await harness.controller.handleBackendEvent({
+              backend: "codex",
+              notification: {
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-2",
+                  turnId: "handoff-turn",
+                  turn: { id: "handoff-turn", status: "completed", output: [] },
+                },
+              },
+            } satisfies AgentEvent);
+          }
+          if (lookup === "waiting") {
+            await harness.controller.handleBackendPendingRequest("codex", {
+              method: "item/tool/requestUserInput",
+              params: {
+                threadId: "thread-2",
+                turnId: "newer-turn",
+                requestId: "question-1",
+                questions: [{ id: "q1", header: "Mode", question: "Proceed?", isOther: true, isSecret: false, options: [] }],
+              },
+            });
+          }
+        }
+        return snapshot;
+      });
+
+      await expect(harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+        args: { backend: "codex", threadId: "thread-2", placement: "current_conversation" },
+      })).resolves.toMatchObject({ ok: true });
+      expect(harness.delivered.filter((intent) => intent.kind === "activity" && intent.state === "active")).toEqual([]);
+      expect(harness.delivered.filter((intent) => intent.kind === "status").at(-1)).toMatchObject({
+        status: lookup === "waiting" ? "waiting" : "idle",
+      });
+    },
+  );
+
+  it.each([false, true])("budgets SQLite writes for attaching a running turn (active=%s)", async (active) => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-attach-writes-"));
+    tempDirs.push(tempDir);
+    const db = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const navigation = buildNavigationSnapshot();
+      navigation.threads.push({ ...navigation.threads[0]!, id: "thread-2" });
+      const harness = await createHarness({
+        navigation,
+        store: new SqliteMessagingStore(db),
+        readActiveTurn: async (request) => active && request.threadId === "thread-2"
+          ? { backend: "codex", threadId: "thread-2", turnId: "handoff-turn" }
+          : undefined,
+      });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("attach another thread"));
+      resetSqliteWriteMetrics();
+      const { result, writes } = await measureSqliteWrites(async () =>
+        await harness.controller.handlePwrAgentMessagingRequest({
+          operation: "attach_thread_here",
+          context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+          args: { backend: "codex", threadId: "thread-2", placement: "current_conversation" },
+        }),
+      );
+      expect(result).toMatchObject({ ok: true });
+      harness.controller.dispose();
+      expectSqliteWriteBudget({
+        scenario: `messaging-attach-${active ? "active" : "idle"}-turn`,
+        note: "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
+        writes,
+      });
+    } finally {
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
   });
 
   it("reuses one status surface when initial and automatic renders race", async () => {

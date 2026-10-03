@@ -15951,6 +15951,61 @@ export class MessagingController {
     return restoredTurn;
   }
 
+  private async restoreAttachedTurnActivity(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    // Handoff starts the turn before attaching its messaging conversation.
+    // The controller had no binding when turn/started arrived, so hydrate
+    // from the owning backend rather than waiting for another start event.
+    const previousTurn = this.getActiveTurn(binding);
+    try {
+      const admission = await this.options.backend.getThreadAdmissionState({
+        backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
+        threadId: binding.threadId,
+      });
+      let activeTurn = this.getActiveTurn(binding);
+      const backendTurn = admission.activeTurn;
+      if (
+        activeTurn === previousTurn
+        && backendTurn?.backend === binding.backend
+        && backendTurn.threadId === binding.threadId
+        && admission.threadStatus !== "idle"
+        && (!activeTurn || activeTurn.turnId !== backendTurn.turnId)
+      ) {
+        activeTurn = {
+          turnId: backendTurn.turnId,
+          status: "working",
+          updatedAt: this.now(),
+        };
+        this.setActiveTurn(binding, activeTurn);
+        this.logBindingTurnStateChange(
+          binding,
+          previousTurn,
+          activeTurn,
+          "attach:active_turn_lookup",
+        );
+      }
+      // Preserve newer lifecycle/pending-request state delivered during the
+      // lookup. In particular, never revive a completed turn or turn a
+      // known waiting turn back into working. Signal this new surface even
+      // when another binding already knew the turn was active.
+      if (activeTurn && ["working", "waiting"].includes(activeTurn.status)) {
+        await this.signalTurnActivity(binding, activeTurn, {
+          force: true,
+          reason: "attach",
+        });
+      }
+    } catch (error) {
+      this.logger.warn?.("messaging attached turn activity restore failed", {
+        backend: binding.backend,
+        bindingId: binding.id,
+        threadId: binding.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async retireApprovalCallbackIfBackendIdle(
     pendingIntent: MessagingPendingIntentRecord,
     event: MessagingInboundCallbackEvent,
@@ -18055,6 +18110,7 @@ export class MessagingController {
       threadId: args.threadId,
       targetKind,
     });
+    await this.restoreAttachedTurnActivity(binding);
     const visibleBinding = await this.renderBindingStatus(binding);
     await this.repostLastAssistantMessageForResume(visibleBinding, {
       important: true,
