@@ -209,7 +209,6 @@ const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
 );
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
-  notify: [],
   include_permissions_instructions: false,
   include_apps_instructions: false,
   include_collaboration_mode_instructions: false,
@@ -227,7 +226,6 @@ const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> =
     deferred_executor: false,
     enable_fanout: false,
     goals: false,
-    hooks: false,
     image_generation: false,
     memories: false,
     multi_agent: false,
@@ -707,9 +705,15 @@ function buildCodexHelperConfig(
 ): NonNullable<CodexThreadStartParams["config"]> {
   return {
     ...baseConfig,
-    ...(disableExecution ? {
-      features: {
-        ...(asRecord(baseConfig.features) ?? {}),
+    // Legacy notifications are independent of features.hooks and can receive
+    // helper output. Keep both suppressions thread-local on the shared server.
+    notify: [],
+    // Apply to both config variants: trusted hooks run outside model-tool
+    // approval/sandbox handling, including before the helper's first turn.
+    features: {
+      ...(asRecord(baseConfig.features) ?? {}),
+      hooks: false,
+      ...(disableExecution ? {
         shell_tool: false,
         unified_exec: false,
         js_repl: false,
@@ -718,8 +722,8 @@ function buildCodexHelperConfig(
         multi_agent: false,
         multi_agent_v2: false,
         enable_fanout: false,
-      },
-    } : {}),
+      } : {}),
+    },
     ...(serverNames.length > 0 ? {
       mcp_servers: Object.fromEntries(
         serverNames.map((name) => [name, { enabled: false }]),

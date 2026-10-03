@@ -120,6 +120,7 @@ class MockTransport implements JsonRpcTransport {
     string,
     Array<{ code: number; message: string }>
   >();
+  static threadStartErrors: Array<{ code: number; message: string }> = [];
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
@@ -1145,6 +1146,11 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/start") {
+      const error = MockTransport.threadStartErrors.shift();
+      if (error) {
+        this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, error }));
+        return;
+      }
       const result = MockTransport.threadStartResult as { thread?: { id?: string } };
       if (result.thread?.id) {
         this.loadedThreads.add(result.thread.id);
@@ -1847,6 +1853,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadTurnsListTransientErrorsByRequest.clear();
     MockTransport.threadItemsListResultByRequest.clear();
     MockTransport.threadItemsListTransientErrorsByRequest.clear();
+    MockTransport.threadStartErrors = [];
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
@@ -11951,6 +11958,113 @@ describe("CodexAppServerClient", () => {
     expect(tracking.helperThreadPredicates.size).toBe(0);
 
     await client.close();
+  });
+
+  describe("helper lifecycle config", () => {
+    const cases = ["title", "structured", "data-only", "tool"] as const;
+
+    async function runHelper(kind: typeof cases[number], fallback: boolean) {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      if (fallback) {
+        MockTransport.threadStartErrors = [{ code: -32602, message: "unsupported helper config" }];
+      }
+      MockTransport.threadStartResult = {
+        thread: { id: "lifecycle-helper" }, instructionSources: [],
+      };
+      MockTransport.turnStartResult = {
+        turn: {
+          id: "lifecycle-turn",
+          output: [{ type: "text", text: JSON.stringify({ title: "Fixture title" }) }],
+        },
+      };
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      const common = {
+        prompt: "Return a fixture title.",
+        schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
+        timeoutMs: 5_000,
+      };
+      const result = kind === "title"
+        ? client.generateTitle({ ...common, promptVersion: "thread-title-v3", schemaName: "thread_title" })
+        : kind === "tool"
+          ? client.runHelperToolTurn({
+              helper: "star_map_intake", prompt: common.prompt, timeoutMs: common.timeoutMs,
+              dynamicTools: [{ type: "function", name: "fixture_tool", description: "Fixture tool.",
+                inputSchema: { type: "object" }, deferLoading: false }],
+              onToolCall: async () => ({ success: true, contentItems: [] }),
+            })
+          : client.generateStructuredObject({
+              ...common, helper: "diff_condensation", disableExecution: kind === "data-only",
+              isMatch: (record) => typeof record.title === "string",
+            });
+      if (kind === "tool") {
+        const transport = await waitForLatestTransportRequest("turn/start");
+        transport.emitInbound({ jsonrpc: "2.0", method: "turn/completed", params: {
+          threadId: "lifecycle-helper", turn: { id: "lifecycle-turn", status: "completed" },
+        } });
+      }
+      await expect(result).resolves.toMatchObject({ status: "ok" });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+        (message) => JSON.parse(message) as { method: string; params: Record<string, unknown> },
+      );
+      const starts = requests.filter((request) => request.method === "thread/start");
+      expect(starts).toHaveLength(fallback ? 2 : 1);
+      return { client, starts };
+    }
+
+    for (const fallback of [false, true]) {
+      it.each(cases)(`suppresses inherited hooks for %s helpers (fallback=${fallback})`, async (kind) => {
+        const { client, starts } = await runHelper(kind, fallback);
+        try {
+          for (const start of starts) {
+            expect(start.params.config).toMatchObject({
+              features: {
+                hooks: false, apps: false, plugins: false, multi_agent: false,
+                ...(kind === "data-only" ? { shell_tool: false, unified_exec: false, js_repl: false } : {}),
+              },
+              mcp_servers: { context7: { enabled: false }, github: { enabled: false } },
+            });
+            if (kind === "tool") expect(start.params.dynamicTools).toBeDefined();
+          }
+        } finally {
+          await client.close();
+        }
+      });
+
+      it.each(cases)(`suppresses inherited notify for %s helpers (fallback=${fallback})`, async (kind) => {
+        const { client, starts } = await runHelper(kind, fallback);
+        try {
+          for (const start of starts) expect(start.params.config).toMatchObject({ notify: [] });
+        } finally {
+          await client.close();
+        }
+      });
+
+      it(`preserves user thread config on the shared client (fallback=${fallback})`, async () => {
+        const { client } = await runHelper("data-only", fallback);
+        const config = { features: { hooks: true, shell_tool: true }, notify: ["fixture-notifier"] };
+        try {
+          await client.startThread({ cwd: "/fixture/user-workspace" });
+          await client.startThread({ cwd: "/fixture/user-workspace", config });
+          await client.forkThread({ threadId: "saved-user-thread", config });
+          await client.startTurn({ threadId: "saved-user-thread", input: [{ type: "text", text: "Fixture input" }], config });
+          const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+            (message) => JSON.parse(message) as { method: string; params: Record<string, unknown> },
+          );
+          const userRequests = requests.filter((request) =>
+            ["thread/start", "thread/fork", "thread/resume"].includes(request.method)
+            && request.params.ephemeral !== true,
+          );
+          expect(userRequests.map((request) => request.method)).toEqual([
+            "thread/start", "thread/start", "thread/fork", "thread/resume",
+          ]);
+          expect(userRequests[0].params).not.toHaveProperty("config");
+          for (const request of userRequests.slice(1)) expect(request.params.config).toEqual(config);
+          expect(config).toEqual({ features: { hooks: true, shell_tool: true }, notify: ["fixture-notifier"] });
+        } finally {
+          await client.close();
+        }
+      });
+    }
   });
 
   it.each([false, true])("forwards structured helper instructions and model (execution disabled=%s)", async (disableExecution) => {
