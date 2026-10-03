@@ -1,4 +1,4 @@
-import type { CameraCue, VoiceCameraObservation } from "../../../../shared/native-voice-camera";
+import type { CameraCue, CameraGesture, VoiceCameraObservation } from "../../../../shared/native-voice-camera";
 
 export const CAMERA_AWAY_END_MS = 30_000;
 export const CAMERA_SAMPLE_GAP_MS = 10_000;
@@ -9,6 +9,12 @@ export type CameraDecision = { cue?: CameraCue; end?: boolean };
 /** Require consecutive confident samples; missing/uncertain frames never count as absence. */
 export class CameraCueFilter {
   status = "Waiting for a decision";
+  gestureStatus = "Waiting for a gesture decision";
+  private gestureCandidate?: CameraGesture;
+  private gestureSince = 0;
+  private gestureSamples = 0;
+  private lastGesture?: CameraGesture;
+  private lastGestureSent = -Infinity;
   private candidate?: CameraCue;
   private since = 0;
   private samples = 0;
@@ -21,10 +27,55 @@ export class CameraCueFilter {
     this.awaySince = undefined;
     this.candidate = undefined;
     this.lastSample = undefined;
+    this.gestureCandidate = undefined;
+    this.gestureSamples = 0;
   }
 
   observe(observation: VoiceCameraObservation, now: number): CameraDecision {
     if (this.lastSample !== undefined && now - this.lastSample > CAMERA_SAMPLE_GAP_MS) this.resetContinuity();
+    let gesture: CameraCue | undefined;
+    if (observation.present && observation.presenceConfidence >= 0.8) {
+      gesture = this.observeGesture(observation, now);
+    } else {
+      this.gestureCandidate = undefined;
+      this.gestureStatus = "Gesture requires confident presence";
+      if (!observation.present && observation.presenceConfidence >= 0.8) this.lastGesture = undefined;
+    }
+    const stopHeld = observation.present && observation.presenceConfidence >= 0.8
+      && (observation.gesture === "stop" || observation.gesture === "thumbs_down")
+      && (observation.gestureConfidence ?? 0) >= 0.85;
+    const decision = this.observeReaction(observation, now, gesture !== undefined || stopHeld);
+    return gesture ? { cue: gesture } : decision;
+  }
+
+  private observeGesture(observation: VoiceCameraObservation, now: number): CameraCue | undefined {
+    const gesture = observation.gesture;
+    const urgent = gesture === "stop" || gesture === "thumbs_down";
+    const threshold = urgent ? 0.85 : 0.8;
+    if (!gesture || (observation.gestureConfidence ?? 0) < threshold) {
+      this.gestureCandidate = undefined;
+      this.gestureStatus = `Gesture confidence below ${threshold * 100}%`;
+      return;
+    }
+    if (gesture !== this.gestureCandidate) {
+      this.gestureCandidate = gesture;
+      this.gestureSince = now;
+      this.gestureSamples = 0;
+    }
+    this.gestureSamples++;
+    this.gestureStatus = "Collecting consecutive gesture frames";
+    const quick = urgent || gesture === "none";
+    if (this.gestureSamples < (quick ? 2 : 3) || now - this.gestureSince < (quick ? 500 : REACTION_DEBOUNCE_MS)) return;
+    if (gesture === this.lastGesture) { this.gestureStatus = "Repeated gesture suppressed"; return; }
+    if (gesture === "none") { this.lastGesture = gesture; this.gestureStatus = "No gesture"; return; }
+    if (!urgent && now - this.lastGestureSent < CUE_COOLDOWN_MS) { this.gestureStatus = "Eight-second gesture cooldown"; return; }
+    this.lastGesture = gesture;
+    this.lastGestureSent = now;
+    this.gestureStatus = "Gesture cue ready";
+    return gesture;
+  }
+
+  private observeReaction(observation: VoiceCameraObservation, now: number, holdReaction: boolean): CameraDecision {
     this.lastSample = now;
     this.status = "Collecting consecutive frames";
     if (observation.presenceConfidence < 0.8) {
@@ -47,6 +98,7 @@ export class CameraCueFilter {
       }
       cue = observation.reaction;
     }
+    if (holdReaction) { this.status = "Vibe cue held for gesture"; return {}; }
     if (cue !== this.candidate) {
       this.candidate = cue;
       this.since = now;

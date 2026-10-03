@@ -495,7 +495,7 @@ export class NativeVoiceController {
               return;
             }
             const decision = filter.observe(observation, now);
-            debug({ filter: filter.status });
+            debug({ filter: observation.gesture ? `${filter.status}; gesture: ${filter.gestureStatus}` : filter.status });
             if (decision.end) {
               this.publish({ endedAfterAway: true });
               void this.stop();

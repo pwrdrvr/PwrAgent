@@ -1,4 +1,4 @@
-import { CAMERA_REACTIONS, VOICE_CAMERA_QUESTIONS, type VoiceCameraObservation } from "../../shared/native-voice-camera";
+import { CAMERA_REACTIONS, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, type VoiceCameraObservation } from "../../shared/native-voice-camera";
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Clef response.");
@@ -12,21 +12,39 @@ export function parseClefObservation(value: unknown): VoiceCameraObservation {
   const data = object(value);
   const answers = object(data.answers);
   const presence = object(answers.presence);
-  const reaction = object(answers.reaction);
-  if (presence.type !== "choice" || reaction.type !== "choice"
-    || (presence.choice !== "present" && presence.choice !== "away")
-    || !CAMERA_REACTIONS.includes(reaction.choice as VoiceCameraObservation["reaction"])) throw new Error("Invalid Clef decisions.");
-  const presenceProbabilities = object(presence.probabilities);
+  const reaction = object(answers.vibe ?? answers.reaction);
+  if (answers.vibe && answers.gesture === undefined) throw new Error("Missing Clef gesture.");
+  if (reaction.type !== "choice" || !CAMERA_REACTIONS.includes(reaction.choice as VoiceCameraObservation["reaction"])) throw new Error("Invalid Clef decisions.");
   const reactionProbabilities = object(reaction.probabilities);
-  for (const key of ["present", "away"]) probability(presenceProbabilities[key]);
-  for (const key of CAMERA_REACTIONS) probability(reactionProbabilities[key]);
+  // Accept the original four-choice response for compatibility; the new vibe
+  // question must return every requested score, with no arbitrary cue text.
+  const reactionKeys = answers.vibe ? CAMERA_REACTIONS : ["neutral", "exasperated", "enthusiastic", "bored"] as const;
+  const reactionScores = Object.fromEntries(reactionKeys.map((key) => [key, probability(reactionProbabilities[key])]));
+  let presenceScores: { present: number; away: number };
+  let present: boolean;
+  if (presence.type === "noul") {
+    const score = probability(presence.noul);
+    presenceScores = { present: score, away: 1 - score };
+    present = score >= 0.5;
+  } else if (presence.type === "choice" && (presence.choice === "present" || presence.choice === "away")) {
+    const scores = object(presence.probabilities);
+    presenceScores = { present: probability(scores.present), away: probability(scores.away) };
+    present = presence.choice === "present";
+  } else throw new Error("Invalid Clef presence.");
+  let gesture: VoiceCameraObservation["gesture"];
+  let gestureScores: VoiceCameraObservation["gestureScores"];
+  if (answers.gesture !== undefined) {
+    const answer = object(answers.gesture);
+    if (answer.type !== "choice" || !CAMERA_GESTURES.includes(answer.choice as NonNullable<typeof gesture>)) throw new Error("Invalid Clef gesture.");
+    const scores = object(answer.probabilities);
+    gesture = answer.choice as NonNullable<typeof gesture>;
+    gestureScores = Object.fromEntries(CAMERA_GESTURES.map((key) => [key, probability(scores[key])])) as NonNullable<typeof gestureScores>;
+  }
   return {
-    presenceScores: { present: probability(presenceProbabilities.present), away: probability(presenceProbabilities.away) },
-    reactionScores: Object.fromEntries(CAMERA_REACTIONS.map((key) => [key, probability(reactionProbabilities[key])])) as NonNullable<VoiceCameraObservation["reactionScores"]>,
-    present: presence.choice === "present",
-    presenceConfidence: probability(presenceProbabilities[presence.choice]),
-    reaction: reaction.choice as VoiceCameraObservation["reaction"],
+    present, presenceScores, presenceConfidence: present ? presenceScores.present : presenceScores.away,
+    reaction: reaction.choice as VoiceCameraObservation["reaction"], reactionScores,
     reactionConfidence: probability(reactionProbabilities[String(reaction.choice)]),
+    ...(gesture && gestureScores ? { gesture, gestureScores, gestureConfidence: gestureScores[gesture] } : {}),
     latencyMs: typeof data.latency_ms === "number" && Number.isFinite(data.latency_ms) ? data.latency_ms : 0,
   };
 }
@@ -44,7 +62,7 @@ export async function classifyVoiceCamera(image: string, signal: AbortSignal, wa
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image, questions: VOICE_CAMERA_QUESTIONS,
-          state: "A laptop webcam frame during a voice conversation. Classify visible presence and expression only; use neutral when ambiguous.",
+          state: "A live webcam frame from a laptop.",
         }),
         signal,
         redirect: "error",

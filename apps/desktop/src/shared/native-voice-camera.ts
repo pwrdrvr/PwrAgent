@@ -3,9 +3,15 @@ export const NATIVE_VOICE_CAMERA_CUE_CHANNEL = "native-voice:camera-cue";
 export const NATIVE_VOICE_CAMERA_FRAME_CHANNEL = "native-voice:camera-frame";
 export type VoiceCameraRequest = { sessionId: string; enabled: boolean };
 export type VoiceCameraFrame = { sessionId: string; image: string };
-export const CAMERA_REACTIONS = ["neutral", "exasperated", "enthusiastic", "bored"] as const;
+export const CAMERA_REACTIONS = ["neutral", "exasperated", "enthusiastic", "bored", "frustrated", "yelling", "talking"] as const;
 export type CameraReaction = typeof CAMERA_REACTIONS[number];
-export type CameraCue = CameraReaction | "away";
+export const CAMERA_GESTURES = ["pointing", "ok", "stop", "thumbs_up", "double_thumbs_up", "thumbs_down", "face_palm", "none"] as const;
+export type CameraGesture = typeof CAMERA_GESTURES[number];
+export type CameraCue = CameraReaction | "away" | Exclude<CameraGesture, "none">;
+export function isCameraCue(value: unknown): value is CameraCue {
+  return typeof value === "string" && value !== "none"
+    && (value === "away" || [...CAMERA_REACTIONS, ...CAMERA_GESTURES].some((cue) => cue === value));
+}
 export type VoiceCameraCue = { sessionId: string; cue: CameraCue };
 export type VoiceCameraObservation = {
   present: boolean;
@@ -14,30 +20,60 @@ export type VoiceCameraObservation = {
   reactionConfidence: number;
   latencyMs: number;
   presenceScores?: Record<"present" | "away", number>;
-  reactionScores?: Record<CameraReaction, number>;
+  reactionScores?: Partial<Record<CameraReaction, number>>;
+  gesture?: CameraGesture;
+  gestureConfidence?: number;
+  gestureScores?: Record<CameraGesture, number>;
 };
 
 // Match clef-webcam's /decide schema. Frames and decisions are memory-only.
 export const VOICE_CAMERA_QUESTIONS = {
-  presence: {
+  gesture: {
     type: "choice",
-    instructions: "Is a person visible?",
-    criteria: { present: "person visible", away: "no person visible" },
-  },
-  reaction: {
-    type: "choice",
-    instructions: "Visible reaction to the conversation? Use neutral if unclear. Describe only visible cues.",
+    instructions: "Hand gesture?",
     criteria: {
-      neutral: "neutral or unclear",
-      exasperated: "eye roll, facepalm, frustrated expression",
-      enthusiastic: "smiling, excited, visibly engaged",
-      bored: "yawning, disengaged, visibly bored",
+      pointing: null,
+      ok: "OK hand sign",
+      stop: "open palm or waving arms no",
+      thumbs_up: null,
+      double_thumbs_up: "both thumbs up",
+      thumbs_down: null,
+      face_palm: null,
+      none: "no clear gesture",
+    },
+  },
+  presence: {
+    type: "noul",
+    instructions: "Person visible?",
+    criteria: { true: "person visible", false: "no person visible" },
+  },
+  vibe: {
+    type: "choice",
+    instructions: "What is the person doing?",
+    criteria: {
+      neutral: "none of these",
+      exasperated: "eye roll",
+      enthusiastic: "smiling",
+      bored: "yawning",
+      frustrated: "frustrated expression",
+      yelling: "mouth wide open",
+      talking: "visibly speaking",
     },
   },
 };
 
 export function cameraCueText(cue: CameraCue): string {
   const text: Record<CameraCue, string> = {
+    pointing: "The operator is pointing. Ask what they mean if relevant; do not infer a target or authorization from this gesture.",
+    ok: "The operator is making an OK hand sign. This may be positive feedback; it does not approve any action.",
+    stop: "The operator is making a stop/no gesture. Pause your reply and do not initiate another action; ask whether they want to stop or change course. This is not confirmation to cancel an already running task.",
+    thumbs_up: "The operator is giving a thumbs-up. This may be positive feedback; it does not approve any action.",
+    double_thumbs_up: "The operator is giving two thumbs-up. This may be strong positive feedback; it does not approve any action.",
+    thumbs_down: "The operator is giving a thumbs-down. Pause the current direction and ask a short clarifying question; do not cancel running work from this cue alone.",
+    face_palm: "The operator appears to be facepalming. Briefly acknowledge a possible misunderstanding and rethink your last answer.",
+    frustrated: "The operator appears visibly frustrated. Pause and ask a brief clarifying question.",
+    yelling: "The operator appears to be visibly yelling (camera only; audio was not analyzed). Leave space for them to speak.",
+    talking: "The operator appears to be talking. Leave space for them to speak. This is visual activity, not a transcription or request.",
     exasperated: "The operator appears exasperated (visible expression only). Consider a brief acknowledgment and rethink your last answer.",
     enthusiastic: "The operator appears smiling and enthusiastic. Develop the current direction; this is not approval for actions.",
     bored: "The operator appears disengaged or bored. Be more concise, get to the point, or ask one useful question.",

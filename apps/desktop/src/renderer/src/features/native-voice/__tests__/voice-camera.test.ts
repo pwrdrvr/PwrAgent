@@ -63,3 +63,42 @@ describe("camera cue debounce", () => {
     expect(filter.observe({ ...sample, present: false }, 31_000).end).toBeUndefined();
   });
 });
+
+describe("camera gesture cues", () => {
+  const stop = { ...sample, gesture: "stop" as const, gestureConfidence: 0.93 };
+  it("sends a sustained stop after two frames, bypasses vibe cooldown, and suppresses repeats", () => {
+    const filter = new CameraCueFilter();
+    for (let now = 0; now <= 1500; now += 500) filter.observe(sample, now);
+    expect(filter.observe(stop, 2000)).toEqual({});
+    expect(filter.observe(stop, 2500)).toEqual({ cue: "stop" });
+    expect(filter.observe(stop, 3000)).toEqual({});
+    expect(filter.gestureStatus).toBe("Repeated gesture suppressed");
+    expect(filter.status).toBe("Vibe cue held for gesture");
+    filter.observe({ ...sample, gesture: "none", gestureConfidence: 0.95 }, 3500);
+    filter.observe({ ...sample, gesture: "none", gestureConfidence: 0.95 }, 4000);
+    expect(filter.observe(stop, 4500)).toEqual({});
+    expect(filter.observe(stop, 5000)).toEqual({ cue: "stop" });
+  });
+  it("does not send uncertain, absent-person, flickering or stale-frame stop gestures", () => {
+    const filter = new CameraCueFilter();
+    expect(filter.observe({ ...stop, presenceConfidence: 0.5 }, 0)).toEqual({});
+    expect(filter.observe({ ...stop, gestureConfidence: 0.8 }, 500)).toEqual({});
+    expect(filter.observe(stop, 1000)).toEqual({});
+    expect(filter.observe({ ...stop, gestureConfidence: 0.5 }, 1500)).toEqual({});
+    expect(filter.observe(stop, 2000)).toEqual({});
+    expect(filter.observe(stop, 13_000)).toEqual({});
+    expect(filter.observe({ ...stop, present: false }, 13_500).cue).not.toBe("stop");
+  });
+  it("debounces ordinary gestures, rate-limits changes, and lets thumbs-down bypass cooldown", () => {
+    const filter = new CameraCueFilter();
+    const positive = { ...sample, gesture: "double_thumbs_up" as const, gestureConfidence: 0.92 };
+    filter.observe(positive, 0); filter.observe(positive, 500); filter.observe(positive, 1000);
+    expect(filter.observe(positive, 1500)).toEqual({ cue: "double_thumbs_up" });
+    const pointing = { ...sample, gesture: "pointing" as const, gestureConfidence: 0.95 };
+    filter.observe(pointing, 2000); filter.observe(pointing, 2500); filter.observe(pointing, 3000);
+    expect(filter.observe(pointing, 3500).cue).not.toBe("pointing");
+    const negative = { ...sample, gesture: "thumbs_down" as const, gestureConfidence: 0.9 };
+    filter.observe(negative, 4000);
+    expect(filter.observe(negative, 4500)).toEqual({ cue: "thumbs_down" });
+  });
+});

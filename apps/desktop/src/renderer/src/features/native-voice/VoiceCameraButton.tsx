@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CAMERA_REACTIONS } from "../../../../shared/native-voice-camera";
+import { CAMERA_GESTURES, CAMERA_REACTIONS } from "../../../../shared/native-voice-camera";
 import type { NativeVoiceController, VoiceView } from "./native-voice-controller";
 
 type CameraProps = { controller: NativeVoiceController; view: VoiceView };
@@ -84,7 +84,8 @@ export function VoiceCameraPanel({ controller, view }: CameraProps) {
             <thead><tr><th>Cue</th><th>Confidence</th></tr></thead>
             <tbody>
               {(["present", "away"] as const).map((cue) => <tr key={cue}><td>{cue}{observation && (cue === "present") === observation.present ? " · selected" : ""}</td><td>{percent(observation?.presenceScores?.[cue] ?? (observation && (cue === "present") === observation.present ? observation.presenceConfidence : undefined))}</td></tr>)}
-              {CAMERA_REACTIONS.map((cue) => <tr key={cue}><td>{cue}{observation?.reaction === cue ? " · selected" : ""}</td><td>{percent(observation?.reactionScores?.[cue] ?? (observation?.reaction === cue ? observation.reactionConfidence : undefined))}</td></tr>)}
+              {CAMERA_GESTURES.map((cue) => <tr key={`gesture-${cue}`}><td>gesture: {cue}{observation?.gesture === cue ? " · selected" : ""}</td><td>{percent(observation?.gestureScores?.[cue])}</td></tr>)}
+              {CAMERA_REACTIONS.map((cue) => <tr key={cue}><td>vibe: {cue}{observation?.reaction === cue ? " · selected" : ""}</td><td>{percent(observation?.reactionScores?.[cue] ?? (observation?.reaction === cue ? observation.reactionConfidence : undefined))}</td></tr>)}
             </tbody>
           </table>
           <p>Rate measures completed decisions over the last 10s. Context acknowledgment confirms the appendText RPC; it does not prove the model used the cue.</p>

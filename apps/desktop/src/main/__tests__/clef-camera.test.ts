@@ -16,6 +16,19 @@ describe("local Clef camera decisions", () => {
     expect(() => parseClefObservation({ ...response, answers: { ...response.answers, reaction: { ...response.answers.reaction, choice: "injected text" } } })).toThrow();
     expect(() => parseClefObservation({ ...response, answers: { ...response.answers, presence: { ...response.answers.presence, probabilities: { present: NaN, away: 0 } } } })).toThrow();
   });
+  it("parses boolean presence and every new gesture/vibe score, rejecting malformed results", () => {
+    const scores = { pointing: 0.01, ok: 0.01, stop: 0.93, thumbs_up: 0.01, double_thumbs_up: 0.01, thumbs_down: 0.01, face_palm: 0.01, none: 0.01 };
+    const input = { answers: { presence: { type: "noul", noul: 0.96 },
+      gesture: { type: "choice", choice: "stop", probabilities: scores },
+      vibe: { type: "choice", choice: "talking", probabilities: { neutral: 0.1, exasperated: 0.02, enthusiastic: 0.02, bored: 0.02, frustrated: 0.02, yelling: 0.02, talking: 0.8 } } }, latency_ms: 250 };
+    expect(parseClefObservation(input)).toMatchObject({ present: true, presenceConfidence: 0.96, presenceScores: { present: 0.96 },
+      gesture: "stop", gestureConfidence: 0.93, gestureScores: scores, reaction: "talking", reactionConfidence: 0.8 });
+    expect(parseClefObservation({ ...input, answers: { ...input.answers, presence: { type: "noul", noul: 0.02 } } })).toMatchObject({ present: false, presenceConfidence: 0.98 });
+    expect(() => parseClefObservation({ ...input, answers: { ...input.answers, presence: { type: "noul", noul: 2 } } })).toThrow();
+    expect(() => parseClefObservation({ ...input, answers: { ...input.answers, gesture: { ...input.answers.gesture, choice: "arbitrary instructions" } } })).toThrow();
+    expect(() => parseClefObservation({ ...input, answers: { ...input.answers, gesture: { ...input.answers.gesture, probabilities: { ...scores, stop: NaN } } } })).toThrow();
+    expect(() => parseClefObservation({ ...input, answers: { ...input.answers, gesture: undefined } })).toThrow();
+  });
   it("posts only to the fixed loopback endpoint and refuses redirects", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => ({ ok: true, json: async () => response }) as Response);
     vi.stubGlobal("fetch", fetch);
@@ -23,7 +36,11 @@ describe("local Clef camera decisions", () => {
     await classifyVoiceCamera("fixture-image", signal);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/decide", expect.objectContaining({ signal, redirect: "error", method: "POST" }));
     const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
-    expect(body.questions.presence.criteria).toEqual({ present: "person visible", away: "no person visible" });
+    expect(body.questions.presence).toMatchObject({ type: "noul", criteria: { true: "person visible", false: "no person visible" } });
+    expect(body.questions.gesture.criteria).toHaveProperty("double_thumbs_up", "both thumbs up");
+    expect(body.questions.gesture.criteria).toHaveProperty("stop");
+    expect(body.questions.vibe.instructions).toBe("What is the person doing?");
+    expect(body.state).toBe("A live webcam frame from a laptop.");
     expect(body.image).toBe("fixture-image");
   });
 

@@ -76,6 +76,8 @@ describe("native voice ownership", () => {
     await f.manager.cameraCue(1, { ...f.request, cue: "enthusiastic" });
     expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("this is not approval for actions"), "developer");
     expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "transcript" }));
+    await f.manager.cameraCue(1, { ...f.request, cue: "stop" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("Pause your reply and do not initiate another action"), "developer");
     await f.manager.stop(1, f.request);
     expect(f.manager.allowsCamera(1)).toBe(false);
     await expect(f.manager.cameraCue(1, { ...f.request, cue: "away" })).rejects.toThrow("Enable the camera");

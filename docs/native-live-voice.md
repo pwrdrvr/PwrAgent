@@ -360,7 +360,12 @@ An appendText RPC acknowledgment confirms delivery to Codex, not whether the
 realtime model incorporated the observation into its next answer.
 
 Main sends 336-pixel JPEG frames to the fixed loopback Clef `/decide` endpoint
-at `127.0.0.1:8787`, with typed presence and reaction questions. One request
+at `127.0.0.1:8787`, with short demo-style questions for gestures, boolean
+presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
+thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
+frustrated, yelling, talking, enthusiastic and bored. All 17 returned scores
+are available in Camera diagnostics. The state is the demo’s compact
+“A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
 runs at a time, at up to two frames per second. Camera permissions and frame
 requests require the owning, established voice session and a separate camera
 opt-in. Frames and decisions remain in memory; this integration adds no
@@ -383,14 +388,26 @@ confidence of at least 70%, three consecutive samples spanning 1.5 seconds,
 and an eight-second cooldown between reaction changes. Repeated cues are
 suppressed after the first sustained cue, including initial neutral context.
 Uncertain presence, a visible return, or a ten-second sampling
-gap resets the absence countdown. Thirty seconds of confident absence ends
+gap resets the absence countdown. Ordinary gestures require 80% confidence
+and three samples spanning 1.5 seconds; stop and thumbs-down require 85% and
+two consecutive frames spanning 500ms, bypassing ordinary cue cooldowns.
+Repeated gestures are suppressed until a confident no-gesture transition.
+Gestures require confident presence, and stale frames never establish a cue.
+Thirty seconds of confident absence ends
 voice, leaving coding turns running.
 
-Only an allowlisted, debounced text cue reaches GPT-Live, through Codex
+Camera observations are pushed automatically by the voice controller; there
+is no model tool to poll for them. Only an allowlisted, debounced text cue
+reaches GPT-Live, through Codex
 `thread/realtime/appendText` with role `developer`. The prompt treats cues as
 uncertain visible observations: exasperation asks for reconsideration,
 enthusiasm develops the current direction, boredom asks for brevity or a
-question, and absence pauses speech. A camera cue cannot approve or cancel
+question, and absence informs the model the operator has left. Stop/no or
+thumbs-down requests a pause and spoken clarification before another action.
+The payload is explicitly labeled as uncertain camera context, never invented
+spoken user text. This context RPC does not guarantee immediate audio
+barge-in or cancellation of an already dispatched action. A camera cue cannot
+approve or cancel
 work. Clef failures stop camera capture and show a dismissible error while
 voice remains available. Facial-expression accuracy and the model's spoken
 adaptation still need live evaluation by the operator.

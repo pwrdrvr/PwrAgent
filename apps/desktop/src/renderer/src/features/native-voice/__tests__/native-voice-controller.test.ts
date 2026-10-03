@@ -221,6 +221,21 @@ describe("voice camera ownership", () => {
     await f.controller.stop();
   });
 
+  it("automatically delivers a stop gesture as a camera cue without spoken-user text or a tool call", async () => {
+    const f = await liveCamera();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: true, presenceConfidence: 0.95, reaction: "neutral" as const,
+      reactionConfidence: 0.9, gesture: "stop" as const, gestureConfidence: 0.93, latencyMs: 250 }));
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledExactlyOnceWith({ sessionId: "fixture-session", cue: "stop" });
+    expect(f.api.sendNativeVoiceText).not.toHaveBeenCalled();
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ lastCue: "stop", delivery: "acknowledged", cuesAcknowledged: 1 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+    expect(f.controller.getView().status).toBe("listening");
+    await f.controller.stop();
+  });
+
   it("exposes a rejected cue route while releasing the camera and keeping voice live", async () => {
     const f = await liveCamera();
     f.api.sendNativeVoiceCameraCue = vi.fn(async () => { throw new Error("appendText rejected"); });

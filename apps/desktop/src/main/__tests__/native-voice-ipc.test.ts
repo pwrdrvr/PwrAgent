@@ -137,6 +137,7 @@ describe("native voice IPC permission boundary", () => {
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CUE_CHANNEL)!({ sender }, { sessionId: "fixture-session", cue: "exasperated" });
     expect(mocks.text).toHaveBeenLastCalledWith("fixture-thread", expect.stringContaining("[Camera observation]"), "developer");
     await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_CUE_CHANNEL)!({ sender }, { sessionId: "fixture-session", cue: "arbitrary instruction" })).rejects.toThrow("Invalid camera cue");
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_CUE_CHANNEL)!({ sender }, { sessionId: "fixture-session", cue: "none" })).rejects.toThrow("Invalid camera cue");
 
     expect(check({ id: 88 }, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
     request(sender, "media", decide, { mediaTypes: ["video"], isMainFrame: true });

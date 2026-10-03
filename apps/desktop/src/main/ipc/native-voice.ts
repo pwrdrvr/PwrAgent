@@ -1,6 +1,6 @@
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL,
-  NATIVE_VOICE_CAMERA_CUE_CHANNEL, CAMERA_REACTIONS,
+  NATIVE_VOICE_CAMERA_CUE_CHANNEL, isCameraCue,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue,
 } from "../../shared/native-voice-camera";
 import { getMainLogger } from "../log";
@@ -114,7 +114,7 @@ export function registerNativeVoiceIpcHandlers(): void {
   });
   ipcMain.handle(NATIVE_VOICE_CAMERA_CUE_CHANNEL, async (event, request: VoiceCameraCue) => {
     validTarget(request);
-    if (request.cue !== "away" && !CAMERA_REACTIONS.includes(request.cue)) throw new Error("Invalid camera cue.");
+    if (!isCameraCue(request.cue)) throw new Error("Invalid camera cue.");
     await sessions.cameraCue(event.sender.id, request);
   });
   ipcMain.handle(NATIVE_VOICE_CAMERA_FRAME_CHANNEL, async (event, request: VoiceCameraFrame) => {
