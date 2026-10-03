@@ -10022,6 +10022,10 @@ describe("CodexAppServerClient", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(codexClientLogError).toHaveBeenCalledWith("MCP server startup failed", {
+      serverName: "datadog",
+      error: "invalid_grant",
+    });
     await expect(client.listMcpServers({ detail: "toolsAndAuthOnly" }))
       .resolves.toEqual([{
         name: "datadog",
@@ -10082,6 +10086,14 @@ describe("CodexAppServerClient", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(codexClientLogError).toHaveBeenCalledWith("MCP server startup failed", {
+      serverName: "atlassian",
+      threadId: "thread-a",
+      error: "thread-a invalid_grant",
+    });
+    expect(codexClientLogError).not.toHaveBeenCalledWith("MCP server startup failed", expect.objectContaining({
+      threadId: "thread-b",
+    }));
     await expect(client.listMcpServers({
       threadId: "thread-a",
       detail: "toolsAndAuthOnly",

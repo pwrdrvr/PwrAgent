@@ -6,6 +6,7 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import readline from "node:readline";
+import { stripVTControlCharacters } from "node:util";
 import {
   createCommandInvocation,
   type JsonRpcTransport,
@@ -244,22 +245,22 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     // transcript or the `agentEvent` log. We used to discard stderr
     // entirely, which made those outages impossible to diagnose after the
     // fact. Line-buffer it and mirror each non-empty line into the
-    // codex-transport log. Logged at info (captured without debug
-    // collection) since severity isn't parseable from raw passthrough;
-    // length-capped so a pathological line can't bloat the log file.
+    // codex-transport log. Strip terminal escapes and preserve ERROR/WARN
+    // severity from Codex's tracing output; unclassified lines stay at info.
+    // Length-cap so a pathological line can't bloat the log file.
     const stderrReader = readline.createInterface({ input: child.stderr });
     const stderrPreview: string[] = [];
     let stderrWindowStartedAt = Date.now();
     let stderrLinesThisWindow = 0;
     let stderrSuppressedThisWindow = 0;
     stderrReader.on("line", (line: string) => {
+      const trimmed = stripVTControlCharacters(line).trim();
       // Only a diagnostic attributed to Codex's own auth/API modules is
       // credential evidence. Multiline JSON and MCP diagnostics have no such
       // provenance and may describe another OAuth account.
-      const diagnostic = line.replace(/\u001b\[[0-9;]*m/g, "").trim()
+      const diagnostic = trimmed
         .match(/^(?:\S+\s+)?(?:ERROR|WARN)\s+(codex_login::auth(?:::[\w]+)*|codex_models_manager::[\w:]+|codex_api::[\w:]+):\s*(.*)$/);
       if (diagnostic) this.observeAuthenticationError(diagnostic[2], diagnostic[1].startsWith("codex_login::auth"));
-      const trimmed = line.trim();
       if (trimmed.length === 0) {
         return;
       }
@@ -286,12 +287,20 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
         stderrSuppressedThisWindow += 1;
         return;
       }
-      codexTransportLog.info("app-server stderr", {
+      const details = {
         line:
           trimmed.length > STDERR_LOG_MAX_LINE_LENGTH
             ? `${trimmed.slice(0, STDERR_LOG_MAX_LINE_LENGTH)}…[truncated]`
             : trimmed,
-      });
+      };
+      const severity = trimmed.match(/^(?:\S+\s+)?(ERROR|WARN)\s+/)?.[1];
+      if (severity === "ERROR") {
+        codexTransportLog.error("app-server stderr", details);
+      } else if (severity === "WARN") {
+        codexTransportLog.warn("app-server stderr", details);
+      } else {
+        codexTransportLog.info("app-server stderr", details);
+      }
     });
     child.on("error", (error: Error) => {
       if (this.childProcess === child && child.pid === undefined) {

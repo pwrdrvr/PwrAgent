@@ -7721,6 +7721,13 @@ export class CodexAppServerClient {
             ...(error ? { error } : {}),
           });
           this.mcpStartupStatusByContext.set(contextKey, statuses);
+          if (status === "failed") {
+            codexClientLog.error("MCP server startup failed", {
+              serverName: name,
+              ...(threadId ? { threadId } : {}),
+              ...(error ? { error } : {}),
+            });
+          }
         }
       }
 

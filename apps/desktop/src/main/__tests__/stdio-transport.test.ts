@@ -13,13 +13,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { compareCodexCliVersions } from "@pwrdrvr/codex-discovery";
 import { StdioJsonRpcTransport } from "../codex-app-server/stdio-transport";
 
-const { resolveCodexCommandMock, spawnMock } = vi.hoisted(() => ({
+const { resolveCodexCommandMock, spawnMock, transportLog } = vi.hoisted(() => ({
   resolveCodexCommandMock: vi.fn(async ({ command }: { command: string }) => ({
     command,
     source: "path",
     version: "0.126.0",
   })),
   spawnMock: vi.fn(),
+  transportLog: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => transportLog),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -80,6 +89,9 @@ function createBundledToolsDirectory(): string {
 beforeEach(() => {
   resolveCodexCommandMock.mockClear();
   spawnMock.mockReset();
+  transportLog.info.mockClear();
+  transportLog.warn.mockClear();
+  transportLog.error.mockClear();
 });
 
 describe("stdio transport Codex CLI resolution", () => {
@@ -94,6 +106,51 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it.each([
+    ["ERROR", "error"],
+    ["WARN", "warn"],
+    ["INFO", "info"],
+  ] as const)("logs colored %s diagnostics at %s without terminal escapes", async (severity, level) => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const exited = vi.fn();
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: "/fixture/stderr-codex" },
+      onUnexpectedExit: exited,
+    });
+    await transport.connect();
+    const message = "worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 401: Unauthorized\")";
+    child.stderr.write(`\u001b[2m2026-10-02T22:04:11.467490Z\u001b[0m \u001b[31m${severity}\u001b[0m \u001b[2mrmcp::transport::worker\u001b[0m\u001b[2m:\u001b[0m ${message}\n`);
+    const line = `2026-10-02T22:04:11.467490Z ${severity} rmcp::transport::worker: ${message}`;
+    expect(transportLog[level]).toHaveBeenCalledWith("app-server stderr", { line });
+    if (level !== "info") {
+      expect(transportLog.info).not.toHaveBeenCalledWith("app-server stderr", expect.anything());
+    }
+    expect(codexAuthState.isBlocked("/fixture/stderr-codex")).toBe(false);
+    child.emit("close", 1, null);
+    expect(exited).toHaveBeenCalledWith({ code: 1, signal: null, stderrPreview: [line] });
+    await transport.close();
+  });
+
+  it("keeps unclassified stderr at info and caps long lines", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({ command: "codex" });
+    await transport.connect();
+    child.stderr.write("\nplain diagnostic mentioning ERROR inside the message\n");
+    child.stderr.write(`${"x".repeat(4001)}\n`);
+    expect(transportLog.info).toHaveBeenCalledWith("app-server stderr", {
+      line: "plain diagnostic mentioning ERROR inside the message",
+    });
+    expect(transportLog.info).toHaveBeenCalledWith("app-server stderr", {
+      line: `${"x".repeat(4000)}…[truncated]`,
+    });
+    expect(transportLog.error).not.toHaveBeenCalled();
+    expect(transportLog.warn).not.toHaveBeenCalled();
+    await transport.close();
+  });
+
   it("reports an app-server exit it did not ask for, and not one it did", async () => {
     const exited = vi.fn();
     const transport = new StdioJsonRpcTransport({
