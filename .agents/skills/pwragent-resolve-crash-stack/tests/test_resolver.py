@@ -87,6 +87,30 @@ with tempfile.TemporaryDirectory(prefix="pwragent-resolver-test-") as workspace:
     code, result = invoke(base + ["--installed-file", "out/main/index.js=" + str(installed)])
     check(result["frames"][1]["installedVerification"] == "sha256-and-size-match", "direct installed bytes are hashed")
     check(result['frames'][1]['mappingConfidence'] == 'installed-bytes-sha256-and-size-match', "direct-byte origin explicit in confidence label")
+    conflicting = temp / "conflicting.js"
+    conflicting.write_bytes(b"z" + contents["out/main/index.js"][1:])
+    root = temp / "installed-root"
+    root_file = root / "out/main/index.js"
+    root_file.parent.mkdir(parents=True)
+    root_file.write_bytes(conflicting.read_bytes())
+    code, result = invoke(base + ["--installed-root", str(root), "--installed-file", "out/main/index.js=" + str(installed)])
+    check(code == 2 and "Conflicting installed evidence" in result["error"], "mismatching root cannot be overridden by a matching explicit file")
+    root_file.write_bytes(installed.read_bytes())
+    code, result = invoke(base + ["--installed-root", str(root), "--installed-file", "out/main/index.js=" + str(conflicting)])
+    check(code == 2 and "Conflicting installed evidence" in result["error"], "matching root rejects conflicting explicit file")
+    for first, second in [(conflicting, installed), (installed, conflicting)]:
+        code, result = invoke(base + ["--installed-file", "out/main/index.js=" + str(first), "--installed-file", "out/main/index.js=" + str(second)])
+        check(code == 2 and "Conflicting installed evidence" in result["error"], "conflicting repeated file inputs rejected regardless of order")
+    identical = temp / "identical.js"
+    identical.write_bytes(installed.read_bytes())
+    code, result = invoke(base + ["--installed-file", "out/main/index.js=" + str(installed), "--installed-file", "out/main/index.js=" + str(identical)])
+    check(code == 0 and result["frames"][1]["installedVerification"] == "sha256-and-size-match", "identical repeated file inputs remain accepted")
+    code, result = invoke(base + ["--installed-root", str(root), "--installed-file", "out/main/index.js=" + str(identical)])
+    check(code == 0 and result["frames"][1]["installedVerification"] == "sha256-and-size-match", "consistent root and explicit file remain accepted")
+    code, result = invoke(base + ["--hashes", str(hashes), "--installed-root", str(root), "--installed-file", "out/main/index.js=" + str(identical)])
+    check(code == 0 and result["frames"][1]["mappingConfidence"] == "installed-bytes-sha256-and-size-match", "consistent operator hash and all direct files remain accepted")
+    code, result = invoke(base + ["--hashes", str(hashes), "--installed-file", "out/main/index.js=" + str(conflicting), "--installed-file", "out/main/index.js=" + str(installed)])
+    check(code == 2 and "Conflicting installed evidence" in result["error"], "matching final file cannot hide earlier conflict with operator hash")
     installed.write_bytes(b"wrong byte content")
     code, result = invoke(base + ["--installed-file", "out/main/index.js=" + str(installed)])
     check(result["frames"][1]["status"] == "unmapped" and result["frames"][1]["installedVerification"] == "mismatch", "wrong installed bytes refuse mapping")

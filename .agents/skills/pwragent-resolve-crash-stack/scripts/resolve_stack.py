@@ -334,24 +334,25 @@ def installed_evidence(args, records):
             size = None if isinstance(value, str) else value.get("bytes")
             require(size is None or type(size) is int and size >= 0, f"Invalid installed byte count: {name}")
             evidence[name] = {"sha256": sha.lower(), "bytes": size, "origin": "operator-supplied installed hash", "kind": "operator-hash"}
-    paths = {}
+    paths = []
     if args.installed_root:
         for name in records:
             if JS.search(name):
                 path = args.installed_root / name
                 if path.is_file():
-                    paths[name] = path
+                    paths.append((name, path))
     for binding in args.installed_file:
         name, separator, path = binding.partition("=")
         require(separator and name in records and JS.search(name), "--installed-file must be out/path.js=/original/extracted/file.js")
-        paths[name] = Path(path)
-    for name, path in paths.items():
+        paths.append((name, Path(path)))
+    for name, path in paths:
         require(path.stat().st_size <= MAX_FILE, "Installed file exceeds size bound")
         data = path.read_bytes()
         entry = {"sha256": digest(data), "bytes": len(data), "origin": str(path.resolve()), "kind": "direct-file"}
         if name in evidence:
             require(evidence[name]["sha256"] == entry["sha256"]
-                    and evidence[name]["bytes"] in (None, entry["bytes"]), f"Conflicting installed evidence: {name}")
+                    and evidence[name]["bytes"] in (None, entry["bytes"]),
+                    f"Conflicting installed evidence: {name} ({evidence[name]['origin']} vs {entry['origin']})")
         evidence[name] = entry
     return evidence
 
