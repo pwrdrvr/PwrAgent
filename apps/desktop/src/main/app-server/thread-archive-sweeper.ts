@@ -50,14 +50,29 @@ export async function workspaceIsSafeForAutoArchive(
     throw error;
   }
   const options = { signal, timeout: 10_000 };
-  const status = await runGitCommand(cwd, [
-    "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
-  ], options);
+  let status: { stdout: string };
+  try {
+    status = await runGitCommand(cwd, [
+      "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
+    ], options);
+  } catch (error) {
+    // Archive removes only registered Git worktrees, so a directory with no
+    // repository at or above it (a scratch project) is left in place. A broken
+    // worktree link reports a different message and still fails closed.
+    if (isOutsideAnyGitRepository(error)) return true;
+    throw error;
+  }
   if (status.stdout.trim()) return false;
   const retained = await runGitCommand(cwd, [
     "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes",
   ], options);
   return retained.stdout.trim() === "0";
+}
+
+function isOutsideAnyGitRepository(error: unknown): boolean {
+  const stderr = (error as { stderr?: unknown })?.stderr;
+  const text = `${error instanceof Error ? error.message : String(error)}\n${typeof stderr === "string" ? stderr : ""}`;
+  return text.includes("not a git repository (or any of the parent directories)");
 }
 
 export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveCandidate): number {

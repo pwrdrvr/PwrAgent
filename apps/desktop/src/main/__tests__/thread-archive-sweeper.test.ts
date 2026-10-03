@@ -269,7 +269,20 @@ describe("workspaceIsSafeForAutoArchive", () => {
     await git("branch", "retained-local-work");
     expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
     expect(await workspaceIsSafeForAutoArchive(path.join(root, "deleted-worktree"), signal)).toBe(true);
-    await expect(workspaceIsSafeForAutoArchive(root, signal)).rejects.toThrow();
+  });
+
+  it("accepts a directory outside any repository, but rejects a broken worktree link", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-"));
+    tempDirs.push(root);
+    const signal = new AbortController().signal;
+    const scratch = path.join(root, "scratch-project");
+    await mkdir(scratch);
+    await writeFile(path.join(scratch, "notes.txt"), "scratch work\n");
+    expect(await workspaceIsSafeForAutoArchive(scratch, signal)).toBe(true);
+    const broken = path.join(root, "broken-worktree");
+    await mkdir(broken);
+    await writeFile(path.join(broken, ".git"), `gitdir: ${path.join(root, "missing", ".git", "worktrees", "x")}\n`);
+    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(/not a git repository/);
   });
 });
 
