@@ -161,12 +161,11 @@ describe("ThreadArchiveSweeper", () => {
     expect(isProtectedArchiveCandidate(lookalike)).toBe(false);
     for (const mode of ["age", "count"] as const) {
       const items = [linked, extra, lookalike].map((item) => ({ ...item, thread: { ...item.thread, projectKey: "project" } }));
-      const { deps, sweeper } = harness(items);
+      const { deps } = harness(items);
       const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode, keepPerProject: 0 };
-      const swept = new ThreadArchiveSweeper({ ...deps, getPolicy: () => policy });
-      await swept.sweep();
+      const sweeper = new ThreadArchiveSweeper({ ...deps, getPolicy: () => policy });
+      await sweeper.sweep();
       expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["lookalike"]);
-      await swept.stop();
       await sweeper.stop();
     }
   });
