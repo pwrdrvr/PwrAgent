@@ -56,8 +56,9 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
 
         {toolParams.length > 0 ? (
           <dl className="transcript-mcp__params">
-            {toolParams.map((param) => (
-              <div key={param.label}>
+            {toolParams.map((param, index) => (
+              // Display names can repeat, so a label is not a stable key.
+              <div key={index}>
                 <dt className={param.named ? undefined : "transcript-mcp__param-key"}>
                   {param.label}
                 </dt>
@@ -336,15 +337,11 @@ function readToolParamsDisplay(
     // `label` and `display_name` are written for people (Computer Use sends
     // `{ name: "app", display_name: "App" }`); `name` and `key` are the raw
     // parameter key, drawn verbatim in mono.
-    const named = readTrimmedString(record.label) ?? readTrimmedString(record.display_name);
-    const label = named ?? readTrimmedString(record.name) ?? readTrimmedString(record.key);
+    const named = readStringMeta(record, "label") ?? readStringMeta(record, "display_name");
+    const label = named ?? readStringMeta(record, "name") ?? readStringMeta(record, "key");
     if (!label) {
       return [];
     }
     return [{ label, named: named !== undefined, value: record.value }];
   });
-}
-
-function readTrimmedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

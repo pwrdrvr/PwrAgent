@@ -104,8 +104,7 @@ export function readMcpApprovalPersistence(state: PendingMcpInteractionState): M
     return [];
   }
   const modes = Array.isArray(meta?.persist) ? meta.persist : [meta?.persist];
-  if (modes.length === 0 || modes.length > 2
-    || modes.some((mode) => mode !== "session" && mode !== "always")) {
+  if (modes.length === 0 || modes.some((mode) => mode !== "session" && mode !== "always")) {
     return [];
   }
   return [...new Set(modes)] as McpApprovalPersistence[];
