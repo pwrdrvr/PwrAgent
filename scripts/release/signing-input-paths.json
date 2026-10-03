@@ -7,6 +7,7 @@
     "apps/desktop/release-stage-arm64",
     ".github/actions/select-xcode-for-actool",
     "apps/desktop/scripts/release.mjs",
+    "apps/desktop/scripts/desktop-debug-artifacts.mjs",
     "apps/desktop/scripts/linux-release-artifacts.mjs",
     "apps/desktop/scripts/assemble-mac-release.mjs",
     "apps/desktop/scripts/release-signing-environment.mjs",
@@ -23,6 +24,7 @@
   "windows": [
     "apps/desktop/release-stage",
     "apps/desktop/scripts/release.mjs",
+    "apps/desktop/scripts/desktop-debug-artifacts.mjs",
     "apps/desktop/scripts/linux-release-artifacts.mjs",
     "apps/desktop/scripts/release-signing-environment.mjs",
     "apps/desktop/scripts/macos-dryrun-signing.mjs",
