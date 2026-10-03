@@ -178,11 +178,21 @@ export async function focusStarMapWindow(
   app: LaunchedApp,
   mapWindow: Page,
 ): Promise<void> {
-  const nativeMapWindow = await app.electronApp.browserWindow(mapWindow);
-  await nativeMapWindow.evaluate((win) => {
-    win.show();
-    win.focus();
-  });
+  // Keep native window selection and use in one main-process round trip.
+  // Returning a remote BrowserWindow handle failed before focus in Windows
+  // CI with "Resulting promise was garbage collected". The map's URL
+  // identifies its dedicated window; never focus a different window when
+  // that identity is missing or ambiguous.
+  await app.electronApp.evaluate(({ BrowserWindow }, url) => {
+    const matches = BrowserWindow.getAllWindows().filter(
+      (win) => win.webContents.getURL() === url,
+    );
+    if (matches.length !== 1) {
+      throw new Error(`Expected one native Star Map window, found ${matches.length}: ${url}`);
+    }
+    matches[0].show();
+    matches[0].focus();
+  }, mapWindow.url());
   const foreground = tolerateTransientRpcFailure(async () =>
     await mapWindow.evaluate(
       () => `${document.visibilityState}/${document.hasFocus()}`,
