@@ -174,7 +174,11 @@ function resolveQuitDialogPosition(
   width: number,
   height: number,
 ): { x: number; y: number } {
-  const anchor = parent?.getBounds();
+  // A minimized window on Windows reports off-screen sentinel bounds
+  // (-32000, -32000); anchor on where it will be once raiseQuitDialog restores it.
+  const anchor = parent?.isMinimized()
+    ? parent.getNormalBounds()
+    : parent?.getBounds();
   const area = anchor
     ? screen.getDisplayMatching(anchor).workArea
     : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;

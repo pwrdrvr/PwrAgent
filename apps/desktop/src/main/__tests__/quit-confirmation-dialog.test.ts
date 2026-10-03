@@ -612,7 +612,9 @@ function createFakeParentWindow(
     calls,
     minimized: false,
     webContents: { id: 1 },
-    getBounds: () => bounds,
+    getBounds: () =>
+      parent.minimized ? { x: -32000, y: -32000, width: 160, height: 28 } : bounds,
+    getNormalBounds: () => bounds,
     isDestroyed: () => false,
     isMinimized: () => parent.minimized,
     restore: () => {
@@ -775,6 +777,26 @@ describe("where the quit dialog opens", () => {
 
   // A parent straddling the edge of its display must not push the dialog off
   // that display.
+  // Windows parks a minimized window at (-32000, -32000). Placing the dialog
+  // by those bounds put it in a corner of the nearest display, while the
+  // parent was then restored on its own.
+  it("centres over a minimized parent where it will be restored", async () => {
+    dialogPlacement.parentDisplayArea = { x: 2560, y: 0, width: 2560, height: 1440 };
+    const main = createFakeParentWindow();
+    main.minimized = true;
+    useMainWindow(main);
+
+    const { pending, window, constructorOptions } = openDialog();
+
+    const width = constructorOptions?.width as number;
+    const height = constructorOptions?.height as number;
+    expect(constructorOptions?.x).toBe(2560 + Math.round((1600 - width) / 2));
+    expect(constructorOptions?.y).toBe(120 + Math.round((1000 - height) / 2));
+
+    window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
   it("keeps the dialog on the parent's display", async () => {
     const main = createFakeParentWindow({ x: 1300, y: 800, width: 400, height: 300 });
     useMainWindow(main);
