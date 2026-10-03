@@ -23,6 +23,14 @@ export type ThreadUsageTokenBreakdown = {
   uncachedInputTokens?: number;
 };
 
+/** Read-only provider totals, kept separate from the observed usage ledger. */
+export type ThreadPricingSnapshot = {
+  model?: string;
+  modelLabel?: string;
+  serviceTier?: string;
+  tokens?: ThreadUsageTokenBreakdown;
+};
+
 export type ThreadUsageSettingsSnapshot = {
   backend: string;
   fastMode?: boolean;
