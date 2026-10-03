@@ -135,9 +135,13 @@ describe("FederationSettings", () => {
     await screen.findByRole("button", { name: "Open Files & Folders" });
     const input = screen.getByRole("textbox", { name: "Incoming files folder" });
     const button = screen.getByRole("button", { name: label });
-    input.focus();
+    await act(async () => {
+      input.focus();
+    });
     fireEvent.change(input, { target: { value: "/tmp/edited" } });
-    button.focus();
+    await act(async () => {
+      button.focus();
+    });
     fireEvent.click(button);
     expect(button).toHaveFocus();
     expect(button).toBeEnabled();
@@ -145,7 +149,9 @@ describe("FederationSettings", () => {
     fireEvent.click(button);
     expect(receivingFolder).toHaveBeenCalledTimes(2);
     expect(onWriteConfig).not.toHaveBeenCalled();
-    screen.getByRole("switch", { name: "Allow incoming files" }).focus();
+    await act(async () => {
+      screen.getByRole("switch", { name: "Allow incoming files" }).focus();
+    });
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledExactlyOnceWith({ federation: { filePushDirectory: "/tmp/edited" } }));
     await act(async () => { finishAction(folderResponse); });
     expect(button).toHaveAttribute("aria-disabled", "false");
@@ -222,17 +228,19 @@ describe("FederationSettings", () => {
     });
     fireEvent.click(screen.getByRole("switch", { name: label }));
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledExactlyOnceWith({ federation: { [key]: value } }));
-    rerender(
-      <FederationSettings
-        desktopApi={federationHealthApi()}
-        onClearSecret={vi.fn(async () => true)}
-        onReplaceSecret={vi.fn(async () => true)}
-        saving={false}
-        snapshot={{ ...snapshot, federation: { ...snapshot.federation, [key]: { value, source: "config" } } }}
-        onSettingsChanged={vi.fn()}
-        onWriteConfig={onWriteConfig}
-      />,
-    );
+    await act(async () => {
+      rerender(
+        <FederationSettings
+          desktopApi={federationHealthApi()}
+          onClearSecret={vi.fn(async () => true)}
+          onReplaceSecret={vi.fn(async () => true)}
+          saving={false}
+          snapshot={{ ...snapshot, federation: { ...snapshot.federation, [key]: { value, source: "config" } } }}
+          onSettingsChanged={vi.fn()}
+          onWriteConfig={onWriteConfig}
+        />,
+      );
+    });
     expect(screen.getByRole("switch", { name: label })).toHaveAttribute("aria-checked", String(value));
     expect(screen.getByRole("textbox", { name: "Advertised endpoints" })).toHaveValue("unfinished connection edit");
   });

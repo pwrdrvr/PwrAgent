@@ -417,7 +417,7 @@ describe("sidebar thread row callback stability", () => {
     expect(pressed).toEqual(titles.slice(0, 3));
   });
 
-  it("collapses a directory row's sub-threads the way the list decides", () => {
+  it("collapses a directory row's sub-threads the way the list decides", async () => {
     // The row names the thread and nothing else, so the list is what turns a
     // click into a target state. Nothing covered the Directories lens here —
     // the existing hover-freeze test drives the same control through
@@ -437,16 +437,18 @@ describe("sidebar thread row callback stability", () => {
       view.rerender(sidebar({ threads, onSetSubthreadsCollapsed }));
     }
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: `Collapse sub-threads for ${parent.title}`,
-      }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Collapse sub-threads for ${parent.title}`,
+        }),
+      );
+    });
 
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(parent, true);
   });
 
-  it("keeps the pin action wired to the newest onSetThreadPin", () => {
+  it("keeps the pin action wired to the newest onSetThreadPin", async () => {
     type SetPin = (
       thread: NavigationThreadSummary,
       pinned: boolean,
@@ -460,7 +462,9 @@ describe("sidebar thread row callback stability", () => {
       view.rerender(sidebar({ onSetThreadPin: second }));
     }
 
-    fireEvent.click(within(row("Thread 2")).getByRole("button", { name: "Pin thread" }));
+    await act(async () => {
+      fireEvent.click(within(row("Thread 2")).getByRole("button", { name: "Pin thread" }));
+    });
 
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
@@ -606,8 +610,10 @@ describe("sidebar thread row callback stability", () => {
       await waitFor(() => {
         expect(target).toHaveClass("is-drop-target-after");
       });
-      fireEvent.pointerUp(window, {
-        button: 0, clientX: 50, clientY: 75, pointerId: 41,
+      await act(async () => {
+        fireEvent.pointerUp(window, {
+          button: 0, clientX: 50, clientY: 75, pointerId: 41,
+        });
       });
     } finally {
       if (elementFromPoint) {

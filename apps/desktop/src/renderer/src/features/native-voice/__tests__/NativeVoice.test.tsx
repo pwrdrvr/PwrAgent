@@ -176,9 +176,9 @@ it("ends a muted session that stays busy past the stall ceiling", async () => {
   try {
     f.agent({ method: "turn/started", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
     fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
-    act(() => { vi.advanceTimersByTime(MUTED_STALL_END_MS - 1); });
+    await act(async () => { vi.advanceTimersByTime(MUTED_STALL_END_MS - 1); });
     expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
-    act(() => { vi.advanceTimersByTime(1); });
+    await act(async () => { vi.advanceTimersByTime(1); });
     expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -194,10 +194,10 @@ it("treats a thread's already-running turn as busy when voice starts", async () 
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
-    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
+    await act(async () => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
     expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
     f.agent({ method: "turn/completed", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
-    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
+    await act(async () => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
     expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();

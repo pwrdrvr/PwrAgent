@@ -1520,7 +1520,9 @@ describe("App", () => {
     });
     fail("failed-turn");
     expect(screen.getAllByText(message)).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: action === "retry" || retryFailure ? "Retry" : action === "delete" ? "Delete" : "Dismiss notice" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: action === "retry" || retryFailure ? "Retry" : action === "delete" ? "Delete" : "Dismiss notice" }));
+    });
     if (action === "delete") {
       await waitFor(() => expect(screen.queryByText("Turn failed")).not.toBeInTheDocument());
       expect(screen.queryByText(message)).not.toBeInTheDocument();
@@ -1553,7 +1555,7 @@ describe("App", () => {
     expect(screen.queryByText("Turn failed")).not.toBeInTheDocument();
     expect(screen.queryByText(message)).not.toBeInTheDocument();
     if (action === "dismiss") {
-      act(() => {
+      await act(async () => {
         for (const listener of listeners) listener({ backend: "codex", notification: {
           method: "thread/turnQueue/updated", params: {
             threadId, queueEntryId: "held-message", origin: "manual", status: "held", errorMessage: message,

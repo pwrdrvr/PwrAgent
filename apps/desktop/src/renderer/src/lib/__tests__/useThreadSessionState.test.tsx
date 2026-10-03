@@ -16306,7 +16306,7 @@ describe("useThreadSessionState", () => {
     await waitForThreadHydration(result);
     await waitFor(() => expect(result.current.backgroundTerminals).toHaveLength(1));
 
-    act(() => {
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -16430,7 +16430,7 @@ describe("useThreadSessionState", () => {
     }));
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -16476,7 +16476,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
       .find((detail) => detail.id === "tool-1")?.status).toBe("in_progress");
 
-    act(() => {
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -16489,7 +16489,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(true);
     expect(result.current.pendingStatusText).toBe("Thinking");
 
-    act(() => {
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -16510,7 +16510,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : [])
       .find((detail) => detail.id === "tool-1")?.status).toBe("completed");
 
-    act(() => {
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -16546,7 +16546,7 @@ describe("useThreadSessionState", () => {
     );
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" },
       } } });
@@ -16563,8 +16563,8 @@ describe("useThreadSessionState", () => {
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
     expect(result.current.agentCommandThreadKeys["codex:thread-1"]).toBe(true);
 
-    act(() => { rerender({ threadId: "thread-2" }); });
-    act(() => {
+    await act(async () => { rerender({ threadId: "thread-2" }); });
+    await act(async () => {
       emit({ backend: "codex", notification: { method: "item/completed", params: {
         threadId: "thread-1", turnId: "turn-1",
         item: { id: "tool-1", type: "commandExecution", status: "completed", command: "pnpm test" },
@@ -16590,7 +16590,7 @@ describe("useThreadSessionState", () => {
     }));
     await waitForThreadHydration(result);
 
-    act(() => {
+    await act(async () => {
       emit({ backend: "codex", notification: { method: "turn/started", params: {
         threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" },
       } } });

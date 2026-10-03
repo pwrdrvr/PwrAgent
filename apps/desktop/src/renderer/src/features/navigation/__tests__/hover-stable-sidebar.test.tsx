@@ -218,11 +218,13 @@ async function dropAlphaAfterBravo(): Promise<void> {
     await waitFor(() => {
       expect(bravoRow).toHaveClass("is-drop-target-after");
     });
-    fireEvent.pointerUp(window, {
-      button: 0,
-      clientX: 50,
-      clientY: 75,
-      pointerId: 41,
+    await act(async () => {
+      fireEvent.pointerUp(window, {
+        button: 0,
+        clientX: 50,
+        clientY: 75,
+        pointerId: 41,
+      });
     });
   } finally {
     if (elementFromPoint) {
@@ -556,7 +558,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).not.toContain("Tail thread");
   });
 
-  it("releases the frozen snapshot for an explicit subthread toggle", () => {
+  it("releases the frozen snapshot for an explicit subthread toggle", async () => {
     const parent = thread({
       id: "parent",
       title: "Parent thread",
@@ -577,7 +579,9 @@ describe("Sidebar hover-stable thread ordering", () => {
       name: "Collapse sub-threads for Parent thread",
     });
     fireEvent.pointerOver(collapseButton, { pointerType: "mouse" });
-    fireEvent.click(collapseButton);
+    await act(async () => {
+      fireEvent.click(collapseButton);
+    });
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(parent, true);
 
     view.rerender(renderSidebar({
@@ -621,7 +625,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
-  it("applies a user-requested pin immediately while hovered", () => {
+  it("applies a user-requested pin immediately while hovered", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const view = render(renderSidebar({
       browseMode: "directories",
@@ -632,9 +636,11 @@ describe("Sidebar hover-stable thread ordering", () => {
     }));
     const bravoRow = threadRow("Bravo thread");
     fireEvent.pointerOver(bravoRow, { pointerType: "mouse" });
-    fireEvent.click(
-      within(bravoRow).getByRole("button", { name: "Pin thread" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        within(bravoRow).getByRole("button", { name: "Pin thread" }),
+      );
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(bravo, true);
 
     const pinnedBravo = { ...bravo, pinnedRank: "1024" };
@@ -649,7 +655,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
-  it("shows an unpinned selected row with a pin action in collapsed Directory threads", () => {
+  it("shows an unpinned selected row with a pin action in collapsed Directory threads", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const pinnedBravo = { ...bravo, pinnedRank: "2048" };
@@ -666,28 +672,35 @@ describe("Sidebar hover-stable thread ordering", () => {
     }));
     const alphaRow = threadRow("Alpha thread");
     fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
-    fireEvent.click(
-      within(alphaRow).getByRole("button", { name: "Unpin thread" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        within(alphaRow).getByRole("button", { name: "Unpin thread" }),
+      );
+      // Deliver the owner's updated rows before the pin action settles.
+      view.rerender(renderSidebar({
+        browseMode: "directories",
+        directories: [collapsedDirectory],
+        selectedItemKey: "codex:alpha",
+        threads: [{ ...alpha, pinnedRank: undefined }, pinnedBravo],
+        onSetThreadPin,
+      }));
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(pinnedAlpha, false);
-
-    view.rerender(renderSidebar({
-      browseMode: "directories",
-      directories: [collapsedDirectory],
-      selectedItemKey: "codex:alpha",
-      threads: [{ ...alpha, pinnedRank: undefined }, pinnedBravo],
-      onSetThreadPin,
-    }));
 
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
     const retained = threadRow("Alpha thread");
     expect(within(retained).queryByRole("button", { name: "Unpin thread" })).toBeNull();
-    fireEvent.click(within(retained).getByRole("button", { name: "Pin thread" }));
+    await act(async () => {
+      fireEvent.click(within(retained).getByRole("button", { name: "Pin thread" }));
+    });
     expect(onSetThreadPin).toHaveBeenLastCalledWith({ ...alpha, pinnedRank: undefined }, true);
   });
 
   it("applies a pointer drag pin reorder immediately while hovered", async () => {
-    const onReorderThreadPins = vi.fn(async () => undefined);
+    let resolveReorder!: () => void;
+    const onReorderThreadPins = vi.fn(() => new Promise<void>((resolve) => {
+      resolveReorder = resolve;
+    }));
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const pinnedBravo = { ...bravo, pinnedRank: "2048" };
     const view = render(renderSidebar({
@@ -714,6 +727,7 @@ describe("Sidebar hover-stable thread ordering", () => {
       onReorderThreadPins,
     }));
 
+    await act(async () => { resolveReorder(); });
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
@@ -866,7 +880,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     ]);
   });
 
-  it("shows a newly created pinned thread while Directory threads are collapsed", () => {
+  it("shows a newly created pinned thread while Directory threads are collapsed", async () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const collapsedDirectory = {
@@ -884,20 +898,22 @@ describe("Sidebar hover-stable thread ordering", () => {
       name: "Open new thread launchpad for Repo",
     });
     fireEvent.pointerOver(launchpadButton, { pointerType: "mouse" });
-    fireEvent.click(launchpadButton);
-    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: collapsedDirectory.key, directoryThreadsCollapsed: true }), undefined);
-
     const expandedDirectory = {
       ...collapsedDirectory,
       threadKeys: ["codex:charlie", ...collapsedDirectory.threadKeys],
     };
-    view.rerender(renderSidebar({
-      browseMode: "directories",
-      directories: [expandedDirectory],
-      selectedItemKey: "codex:alpha",
-      threads: [{ ...charlie, pinnedRank: "512" }, pinnedAlpha, bravo],
-      onOpenLaunchpad,
-    }));
+    await act(async () => {
+      fireEvent.click(launchpadButton);
+      // Deliver the created thread while the launchpad action is pending.
+      view.rerender(renderSidebar({
+        browseMode: "directories",
+        directories: [expandedDirectory],
+        selectedItemKey: "codex:alpha",
+        threads: [{ ...charlie, pinnedRank: "512" }, pinnedAlpha, bravo],
+        onOpenLaunchpad,
+      }));
+    });
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: collapsedDirectory.key, directoryThreadsCollapsed: true }), undefined);
 
     expect(threadTitles()).toEqual(["Charlie thread", "Alpha thread"]);
   });

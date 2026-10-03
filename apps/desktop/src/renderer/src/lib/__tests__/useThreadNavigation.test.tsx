@@ -256,28 +256,30 @@ describe("useThreadNavigation", () => {
     blockRefresh = true;
     let handoffSettled = false;
     let handoffPromise: Promise<void> | undefined;
-    act(() => {
-      handoffPromise = result.current.handoffThreadWorkspace(thread, {
-        direction: "local-to-worktree",
-      }).then(() => { handoffSettled = true; });
-    });
     try {
-      await refreshStarted;
-      await detailStarted;
-      await Promise.resolve();
+      await act(async () => {
+        handoffPromise = result.current.handoffThreadWorkspace(thread, {
+          direction: "local-to-worktree",
+        }).then(() => { handoffSettled = true; });
+        await refreshStarted;
+        await detailStarted;
+        await handoffPromise;
+      });
       expect(handoffSettled).toBe(true);
       expect(handoffThreadWorkspace).toHaveBeenCalledOnce();
       await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(true));
       expect(result.current.selectedThreadConfigurationReady).toBe(false);
       expect(result.current.selectedThread?.linkedDirectories[0]?.path).toBe("/repo");
-      releaseDetail();
+      await act(async () => { releaseDetail(); });
       await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(false));
       expect(result.current.selectedThreadConfigurationReady).toBe(true);
       expect(result.current.selectedThread?.linkedDirectories[0]?.worktreePath).toBe("/worktree");
     } finally {
-      releaseDetail();
-      releaseRefresh();
-      await act(async () => { await handoffPromise; });
+      await act(async () => {
+        releaseDetail();
+        releaseRefresh();
+        await handoffPromise;
+      });
     }
   });
 

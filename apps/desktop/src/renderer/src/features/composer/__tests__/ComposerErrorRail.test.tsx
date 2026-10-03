@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerErrorRail, type ComposerErrorEntry } from "../ComposerErrorRail";
@@ -154,7 +154,7 @@ describe("ComposerErrorRail", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
-  it("copies the raw message, not the cleaned one", () => {
+  it("copies the raw message, not the cleaned one", async () => {
     const copyText = vi.fn().mockResolvedValue(undefined);
     const raw = "Error invoking remote method 'x': Error: Boom";
     render(
@@ -163,9 +163,11 @@ describe("ComposerErrorRail", () => {
         entries={[entry({ message: raw })]}
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Copy error: Environment error" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Copy error: Environment error" }),
+      );
+    });
     expect(copyText).toHaveBeenCalledWith(raw);
   });
 
@@ -176,12 +178,16 @@ describe("ComposerErrorRail", () => {
     expect(screen.queryByRole("button", { expanded: false })).toBeNull();
   });
 
-  it("does not toggle the row when the copy or dismiss buttons are used", () => {
+  it("does not toggle the row when the copy or dismiss buttons are used", async () => {
     render(<ComposerErrorRail entries={[entry()]} />);
     const toggle = screen.getByRole("button", { expanded: false });
-    fireEvent.click(screen.getByRole("button", { name: /Copy error/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Copy error/ }));
+    });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(toggle);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText(/npm ERR! network timeout/)).toBeInTheDocument();
   });

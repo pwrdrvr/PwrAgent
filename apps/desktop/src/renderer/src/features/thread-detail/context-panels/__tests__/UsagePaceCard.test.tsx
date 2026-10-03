@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReadUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { UsagePaceCard } from "../UsagePaceCard";
@@ -31,7 +31,9 @@ describe("UsagePaceCard", () => {
     const readUsageActivity = reader({});
     render(<UsagePaceCard desktopApi={{ openUsageActivity, readUsageActivity }} />);
 
-    await vi.waitFor(() => expect(readUsageActivity).toHaveBeenCalled());
+    await act(async () => {
+      await vi.waitFor(() => expect(readUsageActivity).toHaveBeenCalled());
+    });
     fireEvent.click(screen.getByRole("button", { name: /Usage Activity/ }));
 
     expect(openUsageActivity).toHaveBeenCalledTimes(1);
@@ -117,22 +119,32 @@ describe("UsagePaceCard", () => {
       const { rerender } = render(
         <UsagePaceCard backends={backends(41)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />,
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(1);
 
       // A fraction of a percent is not a new reading.
       rerender(<UsagePaceCard backends={backends(41.2)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
-      await vi.advanceTimersByTimeAsync(120_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(1);
 
       rerender(<UsagePaceCard backends={backends(42)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
       rerender(<UsagePaceCard backends={backends(43)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
-      await vi.advanceTimersByTimeAsync(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(2);
       rerender(<UsagePaceCard backends={backends(44)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
-      await vi.advanceTimersByTimeAsync(30_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(30_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
