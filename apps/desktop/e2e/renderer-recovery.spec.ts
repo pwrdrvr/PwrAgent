@@ -1,11 +1,47 @@
 import path from "node:path";
+import os from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturePath = path.resolve(specDir, "fixtures/turn-lifecycle/replay.fixture.json");
+
+async function createRecoveryFixture() {
+  const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as ReplayFixture;
+  const messages = [
+    { id: "message-1", role: "user", text: "Reply exactly with: lifecycle baseline ready" },
+    { id: "message-2", role: "assistant", text: "lifecycle baseline ready" },
+    { id: "message-3", role: "user", text: "Start the contrived recovery turn." },
+    { id: "message-4", role: "assistant", text: "Created /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn." },
+  ];
+  // Remount hydration reads the backend again. A real backend returns the
+  // completed history; the base fixture otherwise reuses its startup snapshot.
+  // Responses after a live step become available only after it is advanced.
+  fixture.steps.push({
+    id: "thread-read-after-completion",
+    kind: "response",
+    method: "thread/read",
+    result: {
+      entries: messages.map((message) => ({ type: "message", ...message })),
+      messages,
+      threadStatus: { type: "idle" },
+      lastUserMessage: messages[2].text,
+      lastAssistantMessage: messages[3].text,
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+    },
+  });
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-renderer-recovery-"));
+  const recoveryFixturePath = path.join(root, "replay.fixture.json");
+  await writeFile(recoveryFixturePath, JSON.stringify(fixture));
+  return {
+    fixturePath: recoveryFixturePath,
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
+}
 
 // Test-only fault injection into the real production boundary. No app API or
 // shipped environment flag can induce a crash. The fixture contains no user data.
@@ -58,7 +94,8 @@ async function injectBoundaryFault(page: Page): Promise<void> {
 }
 
 test("remounts the UI with its unsent draft while the main-owned turn completes", async () => {
-  const app = await launchElectronApp({ fixturePath });
+  const fixture = await createRecoveryFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
     await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
     await expect(app.window.getByText("lifecycle baseline ready", { exact: true })).toBeVisible();
@@ -99,7 +136,11 @@ test("remounts the UI with its unsent draft while the main-owned turn completes"
     expect(await app.electronApp.evaluate(() => process.pid)).toBe(mainPid);
     expect(await app.window.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
   } finally {
-    await app.close();
+    try {
+      await app.close();
+    } finally {
+      await fixture.cleanup();
+    }
   }
 });
 
@@ -135,37 +176,61 @@ test("reloads after actual renderer termination while retaining the main process
       const api = (window as unknown as { pwragent: { listComposerDraftLatest: () => Promise<unknown> } }).pwragent;
       await api.listComposerDraftLatest();
     });
-    const identity = await app.electronApp.evaluate(({ BrowserWindow }) => {
+    const { rendererPid, ...identity } = await app.electronApp.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
-      return { pid: process.pid, windowId: window.id, webContentsId: window.webContents.id };
+      const probe = { terminated: false, loaded: false };
+      Object.assign(window, { recoveryTestProbe: probe });
+      window.webContents.once("render-process-gone", () => { probe.terminated = true; });
+      window.webContents.once("did-finish-load", () => { probe.loaded = probe.terminated; });
+      return {
+        pid: process.pid,
+        windowId: window.id,
+        webContentsId: window.webContents.id,
+        rendererPid: window.webContents.getOSProcessId(),
+      };
     });
     const timeOrigin = await app.window.evaluate(() => performance.timeOrigin);
-    await app.electronApp.evaluate(async ({ BrowserWindow }) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents;
-      // Establish termination before checking readiness. forcefullyCrashRenderer
-      // returns before the crash event, so polling immediately can see the old,
-      // still healthy document and incorrectly pass the barrier.
-      const gone = new Promise<void>((resolve) => {
-        contents.once("render-process-gone", () => resolve());
-      });
-      contents.forcefullyCrashRenderer();
-      await gone;
-    });
-    // Inspect via main while the old page is crashed. The replacement must
-    // finish loading before the visible shell assertion gates React readiness.
-    const restored = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents;
-      return !contents.isCrashed() && !contents.isLoading();
-    }));
+    expect(rendererPid).toBeGreaterThan(0);
+    expect(rendererPid).not.toBe(identity.pid);
+    expect(rendererPid).not.toBe(process.pid);
+    // Terminate only this isolated fixture's renderer. Do not hold a CDP
+    // evaluation open across termination: on Linux that call never returned.
+    // Main records both events, so readiness cannot pass against the old page.
+    process.kill(rendererPid, "SIGKILL");
+    const restored = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }, windowId) => {
+      const window = BrowserWindow.fromId(windowId)!;
+      const probe = (window as typeof window & { recoveryTestProbe: { terminated: boolean; loaded: boolean } }).recoveryTestProbe;
+      return probe.terminated && probe.loaded && !window.webContents.isCrashed();
+    }, identity.windowId));
     await expect.poll(restored.read).toBe(true).catch(restored.rethrowWithLastFailure);
-    await expect(app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first()).toBeVisible();
-    await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
-    await expect(app.window.getByLabel("Reply")).toContainText("Saved before renderer termination.");
+
+    // Read the replacement document through the surviving webContents rather
+    // than issuing post-crash RPCs against the original Playwright Page.
+    const shell = tolerateTransientRpcFailure(() => app.electronApp.evaluate(async ({ BrowserWindow }, windowId) => {
+      return await BrowserWindow.fromId(windowId)!.webContents.executeJavaScript(`({
+        hasThread: Array.from(document.querySelectorAll("button")).some((button) =>
+          button.textContent.includes("Turn lifecycle replay") && button.getClientRects().length > 0),
+        draft: document.querySelector('[role="textbox"][aria-label="Reply"]')?.textContent,
+        timeOrigin: performance.timeOrigin,
+      })`) as { hasThread: boolean; draft?: string; timeOrigin: number };
+    }, identity.windowId));
+    await expect.poll(shell.read).toMatchObject({ hasThread: true }).catch(shell.rethrowWithLastFailure);
+    await app.electronApp.evaluate(async ({ BrowserWindow }, windowId) => {
+      await BrowserWindow.fromId(windowId)!.webContents.executeJavaScript(`
+        Array.from(document.querySelectorAll("button")).find((button) =>
+          button.textContent.includes("Turn lifecycle replay") && button.getClientRects().length > 0).click()
+      `);
+    }, identity.windowId);
+    await expect.poll(shell.read).toMatchObject({ draft: "Saved before renderer termination." }).catch(shell.rethrowWithLastFailure);
     expect(await app.electronApp.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
       return { pid: process.pid, windowId: window.id, webContentsId: window.webContents.id };
     })).toEqual(identity);
-    expect(await app.window.evaluate(() => performance.timeOrigin)).not.toBe(timeOrigin);
+    const recoveredDocument = await shell.read();
+    shell.assertAnswered();
+    expect(recoveredDocument!.timeOrigin).not.toBe(timeOrigin);
+    expect(await app.electronApp.evaluate(({ BrowserWindow }, windowId) =>
+      BrowserWindow.fromId(windowId)!.webContents.getOSProcessId(), identity.windowId)).not.toBe(rendererPid);
   } finally {
     await app.close();
   }
