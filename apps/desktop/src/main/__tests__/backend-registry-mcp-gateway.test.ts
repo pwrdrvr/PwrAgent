@@ -155,9 +155,15 @@ describe("backend MCP gateway dispatch", () => {
     const pending = new Promise<AgentEvent>((resolve) => {
       registry.onEvent((event) => { if (event.notification.method === "item/commandExecution/requestApproval") resolve(event); });
     });
-    void internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "thread-1", turnId: "turn-1", requestId: "interactive-escalation", command: "cat fixture.txt" } });
+    const response = internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "thread-1", turnId: "turn-1", requestId: "interactive-escalation", command: "cat fixture.txt" } });
     expect((await pending).notification.params).toMatchObject({ requestId: "interactive-escalation" });
     expect(reviewModel).not.toHaveBeenCalled();
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: "interactive-escalation", response: { decision: "decline" },
+    });
+    expect(await response).toEqual({ decision: "decline" });
+    expect(internals.pendingServerRequests.size).toBe(0);
   });
 
   it("keeps a run in its sandbox when escalation review is chosen but the reviewer is off", async () => {
