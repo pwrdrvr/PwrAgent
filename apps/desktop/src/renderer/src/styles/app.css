@@ -4179,12 +4179,10 @@ textarea,
 }
 
 /* The idle stand-in for the scanner. A beam still sweeping next to a 0 would
-   say the opposite of the number, but this must NOT be built by switching off
-   `.thinking-scanner__beam`'s animation: every scanner in the app is pinned to
-   one document-timeline epoch by a mount-time ref (ThinkingScanner.tsx, PR
-   #1187), and an animation that CSS stops and restarts under a live element is
-   never re-pinned. So the zero state is its own element and the live state is
-   an untouched `ThinkingScanner`. Matches `.thinking-scanner--mini`'s footprint
+   say the opposite of the number, so the zero state is its own empty track and
+   the live state is a `ThinkingScanner`. Live beams share one document-timeline
+   epoch, pinned on mount and on CSS animation restarts (ThinkingScanner.tsx).
+   Matches `.thinking-scanner--mini`'s footprint
    so the tab does not reflow when the count leaves zero. */
 .signal-count__dormant-scanner {
   display: block;
