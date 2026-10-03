@@ -21,12 +21,49 @@ broker. The owner re-reads the thread selection after discovery and before
 invocation, including when another process changed it. The model cannot supply
 another thread identity, endpoint or credential.
 
-Every invocation requests once-only confirmation showing the original
-connection, tool and complete arguments. There is no cached permission for the
-generic wrapper, including in Full Access. Headless automations cannot obtain
-this confirmation and decline the call. Native invocation remains available
-under the backend's own policy; inherited provider MCP servers are not exposed
-through this gateway.
+Full Access approves gateway invocations automatically, including headless
+automations. Codex uses the active turn's applied mode, falling back to the
+automation mode or saved thread mode when no active mode is recorded. ACP uses
+its runtime mode selector when present, otherwise its session execution mode.
+Selection, actor permissions, connection authorization and schema validation
+still apply to every call. No permission is cached for the generic wrapper.
+
+Default and Auto access request once-only confirmation showing the original
+connection, tool and complete arguments. Codex's App Server does not expose an
+API for submitting host-owned dynamic calls to its Auto reviewer. Until that
+integration exists, Auto gateway calls still require human confirmation.
+Headless calls without Full Access or an automation MCP grant decline because
+they cannot obtain it.
+Native invocation remains available under the backend's own policy; inherited
+provider MCP servers are not exposed through this gateway.
+
+Only the gateway's host-created invocation approval follows this policy.
+Upstream MCP forms, including empty forms, and URL flows remain interactive:
+their shape alone does not distinguish tool approval from a question or login.
+
+### Automation MCP grants
+
+An automation's saved MCP server and tool allowlists are advance approval for
+those operations, including in Default and Auto access. The headless runner
+forwards them to the registry. Each ephemeral Codex thread receives per-run
+MCP configuration that disables servers outside the list, pre-approves the
+allowed tools, and applies any tool restriction through `enabled_tools`. An
+explicitly allowed server is required at startup so its tools are not silently
+omitted. A blank server list inherits the Agent's servers and preserves their
+enabled/optional settings. Shell access remains governed by the run's execution
+mode; MCP authorization does not change the sandbox.
+
+Managed connections receive fresh bridges bound to the execution thread. The
+registry resolves the allowlist against connection IDs, the Agent's server
+aliases, and unambiguous connection display names. It retains the allowed IDs
+and tool restrictions in memory before `turn/start`, so early gateway calls can
+use that grant. Every gateway operation rechecks the Agent's current selection.
+Grants are revoked on failed startup, turn completion, and shutdown. Unknown or
+ambiguous saved server names fail explicitly without creating a transport-less
+Codex configuration entry.
+
+This authorization applies to invocation approvals. Upstream MCP questions and
+URL/login flows still need interaction and are cancelled in headless runs.
 
 Arguments are validated before requesting approval. After approval, the owner
 broker lists the tools again, compares the revision, validates the arguments and

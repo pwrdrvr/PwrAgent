@@ -59,6 +59,8 @@ export type HeadlessAutomationLauncher = {
     model?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    mcpAllowlist?: string[];
+    toolAllowlist?: string[];
     /**
      * When true, the run delivers via explicit messaging actions, so the
      * messaging controller must NOT broadcast the result/start notice to the
@@ -106,6 +108,8 @@ export class HeadlessAutomationRunner implements AutomationRunner {
       model: params.automation.executionProfile?.model,
       reasoningEffort: params.automation.executionProfile?.reasoningEffort,
       serviceTier: params.automation.executionProfile?.serviceTier,
+      mcpAllowlist: params.automation.executionProfile?.mcpAllowlist,
+      toolAllowlist: params.automation.executionProfile?.toolAllowlist,
       suppressBindingBroadcast: automationSuppressesBindingBroadcast(
         params.automation,
       ),
