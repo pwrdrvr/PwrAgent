@@ -5418,7 +5418,11 @@ describe("ThreadView", () => {
     expect(clearPendingRequest).toHaveBeenCalledWith("input-request-1", "Thinking");
   });
 
-  it("submits pending MCP interactions through the server request bridge", async () => {
+  it.each([
+    { label: "Allow", persist: undefined },
+    { label: "Allow this conversation", persist: "session" },
+    { label: "Always allow", persist: "always" },
+  ])("submits $label MCP interactions through the server request bridge", async ({ label, persist }) => {
     let currentPendingMcpInteraction: PendingMcpInteractionState | undefined = {
       method: "mcpServer/elicitation/request",
       threadId: "thread-2",
@@ -5429,6 +5433,7 @@ describe("ThreadView", () => {
       mode: "form",
       _meta: {
         tool_description: "List, create, close, or select a browser tab.",
+        ...(persist ? { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"] } : {}),
       },
       form: {
         empty: true,
@@ -5615,7 +5620,7 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    fireEvent.click(screen.getByRole("button", { name: label }));
 
     await waitFor(() => {
       expect(submitServerRequest).toHaveBeenCalledWith({
@@ -5626,7 +5631,7 @@ describe("ThreadView", () => {
         response: {
           action: "accept",
           content: {},
-          _meta: null,
+          _meta: persist ? { persist } : null,
         },
       });
     });

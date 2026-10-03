@@ -1,7 +1,9 @@
 import {
   canAcceptMcpElicitation,
   redactDisplayValue,
+  readMcpApprovalPersistence,
   updateMcpFieldValue,
+  type McpApprovalPersistence,
   type PendingMcpField,
   type PendingMcpInteractionState,
 } from "./mcp-elicitation";
@@ -12,7 +14,8 @@ type PendingMcpInteractionProps = {
   onChange: (state: PendingMcpInteractionState) => void;
   onSubmit: (
     state: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
+    persist?: McpApprovalPersistence,
   ) => Promise<void> | void;
 };
 
@@ -20,6 +23,8 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const canAccept = canAcceptMcpElicitation(props.state);
   const toolDescription = readStringMeta(props.state._meta, "tool_description");
   const toolParams = readToolParamsDisplay(props.state._meta);
+  const persistModes = readMcpApprovalPersistence(props.state);
+  const sessionApproval = persistModes.includes("session");
 
   return (
     <div className="transcript-mcp" role="group" aria-label="Pending MCP interaction">
@@ -82,11 +87,27 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
           disabled={props.busy || !canAccept}
           type="button"
           onClick={() => {
-            void props.onSubmit(props.state, "accept");
+            if (sessionApproval) {
+              void props.onSubmit(props.state, "accept", "session");
+            } else {
+              void props.onSubmit(props.state, "accept");
+            }
           }}
         >
-          Allow
+          {sessionApproval ? "Allow this conversation" : "Allow"}
         </button>
+        {persistModes.includes("always") ? (
+          <button
+            className="button button--ghost"
+            disabled={props.busy || !canAccept}
+            type="button"
+            onClick={() => {
+              void props.onSubmit(props.state, "accept", "always");
+            }}
+          >
+            Always allow
+          </button>
+        ) : null}
         <button
           className="button button--ghost"
           disabled={props.busy}

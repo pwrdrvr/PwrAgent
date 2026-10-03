@@ -137,6 +137,7 @@ import {
 import {
   buildMcpElicitationResponse,
   type PendingMcpInteractionState,
+  type McpApprovalPersistence,
 } from "./mcp-elicitation";
 import {
   mergeActivityDetails,
@@ -3288,7 +3289,8 @@ export function ThreadView(props: ThreadViewProps) {
 
   async function submitPendingMcpInteraction(
     pendingMcpInteraction: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
+    persist?: McpApprovalPersistence,
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
@@ -3309,7 +3311,7 @@ export function ThreadView(props: ThreadViewProps) {
             ? pendingMcpInteraction.turnId
             : undefined,
         requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action),
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist),
       });
       props.clearPendingRequest(
         pendingMcpInteraction.requestId,

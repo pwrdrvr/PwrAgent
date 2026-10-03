@@ -10,6 +10,43 @@ afterEach(() => {
 });
 
 describe("PendingMcpInteraction", () => {
+  it.each([
+    { persist: ["session", "always"], always: true },
+    { persist: ["session"], always: false },
+  ])("respects advertised Computer Use app grants: $persist", ({ persist, always }) => {
+    const onSubmit = vi.fn();
+    const state = createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "app-approval",
+        serverName: "cua_repl", mode: "form", message: 'Allow Computer Use to use "Electron"?',
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          codex_approval_kind: "mcp_tool_call", connector_id: "computer-use",
+          tool_params: { app: "Electron" }, persist,
+        },
+      },
+    })!;
+    const { rerender } = render(
+      <PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow this conversation" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "session");
+    if (always) {
+      fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+      expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "always");
+    } else {
+      expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
+    }
+
+    rerender(<PendingMcpInteraction busy state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+    expect(screen.getByRole("button", { name: "Allow this conversation" })).toBeDisabled();
+    if (always) {
+      expect(screen.getByRole("button", { name: "Always allow" })).toBeDisabled();
+    }
+  });
+
   it("renders metadata, redacts sensitive values, and submits accept", () => {
     const onChange = vi.fn();
     const onSubmit = vi.fn();
