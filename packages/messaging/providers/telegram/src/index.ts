@@ -12,6 +12,7 @@ export type {
   TelegramSendChatActionRequest,
   TelegramSendDocumentRequest,
   TelegramSendMessageRequest,
+  TelegramSendRichMessageRequest,
   TelegramSendPhotoRequest,
   TelegramSentMessage,
   TelegramUnpinChatMessageRequest,

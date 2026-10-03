@@ -3,6 +3,8 @@ import {
   buildTelegramKeyboard,
   escapeTelegramHtml,
   renderTelegramHtml,
+  richMessageForTelegramIntent,
+  richMessageForTelegramText,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   TELEGRAM_MESSAGE_TEXT_LIMIT,
@@ -42,7 +44,7 @@ describe("telegram formatting", () => {
 
     expect(rendered).toContain("Use <code>pnpm test</code> &lt;now&gt;");
     expect(rendered).toContain(
-      "<pre><code>expect(true).toBe(true)</code></pre>",
+      "<pre><code class=\"language-ts\">expect(true).toBe(true)</code></pre>",
     );
   });
 
@@ -55,6 +57,109 @@ describe("telegram formatting", () => {
     expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= TELEGRAM_MESSAGE_TEXT_LIMIT)).toBe(
       true,
     );
+  });
+
+  it.each(["markdown", "light"] as const)("renders CommonMark inline formatting with the %s policy", (policy) => {
+    expect(renderTelegramHtml(
+      "**43 more downloads**, *italic*, __bold _nested___, ~~removed~~ and [release](https://example.com/?a=1&b=2)",
+      policy,
+    )).toBe("<b>43 more downloads</b>, <i>italic</i>, <b>bold <i>nested</i></b>, <s>removed</s> and <a href=\"https://example.com/?a=1&amp;b=2\">release</a>");
+    expect(renderTelegramHtml("file_name and \\*literal\\* with **`code <x>`**", policy))
+      .toBe("file_name and *literal* with <code>code &lt;x&gt;</code>");
+  });
+
+  it("renders headings, quotes and task lists without unsupported regular tags", () => {
+    const rendered = renderTelegramHtml("# Release stats\n\n> **Counts** are cumulative.\n> Across releases.\n\n- [x] DMG\n- [ ] ZIP", "markdown");
+    expect(rendered).toBe("<b>Release stats</b>\n\n<blockquote><b>Counts</b> are cumulative.\nAcross releases.</blockquote>\n\n☑ DMG\n☐ ZIP");
+    expect(renderTelegramHtml("> outer\n>\n> > nested `code` and [link](https://example.com)", "markdown"))
+      .toBe("<blockquote>outer\n\nnested code and link</blockquote>");
+  });
+
+  it("degrades a GFM table into labelled records readable on a phone", () => {
+    const rendered = renderTelegramHtml([
+      "| Asset | Downloads | Change |",
+      "| :--- | ---: | ---: |",
+      "| **mac updater ZIP** | 177 | +12 |",
+      "| `stable PwrAgent.dmg` | 96 | +3 |",
+    ].join("\n"), "markdown");
+    expect(rendered).toBe("• <b>mac updater ZIP</b>\n  Downloads: 177\n  Change: +12\n\n• <code>stable PwrAgent.dmg</code>\n  Downloads: 96\n  Change: +3");
+    expect(rendered).not.toContain("|");
+    expect(rendered).not.toContain("<table");
+    expect(renderTelegramHtml("Name | Value\n--- | ---\na\\|b | **2**", "markdown"))
+      .toBe("• a|b\n  Value: <b>2</b>");
+  });
+
+  it("preserves fence languages and treats markup inside code as data", () => {
+    expect(renderTelegramHtml("~~~python\nprint(\"**bold** <x>\")\n~~~", "markdown"))
+      .toBe("<pre><code class=\"language-python\">print(\"**bold** &lt;x&gt;\")</code></pre>");
+    expect(renderTelegramHtml("```js\nconst unfinished = \"<x>\";", "markdown"))
+      .toBe("<pre><code class=\"language-js\">const unfinished = \"&lt;x&gt;\";</code></pre>");
+    expect(renderTelegramHtml("```\"><b>\ntext\n```", "markdown"))
+      .toBe("<pre><code>text</code></pre>");
+  });
+
+  it("escapes source HTML and refuses unsafe or oversized link attributes", () => {
+    const rendered = renderTelegramHtml("<b>source</b> [unsafe](javascript:alert) [local](docs/file.md)", "markdown");
+    expect(rendered).toBe("&lt;b&gt;source&lt;/b&gt; unsafe local");
+    const largeUrl = `https://example.com/${"&".repeat(1000)}`;
+    expect(renderTelegramHtml(`[label](${largeUrl})`, "markdown")).toBe("label");
+    expect(renderTelegramHtml("**literal** | pipes | <b>", "plain"))
+      .toBe("**literal** | pipes | &lt;b&gt;");
+  });
+
+  it("splits formatted Unicode text without cutting entities or leaving tags unbalanced", () => {
+    const html = renderTelegramHtml(`**${"🙂 & <".repeat(1000)}**\n\n\`\`\`python\n${"x < 2\n".repeat(900)}\`\`\``, "markdown");
+    const chunks = splitTelegramHtml(html);
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(TELEGRAM_MESSAGE_TEXT_LIMIT);
+      const stack: string[] = [];
+      for (const tag of chunk.matchAll(/<(\/)?([a-z]+)[^>]*>/g)) {
+        if (tag[1]) expect(stack.pop()).toBe(tag[2]);
+        else stack.push(tag[2]!);
+      }
+      expect(stack).toEqual([]);
+      expect(chunk.replace(/<[^>]*>|&(?:amp|lt|gt|quot);/g, "")).not.toContain("&");
+    }
+    const withoutTags = (value: string) => value.replace(/<[^>]*>/g, "");
+    expect(chunks.map(withoutTags).join("")).toBe(withoutTags(html));
+  });
+
+  it("builds rich HTML for native headings, compact aligned tables and checkboxes", () => {
+    const rich = richMessageForTelegramText("# Stats\n\n| Asset | Count |\n| :--- | ---: |\n| ZIP | **177** |\n\n- [x] Checked\n- [ ] Pending", "markdown");
+    expect(rich?.html).toContain("<h1>Stats</h1>");
+    expect(rich?.html).toContain("<table bordered striped compact><tr><th align=\"left\">Asset</th><th align=\"right\">Count</th></tr><tr><td align=\"left\">ZIP</td><td align=\"right\"><b>177</b></td></tr></table>");
+    expect(rich?.html).toContain("<li><input type=\"checkbox\" checked>Checked</li>");
+    expect(rich?.html).toContain("<li><input type=\"checkbox\">Pending</li>");
+    expect(richMessageForTelegramText("**Basic** formatting", "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText("# Plain heading", "plain")).toBeUndefined();
+    expect(richMessageForTelegramText("```md\n# heading\n- [x] task\n```", "markdown")).toBeUndefined();
+  });
+
+  it("keeps rich payloads within text, block, nesting and table-column limits", () => {
+    expect(richMessageForTelegramText(`# Large\n\n${"x".repeat(32768)}`, "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText(Array.from({ length: 500 }, () => "# Heading").join("\n\n"), "markdown")).toBeDefined();
+    expect(richMessageForTelegramText(Array.from({ length: 501 }, () => "# Heading").join("\n\n"), "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText(Array.from({ length: 20 }, (_, index) => `${"  ".repeat(index)}- [ ] nested`).join("\n"), "markdown")).toBeUndefined();
+    const table = (columns: number) => [
+      Array.from({ length: columns }, () => "Cell").join(" | "),
+      Array.from({ length: columns }, () => "---").join(" | "),
+    ].join("\n");
+    expect(richMessageForTelegramText(table(21), "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText(table(20), "markdown")).toBeDefined();
+  });
+
+  it("preserves plain content parts and applies rich limits across all parts", () => {
+    const intent = {
+      id: "rich-parts", kind: "message", createdAt: 1,
+      parts: [
+        { type: "text", text: "# Stats", markdown: "markdown" },
+        { type: "text", text: "**plain** <b> & data", markdown: "plain" },
+      ],
+    } satisfies Parameters<typeof richMessageForTelegramIntent>[0];
+    expect(richMessageForTelegramIntent(intent)?.html).toContain("<p>**plain** &lt;b&gt; &amp; data</p>");
+    expect(richMessageForTelegramIntent({ ...intent, parts: [...intent.parts, { type: "text", text: "x".repeat(32768) }] })).toBeUndefined();
+    expect(richMessageForTelegramIntent({ ...intent, parts: [...intent.parts, { type: "image", url: "https://example.com/photo.png" }] })).toBeUndefined();
   });
 
   it("builds one-button rows with compact opaque callback handles", () => {
@@ -198,7 +303,7 @@ describe("telegram formatting", () => {
     });
 
     expect(rendered).toContain("Command Approval");
-    expect(rendered).toContain("<pre><code>pnpm test</code></pre>");
+    expect(rendered).toContain("<pre><code class=\"language-shell\">pnpm test</code></pre>");
   });
 
   it("renders generated tool update messages as ordinary escaped chat text", () => {

@@ -46,9 +46,12 @@ import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
   renderTelegramHtml,
+  richMessageForTelegramIntent,
+  richMessageForTelegramText,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   type TelegramInlineKeyboardMarkup,
+  type TelegramInputRichMessage,
   textForTelegramIntent,
 } from "./telegram-formatting.ts";
 import {
@@ -222,6 +225,14 @@ export type TelegramEditMessageTextRequest = TelegramSendMessageRequest & {
   message_id: number;
 };
 
+export type TelegramSendRichMessageRequest = {
+  chat_id: number | string;
+  disable_notification?: boolean;
+  message_thread_id?: number;
+  reply_parameters?: { message_id: number };
+  rich_message: TelegramInputRichMessage;
+};
+
 export type TelegramEditForumTopicRequest = {
   chat_id: number | string;
   message_thread_id: number;
@@ -321,6 +332,7 @@ export type TelegramBotApi = {
   sendChatAction(request: TelegramSendChatActionRequest): Promise<boolean>;
   sendDocument(request: TelegramSendDocumentRequest): Promise<TelegramSentMessage>;
   sendMessage(request: TelegramSendMessageRequest): Promise<TelegramSentMessage>;
+  sendRichMessage?(request: TelegramSendRichMessageRequest): Promise<TelegramSentMessage>;
   sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage>;
   setMyCommands(params: {
     commands: Array<{ command: string; description: string }>;
@@ -405,6 +417,11 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       text: string,
       other?: Omit<TelegramSendMessageRequest, "chat_id" | "text">,
+    ): Promise<TelegramSentMessage>;
+    sendRichMessage?(
+      chatId: number | string,
+      richMessage: TelegramInputRichMessage,
+      other?: Omit<TelegramSendRichMessageRequest, "chat_id" | "rich_message">,
     ): Promise<TelegramSentMessage>;
     sendDocument(
       chatId: number | string,
@@ -1076,6 +1093,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     const lastMessage = sentMessages.at(-1);
+    if (lastMessage && intent.delivery?.mode !== "update") {
+      await this.sendRichSupplement(richMessageForTelegramIntent(intent), target, lastMessage.message_id);
+    }
     if (intent.delivery?.pin && lastMessage) {
       try {
         await this.bot.api.pinChatMessage({
@@ -1228,6 +1248,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         messageThreadId: head.messageThreadId,
       };
       if (intent.stream.isFinal) {
+        // The regular update may have used the last slot in a group budget.
+        // Optional rich content must not force a wait or exceed that budget.
+        if (this.evaluateStreamRateLimit(target, true).allowed) {
+          await this.sendRichSupplement(
+            richMessageForTelegramText(intent.text, intent.markdown),
+            target,
+            anchors[chunks.length - 1]!.messageId!,
+          );
+        }
         this.streamSurfaces.delete(intent.stream.key);
       } else {
         this.streamSurfaces.set(intent.stream.key, anchors);
@@ -1276,6 +1305,36 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         outcome: "failed",
         ...(rateLimitInfo ? { rateLimit: rateLimitInfo } : {}),
       };
+    }
+  }
+
+  private async sendRichSupplement(
+    richMessage: TelegramInputRichMessage | undefined,
+    target: TelegramDeliveryTarget,
+    fallbackMessageId: number,
+  ): Promise<void> {
+    if (!richMessage || !this.bot.api.sendRichMessage) return;
+    try {
+      // Always persist readable regular content first. Old clients display an
+      // update placeholder for rich messages and expose no capability bit.
+      // Keep the regular message as the surface used for updates and pinning.
+      await this.bot.api.sendRichMessage({
+        chat_id: target.chatId,
+        disable_notification: true,
+        message_thread_id: target.messageThreadId,
+        reply_parameters: { message_id: fallbackMessageId },
+        rich_message: richMessage,
+      });
+    } catch (error) {
+      // An older Bot API server or a rejected optional rich payload must not
+      // turn a successful regular delivery into a failure and duplicate it.
+      const rateLimit = this.emitRateLimitFromError(error, target, { retryable: false });
+      if (rateLimit?.retryAfterMs !== undefined) {
+        this.blockStreamRateLimitTarget(target, rateLimit.retryAfterMs);
+      }
+      this.options.logger?.warn?.(`telegram rich supplement failed error=${errorMessage(error)}`);
+    } finally {
+      this.recordStreamRateLimitDelivery(target);
     }
   }
 
@@ -3025,6 +3084,12 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         const { chat_id, text, ...other } = request;
         return await bot.api.sendMessage(chat_id, text, other);
       },
+      sendRichMessage: bot.api.sendRichMessage
+        ? async (request) => {
+            const { chat_id, rich_message, ...other } = request;
+            return await bot.api.sendRichMessage!(chat_id, rich_message, other);
+          }
+        : undefined,
       sendDocument: async (request) => {
         const { chat_id, document, filename, ...other } = request;
         const upload =

@@ -9,6 +9,7 @@ import {
   type TelegramSendChatActionRequest,
   type TelegramSendDocumentRequest,
   type TelegramSendMessageRequest,
+  type TelegramSendRichMessageRequest,
   type TelegramSendPhotoRequest,
   type TelegramUnpinChatMessageRequest,
 } from "../telegram-adapter.ts";
@@ -40,6 +41,13 @@ describe("adaptGrammyBot", () => {
       disable_web_page_preview: true,
       parse_mode: "HTML",
       text: "Choose a thread",
+    });
+    await bot.api.sendRichMessage!({
+      chat_id: 42,
+      message_thread_id: 9,
+      disable_notification: true,
+      reply_parameters: { message_id: 200 },
+      rich_message: { html: "<h1>Stats</h1>" },
     });
     await bot.api.createForumTopic({
       chat_id: 42,
@@ -113,6 +121,11 @@ describe("adaptGrammyBot", () => {
         parse_mode: "HTML",
       },
     );
+    expect(grammyBot.api.sendRichMessage).toHaveBeenCalledWith(
+      42,
+      { html: "<h1>Stats</h1>" },
+      { message_thread_id: 9, disable_notification: true, reply_parameters: { message_id: 200 } },
+    );
     expect(grammyBot.api.createForumTopic).toHaveBeenCalledWith(
       42,
       "Thread topic",
@@ -162,6 +175,147 @@ describe("adaptGrammyBot", () => {
       message_thread_id: 9,
     });
     expect(grammyBot.api.unpinChatMessage).toHaveBeenCalledWith(42, 7, {});
+  });
+});
+
+describe("TelegramAdapter rich messages", () => {
+  const markdown = "# Downloads\n\n| Asset | Count |\n| --- | ---: |\n| ZIP | **177** |\n\n- [x] Reported";
+  const intent = {
+    id: "stats", kind: "message" as const, createdAt: 1,
+    role: "assistant" as const,
+    parts: [{ type: "text" as const, text: markdown, markdown: "markdown" as const }],
+    audit: {
+      actor: { platformUserId: "42" },
+      channel: {
+        channel: "telegram" as const,
+        conversation: { id: "77", kind: "topic" as const, parentId: "-100123" },
+      },
+      occurredAt: 1,
+    },
+  };
+
+  function harness(now?: () => number) {
+    const api = fakeTelegramApi();
+    const send = vi.spyOn(api, "sendMessage");
+    const edit = vi.spyOn(api, "editMessageText");
+    const rich = vi.fn(async (_request: TelegramSendRichMessageRequest) => ({
+      chat: { id: -100123, type: "supergroup" as const }, message_id: 300,
+    }));
+    api.sendRichMessage = rich;
+    const adapter = new TelegramAdapter({
+      api,
+      config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
+      now,
+      store: fakeCallbackStore(),
+    });
+    return { api, adapter, send, edit, rich };
+  }
+
+  it("persists a readable regular fallback before the rich message in the same topic", async () => {
+    const { adapter, send, rich } = harness();
+    const result = await adapter.deliver(intent);
+    expect(result.outcome).toBe("presented");
+    expect(result.surface?.id).toBe("200");
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: -100123, message_thread_id: 77, parse_mode: "HTML",
+      text: "<b>Downloads</b>\n\n• ZIP\n  Count: <b>177</b>\n\n☑ Reported",
+    }));
+    expect(rich).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: -100123, message_thread_id: 77, disable_notification: true,
+      reply_parameters: { message_id: 200 },
+      rich_message: { html: expect.stringContaining("<table bordered striped compact>") },
+    }));
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(rich.mock.invocationCallOrder[0]!);
+  });
+
+  it("keeps successful fallback delivery when the rich endpoint rejects a payload", async () => {
+    const { adapter, send, rich } = harness();
+    rich.mockRejectedValue(new Error("400: unsupported rich message"));
+    const result = await adapter.deliver(intent);
+    expect(result.outcome).toBe("presented");
+    expect(result.surface?.id).toBe("200");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send rich-only content if regular fallback delivery fails", async () => {
+    const { adapter, send, rich } = harness();
+    send.mockRejectedValue(new Error("fallback failed"));
+    expect((await adapter.deliver(intent)).outcome).toBe("failed");
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("keeps the fallback delivered and honours retry_after on a rejected rich supplement", async () => {
+    const { adapter, send, rich } = harness(() => 1000);
+    const onRateLimit = vi.fn();
+    adapter.onRateLimit(onRateLimit);
+    rich.mockRejectedValue({ error_code: 429, parameters: { retry_after: 2 } });
+    expect((await adapter.deliver(intent)).outcome).toBe("presented");
+    expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: false }));
+    const update = await adapter.deliver({
+      id: "next-stream", kind: "stream_update", createdAt: 1,
+      audit: intent.audit, text: "Working", markdown: "markdown",
+      stream: { key: "next-stream", sequence: 1, isFinal: false },
+    });
+    expect(update.outcome).toBe("discarded");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports injected older APIs without the rich endpoint", async () => {
+    const { api, adapter, send, rich } = harness();
+    delete api.sendRichMessage;
+    expect((await adapter.deliver(intent)).outcome).toBe("presented");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("leaves ordinary formatting and oversized structured messages on the regular path", async () => {
+    const { adapter, send, rich } = harness();
+    await adapter.deliver({ ...intent, parts: [{ type: "text", text: "**bold** and `code`", markdown: "markdown" }] });
+    await adapter.deliver({ ...intent, parts: [{ type: "text", text: `# Large\n\n${"🙂".repeat(9000)}`, markdown: "markdown" }] });
+    expect(send.mock.calls.length).toBeGreaterThan(2);
+    expect(send.mock.calls.every(([request]) => Buffer.byteLength(request.text, "utf8") <= 4096)).toBe(true);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("updates the readable surface without appending another rich supplement", async () => {
+    const { adapter, edit, rich } = harness();
+    const result = await adapter.deliver(intent);
+    await adapter.deliver({ ...intent, targetSurface: result.surface, delivery: { mode: "update" } });
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({ message_id: 200, parse_mode: "HTML" }));
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds rich content only after the final persistent stream update", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const stream = {
+      id: "stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: markdown, markdown: "markdown" as const,
+      stream: { key: "stats-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+    const result = await adapter.deliver({ ...stream, text: `${markdown}\n\nComplete.`, stream: { ...stream.stream, sequence: 2, isFinal: true } });
+    expect(result.surface?.id).toBe("200");
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(edit.mock.invocationCallOrder[0]).toBeLessThan(rich.mock.invocationCallOrder[0]!);
+    expect(edit.mock.calls[0]?.[0].text).not.toContain("|");
+  });
+
+  it("keeps the final fallback when it uses the last slot in the group stream budget", async () => {
+    const { adapter, send, rich } = harness(() => 1000);
+    for (let index = 0; index < 20; index += 1) {
+      const result = await adapter.deliver({
+        id: `stream-${index}`, kind: "stream_update", createdAt: 1,
+        audit: intent.audit, text: index === 19 ? markdown : "Complete.", markdown: "markdown",
+        stream: { key: `stream-${index}`, sequence: 1, isFinal: true },
+      });
+      expect(result.outcome).toBe("presented");
+    }
+    expect(send).toHaveBeenCalledTimes(20);
+    expect(rich).not.toHaveBeenCalled();
   });
 });
 
@@ -828,6 +982,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     sendChatAction: ReturnType<typeof vi.fn>;
     sendDocument: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
+    sendRichMessage: ReturnType<typeof vi.fn>;
     sendPhoto: ReturnType<typeof vi.fn>;
     reopenForumTopic: ReturnType<typeof vi.fn>;
     setMyCommands: ReturnType<typeof vi.fn>;
@@ -913,6 +1068,9 @@ function createGrammyBot(): TelegramGrammyBotLike & {
           message_id: 200,
         }),
       ),
+      sendRichMessage: vi.fn(async (chatId: number | string) => ({
+        chat: { id: Number(chatId), type: "private" as const }, message_id: 300,
+      })),
       sendPhoto: vi.fn(
         async (
           chatId: number | string,
