@@ -1,3 +1,9 @@
+import {
+  NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL,
+  NATIVE_VOICE_CAMERA_CUE_CHANNEL, CAMERA_REACTIONS,
+  type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue,
+} from "../../shared/native-voice-camera";
+import { classifyVoiceCamera } from "../native-voice/clef-camera";
 import { ipcMain, session, type WebContents } from "electron";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL,
@@ -12,12 +18,22 @@ import { isOperatorFocusSnapshot, publishOperatorFocus } from "../native-voice/o
 import { isLocalMainWindowWebContents } from "../window-channels";
 
 const sessions = new NativeVoiceSessionManager((threadId) => getDesktopBackendRegistry().acquireNativeVoiceBackend(threadId));
+const cameraRequests = new Map<number, { sessionId: string; abort: AbortController }>();
+function abortCamera(owner: number, sessionId?: string): void {
+  const request = cameraRequests.get(owner);
+  if (!request || (sessionId !== undefined && request.sessionId !== sessionId)) return;
+  request.abort.abort();
+  cameraRequests.delete(owner);
+}
 const owners = new Set<number>();
 function observeOwner(sender: WebContents): void {
   const owner = sender.id;
   if (owners.has(owner)) return;
   owners.add(owner);
-  const stop = () => { void sessions.stopOwner(owner).catch(() => undefined); };
+  const stop = () => {
+    abortCamera(owner);
+    void sessions.stopOwner(owner).catch(() => undefined);
+  };
   sender.on("render-process-gone", stop);
   sender.on("did-start-navigation", (_event, _url, _inPlace, mainFrame) => { if (mainFrame) stop(); });
   sender.once("destroyed", () => { owners.delete(owner); stop(); });
@@ -28,16 +44,18 @@ function validTarget(request: NativeVoiceTarget): void {
   }
 }
 export function registerNativeVoiceIpcHandlers(): void {
-  // Electron otherwise grants media to any renderer. Only the opted-in voice
-  // owner may capture audio; camera requests are never part of this feature.
+  // Media belongs to the opted-in voice owner. Camera needs a separate opt-in.
   session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
     if (permission !== "media") return true;
-    return Boolean(contents && details.isMainFrame && details.mediaType === "audio" && sessions.allowsMicrophone(contents.id));
+    return Boolean(contents && details.isMainFrame
+      && (details.mediaType === "audio"
+        ? sessions.allowsMicrophone(contents.id)
+        : details.mediaType === "video" && sessions.allowsCamera(contents.id)));
   });
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     if (permission !== "media") { callback(true); return; }
-    callback("mediaTypes" in details && details.mediaTypes?.length === 1 && details.mediaTypes[0] === "audio"
-      && details.isMainFrame && sessions.allowsMicrophone(contents.id));
+    callback("mediaTypes" in details && details.mediaTypes?.length === 1 && details.isMainFrame
+      && (details.mediaTypes[0] === "audio" ? sessions.allowsMicrophone(contents.id) : details.mediaTypes[0] === "video" && sessions.allowsCamera(contents.id)));
   });
   ipcMain.handle(NATIVE_VOICE_CAPABILITY_CHANNEL, async () => {
     try { return await getDesktopBackendRegistry().nativeVoiceCapability(); }
@@ -59,6 +77,7 @@ export function registerNativeVoiceIpcHandlers(): void {
     }
     observeOwner(event.sender);
     await sessions.start(event.sender.id, request, (notification) => {
+      if (notification.type === "closed") abortCamera(event.sender.id, notification.sessionId);
       if (!event.sender.isDestroyed()) event.sender.send(NATIVE_VOICE_EVENT_CHANNEL, notification);
     });
   });
@@ -77,7 +96,38 @@ export function registerNativeVoiceIpcHandlers(): void {
   });
   ipcMain.handle(NATIVE_VOICE_STOP_CHANNEL, async (event, request: NativeVoiceTarget) => {
     validTarget(request);
+    abortCamera(event.sender.id, request.sessionId);
     await sessions.stop(event.sender.id, request);
+  });
+  ipcMain.handle(NATIVE_VOICE_CAMERA_CHANNEL, async (event, request: VoiceCameraRequest) => {
+    validTarget(request);
+    if (typeof request.enabled !== "boolean") throw new Error("Invalid camera setting.");
+    sessions.setCamera(event.sender.id, request.sessionId, request.enabled);
+    if (!request.enabled) abortCamera(event.sender.id, request.sessionId);
+  });
+  ipcMain.handle(NATIVE_VOICE_CAMERA_CUE_CHANNEL, async (event, request: VoiceCameraCue) => {
+    validTarget(request);
+    if (request.cue !== "away" && !CAMERA_REACTIONS.includes(request.cue)) throw new Error("Invalid camera cue.");
+    await sessions.cameraCue(event.sender.id, request);
+  });
+  ipcMain.handle(NATIVE_VOICE_CAMERA_FRAME_CHANNEL, async (event, request: VoiceCameraFrame) => {
+    validTarget(request);
+    if (!sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) {
+      throw new Error("Enable the camera in this voice session first.");
+    }
+    if (typeof request.image !== "string" || request.image.length > 300_000
+      || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(request.image)) throw new Error("Invalid camera frame.");
+    if (cameraRequests.has(event.sender.id)) throw new Error("A camera frame is already being analyzed.");
+    const abort = new AbortController();
+    const pending = { sessionId: request.sessionId, abort };
+    cameraRequests.set(event.sender.id, pending);
+    const timeout = setTimeout(() => abort.abort(), 8000);
+    try { return await classifyVoiceCamera(request.image, abort.signal); }
+    catch (error) { throw new Error("Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.", { cause: error }); }
+    finally {
+      clearTimeout(timeout);
+      if (cameraRequests.get(event.sender.id) === pending) cameraRequests.delete(event.sender.id);
+    }
   });
   ipcMain.handle(NATIVE_VOICE_TEXT_CHANNEL, async (event, request: NativeVoiceText) => {
     validTarget(request);

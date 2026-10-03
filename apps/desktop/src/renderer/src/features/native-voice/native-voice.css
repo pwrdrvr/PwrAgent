@@ -394,3 +394,23 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.voice-camera { position: relative; display: inline-flex; }
+.voice-camera__panel {
+  position: fixed;
+  width: 200px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  z-index: 130;
+  font-size: 11px;
+  white-space: normal;
+}
+.voice-camera__preview { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 4px; transform: scaleX(-1); }
+.voice-camera__status { color: var(--text-primary); }
+.voice-camera__hint { color: var(--text-muted); }

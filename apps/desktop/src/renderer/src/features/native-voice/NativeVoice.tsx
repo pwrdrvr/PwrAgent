@@ -49,11 +49,11 @@ export function useNativeVoiceNotices(
       previous = view.status;
       // Director voice keeps its panel open after the session, and the
       // panel says how it ended; the notice is for thread voice's bar.
-      if (ended && view.endedAfterReply && view.mode !== "director") {
+      if (ended && (view.endedAfterReply || view.endedAfterAway) && view.mode !== "director") {
         showNotice({
           id: NATIVE_VOICE_ENDED_NOTICE_ID,
           title: "Live voice",
-          message: "Voice ended after its reply because the microphone was muted.",
+          message: view.endedAfterAway ? "Voice ended because the camera detected 30 seconds away." : "Voice ended after its reply because the microphone was muted.",
           tone: "neutral",
         });
       } else if (view.status === "error") {

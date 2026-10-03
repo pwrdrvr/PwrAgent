@@ -232,7 +232,8 @@ emits `started`, and the peer connects. Stop, permission denial, late permission
 results, startup failure, connection loss, thread change and window teardown
 clean these resources. Main also watches navigation, renderer crashes, window
 destruction and backend disconnect. Electron grants audio capture only to the
-opted-in, established voice owner, and rejects camera/subframe media requests.
+opted-in, established voice owner. Video additionally requires that owner's
+separate camera opt-in; subframe and combined audio/video requests are rejected.
 macOS packaging includes its microphone purpose string and audio-input
 entitlement.
 
@@ -325,3 +326,34 @@ Official context: [Codex App Server](https://learn.chatgpt.com/docs/app-server),
 [GPT-Live](https://developers.openai.com/api/docs/guides/live).
 Desktop voice availability/pricing statements do not establish terms for this
 external experimental App Server integration.
+
+
+## Camera context integration
+
+During a listening thread or director session, the masthead camera button can
+opt into local camera cues. Capture belongs to the window's voice controller
+and ends on camera opt-out, voice stop, navigation teardown, or failure. The
+preview and status follow the masthead microphone across its placements.
+
+Main sends 336-pixel JPEG frames to the fixed loopback Clef `/decide` endpoint
+at `127.0.0.1:8787`, with typed presence and reaction questions. One request
+runs at a time, at up to two frames per second. Camera permissions and frame
+requests require the owning, established voice session and a separate camera
+opt-in. Frames and decisions remain in memory; this integration adds no
+PwrAgent SQLite writes or image files.
+
+The filter requires presence confidence of at least 80% and reaction
+confidence of at least 70%, three consecutive samples spanning 1.5 seconds,
+and an eight-second cooldown between reaction changes. Repeated cues are
+suppressed. Uncertain presence, a visible return, or a ten-second sampling
+gap resets the absence countdown. Thirty seconds of confident absence ends
+voice, leaving coding turns running.
+
+Only an allowlisted, debounced text cue reaches GPT-Live, through Codex
+`thread/realtime/appendText` with role `developer`. The prompt treats cues as
+uncertain visible observations: exasperation asks for reconsideration,
+enthusiasm develops the current direction, boredom asks for brevity or a
+question, and absence pauses speech. A camera cue cannot approve or cancel
+work. Clef failures stop camera capture and show a dismissible error while
+voice remains available. Facial-expression accuracy and the model's spoken
+adaptation still need live evaluation by the operator.

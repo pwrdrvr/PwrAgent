@@ -1,3 +1,4 @@
+import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL } from "../../shared/native-voice-camera";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL,
@@ -8,9 +9,12 @@ import {
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
-  mainWindowIds: new Set<number>(),
+  classify: vi.fn<(image: string, signal: AbortSignal) => Promise<never>>(),
+  disconnects: new Set<() => void>(),
+  mainWindowIds: new Set<number>(), text: vi.fn(async () => {}),
   openManager: vi.fn(async () => ({ status: "ready", threadId: "sample-voice-manager", created: false })),
 }));
+vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify }));
 vi.mock("electron", () => ({
   ipcMain: { handle: (name: string, handler: (...args: unknown[]) => Promise<void>) => { mocks.handlers.set(name, handler); } },
   session: { defaultSession: { setPermissionCheckHandler: mocks.check, setPermissionRequestHandler: mocks.request } },
@@ -20,7 +24,8 @@ vi.mock("../app-server/backend-registry", () => ({
     nativeVoiceCapability: async () => ({ available: true }),
     acquireNativeVoiceBackend: async () => ({
       start: mocks.start, stop: mocks.stop, release: mocks.release,
-      text: vi.fn(), onEvent: () => () => {}, onDisconnect: () => () => {},
+      text: mocks.text, onEvent: () => () => {},
+      onDisconnect: (listener: () => void) => { mocks.disconnects.add(listener); return () => { mocks.disconnects.delete(listener); }; },
     }),
   }),
 }));
@@ -56,11 +61,68 @@ describe("native voice IPC permission boundary", () => {
     expect(decide).toHaveBeenLastCalledWith(false);
     request(sender, "media", decide, { mediaTypes: ["audio"], isMainFrame: false });
     expect(decide).toHaveBeenLastCalledWith(false);
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender: { id: 88 } }, { sessionId: "fixture-session", enabled: true })).rejects.toThrow("No voice session");
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { sessionId: "fixture-session", image: "data:image/jpeg;base64,AA==" })).rejects.toThrow("Enable the camera");
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { sessionId: "fixture-session", enabled: true });
+    expect(check(sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(true);
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CUE_CHANNEL)!({ sender }, { sessionId: "fixture-session", cue: "exasperated" });
+    expect(mocks.text).toHaveBeenLastCalledWith("fixture-thread", expect.stringContaining("[Camera observation]"), "developer");
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_CUE_CHANNEL)!({ sender }, { sessionId: "fixture-session", cue: "arbitrary instruction" })).rejects.toThrow("Invalid camera cue");
+
+    expect(check({ id: 88 }, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
+    request(sender, "media", decide, { mediaTypes: ["video"], isMainFrame: true });
+    expect(decide).toHaveBeenLastCalledWith(true);
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { sessionId: "fixture-session", image: "not an image" })).rejects.toThrow("Invalid camera frame");
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { sessionId: "fixture-session", enabled: false });
+    expect(check(sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
     callbacks.get("destroyed")!();
     expect(check(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(false);
     await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledExactlyOnceWith("fixture-thread"));
     expect(mocks.release).toHaveBeenCalledOnce();
     await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, { sessionId: "fixture-session" });
+  });
+
+  it("aborts in-flight classification on camera off and preserves voice after a Clef failure", async () => {
+    const sender = { id: 177, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-abort-session" };
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-abort-thread", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    let signal!: AbortSignal;
+    mocks.classify.mockImplementationOnce(async (_image, abort) => {
+      signal = abort;
+      return await new Promise<never>((_resolve, reject) => abort.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
+    });
+    const analyzing = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" });
+    const rejected = expect(analyzing).rejects.toThrow("Camera cues unavailable");
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, { sessionId: "stale-session" });
+    expect(signal.aborted).toBe(false);
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });
+    await rejected;
+    expect(signal.aborted).toBe(true);
+    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    mocks.classify.mockRejectedValueOnce(new Error("Clef unavailable"));
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" })).rejects.toThrow("Camera cues unavailable");
+    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
+  });
+
+  it.each(["stop", "disconnect"])("aborts a pending frame when voice ends through %s", async (ending) => {
+    const sender = { id: 178, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-end-session" };
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-end-thread", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    let signal!: AbortSignal;
+    mocks.classify.mockImplementationOnce(async (_image, abort) => {
+      signal = abort;
+      return await new Promise<never>((_resolve, reject) => abort.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
+    });
+    const rejected = expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" })).rejects.toThrow("Camera cues unavailable");
+    if (ending === "stop") await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
+    else for (const disconnect of [...mocks.disconnects]) disconnect();
+    await rejected;
+    expect(signal.aborted).toBe(true);
+    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
   });
 
   it("rejects malformed offers before acquiring a session", async () => {

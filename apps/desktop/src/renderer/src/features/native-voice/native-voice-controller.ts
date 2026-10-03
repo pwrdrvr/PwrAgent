@@ -1,3 +1,4 @@
+import { CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
 
 export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "stopping" | "stop-error" | "error";
@@ -12,6 +13,10 @@ export type VoiceView = {
   threadId?: string;
   /** The operator muted their microphone; the session stays open. */
   muted: boolean;
+  camera?: "starting" | "on";
+  cameraCue?: string;
+  cameraError?: string;
+  endedAfterAway?: boolean;
   /** When the session went live, for the elapsed-time label. Billing runs from here. */
   liveSince?: number;
   /** The last session ended itself: muted, with its reply finished. */
@@ -22,6 +27,7 @@ export type VoiceView = {
 type Meter = { read: () => number; close: () => void };
 type Resources = {
   id: string;
+  camera?: { cancelled: boolean; capture?: CameraCapture; timer?: ReturnType<typeof setTimeout> };
   meter?: Meter;
   peer?: RTCPeerConnection;
   stream?: MediaStream;
@@ -44,6 +50,7 @@ export type VoiceBrowser = {
   audio: () => HTMLAudioElement;
   microphone: () => Promise<MediaStream>;
   id: () => string;
+  camera?: () => Promise<CameraCapture>;
   /** Input level for the live meter. Optional: voice works without one. */
   meter?: (stream: MediaStream) => Meter | undefined;
 };
@@ -52,6 +59,7 @@ const browser: VoiceBrowser = {
   audio: () => new Audio(),
   microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }),
   id: () => crypto.randomUUID(),
+  camera: openVoiceCamera,
   meter: (stream) => {
     if (typeof AudioContext !== "function") return undefined;
     const context = new AudioContext();
@@ -205,7 +213,7 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, transcript: [], actions: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraCue: undefined, cameraError: undefined, transcript: [], actions: [],
     });
     this.watchTurns(resources, threadId);
     try {
@@ -347,6 +355,7 @@ export class NativeVoiceController {
     const resources = this.resources;
     if (!resources) return Promise.resolve();
     if (resources.stop) return resources.stop;
+    this.closeCamera(resources);
     resources.cancelled = true;
     clearTimeout(resources.timer);
     clearTimeout(resources.idleTimer);
@@ -381,6 +390,74 @@ export class NativeVoiceController {
       } else resources.stop = undefined;
     });
     return resources.stop;
+  }
+
+  dismissCameraError(): void { this.publish({ cameraError: undefined }); }
+
+  cameraStream(): MediaStream | undefined { return this.resources?.camera?.capture?.stream; }
+
+  private closeCamera(resources: Resources): void {
+    const camera = resources.camera;
+    if (!camera) return;
+    camera.cancelled = true;
+    clearTimeout(camera.timer);
+    camera.capture?.close();
+    resources.camera = undefined;
+    this.publish({ camera: undefined, cameraCue: undefined });
+    void this.api.setNativeVoiceCamera?.({ sessionId: resources.id, enabled: false }).catch(() => undefined);
+  }
+
+  async setCamera(enabled: boolean): Promise<void> {
+    const resources = this.resources;
+    if (!resources || this.view.status !== "listening") return;
+    if (!enabled) { this.closeCamera(resources); return; }
+    if (resources.camera) return;
+    if (!this.api.setNativeVoiceCamera || !this.api.analyzeNativeVoiceCamera || !this.api.sendNativeVoiceCameraCue || !this.platform.camera) {
+      this.publish({ cameraError: "Camera cues are unavailable in this window." });
+      return;
+    }
+    const camera: NonNullable<Resources["camera"]> = { cancelled: false };
+    resources.camera = camera;
+    const current = () => this.current(resources) && resources.camera === camera && !camera.cancelled;
+    const filter = new CameraCueFilter();
+    this.publish({ camera: "starting", cameraError: undefined });
+    const failed = (error: unknown) => {
+      if (!current()) return;
+      this.closeCamera(resources);
+      this.publish({ cameraError: error instanceof Error ? error.message : "Camera cues failed." });
+    };
+    try {
+      await this.api.setNativeVoiceCamera({ sessionId: resources.id, enabled: true });
+      if (!current()) return;
+      const capture = await this.platform.camera();
+      if (!current()) { capture.close(); return; }
+      camera.capture = capture;
+      this.publish({ camera: "on" });
+      const sample = async () => {
+        if (!current()) return;
+        const started = Date.now();
+        try {
+          const image = capture.frame();
+          if (image) {
+            const observation = await this.api.analyzeNativeVoiceCamera!({ sessionId: resources.id, image });
+            if (!current()) return;
+            const decision = filter.observe(observation, Date.now());
+            if (decision.end) {
+              this.publish({ endedAfterAway: true });
+              void this.stop();
+              return;
+            }
+            if (decision.cue) {
+              this.publish({ cameraCue: decision.cue });
+              // Do not reset muted-idle timers: a camera cue is not user activity.
+              await this.api.sendNativeVoiceCameraCue!({ sessionId: resources.id, cue: decision.cue });
+            }
+          }
+          if (current()) camera.timer = setTimeout(() => { void sample(); }, Math.max(0, 500 - (Date.now() - started)));
+        } catch (error) { failed(error); }
+      };
+      void sample();
+    } catch (error) { failed(error); }
   }
 
   async text(text: string): Promise<void> {
