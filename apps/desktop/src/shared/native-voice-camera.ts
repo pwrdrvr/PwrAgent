@@ -4,6 +4,7 @@ export const NATIVE_VOICE_CAMERA_FRAME_CHANNEL = "native-voice:camera-frame";
 export type VoiceCameraRequest = { sessionId: string; enabled: boolean };
 export type VoiceCameraFrame = { sessionId: string; image: string };
 export const CAMERA_REACTIONS = ["neutral", "exasperated", "enthusiastic", "bored", "frustrated", "yelling", "talking"] as const;
+export const CAMERA_VIBES = ["exasperated", "frustrated", "yelling", "talking", "neutral"] as const;
 export type CameraReaction = typeof CAMERA_REACTIONS[number];
 export const CAMERA_GESTURES = ["pointing", "ok", "stop", "thumbs_up", "double_thumbs_up", "thumbs_down", "face_palm", "none"] as const;
 export type CameraGesture = typeof CAMERA_GESTURES[number];
@@ -45,19 +46,17 @@ export const VOICE_CAMERA_QUESTIONS = {
   presence: {
     type: "noul",
     instructions: "Person visible?",
-    criteria: { true: "person visible", false: "no person visible" },
+    criteria: { true: "yes", false: "no" },
   },
   vibe: {
     type: "choice",
     instructions: "What is the person doing?",
     criteria: {
+      exasperated: null,
+      frustrated: null,
+      yelling: null,
+      talking: null,
       neutral: "none of these",
-      exasperated: "eye roll",
-      enthusiastic: "smiling",
-      bored: "yawning",
-      frustrated: "frustrated expression",
-      yelling: "mouth wide open",
-      talking: "visibly speaking",
     },
   },
 };

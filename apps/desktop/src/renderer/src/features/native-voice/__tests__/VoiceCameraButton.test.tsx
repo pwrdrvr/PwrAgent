@@ -36,7 +36,7 @@ describe("camera voice control", () => {
       staleObservations: 1, rateHz: 1.7, lastObservedAt: Date.now(), frameAgeMs: 410,
       filter: "Collecting consecutive frames", cuesAcknowledged: 0,
       observation: { present: true, presenceConfidence: 0.95, reaction: "neutral", reactionConfidence: 0.8, latencyMs: 400,
-        presenceScores: { present: 0.95, away: 0.05 }, reactionScores: { neutral: 0.8, exasperated: 0.05, enthusiastic: 0.1, bored: 0.05 } },
+        presenceScores: { present: 0.95, away: 0.05 }, reactionScores: { neutral: 0.8, exasperated: 0.05, frustrated: 0.1, yelling: 0.03, talking: 0.02 } },
     };
     const result = render(<VoiceCameraPanel controller={controller} view={view} />);
     const summary = screen.getByText(/Camera diagnostics/);
@@ -45,7 +45,7 @@ describe("camera voice control", () => {
     fireEvent.click(summary);
     expect(summary.parentElement).toHaveAttribute("open");
     expect(screen.getByRole("table")).toHaveTextContent("neutral · selected80.0%");
-    expect(screen.getByRole("table")).toHaveTextContent("enthusiastic10.0%");
+    expect(screen.getByRole("table")).toHaveTextContent("frustrated10.0%");
     expect(screen.getAllByText(/No voice context sent yet/)).toHaveLength(2);
     result.rerender(<VoiceCameraPanel controller={controller} view={{ ...view, cameraDiagnostics: { ...view.cameraDiagnostics, delivery: "acknowledged", lastCue: "neutral", cuesAcknowledged: 1 } }} />);
     expect(screen.getAllByText(/Voice context acknowledged · neutral/)).toHaveLength(2);

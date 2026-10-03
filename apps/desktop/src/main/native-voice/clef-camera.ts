@@ -1,4 +1,4 @@
-import { CAMERA_REACTIONS, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, type VoiceCameraObservation } from "../../shared/native-voice-camera";
+import { CAMERA_VIBES, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, type VoiceCameraObservation } from "../../shared/native-voice-camera";
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Clef response.");
@@ -14,11 +14,11 @@ export function parseClefObservation(value: unknown): VoiceCameraObservation {
   const presence = object(answers.presence);
   const reaction = object(answers.vibe ?? answers.reaction);
   if (answers.vibe && answers.gesture === undefined) throw new Error("Missing Clef gesture.");
-  if (reaction.type !== "choice" || !CAMERA_REACTIONS.includes(reaction.choice as VoiceCameraObservation["reaction"])) throw new Error("Invalid Clef decisions.");
   const reactionProbabilities = object(reaction.probabilities);
   // Accept the original four-choice response for compatibility; the new vibe
   // question must return every requested score, with no arbitrary cue text.
-  const reactionKeys = answers.vibe ? CAMERA_REACTIONS : ["neutral", "exasperated", "enthusiastic", "bored"] as const;
+  const reactionKeys = answers.vibe ? CAMERA_VIBES : ["neutral", "exasperated", "enthusiastic", "bored"] as const;
+  if (reaction.type !== "choice" || !reactionKeys.some((key) => key === reaction.choice)) throw new Error("Invalid Clef decisions.");
   const reactionScores = Object.fromEntries(reactionKeys.map((key) => [key, probability(reactionProbabilities[key])]));
   let presenceScores: { present: number; away: number };
   let present: boolean;

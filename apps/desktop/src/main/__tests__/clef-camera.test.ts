@@ -36,7 +36,7 @@ describe("local Clef camera decisions", () => {
     await classifyVoiceCamera("fixture-image", signal);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/decide", expect.objectContaining({ signal, redirect: "error", method: "POST" }));
     const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
-    expect(body.questions.presence).toMatchObject({ type: "noul", criteria: { true: "person visible", false: "no person visible" } });
+    expect(body.questions.presence).toMatchObject({ type: "noul", criteria: { true: "yes", false: "no" } });
     expect(body.questions.gesture.criteria).toHaveProperty("double_thumbs_up", "both thumbs up");
     expect(body.questions.gesture.criteria).toHaveProperty("stop");
     expect(body.questions.vibe.instructions).toBe("What is the person doing?");

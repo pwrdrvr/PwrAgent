@@ -363,7 +363,7 @@ Main sends 336-pixel JPEG frames to the fixed loopback Clef `/decide` endpoint
 at `127.0.0.1:8787`, with short demo-style questions for gestures, boolean
 presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
 thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
-frustrated, yelling, talking, enthusiastic and bored. All 17 returned scores
+frustrated, yelling and talking. All 15 returned scores
 are available in Camera diagnostics. The state is the demo’s compact
 “A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
 runs at a time, at up to two frames per second. Camera permissions and frame
