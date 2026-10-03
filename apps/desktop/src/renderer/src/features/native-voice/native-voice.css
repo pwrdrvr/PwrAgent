@@ -191,6 +191,13 @@
   box-shadow: var(--shadow-popover);
   -webkit-app-region: no-drag;
 }
+
+/* Its tooltips portal to the body, outside the panel's layer, so the default
+   viewport-tooltip layer (90) would paint them under the panel. Both classes
+   in the selector so it wins whichever stylesheet the bundle loads last. */
+.viewport-tooltip.director-voice-panel__tooltip {
+  z-index: 140;
+}
 .director-voice-panel__head {
   display: flex;
   flex: none;
