@@ -236,6 +236,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * rollout omits them from durable transcript items.
    */
   questionnaireActivityLog?: ThreadQuestionnaireActivity[];
+  /**
+   * Per-thread approval-reviewer decisions. Persisted via the overlay store
+   * and rendered as one transcript row per decision, because a reviewed
+   * request never reaches the operator as an approval card.
+   */
+  approvalReviewLog?: ThreadApprovalReview[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -2014,7 +2020,7 @@ export type NavigationSelectedDetailRequest = {
 export const NAVIGATION_DETAIL_COLLECTION_NAMES = [
   "subAgents", "codexNativeSubAgents", "permissionTransitionLog",
   "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog",
-  "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder",
+  "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder", "approvalReviewLog",
 ] as const;
 export type NavigationDetailCollectionName = typeof NAVIGATION_DETAIL_COLLECTION_NAMES[number];
 export type NavigationDetailCollections = Pick<NavigationThreadSummary, NavigationDetailCollectionName>;
@@ -2864,6 +2870,11 @@ export type ThreadOverlayState = {
    * in the transcript after hydration.
    */
   questionnaireActivityLog?: ThreadQuestionnaireActivity[];
+  /**
+   * Per-thread approval-reviewer decisions, capped at
+   * `MAX_APPROVAL_REVIEW_LOG_ENTRIES` (oldest-first eviction).
+   */
+  approvalReviewLog?: ThreadApprovalReview[];
 };
 
 /**
@@ -3049,6 +3060,29 @@ export type ThreadQuestionnaireActivity = {
   answers?: Record<string, ThreadQuestionnaireActivityAnswer | undefined>;
   createdAt: number;
   updatedAt: number;
+};
+
+/**
+ * Maximum number of approval-reviewer decisions retained per thread. Kept
+ * separate from the other audit streams so a busy automation does not evict
+ * permission or questionnaire history.
+ */
+export const MAX_APPROVAL_REVIEW_LOG_ENTRIES = 100;
+
+/**
+ * One decision by the profile's approval reviewer. `subject` names what was
+ * reviewed (an MCP tool, the server that asked, or the escalated command)
+ * without its arguments or the reviewer's answer content.
+ */
+export type ThreadApprovalReview = {
+  id: string;
+  kind: "invocation" | "question" | "escalation";
+  action: "accept" | "decline" | "cancel";
+  subject: string;
+  reason: string;
+  turnId?: string;
+  automationRunId?: string;
+  occurredAt: number;
 };
 
 export type ThreadBranchDriftPair = {

@@ -701,6 +701,61 @@ describe("DesktopAutomationService", () => {
     );
   });
 
+  it("captures each approval-reviewer decision as a run transcript line", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+    });
+    const runNow = await service.runNow({ automationId: created.automation.id });
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/approvalReview/updated",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-1",
+              review: {
+                id: "review-1",
+                kind: "invocation",
+                action: "decline",
+                subject: "Mail / send_message",
+                reason: "Sending mail is outside the task.",
+                turnId: "turn-1",
+                automationRunId: runNow.run.id,
+                occurredAt: 1_700_000_000_000,
+              },
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    await expect(
+      service.getRunArtifact({ runId: runNow.run.id }),
+    ).resolves.toMatchObject({
+      artifact: {
+        transcriptEvents: expect.arrayContaining([
+          expect.objectContaining({
+            id: `${runNow.run.id}:approval-review:review-1`,
+            kind: "approval_review",
+            text: "Approval reviewer declined Mail / send_message\nSending mail is outside the task.",
+          }),
+        ]),
+      },
+    });
+  });
+
   it("publishes run updates for queue lifecycle events by run id", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();

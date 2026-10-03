@@ -1,3 +1,5 @@
+import type { ThreadApprovalReview } from "./contracts/navigation";
+
 export const MCP_REVIEWER_MODEL_TYPES = ["harness", "completions", "responses", "claude", "system-one"] as const;
 export type McpReviewerModelType = (typeof MCP_REVIEWER_MODEL_TYPES)[number];
 export type AutomationMcpApprovalPolicy = {
@@ -121,6 +123,17 @@ export function resolveAutomationEscalationPolicy(
 }
 
 /** Future decision adapters normalize these values into an approval decision. */
+const APPROVAL_REVIEW_VERBS: Record<ThreadApprovalReview["kind"], Record<ThreadApprovalReview["action"], string>> = {
+  invocation: { accept: "allowed", decline: "declined", cancel: "cancelled" },
+  question: { accept: "answered", decline: "declined", cancel: "cancelled" },
+  escalation: { accept: "approved", decline: "declined", cancel: "cancelled" },
+};
+
+/** One line for a reviewer decision, shared by thread and run transcripts. */
+export function summarizeApprovalReview(review: Pick<ThreadApprovalReview, "kind" | "action" | "subject">): string {
+  return `Approval reviewer ${APPROVAL_REVIEW_VERBS[review.kind][review.action]} ${review.subject}`;
+}
+
 export type SystemOneDecision =
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number };

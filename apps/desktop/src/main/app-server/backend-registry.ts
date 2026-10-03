@@ -1,5 +1,5 @@
 import { DEFAULT_MCP_AUTO_APPROVAL_SETTINGS, normalizeAutomationMcpApprovalPolicy, resolveAutomationEscalationPolicy, resolveAutomationMcpQuestionPolicy, resolveAutomationMcpToolPolicy, type DesktopMcpAutoApprovalSettings, type AutomationMcpApprovalPolicy } from "@pwragent/shared";
-import { McpAutoReviewer, type McpHarnessReviewRequest, type McpReviewInput } from "../mcp-connections/mcp-auto-reviewer";
+import { McpAutoReviewer, type McpHarnessReviewRequest, type McpReviewDecision, type McpReviewInput } from "../mcp-connections/mcp-auto-reviewer";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -303,6 +303,7 @@ import {
   type ThreadCodexInvalidIdRecovery,
   type ThreadPermissionTransition,
   type ThreadQuestionnaireActivity,
+  type ThreadApprovalReview,
   type ThreadTurnFailure,
   type AppServerToolRequestUserInputNotification,
   type ThreadAgentMetadata,
@@ -2493,6 +2494,16 @@ function readNotificationProjectLabel(
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Names an escalation for its transcript row: the command, or a file change. */
+function describeEscalationForReview(request: AppServerPendingRequestNotification): string {
+  if (request.method !== "item/commandExecution/requestApproval") return "a file change";
+  const command = request.params.command;
+  const text = Array.isArray(command)
+    ? command.filter((part): part is string => typeof part === "string").join(" ")
+    : readNonEmptyString(command);
+  return text ? `the command ${text.length > 200 ? `${text.slice(0, 199)}…` : text}` : "a command";
 }
 
 function readOptionalString(value: unknown): string | undefined;
@@ -35356,7 +35367,10 @@ export class DesktopBackendRegistry {
     if (headlessAutomation?.executionMode === "default"
       && (request.method === "item/commandExecution/requestApproval" || request.method === "item/fileChange/requestApproval")
       && resolveAutomationEscalationPolicy(headlessAutomation.mcpApproval, this.resolveMcpAutoApprovalSettingsFn()) === "auto") {
-      const response = await this.reviewMcpRequest({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }, {
+      const response = await this.reviewMcpRequest({
+        backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined,
+        automationRunId: headlessAutomation.automationRunId, subject: describeEscalationForReview(request),
+      }, {
         kind: "escalation", serverName: String(backend), message: request.method,
         context: { request: this.withEmbeddedFileChangeApprovalContext({ backend, notification: request }).notification.params },
       });
@@ -35374,7 +35388,10 @@ export class DesktopBackendRegistry {
           && resolveAutomationMcpQuestionPolicy(headlessAutomation.mcpApproval, settings.enabled) === "auto"
         : settings.enabled && await this.shouldReviewMcpForThread({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined });
       if (allowed && live && (!headlessAutomation || await this.isAutomationMcpServerSelected(backend, headlessAutomation, serverName))) {
-        const response = await this.reviewMcpRequest({ backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined }, {
+        const response = await this.reviewMcpRequest({
+          backend, threadId: request.params.threadId, turnId: request.params.turnId ?? undefined,
+          automationRunId: headlessAutomation?.automationRunId, subject: `a question from ${serverName}`,
+        }, {
           kind: "question", serverName, message: String(request.params.message ?? ""),
           mode: String(request.params.mode ?? "form"), schema: readRecord(request.params.requestedSchema),
           context: { automationRunId: headlessAutomation?.automationRunId },
@@ -35496,7 +35513,7 @@ export class DesktopBackendRegistry {
       const policy = this.automationMcpToolPolicy(automation.mcpApproval, automation.executionMode);
       if (policy === "deny") return false;
       if (policy === "auto" || policy === "backend" && automation.executionMode !== "full-access") {
-        const decision = await this.reviewMcpRequest(context, {
+        const decision = await this.reviewMcpRequest({ ...context, automationRunId: automation.automationRunId, subject: `${invocation.serverName} / ${invocation.toolName}` }, {
           kind: "invocation", serverName: invocation.serverName, message: notification.params.message as string,
           context: { invocation, automationRunId: automation.automationRunId },
         }, signal);
@@ -35518,7 +35535,7 @@ export class DesktopBackendRegistry {
       return true;
     }
     if (this.resolveMcpAutoApprovalSettingsFn().enabled && await this.shouldReviewMcpForThread(context)) {
-      const decision = await this.reviewMcpRequest(context, { kind: "invocation", serverName: invocation.serverName, message: notification.params.message as string, context: { invocation } }, signal);
+      const decision = await this.reviewMcpRequest({ ...context, subject: `${invocation.serverName} / ${invocation.toolName}` }, { kind: "invocation", serverName: invocation.serverName, message: notification.params.message as string, context: { invocation } }, signal);
       return this.acceptReviewedInvocation(decision);
     }
     if (automation) return false;
@@ -35552,8 +35569,8 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * A declined call reaches the agent as the tool's error, so the transcript's
-   * tool row carries the reviewer's reason. Nothing new is stored.
+   * A declined call reaches the agent as the tool's error, so the agent sees
+   * the reviewer's reason as well as the operator.
    */
   private acceptReviewedInvocation(decision: { action: "accept" | "decline" | "cancel"; reason: string }): boolean {
     if (decision.action === "accept") return true;
@@ -35625,17 +35642,57 @@ export class DesktopBackendRegistry {
       : selection.providerServersEnabled;
   }
 
-  private async reviewMcpRequest(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }, input: McpReviewInput, signal?: AbortSignal) {
+  /**
+   * `subject` names the reviewed request for its transcript row. It stays out
+   * of the reviewer's input, which is the request itself.
+   */
+  private async reviewMcpRequest(context: { backend: AppServerBackendKind; threadId: string; turnId?: string; automationRunId?: string; subject: string }, input: McpReviewInput, signal?: AbortSignal) {
     input = { ...input, task: this.activeMcpReviewTasks.get(buildTitleGenerationKey(context.backend, context.threadId)) ?? input.task };
     const key = randomUUID();
     const controller = new AbortController();
-    this.mcpReviews.set(key, { ...context, controller });
+    this.mcpReviews.set(key, { backend: context.backend, threadId: context.threadId, turnId: context.turnId, controller });
     try {
       const result = await this.mcpAutoReviewer.review(this.resolveMcpAutoApprovalSettingsFn(), input, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
-      backendRegistryLog.info("MCP Auto review decision", { ...context, kind: input.kind, serverName: input.serverName, action: result.action, reason: result.reason });
+      backendRegistryLog.info("MCP Auto review decision", { backend: context.backend, threadId: context.threadId, turnId: context.turnId, kind: input.kind, serverName: input.serverName, action: result.action, reason: result.reason });
+      await this.recordApprovalReview(context, input.kind, result);
       return result;
     } finally {
       this.mcpReviews.delete(key);
+    }
+  }
+
+  /**
+   * One transcript row per reviewer decision, since a reviewed request never
+   * shows the operator an approval card. A thread in Auto keeps the row in its
+   * overlay. An automation run's thread is ephemeral, so the automation
+   * service writes the event into the run transcript instead. Recording never
+   * changes the decision.
+   */
+  private async recordApprovalReview(
+    context: { backend: AppServerBackendKind; threadId: string; turnId?: string; automationRunId?: string; subject: string },
+    kind: McpReviewInput["kind"],
+    decision: McpReviewDecision,
+  ): Promise<void> {
+    const review: ThreadApprovalReview = {
+      id: randomUUID(), kind, action: decision.action,
+      subject: context.subject.slice(0, 300), reason: decision.reason,
+      ...(context.turnId ? { turnId: context.turnId } : {}),
+      ...(context.automationRunId ? { automationRunId: context.automationRunId } : {}),
+      occurredAt: Date.now(),
+    };
+    try {
+      if (!context.automationRunId) {
+        await this.overlayStore.appendApprovalReview({ backend: context.backend, threadId: context.threadId, review });
+      }
+      await this.emit({ backend: context.backend, notification: {
+        method: "thread/approvalReview/updated",
+        params: { threadId: context.threadId, ...(context.turnId ? { turnId: context.turnId } : {}), review },
+      } });
+    } catch (error) {
+      backendRegistryLog.error("failed to record approval review", {
+        backend: context.backend, threadId: context.threadId, turnId: context.turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

@@ -3969,6 +3969,7 @@ export function ThreadView(props: ThreadViewProps) {
               questionnaireActivities={
                 selectedThread!.questionnaireActivityLog
               }
+              approvalReviews={selectedThread!.approvalReviewLog}
               turnFailures={selectedThread!.turnFailureLog}
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}

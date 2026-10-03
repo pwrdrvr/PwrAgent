@@ -54,6 +54,7 @@ import type {
   StarMapArrangementEntry,
   StarMapWorkspaceSnapshot,
   StarMapWorkspaceState,
+  ThreadApprovalReview,
   ThreadQuestionnaireActivity,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
@@ -71,6 +72,7 @@ import {
   STAR_MAP_WORKSPACE_VERSION,
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
+  MAX_APPROVAL_REVIEW_LOG_ENTRIES,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_MANAGED_REVIEW_ENTRIES,
@@ -1179,6 +1181,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             current?.messagingBindingTransitionLog,
           turnFailureLog: current?.turnFailureLog,
           questionnaireActivityLog: current?.questionnaireActivityLog,
+          approvalReviewLog: current?.approvalReviewLog,
         });
       }
     }
@@ -5574,6 +5577,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  async appendApprovalReview(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    review: ThreadApprovalReview;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = current.approvalReviewLog ?? [];
+    if (existing.some((entry) => entry.id === params.review.id)) {
+      return current;
+    }
+    const nextLog = [...existing, params.review]
+      .sort((left, right) => left.occurredAt - right.occurredAt);
+    const nextState: ThreadOverlayState = {
+      ...current,
+      approvalReviewLog: nextLog.slice(-MAX_APPROVAL_REVIEW_LOG_ENTRIES),
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadModelSettings(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -9437,6 +9466,7 @@ export type OverlayStoreLike = Pick<
   | "appendTurnFailure"
   | "setTurnFailureCodexInvalidIdRecovery"
   | "appendQuestionnaireActivity"
+  | "appendApprovalReview"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getNavigationBrowseMode"

@@ -1,6 +1,7 @@
-import { normalizeAutomationMcpApprovalPolicy } from "@pwragent/shared";
+import { normalizeAutomationMcpApprovalPolicy, summarizeApprovalReview } from "@pwragent/shared";
 import type {
   AgentEvent,
+  ThreadApprovalReview,
   AppServerNotification,
   AutomationDetail,
   AutomationInspectionFailure,
@@ -1740,6 +1741,21 @@ function automationTranscriptEventFromBackendEvent(params: {
         },
       };
     }
+  }
+
+  if (notification.method === "thread/approvalReview/updated") {
+    const review = (notification.params as { review: ThreadApprovalReview }).review;
+    return {
+      id: `${params.run.id}:approval-review:${review.id}`,
+      at: review.occurredAt,
+      kind: "approval_review",
+      text: `${summarizeApprovalReview(review)}\n${review.reason}`,
+      metadata: {
+        source: "thread/approvalReview/updated",
+        review,
+        turnId: params.turnId,
+      },
+    };
   }
 
   if (notification.method === "turn/plan/updated") {

@@ -271,17 +271,54 @@ describe("backend MCP gateway dispatch", () => {
     expect(reviewModel).not.toHaveBeenCalled();
   });
 
-  it("reviews ordinary Auto gateway calls and adds no SQLite writes", async () => {
+  it("reviews ordinary Auto gateway calls and records one transcript row per decision", async () => {
     reviewerSettings.enabled = true;
     reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Authorized read." } });
     await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+    const reviews: AgentEvent[] = [];
+    registry.onEvent((event) => { if (event.notification.method === "thread/approvalReview/updated") reviews.push(event); });
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
     const { writes } = await measureSqliteWrites(async () => {
       await internals.handleServerRequest("codex", request("search_mcp_tools", {}, "auto-discover"));
       expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "auto-call"))).success).toBe(true);
     });
     expect(reviewModel).toHaveBeenCalledOnce();
-    expectSqliteWriteBudget({ scenario: "mcp-gateway-discovery-and-invocation", note: "MCP review uses an isolated model adapter and in-memory pending decisions without additional SQLite commits.", writes });
+    // The row is the only write: the decision is stored once, after review.
+    // A busy Auto thread reviewing one call every 10 seconds for 8 hours a day
+    // is 2,880 commits, about 47 MB of WAL a day at the measured cost.
+    expectSqliteWriteBudget({ scenario: "mcp-gateway-reviewed-invocation", note: "MCP gateway discovery and one reviewed call in Auto persist exactly the reviewer's decision row.", writes });
+    const log = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.approvalReviewLog;
+    expect(log).toEqual([expect.objectContaining({ kind: "invocation", action: "accept", subject: "Fixture / lookup", reason: "Authorized read.", turnId: "turn-1" })]);
+    expect(reviews.map((event) => event.notification.params)).toEqual([{ threadId: "thread-1", turnId: "turn-1", review: log![0] }]);
+    expect(JSON.stringify(reviewModel.mock.calls[0]![0])).not.toContain("subject");
+  });
+
+  it("leaves an automation run's decision to its run transcript instead of a thread overlay", async () => {
+    reviewerSettings.enabled = true;
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "decline", content: null, reason: "Not part of the task." } });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "run-review", input: [{ type: "text", text: "Read fixture health." }], mcpAllowlist: ["one"], mcpApproval: { tools: "auto" } });
+    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    const reviews: AgentEvent[] = [];
+    registry.onEvent((event) => { if (event.notification.method === "thread/approvalReview/updated") reviews.push(event); });
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      await expect(internals.approveGatewayInvocation({ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", arguments: {} }, { backend: "codex", threadId: "headless-1", turnId: "turn-1", transport: "codex_dynamic_tool" }, new AbortController().signal))
+        .rejects.toThrow("The approval reviewer declined this MCP tool call: Not part of the task.");
+    });
+    expect(writes.commits).toBe(0);
+    expect(reviews.map((event) => event.notification.params)).toEqual([{ threadId: "headless-1", turnId: "turn-1", review: expect.objectContaining({ kind: "invocation", action: "decline", automationRunId: "run-review", reason: "Not part of the task." }) }]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "headless-1" }))?.approvalReviewLog).toBeUndefined();
+  });
+
+  it("names the escalated command in its decision row", async () => {
+    reviewerSettings.enabled = true;
+    reviewerSettings.reviewEscalations = true;
+    reviewModel.mockResolvedValue({ status: "ok", object: { action: "accept", content: null, reason: "Runs the task's tests." } });
+    await registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "thread-1", automationRunId: "run-escalate", executionMode: "default", input: [{ type: "text", text: "Run the tests." }] });
+    const reviews: AgentEvent[] = [];
+    registry.onEvent((event) => { if (event.notification.method === "thread/approvalReview/updated") reviews.push(event); });
+    await internals.handleServerRequest("codex", { method: "item/commandExecution/requestApproval", params: { threadId: "headless-1", turnId: "turn-1", requestId: "escalate", itemId: "cmd-1", command: "pnpm test" } });
+    expect(reviews.map((event) => (event.notification.params as { review: unknown }).review)).toEqual([expect.objectContaining({ kind: "escalation", action: "accept", subject: "the command pnpm test", automationRunId: "run-escalate" })]);
   });
 
   it("invokes a selected MCP tool without a prompt in Full Access", async () => {

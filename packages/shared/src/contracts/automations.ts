@@ -1195,7 +1195,7 @@ export type AutomationRunOutputDecision =
 export type AutomationRunTranscriptEvent = {
   id: string;
   at: number;
-  kind: "invocation" | "gate" | "lifecycle" | "assistant_final" | "error";
+  kind: "invocation" | "gate" | "lifecycle" | "assistant_final" | "error" | "approval_review";
   text?: string;
   metadata?: Record<string, unknown>;
 };

@@ -19,6 +19,7 @@ import type {
 import type {
   PrSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
+  ThreadApprovalReview,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
@@ -1910,6 +1911,14 @@ export type AppServerNotification =
       params: {
         threadId: string;
         requestId: string;
+      };
+    }
+  | {
+      method: "thread/approvalReview/updated";
+      params: {
+        threadId: string;
+        turnId?: string;
+        review: ThreadApprovalReview;
       };
     }
   | {

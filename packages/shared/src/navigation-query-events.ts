@@ -23,13 +23,17 @@ const ROW_CHANGE_METHODS = new Set([
   "navigation/directory/seen", "navigation/directory/removed", "navigation/directoryGitStatus/updated",
   "navigation/threadGitWorkingState/updated", "navigation/threadDirectories/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
-  "serverRequest/resolved", "item/tool/requestUserInput",
+  "serverRequest/resolved", "item/tool/requestUserInput", "thread/approvalReview/updated",
 ]);
 
 /** Streamed text, token accounting and tool deltas do not refresh collection queries. */
 export function navigationQueryEventRequiresRefresh(method: string, params?: unknown): boolean {
   if (method === "thread/subAgents/updated" && params && typeof params === "object"
     && "navigationChanged" in params && params.navigationChanged === false) return false;
+  // An automation run's decision belongs to its run transcript, not a thread.
+  if (method === "thread/approvalReview/updated" && params && typeof params === "object"
+    && "review" in params && params.review && typeof params.review === "object"
+    && "automationRunId" in params.review && params.review.automationRunId) return false;
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
 
@@ -44,7 +48,7 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/turnQueue/updated", "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",
   // Subagent detail and native-group presence belong to the named parent.
   // Ordinary child discovery uses thread/started and thread/parent/set.
-  "thread/subAgents/updated",
+  "thread/subAgents/updated", "thread/approvalReview/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
 ]);
 

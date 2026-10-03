@@ -42,9 +42,18 @@ command and file-change escalations are never sent to the reviewer. Otherwise
 enabling the reviewer would silently turn Default Access into Auto.
 
 A declined or cancelled gateway invocation fails with the reviewer's reason in
-the tool error, so the transcript's tool row shows why. Questions and
-escalations answer their protocol request, which carries no reason; their
-decisions are logged in the main process.
+the tool error, so the agent sees why.
+
+Every decision, whether invocation, question, or escalation, also emits
+`thread/approvalReview/updated` with a `ThreadApprovalReview`: the kind, the
+action, a subject naming the server and tool, the question's server, or the
+escalated command, and the reason. The subject carries no tool arguments or
+answer content, and it never reaches the reviewer. A thread in Auto appends
+the decision to its overlay's `approvalReviewLog` (capped at 100, one commit
+per decision), which the transcript renders as one activity row inside the
+turn's work. An automation run's thread is ephemeral, so nothing is stored on
+it. The automation service captures the event as an `approval_review` line in
+the run transcript, flushed with the run's other events.
 
 ### Automation MCP grants and review
 

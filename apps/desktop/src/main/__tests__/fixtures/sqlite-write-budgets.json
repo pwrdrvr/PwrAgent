@@ -442,6 +442,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "mcp-gateway-reviewed-invocation": {
+    "commits": 1,
+    "note": "MCP gateway discovery and one reviewed call in Auto persist exactly the reviewer's decision row.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "mcp-token-rotation": {
     "commits": 1,
     "note": "persist one encrypted rotated MCP credential generation",

@@ -27,6 +27,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
+  ThreadApprovalReview,
   ThreadTurnFailure,
   ThreadSubAgentSummary,
   MarkdownFileViewerContext,
@@ -39,6 +40,7 @@ import {
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
+import { injectApprovalReviews } from "./approval-review-entries";
 import { injectTurnFailures } from "./turn-failure-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
@@ -130,6 +132,7 @@ type TranscriptListProps = {
   permissionTransitions?: ThreadPermissionTransition[];
   messagingBindingTransitions?: ThreadMessagingBindingTransition[];
   questionnaireActivities?: ThreadQuestionnaireActivity[];
+  approvalReviews?: ThreadApprovalReview[];
   turnFailures?: ThreadTurnFailure[];
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
@@ -898,12 +901,15 @@ export function TranscriptList(props: TranscriptListProps) {
       insertPendingEntry(entries, pendingEntry);
     }
     return injectTurnFailures(
-      injectQuestionnaireActivities(
-        injectMessagingBindingTransitions(
-          injectPermissionTransitions(entries, props.permissionTransitions),
-          props.messagingBindingTransitions,
+      injectApprovalReviews(
+        injectQuestionnaireActivities(
+          injectMessagingBindingTransitions(
+            injectPermissionTransitions(entries, props.permissionTransitions),
+            props.messagingBindingTransitions,
+          ),
+          props.questionnaireActivities,
         ),
-        props.questionnaireActivities,
+        props.approvalReviews,
       ),
       props.turnFailures,
     );
@@ -919,6 +925,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.messagingBindingTransitions,
     props.permissionTransitions,
     props.questionnaireActivities,
+    props.approvalReviews,
     props.turnFailures,
   ]);
   // Replies to Codex async questions, keyed by the question they name. The

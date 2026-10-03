@@ -892,6 +892,14 @@ function questionnaireActivityLogsEqual(
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
+function approvalReviewLogsEqual(
+  left: NavigationThreadSummary["approvalReviewLog"],
+  right: NavigationThreadSummary["approvalReviewLog"]
+): boolean {
+  // Entries are append-only and never edited, so ids identify the log.
+  return (left ?? []).map((entry) => entry.id).join() === (right ?? []).map((entry) => entry.id).join();
+}
+
 function threadSummariesEqual(
   left: NavigationPresentedThread,
   right: NavigationPresentedThread
@@ -983,7 +991,8 @@ function threadSummariesEqual(
     questionnaireActivityLogsEqual(
       left.questionnaireActivityLog,
       right.questionnaireActivityLog
-    )
+    ) &&
+    approvalReviewLogsEqual(left.approvalReviewLog, right.approvalReviewLog)
   );
 }
 
@@ -3390,7 +3399,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined;
   const selectedDetail = useNavigationSelectedDetail({
-    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
+    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "approvalReviewLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId
@@ -4443,6 +4452,15 @@ export function useThreadNavigation(
         // navigation snapshot carries `turnFailureLog` into the transcript;
         // without it the failure would never surface as a durable entry.
         scheduleEventRefresh();
+        return;
+      }
+
+      if (method === "thread/approvalReview/updated") {
+        // A thread in Auto persisted the reviewer's decision in its overlay.
+        // Refresh so the decision appears as a transcript row now. An
+        // automation run's decision goes to its run transcript instead.
+        const params = event.notification.params as { review?: { automationRunId?: string } };
+        if (!params.review?.automationRunId) scheduleEventRefresh();
         return;
       }
 

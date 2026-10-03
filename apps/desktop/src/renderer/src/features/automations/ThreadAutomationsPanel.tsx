@@ -660,6 +660,8 @@ function formatAutomationTranscriptEventKind(
       return "assistant";
     case "invocation":
       return "started";
+    case "approval_review":
+      return "approval reviewer";
     default:
       return kind;
   }
