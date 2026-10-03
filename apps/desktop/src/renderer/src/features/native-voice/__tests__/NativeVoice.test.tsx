@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
@@ -509,12 +509,13 @@ it("draws the director panel's tooltips above the panel", async () => {
   document.head.append(styles);
   try {
     const f = voiceFixture();
-    render(<DirectorVoicePanel api={f.api} />);
+    // The masthead mic's hover card can drop over the panel too.
+    render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /></>);
     await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
     await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
     const panelLayer = Number(getComputedStyle(directorPanel()!).zIndex);
     expect(panelLayer).toBeGreaterThan(0);
-    for (const name of ["Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
+    for (const name of ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
       fireEvent.mouseEnter(screen.getByRole("button", { name }));
       const tooltip = await screen.findByRole("tooltip");
       expect(Number(getComputedStyle(tooltip).zIndex), name).toBeGreaterThan(panelLayer);
