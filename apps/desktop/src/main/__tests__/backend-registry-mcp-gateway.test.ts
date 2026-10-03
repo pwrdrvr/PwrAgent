@@ -192,6 +192,117 @@ describe("backend MCP gateway dispatch", () => {
     expect(internals.headlessAutomationTurns.size).toBe(0);
   });
 
+  const appConsent = (meta: Record<string, unknown> = {}): AppServerPendingRequestNotification => ({
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId: "headless-1", turnId: "turn-1", requestId: "app-consent", serverName: "one",
+      mode: "form", message: "Allow Computer Use to use Electron?",
+      requestedSchema: { type: "object", properties: {} },
+      _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "lookup", persist: ["session", "always"], ...meta },
+    },
+  });
+
+  async function startApprovedAutomation(toolAllowlist = ["lookup"]) {
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["one"], toolAllowlist, input: [{ type: "text", text: "Look up the fixture." }],
+    });
+  }
+
+  it("answers an automation's preauthorized native consent with the advertised run scope", async () => {
+    await startApprovedAutomation();
+    const events = declineUnexpectedApproval();
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(await internals.handleServerRequest("codex", appConsent())).toEqual({
+        action: "accept", content: {}, _meta: { persist: "session" },
+      });
+    });
+    expectSqliteWriteBudget({ scenario: "mcp-automation-native-consent", note: "Native automation MCP consent checks the in-memory run grant and reads the Agent selection without adding SQLite commits.", writes });
+    expect(events).toEqual([]);
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
+  it.each(["allowed", "outside-allowlist", "provider-disabled"])("checks inherited native servers when consent is %s", async (scenario) => {
+    const nativeRegistry = registry as unknown as { readConfiguredCodexMcpServerNames(cwd?: string): Promise<string[]> };
+    vi.spyOn(nativeRegistry, "readConfiguredCodexMcpServerNames").mockResolvedValue(["native-fixture", "other-native"]);
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["native-fixture"], toolAllowlist: ["lookup"], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    if (scenario === "provider-disabled") {
+      await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["one"], providerServersEnabled: false });
+    }
+    const consent = appConsent();
+    consent.params.serverName = scenario === "outside-allowlist" ? "other-native" : "native-fixture";
+    expect(await internals.handleServerRequest("codex", consent)).toEqual(scenario === "allowed"
+      ? { action: "accept", content: {}, _meta: { persist: "session" } }
+      : { action: "cancel", content: null, _meta: null });
+  });
+
+  it("honors native automation consent before turn startup returns", async () => {
+    startTurn.mockImplementation(async () => {
+      expect(await internals.handleServerRequest("codex", appConsent())).toEqual({
+        action: "accept", content: {}, _meta: { persist: "session" },
+      });
+      return { threadId: "headless-1", turnId: "turn-1" };
+    });
+    await startApprovedAutomation();
+  });
+
+  it("does not answer native consent after the automation ends during the selection check", async () => {
+    await startApprovedAutomation();
+    const readSelection = registry.readThreadMcpConnections.bind(registry);
+    vi.spyOn(registry, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
+      const selected = await readSelection(request);
+      internals.headlessAutomationTurns.clear();
+      return selected;
+    });
+    expect(await internals.handleServerRequest("codex", appConsent())).toEqual({ action: "cancel", content: null, _meta: null });
+  });
+
+  it.each(["default", "auto"] as const)("presents native MCP consent to the user in interactive %s threads", async (executionMode) => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode });
+    const pending = approval();
+    const consent = appConsent();
+    consent.params.threadId = "thread-1";
+    const response = internals.handleServerRequest("codex", consent);
+    await pending;
+    expect(internals.pendingServerRequests.size).toBe(1);
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: "app-consent",
+      response: { action: "accept", content: {}, _meta: { persist: "session" } },
+    });
+    expect(await response).toEqual({ action: "accept", content: {}, _meta: { persist: "session" } });
+  });
+
+  it("never creates a permanent native grant for an automation", async () => {
+    await startApprovedAutomation();
+    expect(await internals.handleServerRequest("codex", appConsent({ persist: ["always"] }))).toEqual({
+      action: "accept", content: {}, _meta: null,
+    });
+  });
+
+  it.each(["different-tool", "missing-tool", "revoked-server"])("rejects native consent when the automation grant is %s", async (scenario) => {
+    await startApprovedAutomation();
+    if (scenario === "revoked-server") {
+      await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    }
+    const meta = scenario === "different-tool" ? { tool_name: "write" }
+      : scenario === "missing-tool" ? { tool_name: undefined } : {};
+    expect(await internals.handleServerRequest("codex", appConsent(meta))).toEqual({ action: "cancel", content: null, _meta: null });
+  });
+
+  it.each(["question", "required-field", "url", "unknown-server", "unknown-scope"])("does not use an automation grant for native %s", async (scenario) => {
+    await startApprovedAutomation();
+    const consent = appConsent(scenario === "unknown-scope" ? { persist: ["forever"] } : {});
+    if (scenario === "question") consent.params.requestedSchema = { type: "object", properties: { account: { type: "string" } } };
+    if (scenario === "required-field") consent.params.requestedSchema = { type: "object", properties: {}, required: ["account"] };
+    if (scenario === "url") consent.params.mode = "url";
+    if (scenario === "unknown-server") consent.params.serverName = "other";
+    expect(await internals.handleServerRequest("codex", consent)).toEqual({ action: "cancel", content: null, _meta: null });
+  });
+
   it("cancels upstream MCP questions even when the automation pre-approves that server", async () => {
     await registry.startAutomationHeadlessTurn({
       backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
