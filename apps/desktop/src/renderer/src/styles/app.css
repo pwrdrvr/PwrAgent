@@ -7432,10 +7432,16 @@ a.button {
 }
 
 /* A menu with checkable items gives every other item the same check column,
-   so labels align down the menu. 10px button padding + 16px box + 7px gap. */
+   so labels align down the menu. 10px button padding + 16px box + 7px gap.
+   A cascade row's button sits one level down, inside its wrapper; the child
+   combinator there keeps the indent off the flyout's own rows. */
 .thread-context-menu--check-column
   > .thread-context-menu__section
-  > button:not([role="menuitemcheckbox"]) {
+  > button:not([role="menuitemcheckbox"]),
+.thread-context-menu--check-column
+  > .thread-context-menu__section
+  > .thread-context-menu__cascade
+  > button {
   padding-left: 33px;
 }
 
