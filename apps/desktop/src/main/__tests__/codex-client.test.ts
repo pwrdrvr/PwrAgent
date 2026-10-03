@@ -14675,7 +14675,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("normalizes MCP elicitation requests and returns MCP-shaped responses", async () => {
+  it.each([null, "session", "always"])("normalizes MCP elicitation and preserves the %s grant on the wire", async (persist) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -14691,7 +14691,7 @@ describe("CodexAppServerClient", () => {
       return {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: persist ? { persist } : null
       };
     });
 
@@ -14709,6 +14709,7 @@ describe("CodexAppServerClient", () => {
         mode: "form",
         _meta: {
           codex_approval_kind: "mcp_tool_call",
+          persist: ["session", "always"],
           tool_description: "List, create, close, or select a browser tab.",
           tool_params: {
             action: "list"
@@ -14745,6 +14746,7 @@ describe("CodexAppServerClient", () => {
             properties: {}
           },
           _meta: expect.objectContaining({
+            persist: ["session", "always"],
             tool_description: "List, create, close, or select a browser tab."
           })
         })
@@ -14760,7 +14762,7 @@ describe("CodexAppServerClient", () => {
       result: {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: persist ? { persist } : null
       }
     });
 

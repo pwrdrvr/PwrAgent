@@ -40,6 +40,14 @@ provider MCP servers are not exposed through this gateway.
 Only the gateway's host-created invocation approval follows this policy.
 Upstream MCP forms, including empty forms, and URL flows remain interactive:
 their shape alone does not distinguish tool approval from a question or login.
+For an identified MCP tool approval with an empty form, the desktop offers
+the persistence scopes advertised in `_meta.persist`. **Allow this conversation**
+returns `_meta: { persist: "session" }`; **Always allow** returns
+`_meta: { persist: "always" }`. Browser origin approvals use the same advertised
+scopes. The server owns the grant's scope and storage; PwrAgent does not cache
+an allowance for every tool on that server. Questions and login requests do not
+receive persistent grants. Gateway invocation confirmations do not advertise
+persistence and remain governed by the policy above.
 
 ### Automation MCP grants
 
