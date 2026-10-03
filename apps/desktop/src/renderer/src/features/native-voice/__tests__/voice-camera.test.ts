@@ -7,6 +7,16 @@ const sample: VoiceCameraObservation = {
 };
 
 describe("camera cue debounce", () => {
+  it("delivers the first sustained neutral cue once so voice receives baseline context", () => {
+    const filter = new CameraCueFilter();
+    const neutral = { ...sample, reaction: "neutral" as const };
+    expect(filter.observe(neutral, 0)).toEqual({});
+    expect(filter.observe(neutral, 500)).toEqual({});
+    expect(filter.observe(neutral, 1500)).toEqual({ cue: "neutral" });
+    expect(filter.observe(neutral, 2000)).toEqual({});
+    expect(filter.status).toBe("Repeated cue suppressed");
+  });
+
   it("requires sustained confident samples and deduplicates the same reaction", () => {
     const filter = new CameraCueFilter();
     expect(filter.observe(sample, 0)).toEqual({});

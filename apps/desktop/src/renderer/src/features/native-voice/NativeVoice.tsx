@@ -207,7 +207,7 @@ function micHint(muted: boolean): string {
 }
 
 /** Transcript rows and tool receipts, in the order they happened. */
-export function VoiceFeed({ view, limit }: { view: VoiceView; limit?: number }) {
+export function VoiceFeed({ view, limit, scrollParent = false }: { view: VoiceView; limit?: number; scrollParent?: boolean }) {
   const rows = useMemo(() => {
     const merged = [
       ...view.transcript.map((row) => ({ kind: "say" as const, ...row })),
@@ -218,8 +218,12 @@ export function VoiceFeed({ view, limit }: { view: VoiceView; limit?: number }) 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const node = ref.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [rows]);
+    if (!node) return;
+    if (scrollParent && node.parentElement) {
+      const parent = node.parentElement;
+      parent.scrollTop = Math.max(0, node.offsetTop - parent.offsetTop + node.offsetHeight - parent.clientHeight);
+    } else node.scrollTop = node.scrollHeight;
+  }, [rows, scrollParent]);
   if (!rows.length) return null;
   return (
     <div className="native-voice-feed" ref={ref} role="log" aria-label="Voice transcript">

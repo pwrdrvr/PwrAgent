@@ -53,7 +53,7 @@ export type NativeVoiceApi = {
   onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => () => void;
   sendNativeVoiceCameraCue?: (request: VoiceCameraCue) => Promise<void>;
   setNativeVoiceCamera?: (request: VoiceCameraRequest) => Promise<void>;
-  analyzeNativeVoiceCamera?: (request: VoiceCameraFrame) => Promise<VoiceCameraObservation>;
+  analyzeNativeVoiceCamera?: (request: VoiceCameraFrame) => Promise<VoiceCameraObservation | undefined>;
   openVoiceManager?: () => Promise<OpenVoiceManagerResponse>;
   publishOperatorFocus?: (focus: OperatorFocusSnapshot) => Promise<void>;
   /**

@@ -8,6 +8,7 @@ export type CameraDecision = { cue?: CameraCue; end?: boolean };
 
 /** Require consecutive confident samples; missing/uncertain frames never count as absence. */
 export class CameraCueFilter {
+  status = "Waiting for a decision";
   private candidate?: CameraCue;
   private since = 0;
   private samples = 0;
@@ -25,7 +26,9 @@ export class CameraCueFilter {
   observe(observation: VoiceCameraObservation, now: number): CameraDecision {
     if (this.lastSample !== undefined && now - this.lastSample > CAMERA_SAMPLE_GAP_MS) this.resetContinuity();
     this.lastSample = now;
+    this.status = "Collecting consecutive frames";
     if (observation.presenceConfidence < 0.8) {
+      this.status = "Presence confidence below 80%";
       this.awaySince = undefined;
       this.candidate = undefined;
       return {};
@@ -38,6 +41,7 @@ export class CameraCueFilter {
     } else {
       this.awaySince = undefined;
       if (observation.reactionConfidence < 0.7) {
+        this.status = "Reaction confidence below 70%";
         this.candidate = undefined;
         return {};
       }
@@ -49,12 +53,12 @@ export class CameraCueFilter {
       this.samples = 0;
     }
     this.samples++;
-    if (this.samples < 3 || now - this.since < REACTION_DEBOUNCE_MS || cue === this.lastCue) return {};
-    if (cue !== "away" && this.lastCue !== "away" && now - this.lastSent < CUE_COOLDOWN_MS) return {};
+    if (this.samples < 3 || now - this.since < REACTION_DEBOUNCE_MS) return {};
+    if (cue === this.lastCue) { this.status = "Repeated cue suppressed"; return {}; }
+    if (cue !== "away" && this.lastCue !== "away" && now - this.lastSent < CUE_COOLDOWN_MS) { this.status = "Eight-second cue cooldown"; return {}; }
     this.lastCue = cue;
-    // Initial neutral is useful locally, but doesn't need a voice interruption.
-    if (cue === "neutral" && this.lastSent === -Infinity) return {};
     this.lastSent = now;
+    this.status = "Cue ready";
     return { cue };
   }
 }

@@ -186,7 +186,15 @@ export class NativeVoiceSessionManager {
     if (!session || !this.allowsCameraSession(owner, request.sessionId) || !this.allowsCamera(owner)) {
       throw new Error("Enable the camera in this voice session first.");
     }
-    await session.backend?.text(session.request.threadId, cameraCueText(request.cue), "developer");
+    if (!session.backend) throw new Error("Camera cue has no live voice backend.");
+    const route = { threadId: session.request.threadId, sessionId: request.sessionId, cue: request.cue };
+    try {
+      await session.backend.text(session.request.threadId, cameraCueText(request.cue), "developer");
+      log.info("camera cue appendText acknowledged", route);
+    } catch (error) {
+      log.warn("camera cue appendText failed", route);
+      throw error;
+    }
   }
 
   async text(owner: number, request: NativeVoiceText): Promise<void> {

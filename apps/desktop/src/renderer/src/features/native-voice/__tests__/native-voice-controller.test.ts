@@ -199,6 +199,40 @@ describe("voice camera ownership", () => {
     expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
   });
 
+  it("counts results/rate and marks delivery only after the cue RPC acknowledges", async () => {
+    const f = await liveCamera();
+    const pending = deferred<void>();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: true, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 }));
+    f.api.sendNativeVoiceCameraCue = vi.fn(() => pending.promise);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({
+      threadId: "fixture-thread", sessionId: "fixture-session", observations: 4, rateHz: 2,
+      delivery: "pending", lastCue: "neutral", cuesAcknowledged: 0,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(4);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ delivery: "acknowledged", cuesAcknowledged: 1 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+    expect(f.controller.getView().cameraDiagnostics?.filter).toBe("Repeated cue suppressed");
+    await f.controller.stop();
+  });
+
+  it("exposes a rejected cue route while releasing the camera and keeping voice live", async () => {
+    const f = await liveCamera();
+    f.api.sendNativeVoiceCameraCue = vi.fn(async () => { throw new Error("appendText rejected"); });
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.controller.getView()).toMatchObject({ status: "listening", cameraError: "appendText rejected",
+      cameraDiagnostics: { delivery: "failed", cuesAcknowledged: 0, error: "appendText rejected" } });
+    expect(f.controller.getView().camera).toBeUndefined();
+    expect(f.capture.close).toHaveBeenCalledOnce();
+    await f.controller.stop();
+  });
+
   it("closes a camera that finishes opening after voice ends", async () => {
     const f = await liveCamera();
     const pending = deferred<typeof f.capture>();
@@ -227,6 +261,7 @@ describe("voice camera ownership", () => {
     pending.resolve(away);
     await vi.advanceTimersByTimeAsync(0);
     expect(f.controller.getView().cameraWarming).toBe(false);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ observations: 1, staleObservations: 1 });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(500);
