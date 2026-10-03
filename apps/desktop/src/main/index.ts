@@ -984,20 +984,8 @@ function isWindowCreationBlocked(): boolean {
  * app.quit() re-closing this window during teardown, so there's no loop.
  */
 function quitAppOnMainWindowClose(window: BrowserWindow): void {
-  window.webContents.on("render-process-gone", (_event, details) => {
-    if (
-      details.reason === "clean-exit"
-      || mainProcessShutdownPromise
-      || mainProcessResourcesDisposed
-      || isUpdateInstallInProgress()
-    ) return;
-    const source = `main-renderer-${details.reason}`;
-    mainLog.error("main renderer lost; shutting down app", details);
-    // A dead renderer cannot answer the active-turn confirmation dialog.
-    beginQuitInProgress(source);
-    appQuitManager.allowImmediateQuit();
-    quitAfterResourceShutdown(source);
-  });
+  // Renderer termination is recovered by the window's recovery handler. It
+  // does not close the BrowserWindow or end main-owned turns and connections.
   window.on("close", (event) => {
     if (appQuitManager.isQuitAllowed()) {
       return;

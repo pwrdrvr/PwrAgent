@@ -13,7 +13,7 @@
 import { expect, type ConsoleMessage, type Page } from "@playwright/test";
 import type { launchElectronApp } from "./electron-app";
 import { withProbeTimeout } from "./probe-report";
-import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
+import { retryTransientRpcCall, tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 type LaunchedApp = Awaited<ReturnType<typeof launchElectronApp>>;
 
@@ -178,7 +178,11 @@ export async function focusStarMapWindow(
   app: LaunchedApp,
   mapWindow: Page,
 ): Promise<void> {
-  const nativeMapWindow = await app.electronApp.browserWindow(mapWindow);
+  // Mapping a Page to its BrowserWindow is a pure read. CDP can collect its
+  // result under memory pressure even while the map remains healthy.
+  const nativeMapWindow = await retryTransientRpcCall(() =>
+    app.electronApp.browserWindow(mapWindow)
+  );
   await nativeMapWindow.evaluate((win) => {
     win.show();
     win.focus();

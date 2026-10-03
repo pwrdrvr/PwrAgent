@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
+import { RendererRecoveryStateProvider } from "./lib/RendererRecoveryState";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
@@ -239,6 +240,7 @@ function chooseRoot(): ReactElement {
 }
 
 desktopApi?.recordStartupProfileEvent?.("react-render:start");
+const rendererRoot = chooseRoot();
 // Mount through `mountRendererRoot` rather than calling `createRoot` here:
 // an HMR update re-executes this module in the live page (see that module's
 // notes), and a second `createRoot` on the same container leaves two roots
@@ -246,9 +248,11 @@ desktopApi?.recordStartupProfileEvent?.("react-render:start");
 mountRendererRoot(
   document.getElementById("root")!,
   <React.StrictMode>
-    <RendererErrorBoundary>
-      <Suspense fallback={null}>{chooseRoot()}</Suspense>
-    </RendererErrorBoundary>
+    <RendererRecoveryStateProvider draftsEnabled={rendererRoot.type === App || rendererRoot.type === StarMapWindow}>
+      <RendererErrorBoundary>
+        <Suspense fallback={null}>{rendererRoot}</Suspense>
+      </RendererErrorBoundary>
+    </RendererRecoveryStateProvider>
   </React.StrictMode>,
   (container) => ReactDOM.createRoot(container),
 );

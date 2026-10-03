@@ -37038,6 +37038,10 @@ button.pricing-token-miser__folded:focus-visible {
   white-space: pre-wrap;
 }
 
+.renderer-error-boundary .button {
+  align-self: flex-start;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     /* The capped sidebar width, named once so the painted track and the

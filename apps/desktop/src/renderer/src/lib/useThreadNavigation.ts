@@ -7,6 +7,7 @@ import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navi
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
+import { useRecoverableState, useRendererRecoveryState } from "./RendererRecoveryState";
 import { buildStartingLaunchpadComposerScopeKey } from "../features/composer/launchpad-composer-scope";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
@@ -3103,8 +3104,9 @@ export function useThreadNavigation(
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
-  const [selectedItemKey, setSelectedItemKey] = useState<string>();
-  const initialSelectionEstablishedRef = useRef(false);
+  const recoveryState = useRendererRecoveryState();
+  const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>("navigation.selection", undefined);
+  const initialSelectionEstablishedRef = useRef(recoveryState?.values.has("navigation.selection") ?? false);
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
@@ -3115,12 +3117,12 @@ export function useThreadNavigation(
     Record<string, PendingEnvironmentFailure>
   >({});
   const [creatingThread, setCreatingThread] = useState<CreatingThreadState>();
-  const [localLaunchpads, setLocalLaunchpads] = useState<
+  const [localLaunchpads, setLocalLaunchpads] = useRecoverableState<
     Record<string, NavigationLaunchpadDraft>
-  >({});
-  const [federatedLaunchpad, setFederatedLaunchpad] = useState<
-    FederatedLaunchpadSession
-  >();
+  >("navigation.launchpads", {});
+  const [federatedLaunchpad, setFederatedLaunchpad] = useRecoverableState<
+    FederatedLaunchpadSession | undefined
+  >("navigation.federatedLaunchpad", undefined);
   // A peer snapshot and the subsequent launchpad ensure both cross the
   // network. Keep only the most recent launch intent so a slow prior peer or
   // project selection cannot replace the launchpad the operator just chose.

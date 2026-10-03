@@ -91,8 +91,7 @@ import {
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
-import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
-import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
+import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
@@ -403,7 +402,7 @@ function DesktopAppShell(props: {
   const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
     DEFAULT_ACTION_RUNS_DOCK,
   );
-  const [mainView, setMainViewState] = useState<MainView>("thread");
+  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
   const mainViewRef = useRef<MainView>(mainView);
   // The control that opened Settings or Automations. The layer covers the
   // sidebar and main, which go inert under it, so focus returns here on
@@ -1646,11 +1645,7 @@ function DesktopAppShell(props: {
   const profiles = usePwrAgentProfiles(desktopApi);
   const refreshProfiles = profiles.refresh;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
-  const baseComposerDraftStore = useComposerDraftStore();
-  const composerDraftStore = useDurableComposerDraftStore(
-    baseComposerDraftStore,
-    desktopApi,
-  );
+  const composerDraftStore = useRecoverableComposerDraftStore(desktopApi);
   const providerModelDefaults = useMemo(() => settings.snapshot?.models
     ? settings.snapshot.models.providerDefaults ?? {}
     : undefined, [settings.snapshot]);
