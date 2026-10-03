@@ -3,9 +3,9 @@
 //
 //  - A check the operator asked for (Help -> Check for Updates) gets a LIVE
 //    card for as long as it is working: an indeterminate sweep while the
-//    release read is out, then a real meter with a Cancel button once bytes
-//    are moving. It carries no dismiss countdown, because the work it reports
-//    has no fixed duration.
+//    release read is out, then a real meter once bytes are moving, when
+//    closing the card cancels the download. It carries no dismiss countdown,
+//    because the work it reports has no fixed duration.
 //  - When that check settles on something with nothing to act on - up to
 //    date, unavailable, canceled, failed - it hands off to the ordinary
 //    auto-dismissing notice stack, which is where a notice that has finished
@@ -27,8 +27,11 @@ import type {
   AppUpdateStatus,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
-import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
-import { openReleaseNotes, ReleaseNotesLink } from "./ReleaseNotesLink";
+import {
+  AppNoticeToast,
+  type AppNoticeToastNotice,
+} from "../notifications/AppNoticeToast";
+import { openReleaseNotes } from "./ReleaseNotesLink";
 import {
   isUpdateCheckInProgress,
   updateCheckOutcomeCopy,
@@ -39,11 +42,16 @@ import {
  *  rather than stacking a second one beside it. */
 export const UPDATE_CHECK_NOTICE_SLOT = "app-update-check";
 
+/** The live card, through every phase of one check. */
+export const UPDATE_PROGRESS_NOTICE_ID = "app-update-progress";
+
+/** The sticky offer, suffixed with the version it would install. */
+export const UPDATE_READY_NOTICE_ID_PREFIX = "app-update-ready:";
+
 export function updateCheckOutcomeNotice(
   result: Parameters<typeof updateCheckOutcomeCopy>[0],
 ): AppNoticeToastNotice {
   const copy = updateCheckOutcomeCopy(result);
-  const notesUrl = copy.notesUrl;
   return {
     // Status-keyed so a genuinely new outcome remounts the notice and
     // restarts its countdown, while a repeat of the same one is idempotent.
@@ -52,21 +60,8 @@ export function updateCheckOutcomeNotice(
     title: copy.eyebrow,
     message: copy.message,
     tone: copy.tone,
-    // This is the one update surface that does NOT render `ReleaseNotesLink`:
-    // a notice owns its own action buttons, so the link rides as an action
-    // and shares `openReleaseNotes` instead of the markup. Omitted entirely
-    // for `skipped` and `error`, which name no version.
-    actions:
-      notesUrl === undefined
-        ? undefined
-        : [
-            {
-              label: "Release notes",
-              onClick: () => {
-                openReleaseNotes(notesUrl);
-              },
-            },
-          ],
+    // Omitted entirely for `skipped` and `error`, which name no version.
+    actions: releaseNotesActions(copy.notesUrl),
   };
 }
 
@@ -89,6 +84,9 @@ export function AppUpdateBanner(props: {
   // silent.
   const [watching, setWatching] = useState(false);
   const [canceling, setCanceling] = useState(false);
+  // The operator closed the live card before there was a download to
+  // cancel. The check keeps being watched, so its outcome still arrives.
+  const [liveHidden, setLiveHidden] = useState(false);
   const desktopApi = props.desktopApi;
 
   // Read inside the subscriptions without making them depend on the values -
@@ -167,6 +165,7 @@ export function AppUpdateBanner(props: {
           // preceded it.
           watchingRef.current = true;
           setWatching(true);
+          setLiveHidden(false);
           setCanceling(false);
           setDismissedVersion(undefined);
           setRestartError(undefined);
@@ -259,153 +258,97 @@ export function AppUpdateBanner(props: {
   };
 
   const progress =
-    watching && isUpdateCheckInProgress(updateStatus)
+    watching && !liveHidden && isUpdateCheckInProgress(updateStatus)
       ? updateProgressCopy(updateStatus)
       : undefined;
   const offered = version !== undefined && dismissedVersion !== version;
+  const offerNotesUrl =
+    version === undefined ? undefined : releaseNotesUrl(version);
 
-  if (!progress && !offered) {
+  // One card for every phase of a check, so the offer takes the live card's
+  // place rather than raising a second one. The offer has no bar or meter,
+  // and the stack keeps a card from shrinking through that swap while the
+  // pointer is on it (AppNoticeToast.tsx), which is what makes the close
+  // button below a safe target: a click aimed at it
+  // as Cancel, landing just after the download finished, dismisses the offer
+  // and leaves the update uninstalled. Restart sits in the footer, never
+  // under that pointer, and Release notes trails both cards' footers, so it
+  // holds the same slot too.
+  const notice: AppNoticeToastNotice | undefined = progress
+    ? {
+        id: UPDATE_PROGRESS_NOTICE_ID,
+        autoDismiss: false,
+        title: progress.eyebrow,
+        message: progress.message,
+        progress: {
+          label: progress.eyebrow,
+          percent: progress.percent,
+          meter: progress.meter,
+        },
+        ...(canceling
+          ? { status: { label: "Canceling...", state: "progress" as const } }
+          : {}),
+        // A download is the work this card reports, so closing it is
+        // Cancel. While the release read is still out there is nothing to
+        // stop, and closing only hides the card: the outcome still arrives
+        // as a notice.
+        ...(progress.cancelable
+          ? { dismissLabel: "Cancel update download" }
+          : {}),
+        actions: releaseNotesActions(progress.notesUrl),
+      }
+    : offered
+      ? {
+          id: `${UPDATE_READY_NOTICE_ID_PREFIX}${version}`,
+          autoDismiss: false,
+          tone: "success",
+          title: switchingBack ? "Switch ready" : "Update ready",
+          message: switchingBack
+            ? `Restart to switch to v${version}.`
+            : `Restart to update to v${version}.`,
+          ...(restartError
+            ? { status: { label: restartError, state: "error" as const } }
+            : {}),
+          actions: [
+            {
+              label: restarting ? "Restarting..." : "Restart",
+              onClick: () => {
+                void handleRestart();
+              },
+              tone: "primary",
+              disabled: restarting,
+            },
+            ...(releaseNotesActions(offerNotesUrl) ?? []),
+          ],
+        }
+      : undefined;
+
+  if (!notice) {
     return null;
   }
 
   return (
-    <>
-      {progress ? (
-        <aside
-          className="app-update-banner app-update-banner--progress"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="app-update-banner__content">
-            <p className="app-update-banner__eyebrow">{progress.eyebrow}</p>
-            {/* `role="status"` above makes this card a polite live region, so
-                the eyebrow announces each phase - which is what a screen
-                reader user wants to hear. The percent, the bar and the byte
-                meter change about once a second, and announcing every tick
-                would bury the phase changes under "42%... 44%... 47%". They
-                opt out; the progressbar keeps its value for anyone who asks
-                for it. */}
-            <p className="app-update-banner__message" aria-live="off">
-              {progress.message}
-            </p>
-            <span
-              className={
-                progress.percent === undefined
-                  ? "app-update-banner__track app-update-banner__track--indeterminate"
-                  : "app-update-banner__track"
-              }
-              role="progressbar"
-              aria-live="off"
-              aria-label={progress.eyebrow}
-              aria-valuemin={progress.percent === undefined ? undefined : 0}
-              aria-valuemax={progress.percent === undefined ? undefined : 100}
-              aria-valuenow={progress.percent}
-            >
-              <i
-                style={
-                  progress.percent === undefined
-                    ? undefined
-                    : { width: `${progress.percent}%` }
-                }
-              />
-            </span>
-            {progress.meter ? (
-              <p className="app-update-banner__meter" aria-live="off">
-                {progress.meter}
-              </p>
-            ) : null}
-          </div>
-          {/* `updateProgressCopy` gives every cancelable phase a version and
-              the one phase without a version (`checking`) no Cancel, so the
-              row is present exactly when Cancel is.
-
-              The row sits UNDER the track, never beside it, and is laid out
-              the same way as the offer card's below: the link leads, the
-              buttons trail, and the way out is the last button. That last
-              slot is load-bearing. The stack is bottom-anchored, so this row
-              and the offer card's occupy the same pixels, and a download can
-              finish between the operator aiming at Cancel and clicking it.
-              Whatever replaces Cancel under the pointer has to be Dismiss,
-              not Restart. */}
-          {progress.cancelable ? (
-            <div className="app-update-banner__actions">
-              {/* The card names a version it is spending the operator's
-                  bandwidth on. Reading what is in it is the one question
-                  Cancel exists to answer. */}
-              <ReleaseNotesLink
-                className="app-update-banner__notes"
-                url={progress.notesUrl}
-              />
-              <div className="app-update-banner__buttons">
-                <button
-                  className="button button--ghost app-update-banner__cancel"
-                  type="button"
-                  disabled={canceling}
-                  onClick={handleCancel}
-                >
-                  {canceling ? "Canceling..." : "Cancel"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </aside>
-      ) : null}
-      {offered ? (
-        <aside className="app-update-banner" role="status" aria-live="polite">
-          <div className="app-update-banner__content">
-            <p className="app-update-banner__eyebrow">
-              {switchingBack ? "Switch ready" : "Update ready"}
-            </p>
-            <p className="app-update-banner__message">
-              {switchingBack
-                ? `Restart to switch to v${version}.`
-                : `Restart to update to v${version}.`}
-            </p>
-            {restartError ? (
-              <p className="app-update-banner__error">{restartError}</p>
-            ) : null}
-          </div>
-          <div className="app-update-banner__actions">
-            {/* Rendered as quiet text rather than a third pill: the card
-                already asks the operator to choose between Restart and
-                Dismiss, and a third control that looked equally like the
-                point would make that a three-way decision. It leads the row
-                here for the same reason it leads the live card's: the link
-                stays put while the phases change around it. */}
-            <ReleaseNotesLink
-              className="app-update-banner__notes"
-              url={releaseNotesUrl(version)}
-            />
-            <div className="app-update-banner__buttons">
-              <button
-                className="button button--primary app-update-banner__restart"
-                type="button"
-                disabled={restarting}
-                onClick={() => {
-                  void handleRestart();
-                }}
-              >
-                {restarting ? "Restarting..." : "Restart"}
-              </button>
-              {/* Last, in the slot Cancel held on the live card. See the
-                  comment on that row. */}
-              <button
-                className="button button--ghost app-update-banner__dismiss"
-                type="button"
-                disabled={restarting}
-                aria-label={
-                  switchingBack
-                    ? "Dismiss channel switch notification"
-                    : "Dismiss update notification"
-                }
-                onClick={() => setDismissedVersion(version)}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        </aside>
-      ) : null}
-    </>
+    <AppNoticeToast
+      desktopApi={desktopApi}
+      notice={notice}
+      onDismiss={progress
+        ? progress.cancelable ? handleCancel : () => setLiveHidden(true)
+        : () => {
+            // The old Dismiss was disabled through an install: dismissed
+            // now, a failed restart would report its error to no one.
+            if (!restarting) setDismissedVersion(version);
+          }}
+    />
   );
+}
+
+/** Every update surface that names a version links its release notes. A
+ *  notice owns its action buttons, so the link rides as an action and shares
+ *  `openReleaseNotes` rather than rendering `ReleaseNotesLink`. */
+function releaseNotesActions(
+  url: string | undefined,
+): AppNoticeToastNotice["actions"] {
+  return url === undefined
+    ? undefined
+    : [{ label: "Release notes", onClick: () => openReleaseNotes(url) }];
 }

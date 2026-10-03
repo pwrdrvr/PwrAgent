@@ -626,7 +626,7 @@ describe("Tangerine Terminal theme contract", () => {
   it("keeps onboarding and warning overlays clickable without losing window drag affordances", () => {
     const overlayRule = extractRuleBody(css, ".onboarding-wizard-overlay");
     const titlebarRule = extractRuleBody(css, ".onboarding-wizard__titlebar");
-    const warningBannerRule = extractRuleBody(css, ".codex-config-warning-banner");
+    const noticeRule = extractRuleBody(css, ".app-notice-toast");
 
     expect(overlayRule).toContain("-webkit-app-region: no-drag;");
     expect(css).toMatch(
@@ -636,7 +636,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.onboarding-wizard__titlebar button,\s*\.onboarding-wizard__titlebar input,\s*\.onboarding-wizard__titlebar a,\s*\.onboarding-wizard__titlebar select,\s*\.onboarding-wizard__titlebar \[role="button"\]\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/
     );
-    expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
+    expect(noticeRule).toContain("-webkit-app-region: no-drag;");
   });
 
   it("carries notice tone on the title-row dot, not the card", () => {

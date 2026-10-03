@@ -125,7 +125,7 @@ describe("AppUpdateBanner", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Dismiss update notification" }),
+      screen.getByRole("button", { name: "Dismiss notice" }),
     );
 
     expect(
@@ -149,8 +149,11 @@ describe("AppUpdateBanner", () => {
     expect(notices).toHaveLength(0);
     // Indeterminate while the release read is out.
     expect(progressBar()?.getAttribute("aria-valuenow")).toBe(null);
-    // And no Cancel yet: there is no download to stop.
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    // And no Cancel yet: there is no download to stop, so closing only hides.
+    expect(
+      screen.queryByRole("button", { name: "Cancel update download" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss notice" })).toBeEnabled();
   });
 
   it("follows the download with a meter and a way out", async () => {
@@ -169,8 +172,11 @@ describe("AppUpdateBanner", () => {
     });
     expect(screen.getByText("Starting download of v1.0.0...")).toBeInTheDocument();
     // Cancel is live from `available`, before any byte moves — which is why
-    // main registers its cancelable download at that same moment.
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    // main registers its cancelable download at that same moment. It is the
+    // card's own close, named for what closing does.
+    expect(
+      screen.getByRole("button", { name: "Cancel update download" }),
+    ).toBeEnabled();
 
     act(() => {
       emit({
@@ -191,12 +197,19 @@ describe("AppUpdateBanner", () => {
     // Still nothing in the notice stack to expire.
     expect(notices).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel update download" }),
+    );
 
     await waitFor(() => {
       expect(desktopApi.cancelAppUpdateDownload).toHaveBeenCalledTimes(1);
     });
-    expect(screen.getByRole("button", { name: "Canceling..." })).toBeDisabled();
+    expect(screen.getByText("Canceling...")).toBeInTheDocument();
+    // A second close while the first is in flight asks nothing new.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel update download" }),
+    );
+    expect(desktopApi.cancelAppUpdateDownload).toHaveBeenCalledTimes(1);
   });
 
   it("hands a canceled download to the notice stack as an answer, not a failure", async () => {
@@ -326,17 +339,21 @@ describe("AppUpdateBanner", () => {
     expect(notices).toHaveLength(0);
   });
 
-  it("puts Dismiss in the slot Cancel held when the offer replaces the live card", async () => {
-    // The stack is bottom-anchored, so the live card's action row and the
-    // offer's cover the same pixels, and a click aimed at Cancel as the
-    // download finishes lands on whatever took its place. That has to be
-    // Dismiss, never Restart. This pins the order; app.css's trailing
-    // button group places it, and update-check.spec.ts measures the result.
+  it("swaps the offer into the live card, close for close and link for link", async () => {
+    // The stack is bottom-anchored and keeps a card from shrinking while the
+    // pointer is on it, so a click aimed at Cancel as the download finishes lands on
+    // the same card's close, which now dismisses the offer: never Restart.
+    // Release notes trails both footers, so it keeps its slot too. This pins
+    // the shape; update-check.spec.ts measures the result.
     const { desktopApi, emit, emitResult } = renderBanner({ status: "idle" });
+    const card = () => document.querySelector(".app-notice-toast");
+    const closeLabel = () =>
+      card()?.querySelector(".app-notice-toast__actions button:last-child")
+        ?.getAttribute("aria-label");
     const actionLabels = () =>
       Array.from(
-        document.querySelectorAll(".app-update-banner__actions button"),
-        (button) => button.getAttribute("aria-label") ?? button.textContent,
+        document.querySelectorAll(".app-notice-toast__custom-actions button"),
+        (button) => button.textContent,
       );
 
     await waitFor(() => {
@@ -348,16 +365,16 @@ describe("AppUpdateBanner", () => {
     act(() => {
       emit({ status: "downloading", version: "1.0.0", percent: 99 });
     });
-    expect(actionLabels()).toEqual(["Release notes", "Cancel"]);
+    const liveCard = card();
+    expect(closeLabel()).toBe("Cancel update download");
+    expect(actionLabels()).toEqual(["Release notes"]);
 
     act(() => {
       emit({ status: "downloaded", version: "1.0.0" });
     });
-    expect(actionLabels()).toEqual([
-      "Release notes",
-      "Restart",
-      "Dismiss update notification",
-    ]);
+    expect(card()).toBe(liveCard);
+    expect(closeLabel()).toBe("Dismiss notice");
+    expect(actionLabels()).toEqual(["Restart", "Release notes"]);
   });
 
   it("hands a failed check to the notice stack and takes the card down", async () => {
@@ -380,6 +397,65 @@ describe("AppUpdateBanner", () => {
     expect(notices).toHaveLength(1);
     expect(notices[0]?.title).toBe("Update check failed");
     expect(notices[0]?.tone).toBe("error");
+  });
+
+  it("still reports the outcome of a check whose card was closed early", async () => {
+    // Closing before there is a download to cancel only hides the card. A
+    // download that then fails must still say so.
+    const { desktopApi, notices, emit, emitResult } = renderBanner({
+      status: "idle",
+    });
+
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateCheckResult).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(screen.queryByText("Checking for updates")).toBeNull();
+
+    act(() => {
+      emitResult({ status: "available", version: "1.0.0" });
+    });
+    act(() => {
+      emit({ status: "downloading", version: "1.0.0", percent: 30 });
+    });
+    // Closed means closed for this check: the download does not reopen it.
+    expect(screen.queryByText("Downloading update")).toBeNull();
+    act(() => {
+      emit({ status: "error", message: "connection reset" });
+    });
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.tone).toBe("error");
+  });
+
+  it("keeps the offer up while a restart is in flight", async () => {
+    const { desktopApi, emit } = renderBanner({ status: "idle" });
+    let finishInstall: ((result: { status: "error"; message: string }) => void) | undefined;
+    desktopApi.installAppUpdate.mockImplementation(
+      () => new Promise((resolve) => {
+        finishInstall = resolve;
+      }) as never,
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateStatus).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      emit({ status: "downloaded", version: "1.2.3" });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
+    expect(screen.getByRole("button", { name: "Restarting..." })).toBeDisabled();
+
+    // The old Dismiss was disabled here; the close is ignored instead, so a
+    // failed install has a card to report on.
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    await act(async () => {
+      finishInstall?.({ status: "error", message: "install failed" });
+    });
+    expect(screen.getByText("install failed")).toBeInTheDocument();
   });
 
   it("takes down the previous answer when the operator asks again", async () => {
@@ -416,7 +492,7 @@ describe("AppUpdateBanner", () => {
       emit({ status: "downloaded", version: "1.2.3" });
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Dismiss update notification" }),
+      screen.getByRole("button", { name: "Dismiss notice" }),
     );
     expect(screen.queryByText("Restart to update to v1.2.3.")).toBeNull();
 

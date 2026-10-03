@@ -1990,9 +1990,7 @@ describe("App", () => {
       }
     });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Codex config warning"
-    );
+    expect(await screen.findByText("Codex config warning")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Trust PwrAgnt" }));
 
     await waitFor(() => {
@@ -2002,7 +2000,7 @@ describe("App", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("Codex config warning")).not.toBeInTheDocument();
     });
   });
 
@@ -2056,9 +2054,7 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Codex config warning"
-    );
+    expect(await screen.findByText("Codex config warning")).toBeInTheDocument();
     expect(getLatestCodexConfigWarning).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Trust PwrAgnt" }));

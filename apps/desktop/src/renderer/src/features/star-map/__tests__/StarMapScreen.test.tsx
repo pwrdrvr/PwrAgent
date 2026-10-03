@@ -1920,8 +1920,8 @@ describe("StarMapScreen", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive thread" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/peer is offline/);
+    const notice = await screen.findByText(/peer is offline/);
+    expect(notice.textContent).toMatch(/peer is offline/);
   });
 
   it("closes the kebab on Escape without running anything", async () => {
@@ -2037,8 +2037,8 @@ describe("StarMapScreen", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/peer is offline/);
+    const notice = await screen.findByText(/peer is offline/);
+    expect(notice.textContent).toMatch(/peer is offline/);
     expect(
       screen.getByRole("button", { name: "Open thread: Thread t1" }),
     ).toBeTruthy();
