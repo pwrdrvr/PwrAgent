@@ -1,5 +1,5 @@
 import type { NativeVoiceNotification } from "./native-voice-protocol";
-import type { ThreadRealtimeStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   ListBackgroundTerminalsResponse,
   CodexBackgroundTerminal,
@@ -8431,9 +8431,9 @@ export class CodexAppServerClient {
     this.ownedRealtimeThreads.delete(threadId);
   }
 
-  async appendRealtimeText(threadId: string, text: string): Promise<void> {
+  async appendRealtimeText(threadId: string, text: string, role: ThreadRealtimeAppendTextParams["role"] = "user"): Promise<void> {
     if (!this.initialized || this.pendingCloses > 0) throw new Error("Voice backend disconnected.");
-    await this.connection.request("thread/realtime/appendText", { threadId, text, role: "user" }, 10_000);
+    await this.connection.request("thread/realtime/appendText", { threadId, text, role } satisfies ThreadRealtimeAppendTextParams, 10_000);
   }
 
   onNotification(

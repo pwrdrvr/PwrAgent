@@ -1,3 +1,7 @@
+import {
+  NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL,
+  type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue,
+} from "../shared/native-voice-camera";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -1097,6 +1101,9 @@ const desktopApi = Object.freeze({
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
+  sendNativeVoiceCameraCue: (request: VoiceCameraCue) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CUE_CHANNEL, request),
+  setNativeVoiceCamera: (request: VoiceCameraRequest) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CHANNEL, request),
+  analyzeNativeVoiceCamera: (request: VoiceCameraFrame) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_FRAME_CHANNEL, request),
   sendNativeVoiceText: (request: NativeVoiceText) => ipcRenderer.invoke(NATIVE_VOICE_TEXT_CHANNEL, request),
   openVoiceManager: (): Promise<OpenVoiceManagerResponse> => ipcRenderer.invoke(NATIVE_VOICE_OPEN_MANAGER_CHANNEL),
   publishOperatorFocus: (focus: OperatorFocusSnapshot): Promise<void> => ipcRenderer.invoke(OPERATOR_FOCUS_PUBLISH_CHANNEL, focus),

@@ -1,3 +1,4 @@
+import { VoiceCameraButton } from "./VoiceCameraButton";
 import { useEffect, useRef, useState } from "react";
 import {
   isRemoteFederationTarget,
@@ -159,6 +160,7 @@ export function DirectorVoiceButton({ api }: { api: NativeVoiceApi }) {
         <MicIcon size={16} aria-hidden="true" />
       </button>
       {tooltip.tooltipNode}
+      <VoiceCameraButton api={api} />
     </>
   );
 }
@@ -475,7 +477,7 @@ function DirectorVoiceState({ controller, ended, view }: {
   const live = !ended && view.status === "listening" && !view.muted;
   const muted = !ended && view.status === "listening" && view.muted;
   const label = ended
-    ? view.endedAfterReply ? "Ended after the reply" : "Voice ended"
+    ? view.endedAfterAway ? "Ended while you were away" : view.endedAfterReply ? "Ended after the reply" : "Voice ended"
     : live ? "Microphone live" : muted ? "Muted" : voiceStateLabel(view);
   return (
     <p
