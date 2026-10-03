@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { buildStarMapDiagnosticsInfo } from "../../../../shared/local-diagnostics-info";
-import { copyText } from "../../lib/copy-text";
+import { copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { IntakeDialogTarget } from "./IntakeDialog";
 
@@ -19,7 +19,7 @@ export function StarMapDiagnosticsListener(props: {
     }
     return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
       void readAppMetadata().then((metadata) =>
-        copyText(
+        copyTextAsCodeBlock(
           buildStarMapDiagnosticsInfo(
             { intakeTarget: props.intakeTarget },
             metadata,
