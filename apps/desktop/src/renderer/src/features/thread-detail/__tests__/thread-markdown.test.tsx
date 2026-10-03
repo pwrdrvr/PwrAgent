@@ -1031,6 +1031,67 @@ describe("ThreadMarkdown", () => {
     expect(screen.getByText("Second List - One")).toBeInTheDocument();
   });
 
+  it.each([".", ")"])("preserves section numbers separated by unindented bullets (%s delimiter)", (delimiter) => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          `1${delimiter} First category:`,
+          "- First finding",
+          "",
+          `2${delimiter} Second category:`,
+          "- Second finding",
+          "",
+          `3${delimiter} Third category:`,
+          "- Third finding",
+          "",
+          `4${delimiter} Fourth category:`,
+          "- Fourth finding",
+        ].join("\n")}
+      />
+    );
+
+    const lists = container.querySelectorAll<HTMLOListElement>(".thread-markdown > ol");
+    expect(Array.from(lists, (list) => list.start)).toEqual([1, 2, 3, 4]);
+    expect(container.querySelectorAll(".thread-markdown > ul")).toHaveLength(4);
+    expect(container.querySelector("ol ul")).toBeNull();
+  });
+
+  it("preserves nested list starts and indented bullets", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "5. Fifth category:",
+          "   - Nested finding",
+          "   - Another nested finding",
+          "",
+          "   9. Nested numbered finding",
+          "   1. Next nested numbered finding",
+          "6. Sixth category",
+        ].join("\n")}
+      />
+    );
+
+    const rootList = container.querySelector<HTMLOListElement>(".thread-markdown > ol");
+    expect(rootList?.start).toBe(5);
+    expect(rootList?.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(rootList?.querySelectorAll(":scope > li:first-child > ul > li")).toHaveLength(2);
+    const nestedList = rootList?.querySelector<HTMLOListElement>(":scope > li:first-child > ol");
+    expect(nestedList?.start).toBe(9);
+    expect(nestedList?.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(container.querySelector(".thread-markdown > ul")).toBeNull();
+  });
+
+  it("preserves zero starts and explicit restarts after a thematic break", () => {
+    const { container } = render(
+      <ThreadMarkdown text={"0. Zero\n1. One\n\n---\n\n1. Restart\n1. Continue"} />
+    );
+
+    const lists = container.querySelectorAll<HTMLOListElement>(".thread-markdown > ol");
+    expect(Array.from(lists, (list) => list.start)).toEqual([0, 1]);
+    expect(Array.from(lists, (list) => list.querySelectorAll(":scope > li").length))
+      .toEqual([2, 2]);
+  });
+
   it("renders nested numbered lists instead of flattening them", () => {
     const { container } = render(
       <ThreadMarkdown
