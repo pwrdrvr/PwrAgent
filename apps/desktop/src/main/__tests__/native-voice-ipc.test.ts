@@ -1,5 +1,6 @@
 import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL } from "../../shared/native-voice-camera";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceCameraObservation } from "../../shared/native-voice-camera";
 import {
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL,
   NATIVE_VOICE_START_CHANNEL,
@@ -9,7 +10,7 @@ import {
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
-  classify: vi.fn<(image: string, signal: AbortSignal) => Promise<never>>(),
+  classify: vi.fn<(image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
   disconnects: new Set<() => void>(),
   mainWindowIds: new Set<number>(), text: vi.fn(async () => {}),
   openManager: vi.fn(async () => ({ status: "ready", threadId: "sample-voice-manager", created: false })),
@@ -39,9 +40,72 @@ vi.mock("../window-channels", () => ({
 import { registerNativeVoiceIpcHandlers } from "../ipc/native-voice";
 import { readOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
 
-beforeEach(() => { mocks.handlers.clear(); mocks.check.mockClear(); mocks.request.mockClear(); registerNativeVoiceIpcHandlers(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
+afterEach(() => vi.useRealTimers());
 
 describe("native voice IPC permission boundary", () => {
+  it("allows a minute-long first decision, keeps it single-flight, then uses normal inference limits", async () => {
+    vi.useFakeTimers();
+    const sender = { id: 277, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-warmup-session" };
+    const frame = { ...target, image: "data:image/jpeg;base64,AA==" };
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-warmup-thread", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    let finish!: (value: VoiceCameraObservation) => void;
+    let signal!: AbortSignal;
+    mocks.classify.mockImplementationOnce((_image, abort, warming) => {
+      expect(warming).toBe(true);
+      signal = abort;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const pending = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(signal.aborted).toBe(false);
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).rejects.toThrow("already being analyzed");
+    finish({ present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 60_000 });
+    await pending;
+
+    mocks.classify.mockImplementationOnce((_image, abort, warming) => {
+      expect(warming).toBe(false);
+      signal = abort;
+      return new Promise((_resolve, reject) => abort.addEventListener("abort", () => reject(abort.reason), { once: true }));
+    });
+    const normal = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
+    const rejected = expect(normal).rejects.toThrow("after eight seconds");
+    const stops = mocks.stop.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8000);
+    await rejected;
+    expect(signal.aborted).toBe(true);
+    expect(mocks.stop).toHaveBeenCalledTimes(stops);
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    mocks.classify.mockImplementationOnce(async (_image, _abort, warming) => {
+      expect(warming).toBe(true);
+      return { present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 };
+    });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
+  });
+
+  it("bounds a stalled first decision at five minutes while leaving voice running", async () => {
+    vi.useFakeTimers();
+    const sender = { id: 278, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-warmup-timeout" };
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-timeout-thread", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    mocks.classify.mockImplementationOnce((_image, abort) => new Promise((_resolve, reject) => {
+      abort.addEventListener("abort", () => reject(abort.reason), { once: true });
+    }));
+    const pending = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" });
+    const rejected = expect(pending).rejects.toThrow("within five minutes");
+    const stops = mocks.stop.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(300_000);
+    await rejected;
+    expect(mocks.stop).toHaveBeenCalledTimes(stops);
+    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
+  });
+
   it("allows only the opted-in owner microphone, blocks cameras/frames, and stops on window destruction", async () => {
     const callbacks = new Map<string, (...args: unknown[]) => void>();
     const sender = { id: 77, on: (name: string, callback: (...args: unknown[]) => void) => { callbacks.set(name, callback); },

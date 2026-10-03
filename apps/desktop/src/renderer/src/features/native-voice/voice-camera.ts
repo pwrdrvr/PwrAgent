@@ -1,6 +1,7 @@
 import type { CameraCue, VoiceCameraObservation } from "../../../../shared/native-voice-camera";
 
 export const CAMERA_AWAY_END_MS = 30_000;
+export const CAMERA_SAMPLE_GAP_MS = 10_000;
 const REACTION_DEBOUNCE_MS = 1500;
 const CUE_COOLDOWN_MS = 8000;
 export type CameraDecision = { cue?: CameraCue; end?: boolean };
@@ -15,11 +16,14 @@ export class CameraCueFilter {
   private lastSent = -Infinity;
   private awaySince?: number;
 
+  resetContinuity(): void {
+    this.awaySince = undefined;
+    this.candidate = undefined;
+    this.lastSample = undefined;
+  }
+
   observe(observation: VoiceCameraObservation, now: number): CameraDecision {
-    if (this.lastSample !== undefined && now - this.lastSample > 10_000) {
-      this.awaySince = undefined;
-      this.candidate = undefined;
-    }
+    if (this.lastSample !== undefined && now - this.lastSample > CAMERA_SAMPLE_GAP_MS) this.resetContinuity();
     this.lastSample = now;
     if (observation.presenceConfidence < 0.8) {
       this.awaySince = undefined;

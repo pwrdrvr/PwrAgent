@@ -53,10 +53,11 @@ export function VoiceCameraButton({ api }: { api: NativeVoiceApi }) {
         <span className="voice-camera__panel" style={position}>
           {view.camera === "on" ? <video ref={video} muted playsInline autoPlay className="voice-camera__preview" /> : null}
           <span className="voice-camera__status" role={view.cameraError ? "alert" : "status"}>
-            {view.cameraError ?? (view.camera === "starting" ? "Starting camera…" : `Camera cues · ${view.cameraCue ?? "observing"}`)}
+            {view.cameraError ?? (view.camera === "starting" ? "Starting camera…"
+              : view.cameraWarming ? "Camera cues · warming up…" : `Camera cues · ${view.cameraCue ?? "observing"}`)}
           </span>
           {view.cameraError ? <button type="button" className="button button--ghost" onClick={() => controller.dismissCameraError()}>Dismiss</button> : null}
-          {active ? <span className="voice-camera__hint">Local analysis · ends voice after 30s away</span> : null}
+          {active ? <span className="voice-camera__hint">{view.cameraWarming ? "Model loading can take a few minutes." : "Local analysis · ends voice after 30s away"}</span> : null}
         </span>, document.body,
       ) : null}
     </span>
