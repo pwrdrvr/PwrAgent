@@ -19,7 +19,7 @@ describe("PendingMcpInteraction", () => {
       method: "mcpServer/elicitation/request",
       params: {
         threadId: "thread-1", turnId: "turn-1", requestId: "app-approval",
-        serverName: "cua_repl", mode: "form", message: 'Allow Computer Use to use "Electron"?',
+        serverName: "cua_repl", mode: "form", message: "Allow Computer Use to use \"Electron\"?",
         requestedSchema: { type: "object", properties: {} },
         _meta: {
           codex_approval_kind: "mcp_tool_call", connector_id: "computer-use",
@@ -80,6 +80,8 @@ describe("PendingMcpInteraction", () => {
     expect(screen.getByText("MCP approval")).toBeInTheDocument();
     expect(screen.getByText(/browser_tabs/)).toBeInTheDocument();
     expect(screen.getByText("[redacted]")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow this conversation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
