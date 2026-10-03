@@ -3183,7 +3183,7 @@ describe("DesktopBackendRegistry", () => {
       const started = await registry.startThread({ backend: "codex", cwd: "/sample/voice-manager", tokenMiserEnabled: false });
       const voice = await registry.acquireNativeVoiceBackend(started.threadId);
       expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
-        threadId: started.threadId, cwd: "/sample/voice-manager", approvalPolicy: "on-request", sandbox: "workspace-write",
+        threadId: started.threadId, cwd: expectedDir("/sample/voice-manager"), approvalPolicy: "on-request", sandbox: "workspace-write",
       }));
       expect(JSON.stringify(prepare.mock.calls[0][0].dynamicTools)).toContain("tool_search");
       expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
