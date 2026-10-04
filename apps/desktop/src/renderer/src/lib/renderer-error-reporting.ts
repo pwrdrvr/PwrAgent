@@ -3,6 +3,7 @@ import type {
   RendererErrorSource,
 } from "../../../shared/renderer-error";
 import { getDesktopApi } from "./desktop-api";
+import { installRendererUpdateConsole, retainRendererUpdateFailure, snapshotRendererUpdates } from "./renderer-update-diagnostics";
 
 function getErrorShape(error: unknown): {
   message: string;
@@ -30,6 +31,7 @@ export function createRendererErrorReport(
     componentStack?: string | null;
     filename?: string;
     lineno?: number;
+    updateDiagnostics?: RendererErrorReport["updateDiagnostics"];
   },
 ): RendererErrorReport {
   const errorShape = getErrorShape(error);
@@ -44,14 +46,17 @@ export function createRendererErrorReport(
     source,
     timestamp: new Date().toISOString(),
     userAgent: navigator.userAgent,
+    updateDiagnostics: details?.updateDiagnostics ?? snapshotRendererUpdates(),
   };
 }
 
 export function reportRendererError(report: RendererErrorReport): void {
+  if (report.updateDiagnostics) retainRendererUpdateFailure(report.updateDiagnostics);
   void getDesktopApi()?.reportRendererError?.(report).catch(() => undefined);
 }
 
 export function installGlobalRendererErrorHandlers(): () => void {
+  const uninstallUpdateConsole = installRendererUpdateConsole();
   const handleError = (event: ErrorEvent): void => {
     reportRendererError(
       createRendererErrorReport("window-error", event.error ?? event.message, {
@@ -72,6 +77,7 @@ export function installGlobalRendererErrorHandlers(): () => void {
   window.addEventListener("unhandledrejection", handleUnhandledRejection);
 
   return () => {
+    uninstallUpdateConsole();
     window.removeEventListener("error", handleError);
     window.removeEventListener("unhandledrejection", handleUnhandledRejection);
   };

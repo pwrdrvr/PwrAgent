@@ -1,6 +1,7 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   attachedPullRequestsForWorkspace,
@@ -10554,6 +10555,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     nextSkillTokens?: ComposerSkillToken[],
     metadata?: ComposerInputChangeMetadata,
   ): void => {
+    recordRendererUpdate(RendererUpdateEvent.composerChange, isLaunchpad ? "new-thread" : "reply");
     if (!recoveringDraftRef.current) {
       recoveryCycleRef.current = undefined;
       recoveryEligibilityVersionRef.current += 1;
@@ -13620,7 +13622,7 @@ function ContextWindowMoon({
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
-  const { show, update, hide, visible, tooltipNode } = useViewportTooltip({
+  const { show, update, hide, visible, tooltipNode, tooltipId } = useViewportTooltip({
     className: "context-usage-card",
   });
 
@@ -13630,6 +13632,7 @@ function ContextWindowMoon({
   // drop the card so it can't reappear at stale coordinates.
   useEffect(() => {
     if (!contextWindow) {
+      recordRendererUpdate(RendererUpdateEvent.contextCardClear, tooltipId);
       hide();
       return;
     }
@@ -13640,6 +13643,7 @@ function ContextWindowMoon({
       CONTEXT_MOON_PHASES.length - 1,
       Math.max(0, contextWindow.phase),
     );
+    recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
         contextWindow={contextWindow}
@@ -13647,7 +13651,7 @@ function ContextWindowMoon({
         phaseLabel={CONTEXT_MOON_PHASES[phase]}
       />,
     );
-  }, [contextWindow, hide, onOpenUsage, update, visible]);
+  }, [contextWindow, hide, onOpenUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;

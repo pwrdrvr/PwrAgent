@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { recordRendererUpdate, RendererUpdateEvent } from "./renderer-update-diagnostics";
 import {
   isNativeDragInteractionActive,
   subscribeNativeDragInteraction,
@@ -412,13 +413,14 @@ export function useViewportTooltip(options: {
   }, []);
 
   const hide = useCallback((): void => {
+    recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
     clearHoverDelay();
     setDelayPending(false);
     targetRef.current = null;
     targetRectRef.current = null;
     anchorSettlingRef.current = false;
     setState(undefined);
-  }, [clearHoverDelay]);
+  }, [clearHoverDelay, tooltipId]);
 
   /**
    * Wait out the motion, then re-baseline the anchor and re-anchor the tooltip
@@ -542,11 +544,13 @@ export function useViewportTooltip(options: {
       top = Math.min(maximumTop, Math.max(viewportTop, preferredTop));
     }
     if (state.left !== left || state.top !== top) {
+      recordRendererUpdate(RendererUpdateEvent.tooltipReposition, tooltipId);
       setState({ ...state, left, top });
     }
-  }, [state]);
+  }, [state, tooltipId]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+    recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);
     clearHoverDelay();
     setDelayPending(false);
     if (isNativeDragInteractionActive()) {
@@ -569,7 +573,7 @@ export function useViewportTooltip(options: {
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
-  }, [clearHoverDelay, getHorizontalBounds, rememberTarget]);
+  }, [clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
 
   const showAfterDelay = useCallback(
     (target: HTMLElement, content: DelayedTooltipContent): void => {
@@ -593,8 +597,9 @@ export function useViewportTooltip(options: {
   );
 
   const update = useCallback((content: ReactNode): void => {
+    recordRendererUpdate(RendererUpdateEvent.tooltipUpdate, tooltipId);
     setState((current) => (current ? { ...current, content } : current));
-  }, []);
+  }, [tooltipId]);
 
   useEffect(() => clearHoverDelay, [clearHoverDelay]);
 

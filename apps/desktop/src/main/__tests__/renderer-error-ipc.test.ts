@@ -71,6 +71,56 @@ describe("renderer error ipc", () => {
     expect(handlers.has(RENDERER_ERROR_REPORT_CHANNEL)).toBe(false);
   });
 
+  it("logs update history separately, bounded and deduplicated even without a stack", async () => {
+    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
+    registerRendererErrorIpcHandlers();
+    const report = {
+      href: "file:///renderer/index.html", message: "Maximum update depth exceeded",
+      source: "error-boundary", timestamp: "2026-10-04T16:33:11Z", userAgent: "Vitest",
+      updateDiagnostics: {
+        version: 1, capacity: 64, capturedAtMs: 200, total: 1000,
+        counts: Array.from({ length: 10000 }, () => 1000),
+        events: Array.from({ length: 10000 }, (_, index) => ({
+          event: index % 11, scope: "r".repeat(32),
+          firstMs: Number.MAX_SAFE_INTEGER, lastMs: Number.MAX_SAFE_INTEGER, count: Number.MAX_SAFE_INTEGER,
+          draft: "private draft must never reach the log",
+        })),
+      },
+    };
+    vi.useFakeTimers();
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, report);
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, report);
+    const logs = errorLog.error.mock.calls.filter(([first]) => first === "report update diagnostics");
+    expect(logs).toHaveLength(1);
+    const serialized = logs[0][2] as string;
+    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(8192);
+    expect(serialized).not.toContain("private draft");
+    const snapshot = JSON.parse(serialized);
+    expect(snapshot.events.length).toBeLessThanOrEqual(64);
+    expect(snapshot.omittedEvents).toBeGreaterThan(10000 - 64);
+    expect(snapshot.events.at(-1).event).toBe(9999 % 11);
+    expect(snapshot.counts).toHaveLength(11);
+    expect(snapshot.eventNames).toContain("tooltipHide");
+    expect(errorLog.error.mock.calls.find(([first]) => first === "report")?.[1])
+      .not.toHaveProperty("updateDiagnostics");
+    vi.advanceTimersByTime(60_000);
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, report);
+    expect(errorLog.error.mock.calls.filter(([first]) => first === "report update diagnostics")).toHaveLength(2);
+  });
+
+  it("ignores malformed update history while preserving the error report", async () => {
+    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
+    registerRendererErrorIpcHandlers();
+    await expect(handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, {
+      href: "file:///renderer/index.html", message: "Fault with malformed history", source: "window-error",
+      updateDiagnostics: { version: 1, events: "invalid", counts: [] },
+    })).resolves.toEqual({ ok: true });
+    expect(errorLog.error.mock.calls.map(([first]) => first)).toEqual(["report"]);
+    expect(errorLog.error.mock.calls[0][1]).not.toHaveProperty("updateDiagnostics");
+  });
+
   it("bounds large stacks while retaining useful frames and an explicit truncation marker", async () => {
     const {
       registerRendererErrorIpcHandlers,

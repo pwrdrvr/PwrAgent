@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RendererErrorBoundary } from "../RendererErrorBoundary";
 import { RENDERER_RECOVERY_DELAY_MS } from "../../../../../shared/renderer-recovery";
+import type { RendererErrorReport } from "../../../../../shared/renderer-error";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../../lib/renderer-update-diagnostics";
 
 function ThrowingChild() {
   throw new Error("Should have a queue");
@@ -21,21 +23,35 @@ describe("RendererErrorBoundary", () => {
   it("recovers after React itself detects a maximum update depth failure", () => {
     vi.useFakeTimers();
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const reportRendererError = vi.fn(async () => ({ ok: true }));
+    const reportRendererError = vi.fn(async (_report: RendererErrorReport) => ({ ok: true }));
     Object.defineProperty(window, "pwragent", { configurable: true, value: { reportRendererError } });
     let looping = true;
     function UpdateLoop() {
       const [count, setCount] = useState(0);
       useLayoutEffect(() => {
-        if (looping) setCount(count + 1);
+        if (looping) {
+          recordRendererUpdate(RendererUpdateEvent.editorControlledSync, "loop");
+          setCount(count + 1);
+        }
       });
+      useLayoutEffect(() => () => {
+        // Enough teardown updates to overwrite the entire live ring.
+        for (let index = 0; index < 128; index += 1) {
+          recordRendererUpdate(index % 2 ? RendererUpdateEvent.tooltipHide : RendererUpdateEvent.contextCardClear, "cleanup");
+        }
+      }, []);
       return <p>Update loop stopped at {count}</p>;
     }
     render(<RendererErrorBoundary><UpdateLoop /></RendererErrorBoundary>);
     expect(reportRendererError).toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining("Maximum update depth exceeded"),
       componentStack: expect.stringContaining("UpdateLoop"),
+      updateDiagnostics: expect.objectContaining({ events: expect.arrayContaining([
+        expect.objectContaining({ event: RendererUpdateEvent.editorControlledSync, scope: "loop", count: expect.any(Number) }),
+      ]) }),
     }));
+    const report = reportRendererError.mock.calls[0][0];
+    expect(report.updateDiagnostics?.events.some((event) => event.scope === "cleanup")).toBe(false);
     looping = false;
     act(() => vi.advanceTimersByTime(RENDERER_RECOVERY_DELAY_MS));
     expect(screen.getByText("Update loop stopped at 0")).toBeInTheDocument();
