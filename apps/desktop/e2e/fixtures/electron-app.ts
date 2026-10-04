@@ -140,13 +140,6 @@ const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 const ONBOARDING_WIZARD_SELECTOR = ".onboarding-wizard-overlay";
 
 /**
- * Upper bound on how long the wizard watcher stays armed. It only has to
- * outlive a slow boot; expiring means the wizard never appeared, so the
- * watcher goes quiet rather than failing.
- */
-const ONBOARDING_WIZARD_WATCH_TIMEOUT_MS = 120_000;
-
-/**
  * Env vars that redirect which PwrAgent root and profile the launched
  * app opens into. The harness inherits the full ambient environment
  * (below), so any of these left exported in the runner's shell — the
@@ -859,7 +852,7 @@ export async function waitForRendererReady(params: {
       await wizardWatch.assertAbsent();
     }
   } finally {
-    wizardWatch?.disarm();
+    await wizardWatch?.disarm();
   }
 }
 
@@ -869,23 +862,49 @@ function watchForOnboardingWizard(
 ): {
   detected: Promise<never>;
   assertAbsent: () => Promise<void>;
-  disarm: () => void;
+  disarm: () => Promise<void>;
 } {
   let disarmed = false;
+  const watchId = randomUUID();
   const overlay = window.locator(ONBOARDING_WIZARD_SELECTOR);
   const never = new Promise<never>(() => undefined);
-  const detected = overlay
-    .waitFor({
-      state: "attached",
-      timeout: ONBOARDING_WIZARD_WATCH_TIMEOUT_MS,
-    })
-    .then(
-      () => (disarmed ? never : Promise.reject(onboardingWizardError(context))),
-      // Timed out, or the page went away because the launch failed for
-      // an unrelated reason. Either way this racer has nothing to say —
-      // never settle, and let the real result win the race.
-      () => never,
-    );
+  // Own the DOM observer and its completion promise. Locator.waitFor cannot
+  // be cancelled: disarming its result left the RPC alive after launch, where
+  // a deliberately terminated renderer rejected it with "Target crashed".
+  const installed = window.evaluate(({ watchId, selector }) => {
+    type Watch = { detected: Promise<boolean>; stop: () => void };
+    const host = globalThis as typeof globalThis & { __PWRAGENT_ONBOARDING_WATCHES__?: Map<string, Watch> };
+    const watches = host.__PWRAGENT_ONBOARDING_WATCHES__ ??= new Map();
+    let answer!: (present: boolean) => void;
+    const detected = new Promise<boolean>((resolve) => { answer = resolve; });
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(selector)) {
+        observer.disconnect();
+        answer(true);
+      }
+    });
+    watches.set(watchId, {
+      detected,
+      stop: () => {
+        observer.disconnect();
+        answer(false);
+        watches.delete(watchId);
+      },
+    });
+    if (document.querySelector(selector)) answer(true);
+    else observer.observe(document, { childList: true, subtree: true });
+  }, { watchId, selector: ONBOARDING_WIZARD_SELECTOR });
+  const answered = installed.then(() => window.evaluate(async (watchId) => {
+    const host = globalThis as typeof globalThis & {
+      __PWRAGENT_ONBOARDING_WATCHES__?: Map<string, { detected: Promise<boolean> }>;
+    };
+    return await host.__PWRAGENT_ONBOARDING_WATCHES__?.get(watchId)?.detected ?? false;
+  }, watchId));
+  const detected = answered.then(
+    (present) => (disarmed || !present ? never : Promise.reject(onboardingWizardError(context))),
+    // A launch failure may destroy the document. Preserve that launch error.
+    () => never,
+  );
   detected.catch(() => undefined);
   return {
     detected,
@@ -894,8 +913,16 @@ function watchForOnboardingWizard(
         throw onboardingWizardError(context);
       }
     },
-    disarm: () => {
+    disarm: async () => {
       disarmed = true;
+      await installed;
+      await window.evaluate((watchId) => {
+        const host = globalThis as typeof globalThis & {
+          __PWRAGENT_ONBOARDING_WATCHES__?: Map<string, { stop: () => void }>;
+        };
+        host.__PWRAGENT_ONBOARDING_WATCHES__?.get(watchId)?.stop();
+      }, watchId);
+      await answered.catch(() => undefined);
     },
   };
 }
