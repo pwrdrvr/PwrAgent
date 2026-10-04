@@ -101,8 +101,10 @@ casks/manifests, validator code, architecture, published hosted-image version,
 the pinned stable Homebrew commit and the resolved stable WinGet client assets.
 A runner validates normally during an image rollout, but records no reusable
 success unless its actual `ImageVersion` matches the planned image. Changes to
-these inputs require new coverage. A PR can reuse its own or main's success;
-trusted submission accepts only main's success, never PR results. Failed checks
+these inputs require new coverage. A PR can reuse its own or trusted success;
+validation-only manual branch dispatches can reuse their own success too. Trusted
+submission accepts only main or the promoted stable tag's success, never PR or
+other branch results. Failed checks
 never create a success marker.
 
 Installer caches use exact version/name/SHA256 keys independently of validator

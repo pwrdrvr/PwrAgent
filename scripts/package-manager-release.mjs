@@ -274,6 +274,7 @@ export async function download(asset, dir) {
     await stat(file);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
+    console.log(`Release asset download (cache miss): ${asset.name}`);
     const response = await fetch(asset.browser_download_url);
     if (!response.ok) throw new Error(`Download ${asset.name}: HTTP ${response.status}`);
     try {

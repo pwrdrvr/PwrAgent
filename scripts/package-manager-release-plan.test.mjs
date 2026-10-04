@@ -33,7 +33,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 async function temporary() { const dir = await mkdtemp(resolve(tmpdir(), "distribution-plan-")); dirs.push(dir); return dir; }
-function apiFixture({ published = false, pending = false, hit = false, cacheRef = "refs/heads/main", winget = "v1.12.0" } = {}) {
+function apiFixture({ published = false, pending = false, hit = false, cacheRef = "refs/heads/main", winget = "v1.12.0", downloads = 0 } = {}) {
   return vi.fn((endpoint) => {
     if (endpoint === `repos/${SOURCE_REPO}/releases/latest`) return structuredClone(current);
     if (endpoint === `repos/${SOURCE_REPO}/releases/tags/${previous.tag_name}`) return structuredClone(previous);
@@ -51,7 +51,7 @@ function apiFixture({ published = false, pending = false, hit = false, cacheRef 
     if (endpoint === "repos/Homebrew/brew/commits/5.1.0") return { sha: "a".repeat(40) };
     if (endpoint === "repos/microsoft/winget-cli/releases/latest") return {
       tag_name: winget, assets: ["Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", "DesktopAppInstaller_Dependencies.zip"]
-        .map((name) => ({ name, size: 3, digest: `sha256:${sha("client")}` })),
+        .map((name) => ({ name, size: 3, digest: `sha256:${sha("client")}`, download_count: downloads })),
     };
     if (endpoint.includes("/actions/caches?")) return { actions_caches: hit ? [{ key: decodeURIComponent(endpoint.split("&key=")[1]), ref: cacheRef }] : [] };
     throw new Error(`Unexpected API read: ${endpoint}`);
@@ -103,6 +103,23 @@ describe("metadata-only distribution planning", () => {
     expect(reusableValidation([{ key: "key", ref: event.ref }], "key", { ...event, force: true })).toBe(false);
   });
 
+  it("reuses manual branch validation without allowing it to authorize publication", async () => {
+    const ref = "refs/heads/test-distribution";
+    const api = apiFixture({ hit: true, cacheRef: ref });
+    const local = await buildPlan({ ...event, event: "workflow_dispatch", ref, publication: false }, api);
+    expect(local.native.every(({ reuse }) => reuse)).toBe(true);
+    const submit = await buildPlan({ ...event, event: "workflow_dispatch", ref, publication: true }, api);
+    expect(submit.native.some(({ reuse }) => reuse)).toBe(false);
+    expect(reusableValidation([{ key: "key", ref: "refs/tags/v1.1.4" }], "key", { ...event, tag: "v1.1.4" })).toBe(true);
+    expect(reusableValidation([{ key: "key", ref: "refs/tags/v1.1.3" }], "key", { ...event, tag: "v1.1.4" })).toBe(false);
+  });
+
+  it("does not invalidate validation when mutable WinGet download counters change", async () => {
+    const before = await buildPlan(event, apiFixture({ downloads: 12 }));
+    const after = await buildPlan(event, apiFixture({ downloads: 99 }));
+    expect(before.native.map(({ key }) => key)).toEqual(after.native.map(({ key }) => key));
+  });
+
   it("invalidates changed bytes, baseline, generated packages, validator logic and platform/tool inputs", () => {
     const input = { current, previous, files: metadataPackages(current).files, logic: "logic",
       platform: { image: "20260907.1", tool: "1.12", arch: "X64" } };
@@ -139,6 +156,9 @@ describe("metadata-only distribution planning", () => {
     vi.stubGlobal("fetch", fetchAsset);
     await cachedAsset(plan, 0, resolve(dir, "first"), resolve(dir, "cache"));
     await cachedAsset(plan, 0, resolve(dir, "second"), resolve(dir, "cache"));
+    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    await cachedAsset({ assets: [{ asset, key, role: "previous" }] }, 0, resolve(dir, "baseline"), resolve(dir, "cache"));
+    expect(await readFile(resolve(dir, "baseline/assets/previous", asset.name), "utf8")).toBe("abc");
     expect(fetchAsset).toHaveBeenCalledTimes(1);
     await writeFile(resolve(dir, "cache", key, asset.name), "bad");
     await expect(cachedAsset(plan, 0, resolve(dir, "bad"), resolve(dir, "cache"))).rejects.toThrow(/SHA-256/);

@@ -37,12 +37,17 @@ export function validationKey({ current, previous, files, logic, platform }) {
   return `distribution-validation-v3-${digest({ current, previous, files, logic, platform })}`;
 }
 
-export function reusableValidation(caches, key, { event, ref, force = false }) {
+export function reusableValidation(caches, key, { event, ref, tag, force = false, publication = true }) {
   if (force) return false;
-  // A PR may consume its own or main's success, never another PR's. Trusted
-  // publication accepts only main's markers, even on a manual branch dispatch.
-  const allowed = event === "pull_request" ? [DEFAULT_REF, ref] : [DEFAULT_REF];
-  if (event === "pull_request" && !/^refs\/pull\/\d+\/merge$/.test(ref)) return false;
+  // Only main and the promoted stable tag can authorize publication. PRs and
+  // manual validation-only dispatches may additionally consume their own ref.
+  const allowed = [DEFAULT_REF];
+  if (/^v\d+\.\d+\.\d+$/.test(tag ?? "")) allowed.push(`refs/tags/${tag}`);
+  if (event === "pull_request") {
+    if (!/^refs\/pull\/\d+\/merge$/.test(ref)) return false;
+    allowed.push(ref);
+  } else if (event === "workflow_dispatch" && !publication && /^refs\/heads\//.test(ref)) allowed.push(ref);
+
   return caches.some((cache) => cache.key === key && allowed.includes(cache.ref));
 }
 
@@ -66,7 +71,7 @@ async function writePackages(out, files) {
   }
 }
 
-export async function buildPlan({ event, ref, tag = "", force = false, logic }, api = ghJson) {
+export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic }, api = ghJson) {
   const audit = auditChannels(api);
   const needed = distributionNeeded(audit, event, tag);
   const plan = { audit, needed, native: [], assets: [], submit: false };
@@ -105,7 +110,7 @@ export async function buildPlan({ event, ref, tag = "", force = false, logic }, 
     const key = validationKey({ current: identity(current), previous: identity(previous), files, logic, platform: inputs });
     const result = api(`repos/${SOURCE_REPO}/actions/caches?per_page=100&key=${encodeURIComponent(key)}`);
     if (!Array.isArray(result.actions_caches)) throw new Error("Cannot inspect successful validation cache");
-    const reuse = reusableValidation(result.actions_caches, key, { event, ref, force });
+    const reuse = reusableValidation(result.actions_caches, key, { event, ref, tag: current.tag_name, force, publication });
     plan.native.push({ ...inputs, key, reuse });
   }
   const families = new Set(plan.native.filter((platform) => !platform.reuse).map((platform) => platform.family));
@@ -142,6 +147,7 @@ export async function cachedAsset(plan, index, dir, cacheRoot = ".local/distribu
   const file = await download(asset, cache);
   // A corrupt restore fails closed. Never save, copy or install unchecked bytes.
   await verifyFile(file, asset, asset.digest.slice(7));
+  console.log(`Verified release asset: ${asset.name}`);
   const target = resolve(dir, "assets", role === "previous" ? "previous" : "");
   await mkdir(target, { recursive: true });
   await copyFile(file, resolve(target, asset.name));
@@ -154,7 +160,8 @@ async function main(argv) {
       "scripts/package-manager-release.mjs", "scripts/package-manager-release-plan.mjs", "scripts/package-manager-release-loopback.mjs"];
     const logic = digest(await Promise.all(paths.map(async (path) => [path, await readFile(path, "utf8")])));
     const plan = await buildPlan({ event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
-      tag: process.env.EVENT_TAG, force: process.env.FORCE_VALIDATION === "true", logic });
+      tag: process.env.EVENT_TAG, force: process.env.FORCE_VALIDATION === "true",
+      publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true", logic });
     await prepare(plan, dir);
     const mac = plan.native.filter((p) => p.family === "homebrew" && !p.reuse);
     const windows = plan.native.find((p) => p.family === "winget");

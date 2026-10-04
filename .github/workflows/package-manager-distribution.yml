@@ -60,6 +60,7 @@ jobs:
           DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
           FORCE_VALIDATION: ${{ inputs.force_validation || false }}
+          SUBMIT_REQUESTED: ${{ inputs.submit || false }}
         run: |
           set -euo pipefail
           node scripts/package-manager-release-plan.mjs plan distribution | tee -a "$GITHUB_STEP_SUMMARY"
@@ -123,17 +124,36 @@ jobs:
           path: |
             distribution/preflight.json
             distribution/plan.json
-            distribution/assets
             distribution/current/audit.json
             distribution/current/Casks
             distribution/current/manifests
             distribution/previous/Casks
             distribution/previous/manifests
           if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: fromJSON(steps.plan.outputs.homebrew).include[0] != null
+        with:
+          name: package-manager-macos-assets
+          compression-level: 0
+          path: |
+            distribution/assets/*.dmg
+            distribution/assets/previous/*.dmg
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: steps.plan.outputs.winget == 'true'
+        with:
+          name: package-manager-windows-assets
+          compression-level: 0
+          path: |
+            distribution/assets/*.exe
+            distribution/assets/previous/*.exe
+          if-no-files-found: error
+
 
   homebrew:
+    name: homebrew (${{ matrix.runner }})
     needs: prepare
-    if: fromJSON(needs.prepare.outputs.homebrew).include[0] != null
+    if: needs.prepare.outputs.needed == 'true' && fromJSON(needs.prepare.outputs.homebrew).include[0] != null
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.homebrew) }}
@@ -152,6 +172,10 @@ jobs:
         with:
           name: package-manager-inputs
           path: distribution
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-macos-assets
+          path: distribution/assets
       - name: Pin Homebrew validator code
         env:
           BREW_SHA: ${{ matrix.tool.brew }}
@@ -262,6 +286,10 @@ jobs:
         with:
           name: package-manager-inputs
           path: distribution
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-windows-assets
+          path: distribution/assets
       - name: Install Microsoft's WinGet client
         shell: pwsh
         env:
