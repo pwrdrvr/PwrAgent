@@ -34,6 +34,34 @@ describe("Federation @ references", () => {
     expect(listInstanceReferences({ ...health, enabled: false })).toEqual([]);
   });
 
+  it("shows each machine's federation short name and keeps the full label for the agent", () => {
+    const named: FederationHealthStatus = {
+      enabled: true,
+      role: "gateway",
+      status: "connected",
+      instanceId: "mini-2",
+      localLabel: "Harold-Mac-Mini-2",
+      localProfileName: "default",
+      localShortLabel: "Mini 2",
+      peers: [
+        { id: "mini-1", label: "Harold-Mac-Mini-1", profileName: "default", shortLabel: "Mini 1", role: "client", status: "connected", capabilities: [] },
+        { id: "mini-1-dev", label: "Harold-Mac-Mini-1", profileName: "dev", shortLabel: "Mini 1", role: "client", status: "disconnected", capabilities: [] },
+        { id: "unnamed", label: "DESKTOP-LAB", profileName: "default", role: "client", status: "connected", capabilities: [] },
+      ],
+    };
+    expect(listInstanceReferences(named).map(({ label, shortLabel }) => ({ label, shortLabel }))).toEqual([
+      // A lone default profile drops its suffix, as on every other face.
+      { label: "Harold-Mac-Mini-2 / default", shortLabel: "Mini 2" },
+      { label: "Harold-Mac-Mini-1 / default", shortLabel: "Mini 1 / default" },
+      { label: "Harold-Mac-Mini-1 / dev", shortLabel: "Mini 1 / dev" },
+      { label: "DESKTOP-LAB / default", shortLabel: undefined },
+    ]);
+    for (const [query, instanceId] of [["mini 2", "mini-2"], ["Mini 1/dev", "mini-1-dev"], ["harold-mac-mini-1", "mini-1"]]) {
+      expect(filterAtReferenceCandidates([], listInstanceReferences(named), query))
+        .toContainEqual(expect.objectContaining({ instanceId }));
+    }
+  });
+
   it.each(["desk", "DEV", "windows-lab", "windows-dev", "DESKTOP-LAB/dev"])("searches machines, profiles, hostnames and IDs with %s", (query) => {
     expect(filterAtReferenceCandidates([], listInstanceReferences(health), query))
       .toContainEqual(expect.objectContaining({ instanceId: "windows-dev" }));

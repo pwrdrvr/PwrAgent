@@ -12263,9 +12263,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     autocompleteOptionRefs.current[index] = node;
                   }}
                   aria-selected={index === activeDirectoryRefIndex}
-                  className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                  className={`composer__autocomplete-option${directory.kind === "instance" ? " composer__autocomplete-option--instance" : ""}${index === activeDirectoryRefIndex ? " is-active" : ""}`}
                   role="option"
                   tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                  title={directory.kind === "instance"
+                    ? `${directory.label} · ${directory.status}`
+                    : undefined}
                   type="button"
                   onMouseDown={(event) => {
                     event.preventDefault();
@@ -12286,7 +12289,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         : <InstanceGlyph instanceId={directory.instanceId} size={13} />
                     ) : <FolderIcon size={13} aria-hidden="true" />}
                     <HighlightedAutocompleteLabel
-                      label={directory.label}
+                      label={directory.kind === "instance"
+                        ? directory.shortLabel ?? directory.label
+                        : directory.label}
                       query={directoryRefTrigger?.query ?? ""}
                     />
                   </span>

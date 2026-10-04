@@ -1,11 +1,15 @@
 import type { CelestialIconId, FederationHealthStatus } from "@pwragent/shared";
 import { filterDirectoryReferenceCandidates, type ReferenceDirectory } from "./directory-references";
+import { federationDisplayLabel } from "./federation-display-label";
 
 export type InstanceReference = {
   kind: "instance";
   key: string;
   instanceId: string;
+  /** Full machine and profile; the inserted mention, so what the agent reads. */
   label: string;
+  /** The federation short name, with any distinguishing profile, for the picker row. */
+  shortLabel?: string;
   path: string;
   profileName?: string;
   hostname?: string;
@@ -42,8 +46,13 @@ export function listInstanceReferences(health?: FederationHealthStatus): Instanc
   if (!health?.enabled) return [];
   const instances: InstanceReference[] = [];
   const seen = new Set<string>();
+  // The local instance counts, so a peer on this machine keeps its profile.
+  const visible = [
+    ...health.peers,
+    ...(health.localLabel ? [{ label: health.localLabel, profileName: health.localProfileName }] : []),
+  ];
   const add = (id: string, label: string, profileName: string | undefined,
-    status: string, icon?: CelestialIconId, hostname?: string): void => {
+    status: string, icon?: CelestialIconId, hostname?: string, shortLabel?: string): void => {
     if (!id || seen.has(id)) return;
     seen.add(id);
     instances.push({
@@ -51,6 +60,9 @@ export function listInstanceReferences(health?: FederationHealthStatus): Instanc
       key: `instance:${id}`,
       instanceId: id,
       label: profileName ? `${label} / ${profileName}` : label,
+      ...(shortLabel
+        ? { shortLabel: federationDisplayLabel({ label, profileName, shortLabel }, visible) }
+        : {}),
       path: buildInstanceReferenceUrl(id),
       profileName,
       hostname,
@@ -60,11 +72,13 @@ export function listInstanceReferences(health?: FederationHealthStatus): Instanc
   };
   if (health.instanceId) {
     add(health.instanceId, health.localLabel ?? health.instanceId,
-      health.localProfileName, "This instance", health.localCelestialIcon);
+      health.localProfileName, "This instance", health.localCelestialIcon, undefined,
+      health.localShortLabel);
   }
   for (const peer of health.peers) {
     if (peer.revokedAt || peer.status === "revoked") continue;
-    add(peer.id, peer.label, peer.profileName, peer.status, peer.celestialIcon, peer.host?.hostname);
+    add(peer.id, peer.label, peer.profileName, peer.status, peer.celestialIcon,
+      peer.host?.hostname, peer.shortLabel);
   }
   return instances;
 }
@@ -76,14 +90,21 @@ export function filterAtReferenceCandidates(
   query: string,
 ): AtReference[] {
   const normalized = query.trim().toLowerCase();
+  const names = (instance: InstanceReference): string[] =>
+    [instance.label, instance.shortLabel ?? ""].filter(Boolean);
+  const startsWith = (instance: InstanceReference): number =>
+    Number(names(instance).some((name) => name.toLowerCase().startsWith(normalized)));
+  const shown = (instance: InstanceReference): string => instance.shortLabel ?? instance.label;
   const matches = instances.filter((instance) =>
-    [instance.label, instance.label.replace(/\s*\/\s*/g, "/"), instance.instanceId, instance.hostname ?? ""].some((value) =>
-      value.toLowerCase().includes(normalized),
-    ),
-  ).sort((left, right) => {
-    const prefix = Number(right.label.toLowerCase().startsWith(normalized))
-      - Number(left.label.toLowerCase().startsWith(normalized));
-    return prefix || left.label.localeCompare(right.label) || left.instanceId.localeCompare(right.instanceId);
-  }).slice(0, 10);
+    [
+      ...names(instance).flatMap((name) => [name, name.replace(/\s*\/\s*/g, "/")]),
+      instance.instanceId,
+      instance.hostname ?? "",
+    ].some((value) => value.toLowerCase().includes(normalized)),
+  ).sort((left, right) =>
+    startsWith(right) - startsWith(left)
+    || shown(left).localeCompare(shown(right))
+    || left.instanceId.localeCompare(right.instanceId),
+  ).slice(0, 10);
   return [...filterDirectoryReferenceCandidates([...directories], query), ...matches];
 }

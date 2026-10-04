@@ -17732,6 +17732,43 @@ describe("Composer", () => {
     expect(attachDirectoryToThread).not.toHaveBeenCalled();
   });
 
+  it("lists Federation instances by short name, with room for the name and the full label on hover", async () => {
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+    render(<Composer
+      desktopApi={{
+        onAgentEvent: () => () => undefined,
+        startTurn,
+        readFederationHealth: async () => ({ health: {
+          enabled: true, role: "gateway", status: "connected",
+          peers: [
+            { id: "mini-1", label: "Harold-Mac-Mini-1", profileName: "default", shortLabel: "Mini 1",
+              role: "client", status: "connected", capabilities: [] },
+            { id: "mini-1-dev", label: "Harold-Mac-Mini-1", profileName: "dev", shortLabel: "Mini 1",
+              role: "client", status: "disconnected", capabilities: [] },
+          ],
+        } }),
+      }}
+      backends={[backendSummary("codex")]}
+      draftStore={createComposerDraftStore()}
+      skills={[]}
+      thread={{ id: "thread-1", title: "Work", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "Hand off to @mac" } });
+    const option = await screen.findByRole("option", { name: /Mini 1 \/ dev/ });
+    expect(screen.getByRole("option", { name: /Mini 1 \/ default/ })).toBeInTheDocument();
+    expect(option.textContent).not.toContain("Harold-Mac-Mini-1");
+    expect(option).toHaveAttribute("title", "Harold-Mac-Mini-1 / dev · disconnected");
+    // The 160px name column suits a folder beside its path; an instance's
+    // meta is a short status, so the name takes the row instead.
+    expect(option).toHaveClass("composer__autocomplete-option--instance");
+    fireEvent.click(option);
+    // What the agent reads keeps the full machine label.
+    await waitFor(() => expect(screen.getByTestId("composer-tiptap-input")
+      .querySelector('[data-mention-kind="instance"]')).toHaveTextContent("@Harold-Mac-Mini-1 / dev"));
+  });
+
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/example";

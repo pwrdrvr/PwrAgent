@@ -813,6 +813,26 @@ describe("CompactComposer markdown", () => {
       expect(onSend).toHaveBeenCalledWith("Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)");
     });
 
+    it("lists a Federation machine by its short name and keeps the full label for the agent", async () => {
+      const { onSend, container } = renderComposer({
+        mentionSources: {
+          instances: [{
+            kind: "instance", key: "instance:mini-1", instanceId: "mini-1",
+            label: "Harold-Mac-Mini-1 / dev", shortLabel: "Mini 1 / dev",
+            path: buildInstanceReferenceUrl("mini-1"), status: "connected",
+          }],
+        },
+      });
+      const input = openPicker("Hand off to @mac");
+      const option = screen.getByRole("option");
+      expect(option.querySelector(".compact-composer__mention-title")?.textContent).toBe("Mini 1 / dev");
+      expect(option.getAttribute("title")).toBe("Harold-Mac-Mini-1 / dev · connected");
+      fireEvent.click(option);
+      expect(container.querySelector('[data-mention-kind="instance"]')?.textContent).toBe("@Harold-Mac-Mini-1 / dev");
+      await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+      expect(onSend).toHaveBeenCalledWith("Hand off to [@Harold-Mac-Mini-1 / dev](pwragent://instance/mini-1)");
+    });
+
     it.each([
       ["code block", "\n\n```sh\npnpm lint\n```"],
       ["blockquote", "\n\n> Quoted text"],
