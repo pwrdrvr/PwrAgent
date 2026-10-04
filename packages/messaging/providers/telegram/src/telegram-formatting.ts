@@ -12,13 +12,22 @@ import {
   layoutMessagingActionRows,
   messagingQuestionnaireActions,
 } from "@pwragent/messaging-interface";
-import { Lexer, type MarkedToken, type Token, type Tokens } from "marked";
+import type { MarkedToken, Token, Tokens } from "marked";
+import { lexTelegramMarkdown, type TelegramMarkdownToken } from "./telegram-markdown.ts";
 
 export const TELEGRAM_CALLBACK_DATA_LIMIT_BYTES = 64;
 export const TELEGRAM_MESSAGE_TEXT_LIMIT = 4096;
 export const TELEGRAM_RICH_MESSAGE_TEXT_LIMIT = 32768;
 
-export type TelegramInputRichMessage = { html: string };
+export type TelegramRichMessageMedia = {
+  id: string;
+  media: { type: "photo" | "document"; media: string | Uint8Array; filename?: string };
+};
+
+export type TelegramRichMessageMediaPart = TelegramRichMessageMedia & { partIndex: number };
+export type TelegramInputRichMessage = { html: string; media?: TelegramRichMessageMedia[] };
+type TelegramMediaToken = { type: "telegram_media"; raw: string; id: string; mediaType: "photo" | "document"; caption: string };
+type TelegramRenderToken = MarkedToken | TelegramMarkdownToken | TelegramMediaToken;
 
 export type TelegramInlineKeyboardButton = {
   text: string;
@@ -44,7 +53,7 @@ export function renderTelegramHtml(
     return escapeTelegramHtml(text);
   }
 
-  return renderBlocks(Lexer.lex(text, { gfm: true }), "regular");
+  return renderBlocks(lexTelegramMarkdown(text), "regular");
 }
 
 export function splitTelegramHtml(text: string): string[] {
@@ -102,37 +111,48 @@ export function richMessageForTelegramText(
   if (policy === "plain" || Buffer.byteLength(text, "utf8") > TELEGRAM_RICH_MESSAGE_TEXT_LIMIT) {
     return undefined;
   }
-  return richMessageFromTokens(Lexer.lex(text, { gfm: true }), attribution);
+  return richMessageFromTokens(lexTelegramMarkdown(text), attribution);
 }
 
 function richMessageFromTokens(
   tokens: Token[],
   attribution?: MessagingResponseAttribution,
+  media?: TelegramRichMessageMedia[],
 ): TelegramInputRichMessage | undefined {
   const stats = { blocks: 0, structured: false, valid: true };
   inspectRichTokens(tokens, stats);
   const attributionHtml = telegramAttributionHtml(attribution);
   if (attributionHtml) stats.blocks += 1;
-  if (!stats.structured || !stats.valid || stats.blocks > 500) return undefined;
-  const html = [renderBlocks(tokens, "rich"), attributionHtml ? `<p>${attributionHtml}</p>` : ""]
+  if (!stats.valid || stats.blocks > 500 || (media?.length ?? 0) > 50) return undefined;
+  const body = renderBlocks(tokens, "rich");
+  if (!stats.structured && Buffer.byteLength(renderBlocks(tokens, "regular").trim(), "utf8") <= TELEGRAM_MESSAGE_TEXT_LIMIT) return undefined;
+  const html = [body, attributionHtml ? `<footer>${attributionHtml}</footer>` : ""]
     .filter(Boolean).join("\n");
   // Counting source bytes (including tags) is deliberately conservative.
   return Buffer.byteLength(html, "utf8") <= TELEGRAM_RICH_MESSAGE_TEXT_LIMIT
-    ? { html }
+    ? { html, ...(media?.length ? { media } : {}) }
     : undefined;
 }
 
 export function richMessageForTelegramIntent(
   intent: MessagingSurfaceIntent,
+  mediaParts: TelegramRichMessageMediaPart[] = [],
 ): TelegramInputRichMessage | undefined {
-  if (intent.kind !== "message" || intent.parts.some((part) => part.type !== "text")) {
+  if (intent.kind !== "message"
+    || intent.parts.some((part, index) => part.type !== "text" && !mediaParts.some((media) => media.partIndex === index))
+    || (mediaParts.length > 0 && !intent.parts.some((part) => part.type === "text" && part.text.trim()))) {
     return undefined;
   }
   // Do not reinterpret plain parts as Markdown when combining content.
-  const tokens = intent.parts.flatMap((part): Token[] => {
-    if (part.type !== "text") return [];
+  const tokens = intent.parts.flatMap((part, index): Token[] => {
+    if (part.type !== "text") {
+      const media = mediaParts.find((entry) => entry.partIndex === index)!;
+      const caption = part.type === "image" ? part.alt ?? ""
+        : [part.name, part.description].filter(Boolean).join(" — ");
+      return [{ type: "telegram_media", raw: "", id: media.id, mediaType: media.media.type, caption }];
+    }
     return part.markdown && part.markdown !== "plain"
-      ? Lexer.lex(part.text, { gfm: true })
+      ? lexTelegramMarkdown(part.text, `part-${index}-fn`)
       : [{
           type: "paragraph",
           raw: part.text,
@@ -140,7 +160,7 @@ export function richMessageForTelegramIntent(
           tokens: [{ type: "text", raw: part.text, text: part.text }],
         }];
   });
-  return richMessageFromTokens(tokens, intent.attribution);
+  return richMessageFromTokens(tokens, intent.attribution, mediaParts.map(({ id, media }) => ({ id, media })));
 }
 
 function telegramAttributionHtml(attribution: MessagingResponseAttribution | undefined): string {
@@ -295,8 +315,29 @@ type TelegramHtmlMode = "regular" | "rich";
 
 function renderBlocks(tokens: Token[], mode: TelegramHtmlMode, inQuote = false): string {
   return tokens.map((item) => {
-    const token = item as MarkedToken;
+    const token = item as TelegramRenderToken;
     switch (token.type) {
+      case "telegram_details": {
+        const summary = renderInline(token.summary, mode);
+        const body = renderBlocks(token.tokens, mode, inQuote);
+        return mode === "rich" ? `<details${token.open ? " open" : ""}><summary>${summary}</summary>${body}</details>`
+          : `${wrapInline("<b>", "</b>", summary, mode)}\n\n${body}`;
+      }
+      case "telegram_math_block":
+        return mode === "rich" ? `<tg-math-block>${escapeTelegramHtml(token.text)}</tg-math-block>`
+          : `<pre><code>${escapeTelegramHtml(token.text)}</code></pre>`;
+      case "telegram_footnote_definition":
+        return token.number === undefined ? escapeTelegramHtml(token.raw.trim()) : "";
+      case "telegram_footnote": {
+        const text = renderInline(token.tokens, mode);
+        return mode === "rich" ? `<p><tg-reference name="${token.anchor}">[${token.number}] ${text}</tg-reference></p>`
+          : `[${token.number}] ${text}`;
+      }
+      case "telegram_media": {
+        const media = token.mediaType === "photo" ? `<img src="tg://photo?id=${token.id}"/>`
+          : `<tg-document src="tg://document?id=${token.id}"></tg-document>`;
+        return `<figure>${media}${token.caption ? `<figcaption>${escapeTelegramHtml(token.caption)}</figcaption>` : ""}</figure>`;
+      }
       case "space":
       case "def":
         return "";
@@ -312,6 +353,7 @@ function renderBlocks(tokens: Token[], mode: TelegramHtmlMode, inQuote = false):
       }
       case "code": {
         const language = token.lang?.split(/\s/)[0];
+        if (mode === "rich" && language === "math") return `<tg-math-block>${escapeTelegramHtml(token.text)}</tg-math-block>`;
         const attribute = language && /^[a-zA-Z0-9_+.-]{1,64}$/.test(language)
           ? ` class="language-${language}"`
           : "";
@@ -342,8 +384,14 @@ function renderBlocks(tokens: Token[], mode: TelegramHtmlMode, inQuote = false):
 
 function renderInline(tokens: Token[], mode: TelegramHtmlMode): string {
   return tokens.map((item) => {
-    const token = item as MarkedToken;
+    const token = item as TelegramRenderToken;
     switch (token.type) {
+      case "telegram_math":
+        return mode === "rich" ? `<tg-math>${escapeTelegramHtml(token.text)}</tg-math>`
+          : `<code>${escapeTelegramHtml(token.text)}</code>`;
+      case "telegram_footnote_reference":
+        return token.number === undefined ? escapeTelegramHtml(token.raw)
+          : mode === "rich" ? `<a href="#${token.anchor}">[${token.number}]</a>` : `[${token.number}]`;
       case "strong":
       case "em":
       case "del": {
@@ -441,8 +489,25 @@ function inspectRichTokens(
     return;
   }
   for (const item of tokens) {
-    const token = item as MarkedToken;
+    const token = item as TelegramRenderToken;
     switch (token.type) {
+      case "telegram_details":
+        stats.structured = true;
+        stats.blocks += 1;
+        inspectRichTokens(token.summary, stats, depth + 1, true);
+        break;
+      case "telegram_math":
+        stats.structured = true;
+        break;
+      case "telegram_math_block":
+      case "telegram_footnote":
+      case "telegram_media":
+        stats.structured = true;
+        stats.blocks += token.type === "telegram_media" ? 2 : 1;
+        break;
+      case "telegram_footnote_definition":
+        if (token.number === undefined) stats.blocks += 1;
+        break;
       case "heading":
         stats.structured = true;
         stats.blocks += 1;
@@ -456,7 +521,7 @@ function inspectRichTokens(
         }
         break;
       case "list":
-        stats.structured ||= token.items.some((entry) => entry.task);
+        stats.structured = true;
         stats.blocks += 1 + token.items.length;
         for (const entry of token.items) inspectRichTokens(entry.tokens, stats, depth + 2);
         break;
@@ -466,11 +531,12 @@ function inspectRichTokens(
       case "hr":
       case "text":
       case "html":
+        stats.structured ||= token.type === "blockquote" || token.type === "code";
         if (!inline) stats.blocks += 1;
         break;
     }
     if ("tokens" in token && token.tokens) {
-      inspectRichTokens(token.tokens, stats, depth + 1, token.type !== "blockquote");
+      inspectRichTokens(token.tokens, stats, depth + 1, token.type !== "blockquote" && token.type !== "telegram_details");
     }
   }
 }

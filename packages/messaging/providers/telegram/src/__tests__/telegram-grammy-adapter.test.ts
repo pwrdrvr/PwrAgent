@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { InputFile } from "grammy";
 import {
   adaptGrammyBot,
   TelegramAdapter,
@@ -24,6 +25,31 @@ import {
 } from "@pwragent/messaging-interface";
 
 describe("adaptGrammyBot", () => {
+  it("uploads rich media through grammY InputFile for both sends and edits", async () => {
+    const grammyBot = createGrammyBot();
+    grammyBot.api.sendRichMessage = vi.fn(async () => ({ chat: { id: 42, type: "private" as const }, message_id: 9 }));
+    const bot = adaptGrammyBot(grammyBot);
+    const rich = {
+      html: '<img src="tg://photo?id=photo"/><tg-document src="tg://document?id=file"></tg-document>',
+      media: [
+        { id: "photo", media: { type: "photo" as const, media: new Uint8Array([1, 2]), filename: "screenshot.png" } },
+        { id: "file", media: { type: "document" as const, media: new Uint8Array([3, 4]), filename: "report.csv" } },
+        { id: "remote", media: { type: "photo" as const, media: "https://example.com/chart.png" } },
+      ],
+    };
+    await bot.api.sendRichMessage!({ chat_id: 42, rich_message: rich });
+    await bot.api.editMessageText({ chat_id: 42, message_id: 9, text: "Fallback", rich_message: rich });
+    for (const request of [grammyBot.api.sendRichMessage.mock.calls[0]?.[1], grammyBot.api.editMessageText.mock.calls[0]?.[2]]) {
+      expect(request).toMatchObject({ html: rich.html });
+      const media = (request as { media: Array<{ media: { media: unknown } }> }).media;
+      expect(media[0]?.media.media).toBeInstanceOf(InputFile);
+      expect(media[0]?.media.media).toMatchObject({ filename: "screenshot.png" });
+      expect(media[1]?.media.media).toBeInstanceOf(InputFile);
+      expect(media[1]?.media.media).toMatchObject({ filename: "report.csv" });
+      expect(media[2]?.media.media).toBe("https://example.com/chart.png");
+    }
+  });
+
   it("maps object-shaped adapter calls to grammY positional API calls", async () => {
     const grammyBot = createGrammyBot();
     const bot = adaptGrammyBot(grammyBot);
@@ -226,6 +252,71 @@ describe("TelegramAdapter rich messages", () => {
     return { api, adapter, send, edit, rich };
   }
 
+  it("combines text, photos, documents and a native footer in content order", async () => {
+    const { api, adapter, rich, send } = harness();
+    const photo = vi.spyOn(api, "sendPhoto");
+    const file = vi.spyOn(api, "sendDocument");
+    const imageBytes = new Uint8Array([1, 2, 3]);
+    const fileBytes = new Uint8Array([4, 5]);
+    const result = await adapter.deliver({
+      ...intent, attribution: { label: "Agent: Reporter" },
+      parts: [
+        { type: "text", text: "Evidence **below**", markdown: "markdown" },
+        { type: "image", url: "", data: imageBytes, mimeType: "image/png", name: "chart.png", alt: "Chart <caption>" },
+        { type: "text", text: "Download the data:", markdown: "plain" },
+        { type: "file", name: "stats.csv", data: fileBytes, description: "Raw & complete" },
+      ],
+    });
+    expect(result.outcome).toBe("presented");
+    expect(result.surface?.id).toBe("300");
+    expect(rich).toHaveBeenCalledTimes(1);
+    const message = rich.mock.calls[0]![0].rich_message;
+    expect(message.html).toBe('<p>Evidence <b>below</b></p>\n<figure><img src="tg://photo?id=part_1"/><figcaption>Chart &lt;caption&gt;</figcaption></figure>\n<p>Download the data:</p>\n<figure><tg-document src="tg://document?id=part_3"></tg-document><figcaption>stats.csv — Raw &amp; complete</figcaption></figure>\n<footer><i>Agent: Reporter</i></footer>');
+    expect(message.media).toEqual([
+      { id: "part_1", media: { type: "photo", media: imageBytes, filename: "chart.png" } },
+      { id: "part_3", media: { type: "document", media: fileBytes, filename: "stats.csv" } },
+    ]);
+    expect(send).not.toHaveBeenCalled();
+    expect(photo).not.toHaveBeenCalled();
+    expect(file).not.toHaveBeenCalled();
+  });
+
+  it("falls back with every mixed attachment after definite rich rejection", async () => {
+    const { api, adapter, rich, send } = harness();
+    const photo = vi.spyOn(api, "sendPhoto");
+    const file = vi.spyOn(api, "sendDocument");
+    rich.mockRejectedValue({ error_code: 400, description: "Rich uploads unsupported" });
+    const result = await adapter.deliver({
+      ...intent,
+      parts: [
+        { type: "text", text: "**Evidence**", markdown: "markdown" },
+        { type: "image", url: "data:image/png;base64,AQID", name: "chart.png" },
+        { type: "file", name: "report.csv", data: new Uint8Array([4, 5]), description: "Full & raw" },
+        { type: "image", url: "https://example.com/second.png" },
+      ],
+    });
+    expect(result.outcome).toBe("presented");
+    expect(send).not.toHaveBeenCalled();
+    expect(photo).toHaveBeenCalledTimes(2);
+    expect(file).toHaveBeenCalledTimes(1);
+    expect(photo.mock.calls[0]?.[0]).toMatchObject({ caption: "<b>Evidence</b>\n\nreport.csv: Full &amp; raw", filename: "chart.png", photo: new Uint8Array([1, 2, 3]) });
+    expect(file.mock.calls[0]?.[0]).toMatchObject({ filename: "report.csv", document: new Uint8Array([4, 5]) });
+    expect(photo.mock.invocationCallOrder[0]).toBeLessThan(file.mock.invocationCallOrder[0]!);
+    expect(file.mock.invocationCallOrder[0]).toBeLessThan(photo.mock.invocationCallOrder[1]!);
+  });
+
+  it("keeps standalone media regular and declines oversized media bundles", async () => {
+    const { api, adapter, rich } = harness();
+    const photo = vi.spyOn(api, "sendPhoto");
+    await adapter.deliver({ ...intent, parts: [{ type: "image", url: "https://example.com/one.png", alt: "Standalone" }] });
+    await adapter.deliver({ ...intent, parts: [
+      { type: "text", text: "Collection" },
+      ...Array.from({ length: 51 }, (_, index) => ({ type: "image" as const, url: `https://example.com/${index}.png` })),
+    ] });
+    expect(rich).not.toHaveBeenCalled();
+    expect(photo).toHaveBeenCalledTimes(52);
+  });
+
   it("sends one rich message directly in the same topic and pins its surface", async () => {
     const { api, adapter, send, rich } = harness();
     const pin = vi.spyOn(api, "pinChatMessage");
@@ -267,7 +358,7 @@ describe("TelegramAdapter rich messages", () => {
     expect(send).not.toHaveBeenCalled();
     expect(rich).toHaveBeenCalledWith(expect.objectContaining({
       chat_id: 42, message_thread_id: undefined,
-      rich_message: { html: expect.stringContaining("<p><i>Agent: Messaging helper</i></p>") },
+      rich_message: { html: expect.stringContaining("<footer><i>Agent: Messaging helper</i></footer>") },
     }));
   });
 
@@ -367,7 +458,7 @@ describe("TelegramAdapter rich messages", () => {
     expect(edit.mock.calls[0]?.[0].text).not.toContain("|");
     expect(edit.mock.calls[0]?.[0].text).toContain("<i>Bound thread: Downloads</i>");
     expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
-    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<p><i>Bound thread: Downloads</i></p>");
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<footer><i>Bound thread: Downloads</i></footer>");
   });
 
   it("uses one request for rich final content in the last group stream budget slot", async () => {
@@ -1485,7 +1576,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         async (
           chatId: number | string,
           messageId: number,
-          _text: string | NonNullable<TelegramEditMessageTextRequest["rich_message"]>,
+          _text: Parameters<TelegramGrammyBotLike["api"]["editMessageText"]>[2],
           _other?: Omit<
             TelegramEditMessageTextRequest,
             "chat_id" | "message_id" | "text"

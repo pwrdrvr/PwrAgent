@@ -56,14 +56,14 @@ describe("telegram formatting", () => {
     };
     const label = "<i>Agent: Breakfast &lt;helper&gt; &amp; friends · From DM</i>";
     expect(textForTelegramIntent(intent)).toBe(`<b>Options</b>\n\n${label}`);
-    expect(richMessageForTelegramIntent(intent)?.html).toBe(`<h1>Options</h1>\n<p>${label}</p>`);
+    expect(richMessageForTelegramIntent(intent)?.html).toBe(`<h1>Options</h1>\n<footer>${label}</footer>`);
     expect(textForTelegramIntent({
       id: "stream", kind: "stream_update", createdAt: 1, attribution,
       text: "# Options", markdown: "markdown",
       stream: { key: "options", sequence: 2, isFinal: true },
     })).toBe(`<b>Options</b>\n\n${label}`);
     expect(richMessageForTelegramText("# Options", "markdown", attribution)?.html)
-      .toBe(`<h1>Options</h1>\n<p>${label}</p>`);
+      .toBe(`<h1>Options</h1>\n<footer>${label}</footer>`);
   });
 
   it("does not turn an empty response into an attribution-only message", () => {
@@ -202,7 +202,8 @@ describe("telegram formatting", () => {
     expect(rich?.html).toContain("<li><input type=\"checkbox\">Pending</li>");
     expect(richMessageForTelegramText("**Basic** formatting", "markdown")).toBeUndefined();
     expect(richMessageForTelegramText("# Plain heading", "plain")).toBeUndefined();
-    expect(richMessageForTelegramText("```md\n# heading\n- [x] task\n```", "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText("```md\n# heading\n- [x] task\n```", "markdown")?.html)
+      .toBe("<pre><code class=\"language-md\"># heading\n- [x] task</code></pre>");
   });
 
   it("keeps rich payloads within text, block, nesting and table-column limits", () => {
@@ -221,6 +222,92 @@ describe("telegram formatting", () => {
     ].join("\n");
     expect(richMessageForTelegramText(table(21), "markdown")).toBeUndefined();
     expect(richMessageForTelegramText(table(20), "markdown")).toBeDefined();
+  });
+
+  it("uses rich delivery for code, quotes, lists and long answers", () => {
+    for (const text of ["```ts\nconst result = 1;\n```", "> Quoted evidence", "- First\n- Second", "x".repeat(5000)]) {
+      expect(richMessageForTelegramText(text, "markdown")).toBeDefined();
+    }
+    expect(richMessageForTelegramText("A short **answer**.", "markdown")).toBeUndefined();
+  });
+
+  it("renders nested details and expands their readable fallback", () => {
+    const text = '<details open><summary>**Build evidence**</summary>\n\n- Passed\n\n<details><summary>Logs</summary>\n\n```html\n</details>\n<script>ignored</script>\n```\n\n</details>\n\n</details>';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain("<details open><summary><b>Build evidence</b></summary>");
+    expect(rich).toContain("<details><summary>Logs</summary>");
+    expect(rich).toContain('<pre><code class="language-html">&lt;/details&gt;\n&lt;script&gt;ignored&lt;/script&gt;</code></pre>');
+    const regular = renderTelegramHtml(text, "markdown");
+    expect(regular).toContain("<b>Build evidence</b>");
+    expect(regular).toContain("• Passed");
+    expect(regular).toContain("<b>Logs</b>");
+    expect(regular).not.toContain("<details");
+    expect(renderTelegramHtml('<details onclick="alert(1)"><summary>Title</summary>body</details>', "markdown"))
+      .toContain('&lt;details onclick="alert(1)"&gt;');
+    expect(renderTelegramHtml('<details><summary>unfinished</summary>', "markdown")).toContain("&lt;details&gt;");
+    expect(renderTelegramHtml('<details><summary>literal</summary></details>', "plain")).toContain("&lt;details&gt;");
+  });
+
+  it("renders footnotes in first-use order and preserves unresolved source", () => {
+    const text = 'Second[^b], first[^a], repeated[^b] and missing[^unknown].\n\n[^a]: **Alpha**\n[^b]: [Beta](https://example.com)\n    continued\n[^unused]: Keep this unused definition.';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain('Second<a href="#fn-1">[1]</a>, first<a href="#fn-2">[2]</a>');
+    expect(rich).toContain('repeated<a href="#fn-1">[1]</a>');
+    expect(rich).toContain('<tg-reference name="fn-1">[1] <a href="https://example.com">Beta</a>\ncontinued</tg-reference>');
+    expect(rich).toContain('<tg-reference name="fn-2">[2] <b>Alpha</b></tg-reference>');
+    expect(rich).toContain("missing[^unknown]");
+    expect(rich).toContain("[^unused]: Keep this unused definition.");
+    const regular = renderTelegramHtml(text, "markdown");
+    expect(regular).toContain("Second[1], first[2], repeated[1]");
+    expect(regular).toContain('[1] <a href="https://example.com">Beta</a>\ncontinued');
+    expect(regular).not.toContain("tg-reference");
+    expect(renderTelegramHtml('`[^a]`\n\n```md\n[^a]: source\n```', "markdown"))
+      .toContain('<code>[^a]</code>');
+  });
+
+  it("does not close details on tags in multiline or indented code", () => {
+    const text = '<details><summary>Code</summary>\n\n`first\ncode </details> code\nlast`\n\n    </details>\n\n```html\n``` not a closing fence\n</details>\n```\n\nActual end\n\n</details>';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain('<details><summary>Code</summary>');
+    expect(rich).toContain('<code>first code &lt;/details&gt; code last</code>');
+    expect(rich).toContain('<pre><code>&lt;/details&gt;</code></pre>');
+    expect(rich).toContain('``` not a closing fence\n&lt;/details&gt;');
+    expect(rich).toContain('<p>Actual end</p></details>');
+  });
+
+  it("resolves forward reference links in details summaries and footnotes", () => {
+    const text = '<details><summary>[Source][ref]</summary>\n\nResult[^a].\n\n</details>\n\n[^a]: [Evidence][ref]\n\n[ref]: https://example.com/source';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain('<summary><a href="https://example.com/source">Source</a></summary>');
+    expect(rich).toContain('<tg-reference name="fn-1">[1] <a href="https://example.com/source">Evidence</a></tg-reference>');
+  });
+
+  it("keeps footnote anchors unique across separate message parts", () => {
+    const rich = richMessageForTelegramIntent({
+      id: "notes", kind: "message", createdAt: 1,
+      parts: ["First[^a].\n\n[^a]: Alpha", "Second[^a].\n\n[^a]: Beta"]
+        .map((text) => ({ type: "text", text, markdown: "markdown" })),
+    });
+    expect(rich?.html).toContain('href="#part-0-fn-1"');
+    expect(rich?.html).toContain('name="part-0-fn-1"');
+    expect(rich?.html).toContain('href="#part-1-fn-1"');
+    expect(rich?.html).toContain('name="part-1-fn-1"');
+  });
+
+  it("renders LaTeX without interpreting code or currency as formulas", () => {
+    const text = 'Formula $x^2 < y^2$, costs $5 and $10, `$code$`, and \\$escaped.\n\n$$\nE = mc^2\n$$\n\n```math\n\\frac{a}{b}\n```';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain('<tg-math>x^2 &lt; y^2</tg-math>');
+    expect(rich).toContain('costs $5 and $10');
+    expect(rich).toContain('<code>$code$</code>');
+    expect(rich).toContain('$escaped');
+    expect(rich).toContain('<tg-math-block>E = mc^2</tg-math-block>');
+    expect(rich).toContain('<tg-math-block>\\frac{a}{b}</tg-math-block>');
+    expect(renderTelegramHtml(text, "markdown")).toContain('<code>x^2 &lt; y^2</code>');
+    expect(renderTelegramHtml(text, "markdown")).toContain('<pre><code>E = mc^2</code></pre>');
+    expect(richMessageForTelegramText('Cost $5 and $10; unfinished $formula', "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText('Also \\(x^2\\).\n\n\\[\ny^2\n\\]', "markdown")?.html)
+      .toContain('<p>Also <tg-math>x^2</tg-math>.</p>\n<tg-math-block>y^2</tg-math-block>');
   });
 
   it("preserves plain content parts and applies rich limits across all parts", () => {

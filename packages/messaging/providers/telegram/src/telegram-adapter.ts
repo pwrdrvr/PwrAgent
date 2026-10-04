@@ -6,6 +6,7 @@ import type {
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingCapabilityProfile,
+  MessagingContentPart,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -16,6 +17,7 @@ import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingFilePart,
+  MessagingImagePart,
   MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingInboundReceipt,
@@ -51,6 +53,7 @@ import {
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   type TelegramInlineKeyboardMarkup,
   type TelegramInputRichMessage,
+  type TelegramRichMessageMediaPart,
   textForTelegramIntent,
 } from "./telegram-formatting.ts";
 import {
@@ -245,6 +248,10 @@ export type TelegramSendRichMessageRequest = {
   rich_message: TelegramInputRichMessage;
 };
 
+type TelegramGrammyInputRichMessage = Omit<TelegramInputRichMessage, "media"> & {
+  media?: Array<{ id: string; media: { type: "photo" | "document"; media: string | InputFile } }>;
+};
+
 export type TelegramEditForumTopicRequest = {
   chat_id: number | string;
   message_thread_id: number;
@@ -393,7 +400,7 @@ export type TelegramGrammyBotLike = {
     editMessageText(
       chatId: number | string,
       messageId: number,
-      text: string | TelegramInputRichMessage,
+      text: string | TelegramGrammyInputRichMessage,
       other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text" | "rich_message">,
     ): Promise<TelegramSentMessage | boolean>;
     // Telegram's `User` allows `username` to be absent (non-bot users
@@ -434,7 +441,7 @@ export type TelegramGrammyBotLike = {
     ): Promise<TelegramSentMessage>;
     sendRichMessage?(
       chatId: number | string,
-      richMessage: TelegramInputRichMessage,
+      richMessage: TelegramGrammyInputRichMessage,
       other?: Omit<TelegramSendRichMessageRequest, "chat_id" | "rich_message">,
     ): Promise<TelegramSentMessage>;
     sendDocument(
@@ -993,7 +1000,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const replyMarkup = await this.buildReplyMarkup(intent, actions);
     const files = uploadableFileParts(intent);
     const text = files.length > 0 ? textForTelegramIntentWithoutFiles(intent) : textForTelegramIntent(intent);
-    const images = this.imagePayloads(intent);
+    const mediaParts = richMediaParts(intent);
+    const images = mediaParts.filter((part) => part.media.type === "photo");
     const sentMessages: TelegramSentMessage[] = [];
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
     this.options.logger?.debug(
@@ -1001,7 +1009,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     );
 
     const richSentMessage = await this.tryDeliverRichMessage(
-      richMessageForTelegramIntent(intent),
+      richMessageForTelegramIntent(intent, mediaParts),
       intent.delivery?.mode === "update" ? target : { ...target, messageId: undefined },
       text,
       replyMarkup ?? (intent.delivery?.replaceMarkup ? { inline_keyboard: [] } : undefined),
@@ -1045,69 +1053,31 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         );
         outcome = "presented_new";
       }
-    } else if (files.length > 0) {
+    } else if (mediaParts.length > 0) {
       const caption = text && Buffer.byteLength(text, "utf8") <= 1024 ? text : undefined;
       if (text && !caption) {
-        const chunks = splitTelegramHtml(text);
-        for (const chunk of chunks) {
-          sentMessages.push(
-            await this.bot.api.sendMessage({
-              chat_id: target.chatId,
-              disable_web_page_preview: true,
-              message_thread_id: target.messageThreadId,
-              parse_mode: "HTML",
-              text: chunk,
-            }),
-          );
+        for (const chunk of splitTelegramHtml(text)) {
+          sentMessages.push(await this.bot.api.sendMessage({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            text: chunk,
+          }));
         }
       }
-
-      const lastFileIndex = files.length - 1;
-      for (const [index, file] of files.entries()) {
-        sentMessages.push(
-          await this.bot.api.sendDocument({
-            caption: index === 0 ? caption : undefined,
-            chat_id: target.chatId,
-            document: file.url ?? file.data!,
-            filename: file.name,
-            message_thread_id: target.messageThreadId,
-            parse_mode: caption && index === 0 ? "HTML" : undefined,
-            reply_markup: index === lastFileIndex ? replyMarkup : undefined,
-          }),
-        );
-      }
-    } else if (images.length > 0) {
-      const caption = text && Buffer.byteLength(text, "utf8") <= 1024
-        ? text
-        : undefined;
-      if (text && !caption) {
-        const chunks = splitTelegramHtml(text);
-        for (const chunk of chunks) {
-          sentMessages.push(
-            await this.bot.api.sendMessage({
-              chat_id: target.chatId,
-              disable_web_page_preview: true,
-              message_thread_id: target.messageThreadId,
-              parse_mode: "HTML",
-              text: chunk,
-            }),
-          );
-        }
-      }
-
-      const lastImageIndex = images.length - 1;
-      for (const [index, image] of images.entries()) {
-        sentMessages.push(
-          await this.bot.api.sendPhoto({
-            caption: index === 0 ? caption : undefined,
-            chat_id: target.chatId,
-            message_thread_id: target.messageThreadId,
-            parse_mode: caption && index === 0 ? "HTML" : undefined,
-            filename: image.filename,
-            photo: image.source,
-            reply_markup: index === lastImageIndex ? replyMarkup : undefined,
-          }),
-        );
+      for (const [index, { media }] of mediaParts.entries()) {
+        const common = {
+          caption: index === 0 ? caption : undefined,
+          chat_id: target.chatId,
+          message_thread_id: target.messageThreadId,
+          parse_mode: caption && index === 0 ? "HTML" as const : undefined,
+          reply_markup: index === mediaParts.length - 1 ? replyMarkup : undefined,
+          filename: media.filename,
+        };
+        sentMessages.push(media.type === "photo"
+          ? await this.bot.api.sendPhoto({ ...common, photo: media.media })
+          : await this.bot.api.sendDocument({ ...common, document: media.media }));
       }
     } else {
       const chunks = splitTelegramHtml(text || " ");
@@ -2480,32 +2450,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  private imagePayloads(
-    intent: MessagingSurfaceIntent,
-  ): Array<{ filename?: string; source: string | Uint8Array }> {
-    if (intent.kind !== "message") {
-      return [];
-    }
-
-    return intent.parts.flatMap((part) => {
-      if (part.type !== "image") {
-        return [];
-      }
-      const inline = messagingInlineImageBytes(part);
-      if (inline) {
-        return [{
-          filename: part.name ?? `image.${inline.extension}`,
-          source: inline.data,
-        }];
-      }
-      if (!part.url) {
-        return [];
-      }
-      const dataImage = parseDataImageUrl(part.url);
-      return [dataImage ?? { source: part.url }];
-    });
-  }
-
   private async deliverActivity(
     intent: Extract<MessagingSurfaceIntent, { kind: "activity" }>,
     target: TelegramDeliveryTarget,
@@ -3129,6 +3073,40 @@ function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[
   );
 }
 
+function telegramImagePayload(part: MessagingImagePart): { filename?: string; source: string | Uint8Array } | undefined {
+  const inline = messagingInlineImageBytes(part);
+  if (inline) return { filename: part.name ?? `image.${inline.extension}`, source: inline.data };
+  if (!part.url) return undefined;
+  const dataImage = parseDataImageUrl(part.url);
+  return dataImage ? { ...dataImage, filename: part.name ?? dataImage.filename } : { source: part.url, filename: part.name };
+}
+
+function richMediaParts(intent: MessagingSurfaceIntent): TelegramRichMessageMediaPart[] {
+  if (intent.kind !== "message") return [];
+  return intent.parts.flatMap((part, partIndex): TelegramRichMessageMediaPart[] => {
+    const id = `part_${partIndex}`;
+    if (part.type === "image") {
+      const payload = telegramImagePayload(part);
+      return payload ? [{ partIndex, id, media: { type: "photo", media: payload.source, filename: payload.filename } }] : [];
+    }
+    if (part.type === "file" && (part.data !== undefined || part.url)) {
+      return [{ partIndex, id, media: { type: "document", media: part.data ?? part.url!, filename: part.name } }];
+    }
+    return [];
+  });
+}
+
+function grammyRichMessage(message: TelegramInputRichMessage): TelegramGrammyInputRichMessage {
+  const { media, ...text } = message;
+  return {
+    ...text,
+    ...(media ? { media: media.map(({ id, media }) => ({
+      id,
+      media: { type: media.type, media: typeof media.media === "string" ? media.media : new InputFile(media.media, media.filename) },
+    })) } : {}),
+  };
+}
+
 function unsupportedManagedTopicOperations(reason: string) {
   return ([
     "create_child",
@@ -3149,7 +3127,8 @@ function textForTelegramIntentWithoutFiles(intent: MessagingSurfaceIntent): stri
 
   return textForTelegramIntent({
     ...intent,
-    parts: intent.parts.filter((part) => part.type !== "file"),
+    parts: intent.parts.flatMap<MessagingContentPart>((part) => part.type !== "file" ? [part]
+      : part.description ? [{ type: "text", text: `${part.name}: ${part.description}`, markdown: "plain" }] : []),
   });
 }
 
@@ -3212,7 +3191,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
       editMessageText: async (request) => {
         const { chat_id, message_id, text, rich_message, ...other } = request;
         return coerceTelegramSentMessage(
-          await bot.api.editMessageText(chat_id, message_id, rich_message ?? text, other),
+          await bot.api.editMessageText(chat_id, message_id, rich_message ? grammyRichMessage(rich_message) : text, other),
           request,
         );
       },
@@ -3239,7 +3218,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
       sendRichMessage: bot.api.sendRichMessage
         ? async (request) => {
             const { chat_id, rich_message, ...other } = request;
-            return await bot.api.sendRichMessage!(chat_id, rich_message, other);
+            return await bot.api.sendRichMessage!(chat_id, grammyRichMessage(rich_message), other);
           }
         : undefined,
       sendDocument: async (request) => {
