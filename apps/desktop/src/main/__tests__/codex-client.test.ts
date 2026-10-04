@@ -13345,6 +13345,91 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each(["turn response", "turn notification", "review response"])(
+    "skips new thread history until the first %s",
+    async (firstTurnSignal) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const threadId = "thread-awaiting-env-setup";
+      MockTransport.threadStartResult = { thread: { id: threadId, turns: [] } };
+      MockTransport.readThreadResultByThreadId.set(threadId, {
+        thread: { id: threadId, turns: [] },
+      });
+      const missingRollout = {
+        code: -32600,
+        message: `invalid paginated history lineage for ${threadId}: missing source rollout`,
+      };
+      MockTransport.threadTurnsListTransientErrorsByRequest.set(`${threadId}:`, [missingRollout]);
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+
+      try {
+        await client.startThread({});
+        const transport = MockTransport.instances.at(-1)!;
+        transport.sentMessages.length = 0;
+
+        // A setup failure leaves the thread in this state until the operator
+        // retries or continues. Repeated transcript loads must send no RPCs.
+        for (let index = 0; index < 2; index += 1) {
+          await expect(client.readThread({ threadId })).resolves.toMatchObject({
+            entries: [], messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          });
+        }
+        expect(transport.sentMessages).toHaveLength(0);
+
+        MockTransport.threadTurnsListTransientErrorsByRequest.delete(`${threadId}:`);
+        MockTransport.threadTurnsListResultByRequest.set(`${threadId}:`, {
+          data: [{ id: "turn-first", status: "completed", items: [] }],
+          nextCursor: null,
+        });
+        MockTransport.threadItemsListResultByRequest.set(`${threadId}:turn-first:`, {
+          data: [{ turnId: "turn-first", item: { id: "reply-first", type: "agentMessage", text: "First reply" } }],
+          nextCursor: null,
+        });
+        if (firstTurnSignal === "turn response") {
+          MockTransport.turnStartResult = { threadId, turn: { id: "turn-first" } };
+          await client.startTurn({ threadId, input: [{ type: "text", text: "Continue anyway" }] });
+        } else if (firstTurnSignal === "review response") {
+          MockTransport.reviewStartResult = { reviewThreadId: threadId, turn: { id: "turn-first" } };
+          await client.startReview({ threadId, target: { type: "uncommittedChanges" } });
+        } else {
+          const notifications: AppServerNotification[] = [];
+          client.onNotification((notification) => { notifications.push(notification); });
+          transport.emitInbound({ method: "turn/started", params: {
+            threadId, turn: { id: "turn-first", status: "inProgress" },
+          } });
+          await vi.waitFor(() => expect(notifications.some((notification) => notification.method === "turn/started")).toBe(true));
+        }
+
+        const replay = await client.readThread({ threadId });
+        expect(replay.messages.map((message) => message.text)).toContain("First reply");
+        const methods = transport.sentMessages.map((message) => JSON.parse(message).method);
+        expect(methods).toContain("thread/read");
+        expect(methods).toContain("thread/turns/list");
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("reads fork history before its first new turn and preserves missing-lineage errors", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "thread-fork";
+    MockTransport.readThreadResultByThreadId.set(threadId, {
+      thread: { id: threadId, turns: [] },
+    });
+    MockTransport.threadTurnsListTransientErrorsByRequest.set(`${threadId}:`, [{
+      code: -32600,
+      message: `invalid paginated history lineage for ${threadId}: missing source rollout`,
+    }]);
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await client.forkThread({ threadId: "thread-parent" });
+      await expect(client.readThread({ threadId })).rejects.toThrow("missing source rollout");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("treats unmaterialized new threads as empty transcripts", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadErrorByThreadId.set("thread-empty", {
