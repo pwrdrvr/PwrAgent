@@ -14,7 +14,8 @@ const DEFAULT_REF = "refs/heads/main";
 export const PLATFORMS = [
   { runner: "macos-26", imagePrefix: "macos-26-arm64/", arch: "ARM64", family: "homebrew" },
   { runner: "macos-26-intel", imagePrefix: "macos-26/", arch: "X64", family: "homebrew" },
-  { runner: "windows-2025", imagePrefix: "win25/", arch: "X64", family: "winget" },
+  // runner-images README maps windows-2025 to the VS2026 image family.
+  { runner: "windows-2025", imagePrefix: "win25-vs2026/", arch: "X64", family: "winget" },
 ];
 
 // Installer bytes do not depend on automation code, platform or current/previous role.
@@ -31,6 +32,18 @@ export function metadataPackages(release) {
     return [asset.name, asset.digest.slice(7)];
   }));
   return { hashes, files: renderPackages(release, hashes) };
+}
+
+export function validationCode(workflow, family, sources) {
+  const section = (name) => {
+    const start = workflow.indexOf(`\n  ${name}:\n`);
+    if (start < 0) throw new Error(`Missing workflow validator job: ${name}`);
+    const end = workflow.slice(start + 1).search(/\n  [a-z]+:\n/);
+    return end < 0 ? workflow.slice(start) : workflow.slice(start, start + 1 + end);
+  };
+  const code = { ...sources, workflow: section("prepare") + section(family) };
+  if (family !== "winget") delete code.loopback;
+  return digest(code);
 }
 
 export function validationKey({ current, previous, files, logic, platform }) {
@@ -105,9 +118,16 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
       ...platform, image: selectImage(images, platform.imagePrefix),
       tool: platform.family === "homebrew" ? { brew } : { tag: winget.tag_name, assets: wingetAssets },
     };
+    const relevantAsset = (asset) => inputs.family === "homebrew"
+      ? /\.dmg$|macos-SHA256SUMS$/.test(asset.name) : /\.exe$|windows-SHA256SUMS$/.test(asset.name);
     const identity = (release) => ({ version: stableVersion(release), assets: releaseAssets(release)
-      .map(({ name, size, digest, id }) => ({ name, size, digest, id })) });
-    const key = validationKey({ current: identity(current), previous: identity(previous), files, logic, platform: inputs });
+      .filter(relevantAsset).map(({ name, size, digest, id }) => ({ name, size, digest, id })) });
+    const relevantFiles = Object.fromEntries(Object.entries(files).map(([role, packages]) => [role,
+      Object.fromEntries(Object.entries(packages).filter(([path]) => inputs.family === "homebrew"
+        ? path.startsWith("Casks/") : path.endsWith(".yaml"))),
+    ]));
+    const key = validationKey({ current: identity(current), previous: identity(previous), files: relevantFiles,
+      logic: typeof logic === "string" ? logic : logic[inputs.family], platform: inputs });
     const result = api(`repos/${SOURCE_REPO}/actions/caches?per_page=100&key=${encodeURIComponent(key)}`);
     if (!Array.isArray(result.actions_caches)) throw new Error("Cannot inspect successful validation cache");
     const reuse = reusableValidation(result.actions_caches, key, { event, ref, tag: current.tag_name, force, publication });
@@ -156,9 +176,14 @@ export async function cachedAsset(plan, index, dir, cacheRoot = ".local/distribu
 async function main(argv) {
   const [command, dir = "distribution", index] = argv;
   if (command === "plan") {
-    const paths = [".github/workflows/package-manager-distribution.yml", ".github/actions/distribution-asset/action.yml",
-      "scripts/package-manager-release.mjs", "scripts/package-manager-release-plan.mjs", "scripts/package-manager-release-loopback.mjs"];
-    const logic = digest(await Promise.all(paths.map(async (path) => [path, await readFile(path, "utf8")])));
+    const workflow = await readFile(".github/workflows/package-manager-distribution.yml", "utf8");
+    const sources = {
+      assetAction: await readFile(".github/actions/distribution-asset/action.yml", "utf8"),
+      release: await readFile("scripts/package-manager-release.mjs", "utf8"),
+      planner: await readFile("scripts/package-manager-release-plan.mjs", "utf8"),
+      loopback: await readFile("scripts/package-manager-release-loopback.mjs", "utf8"),
+    };
+    const logic = Object.fromEntries(["homebrew", "winget"].map((family) => [family, validationCode(workflow, family, sources)]));
     const plan = await buildPlan({ event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
       tag: process.env.EVENT_TAG, force: process.env.FORCE_VALIDATION === "true",
       publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true", logic });

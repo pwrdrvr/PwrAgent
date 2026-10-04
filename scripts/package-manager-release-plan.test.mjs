@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
 import {
   assetKey, buildPlan, cachedAsset, imageMatches, metadataPackages, prepare,
-  reusableValidation, selectImage, validationKey,
+  reusableValidation, selectImage, validationCode, validationKey,
 } from "./package-manager-release-plan.mjs";
 import { installationCopy, serveInstallers, writeInstallationCopies } from "./package-manager-release-loopback.mjs";
 
@@ -45,7 +45,7 @@ function apiFixture({ published = false, pending = false, hit = false, cacheRef 
     if (endpoint.startsWith("repos/actions/runner-images/releases")) return [
       { tag_name: "macos-26-arm64/20260907.1", body: "Image Version: 20260907.1" },
       { tag_name: "macos-26/20260824.1", body: "Image Version: 20260824.1" },
-      { tag_name: "win25/20260927.1", body: "Image Version: 20260927.1" },
+      { tag_name: "win25-vs2026/20260927.1", body: "Image Version: 20260927.1" },
     ];
     if (endpoint === "repos/Homebrew/brew/releases/latest") return { tag_name: "5.1.0" };
     if (endpoint === "repos/Homebrew/brew/commits/5.1.0") return { sha: "a".repeat(40) };
@@ -134,6 +134,28 @@ describe("metadata-only distribution planning", () => {
     const asset = current.assets[0];
     expect(assetKey(current.tag_name, asset)).not.toBe(assetKey(current.tag_name, { ...asset, digest: `sha256:${sha("bad")}` }));
     expect(() => assetKey(current.tag_name, { ...asset, digest: null })).toThrow(/digest/);
+  });
+
+  it("covers only the affected platform when validator code or installer bytes change", async () => {
+    const workflow = "jobs:\n  prepare:\n    plan\n  homebrew:\n    brew\n  winget:\n    winget\n  submit:\n    submit\n";
+    const sources = { common: "verify", loopback: "mirror" };
+    expect(validationCode(workflow, "homebrew", sources)).toBe(validationCode(workflow, "homebrew", { ...sources, loopback: "changed" }));
+    expect(validationCode(workflow, "winget", sources)).not.toBe(validationCode(workflow, "winget", { ...sources, loopback: "changed" }));
+    expect(validationCode(workflow, "winget", sources)).toBe(validationCode(workflow.replace("    brew", "    changed brew"), "winget", sources));
+    const before = await buildPlan({ ...event, logic: { homebrew: "mac", winget: "windows" } }, apiFixture());
+    const after = await buildPlan({ ...event, logic: { homebrew: "changed mac", winget: "windows" } }, apiFixture());
+    expect(before.native[0].key).not.toBe(after.native[0].key);
+    expect(before.native[2].key).toBe(after.native[2].key);
+    const baseApi = apiFixture();
+    const api = (endpoint, ...args) => {
+      const value = baseApi(endpoint, ...args);
+      if (endpoint === `repos/${SOURCE_REPO}/releases/latest`) value.assets[2].digest = `sha256:${sha("changed Windows bytes")}`;
+      return value;
+    };
+    const changed = await buildPlan(event, api);
+    const baseline = await buildPlan(event, apiFixture());
+    expect(changed.native[0].key).toBe(baseline.native[0].key);
+    expect(changed.native[2].key).not.toBe(baseline.native[2].key);
   });
 
   it("pins resolved WinGet version and fails closed on missing image metadata or a rollout mismatch", async () => {

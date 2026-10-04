@@ -99,6 +99,7 @@ no pending PR can retry submission using already validated inputs.
 Validation keys include current/previous versions and asset digests, generated
 casks/manifests, validator code, architecture, published hosted-image version,
 the pinned stable Homebrew commit and the resolved stable WinGet client assets.
+Image families follow the [published runner label mapping](https://github.com/actions/runner-images#available-images).
 A runner validates normally during an image rollout, but records no reusable
 success unless its actual `ImageVersion` matches the planned image. Changes to
 these inputs require new coverage. A PR can reuse its own or trusted success;
