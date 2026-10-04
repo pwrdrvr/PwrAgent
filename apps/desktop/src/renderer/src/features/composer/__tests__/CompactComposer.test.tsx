@@ -813,6 +813,28 @@ describe("CompactComposer markdown", () => {
       expect(onSend).toHaveBeenCalledWith("Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)");
     });
 
+    it("lists and inserts a Federation machine by its short name, with the full label on hover", async () => {
+      const { onSend, container } = renderComposer({
+        mentionSources: {
+          instances: [{
+            kind: "instance", key: "instance:mini-1", instanceId: "mini-1",
+            label: "Lab-Mac-Mini-1 / dev", shortLabel: "Mini 1 / dev",
+            path: buildInstanceReferenceUrl("mini-1"), status: "connected",
+          }],
+        },
+      });
+      const input = openPicker("Hand off to @mac");
+      const option = screen.getByRole("option");
+      expect(option.querySelector(".compact-composer__mention-title")?.textContent).toBe("Mini 1 / dev");
+      expect(option.getAttribute("title")).toBe("Lab-Mac-Mini-1 / dev · connected");
+      fireEvent.click(option);
+      const chip = container.querySelector('[data-mention-kind="instance"]');
+      expect(chip?.textContent).toBe("@Mini 1 / dev");
+      expect(chip?.getAttribute("data-tooltip")).toContain("Lab-Mac-Mini-1 / dev");
+      await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+      expect(onSend).toHaveBeenCalledWith("Hand off to [@Mini 1 / dev](pwragent://instance/mini-1)");
+    });
+
     it.each([
       ["code block", "\n\n```sh\npnpm lint\n```"],
       ["blockquote", "\n\n> Quoted text"],

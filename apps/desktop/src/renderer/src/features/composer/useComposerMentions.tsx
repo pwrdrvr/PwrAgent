@@ -770,7 +770,9 @@ export function useComposerMentions(params: {
                 : <InstanceGlyph instanceId={directory.instanceId} size={12} />
             ) : <FolderIcon size={12} aria-hidden="true" />}
             <HighlightedAutocompleteLabel
-              label={directory.label}
+              label={directory.kind === "instance"
+                ? directory.shortLabel ?? directory.label
+                : directory.label}
               query={query}
             />
           </span>
@@ -780,6 +782,9 @@ export function useComposerMentions(params: {
               : buildDirectoryReferenceInsertText(directory)}
           </span>
         </>,
+        directory.kind === "instance"
+          ? { title: `${directory.label} · ${directory.status}` }
+          : undefined,
       ),
     );
   } else if (kind === "hash") {

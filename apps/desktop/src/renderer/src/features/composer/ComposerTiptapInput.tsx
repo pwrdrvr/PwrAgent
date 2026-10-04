@@ -276,8 +276,12 @@ const SkillMention = Mention.extend({
       ];
     }
     if (node.attrs.kind === "instance") {
+      // `name` is the short name the chip shows; `description`, when the
+      // chip was minted from the picker, is the full machine label.
       const label = String(node.attrs.name ?? "instance");
       const path = String(node.attrs.path ?? "");
+      const fullLabel =
+        typeof node.attrs.description === "string" ? node.attrs.description : "";
       return ["span", {
         class: "chip chip--instance composer-tiptap-input__mention",
         "data-type": "mention",
@@ -287,7 +291,8 @@ const SkillMention = Mention.extend({
         "data-label": label,
         "data-skill-name": label,
         "data-skill-path": path,
-        "data-tooltip": `${label}\n${path}`,
+        ...(fullLabel ? { "data-skill-description": fullLabel } : {}),
+        "data-tooltip": `${fullLabel || label}\n${path}`,
       }, `@${label}`];
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
