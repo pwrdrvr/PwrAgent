@@ -151,6 +151,39 @@ describe("useQueuedTurnProjection", () => {
     expect(queued.map((entry) => entry.id)).toEqual(["local-1", "inflight-1"]);
   });
 
+  it("adopts an owner's title from a later snapshot", () => {
+    const { result: storeResult } = renderHook(() => useComposerDraftStore());
+    const store = storeResult.current;
+    const scopeKey = "thread:codex:thread-1";
+    const entry = {
+      queueEntryId: "entry-1",
+      origin: "manual" as const,
+      displayText: "Docs child: the migration guide now covers the renamed keys",
+      createdAt: 1_000,
+      position: 0,
+    };
+    const projection = renderHook(
+      (props: { threads: NavigationThreadSummary[] }) =>
+        useQueuedTurnProjection({
+          composerDraftStore: store,
+          snapshotFetchedAt: 2_000,
+          threads: props.threads,
+        }),
+      { initialProps: { threads: [buildThread([entry])] } },
+    );
+    expect(store.getQueuedTurn(scopeKey)?.title).toBeUndefined();
+
+    // A window that missed the title event learns it from the next snapshot,
+    // even though nothing else about the row changed.
+    projection.rerender({
+      threads: [buildThread([{ ...entry, title: "Migration guide covers renamed keys" }])],
+    });
+
+    expect(store.getQueuedTurn(scopeKey)?.title).toBe(
+      "Migration guide covers renamed keys",
+    );
+  });
+
   it("restores a newly held head ahead of previously mirrored entries", () => {
     const { result: storeResult } = renderHook(() => useComposerDraftStore());
     const store = storeResult.current;

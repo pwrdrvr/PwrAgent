@@ -125,6 +125,7 @@ export function useQueuedTurnProjection(params: {
         entry.id !== current[index]?.id
         || entry.manualReleaseRequired !== current[index]?.manualReleaseRequired
         || entry.holdReason !== current[index]?.holdReason
+        || entry.title !== current[index]?.title
       );
 
       if (
