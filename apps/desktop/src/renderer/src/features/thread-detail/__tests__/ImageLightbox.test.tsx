@@ -483,6 +483,59 @@ describe("ImageLightbox, SVG script notice", () => {
     expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
   });
 
+  it("runs nothing when the operator cancels while the choice is still saving", async () => {
+    let finishSave: (saved: boolean) => void = () => {};
+    const save = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don\u2019t ask again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await act(async () => { finishSave(true); });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(scriptNotice()).toBeNull();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+  });
+
+  it("keeps the operator's choices and opener when asked again while asking", async () => {
+    const save = vi.fn().mockResolvedValue(true);
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+    const interact = screen.getByRole("button", { name: "Interact with SVG" });
+    interact.focus();
+    fireEvent.click(interact);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don\u2019t ask again" }));
+
+    pressAndClick(stubPointerCapture(screen.getByRole("img", { name: "Flamegraph" })));
+    expect(screen.getByRole("checkbox", { name: "Don\u2019t ask again" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(interact).toHaveFocus();
+  });
+
+  it("does not let a later ready-to-use setting undo a Preview the operator chose", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([SCRIPTED_SVG], { type: "image/svg+xml" }),
+    }));
+    const lightbox = (preferences: InteractiveSvgPreferences) => (
+      <InteractiveSvgPreferencesProvider value={preferences}>
+        <ImageLightbox src="pwragent-image://file/graph.svg"
+          alt="Flamegraph" interactiveSvg onClose={() => {}} />
+      </InteractiveSvgPreferencesProvider>
+    );
+    const view = render(lightbox({ skipNotice: true, autoOpen: false }));
+    await screen.findByText("This SVG has interactive controls");
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show image preview" }));
+
+    // The snapshot carrying the notice's "open ready to use" lands late.
+    view.rerender(lightbox({ skipNotice: true, autoOpen: true }));
+    await act(async () => {});
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+  });
+
   it("goes straight to the frame once the operator stopped being asked", async () => {
     await renderScriptedSvg({ skipNotice: true, autoOpen: false });
     expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();

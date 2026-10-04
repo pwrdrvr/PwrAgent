@@ -83,7 +83,9 @@ export function interactiveSvgDocument(
   </body></html>`;
 }
 
-const PIXEL_LENGTH = /^\s*(\d+(?:\.\d+)?|\.\d+)(?:px)?\s*$/;
+/** A unitless (user-unit, i.e. px) length, an absolute CSS length, or a
+ *  percentage: everything an `<img>` honours in the root's `width`. */
+const ROOT_LENGTH = /^\s*(\d+(?:\.\d+)?|\.\d+)(px|pt|pc|cm|mm|q|in|%)?\s*$/i;
 
 /**
  * The root's CSS width, fixed when the document is built.
@@ -91,15 +93,19 @@ const PIXEL_LENGTH = /^\s*(\d+(?:\.\d+)?|\.\d+)(?:px)?\s*$/;
  * It cannot be read back from the SVG later: inferno's fluid layout removes
  * the root's `width` and `viewBox` in its load handler, and an inline `<svg>`
  * with no width left is sized at the 300px replaced-element default. Capping
- * at the declared width matches the preview, which never upscales; an SVG that
+ * at the declared width, in whatever unit it names, matches the preview, which never upscales; an SVG that
  * declares no pixel width fills the frame, as it would as a document of its
  * own. The height is the SVG's own `height` attribute, except while a viewBox
  * gives it a ratio to follow (`body > svg[viewBox]`), so a fluid graph keeps
  * the pixel height its frames are laid out in.
  */
 function interactiveSvgRootWidth(svg: Element): string {
-  const width = PIXEL_LENGTH.exec(svg.getAttribute("width") ?? "");
-  if (width && Number(width[1]) > 0) return `min(100%, ${Number(width[1])}px)`;
+  const width = ROOT_LENGTH.exec(svg.getAttribute("width") ?? "");
+  if (width && Number(width[1]) > 0) {
+    const unit = width[2]?.toLowerCase() ?? "px";
+    if (unit === "%") return `${Math.min(Number(width[1]), 100)}%`;
+    return `min(100%, ${Number(width[1])}${unit})`;
+  }
   const viewBox = (svg.getAttribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
   if (viewBox.length === 4 && viewBox[2] > 0 && viewBox[3] > 0) {
     return `min(100%, calc(100vh * ${viewBox[2] / viewBox[3]}))`;

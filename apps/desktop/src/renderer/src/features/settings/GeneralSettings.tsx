@@ -234,7 +234,9 @@ export function GeneralSettings(props: {
       <SettingsSection
         eyebrow="General"
         title="Interactive SVGs"
-        chip={sourceBadge(interactiveSvgAutoOpen)}
+        chip={sourceBadge(interactiveSvgAutoOpen.source === "default"
+          ? interactiveSvgSkipNotice
+          : interactiveSvgAutoOpen)}
       >
         <div className="settings-fields">
           <ToggleField

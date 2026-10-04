@@ -44,6 +44,15 @@ describe("interactiveSvgDocument", () => {
     expect(interactiveSvgDocument(viewBoxOnly)).toContain("width: min(100%, calc(100vh * 4));");
   });
 
+  it("caps at a declared width in any unit an image honours", () => {
+    const svg = (width: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="80" viewBox="0 0 400 200"><script>function init() {}</script></svg>`;
+
+    expect(interactiveSvgDocument(svg("4cm"))).toContain("width: min(100%, 4cm);");
+    expect(interactiveSvgDocument(svg("300PT"))).toContain("width: min(100%, 300pt);");
+    expect(interactiveSvgDocument(svg("50%"))).toContain("width: 50%;");
+    expect(interactiveSvgDocument(svg("12em"))).toContain("width: min(100%, calc(100vh * 2));");
+  });
+
   it("rejects non-SVG documents", () => {
     expect(() => interactiveSvgDocument("<html/>"))
       .toThrow("Interactive SVG could not be parsed");

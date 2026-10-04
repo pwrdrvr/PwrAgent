@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronLeftIcon,
@@ -47,6 +47,14 @@ type ImageLightboxProps = {
 
 /** How far a press may travel and still count as a click rather than a drag. */
 const DISMISS_SLOP = 4;
+
+/** Whether a click is the release of the press recorded at `start`, rather
+ *  than a keyboard activation (which reports no pointer) or the end of a drag. */
+function isPointerClick(start: { x: number; y: number } | null, event: ReactMouseEvent): boolean {
+  if (!start || event.detail === 0) return false;
+  return Math.abs(event.clientX - start.x) <= DISMISS_SLOP
+    && Math.abs(event.clientY - start.y) <= DISMISS_SLOP;
+}
 
 /**
  * The single full-size local-raster viewer used for pasted Composer attachments,
@@ -167,13 +175,9 @@ export function ImageLightbox({
         press.current = null;
         // Keyboard activation of a control synthesises a click with no
         // `pointerdown` behind it and reports (0, 0), so it would otherwise be
-        // matched against whatever record an aborted press left here.
-        if (event.detail === 0) return;
-        if (!start || !start.scrim) return;
-        // A press that travelled is a drag the operator aborted over the
-        // scrim, not a click on it.
-        if (Math.abs(event.clientX - start.x) > DISMISS_SLOP) return;
-        if (Math.abs(event.clientY - start.y) > DISMISS_SLOP) return;
+        // matched against whatever record an aborted press left here. A press
+        // that travelled is a drag the operator aborted over the scrim.
+        if (!start?.scrim || !isPointerClick(start, event)) return;
         onClose();
       }}
     >
@@ -287,7 +291,11 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   /** Where a press on the image began, so a pan is not read as a click. */
   const imagePress = useRef<{ x: number; y: number } | null>(null);
   const autoOpened = useRef(false);
+  /** Bumped whenever the notice closes, so a save still in flight when the
+   *  operator cancels cannot go on to run the scripts. */
+  const noticeGeneration = useRef(0);
   const closeNotice = (): void => {
+    noticeGeneration.current += 1;
     setNoticeOpen(false);
     if (noticeOpener.current?.isConnected) noticeOpener.current.focus();
     noticeOpener.current = null;
@@ -343,6 +351,10 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   }, [onClose, svgActive, svgSearchOpen]);
 
   const startInteractiveSvg = (): void => {
+    // The operator chose for this image; a later "open ready to use" must not
+    // override a Preview they pick after it.
+    autoOpened.current = true;
+    noticeGeneration.current += 1;
     setNoticeOpen(false);
     noticeOpener.current = null;
     setSvgSearchOpen(false);
@@ -359,6 +371,9 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
       startInteractiveSvg();
       return;
     }
+    // Already asking: keep the operator's choices and the original opener,
+    // not the notice's own Cancel button.
+    if (noticeOpen) return;
     noticeOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setNoticeSkip(false);
     setNoticeAutoOpen(false);
@@ -371,10 +386,12 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
       ...(noticeAutoOpen ? { interactiveSvgAutoOpen: true } : {}),
     };
     if (preferences.save && Object.keys(patch).length > 0) {
+      const generation = noticeGeneration.current;
       setNoticeSaving(true);
       setNoticeError(false);
       const saved = await preferences.save(patch).catch(() => false);
       setNoticeSaving(false);
+      if (generation !== noticeGeneration.current) return;
       if (!saved) {
         setNoticeError(true);
         return;
@@ -418,10 +435,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
             const start = imagePress.current;
             imagePress.current = null;
             // A press that travelled is a pan, the image's other gesture.
-            if (!start || event.detail === 0) return;
-            if (Math.abs(event.clientX - start.x) > DISMISS_SLOP) return;
-            if (Math.abs(event.clientY - start.y) > DISMISS_SLOP) return;
-            requestInteractiveSvg();
+            if (isPointerClick(start, event)) requestInteractiveSvg();
           } : undefined} />
       )}
       {svgActive && svgSearchOpen ? (
