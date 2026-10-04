@@ -47,13 +47,15 @@ test("opens the update restart banner until Electron is closed manually", async 
       },
     );
 
-    const banner = app.window.locator(".app-update-banner");
+    const banner = app.window.locator(
+      ".app-notice-toast[data-notice-id^='app-update-ready:']",
+    );
     await expect(banner).toBeVisible();
     await expect(banner).toContainText("Update ready");
     await expect(banner).toContainText("Restart to update to v1.0.0-beta.7.");
     await expect(banner.getByRole("button", { name: "Restart" })).toBeVisible();
     await expect(
-      banner.getByRole("button", { name: "Dismiss update notification" }),
+      banner.getByRole("button", { name: "Dismiss notice" }),
     ).toBeVisible();
 
     console.log(

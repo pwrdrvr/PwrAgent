@@ -1,4 +1,13 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -12,11 +21,26 @@ import { ThreadChip } from "../thread-detail/ThreadChip";
 
 const AUTO_DISMISS_MS = 9_000;
 
+/**
+ * Whether the pointer is over the region a card holds its size for. The
+ * stack provides it, so a held card is released only when the pointer leaves
+ * every notice: releasing it as the pointer crossed onto a neighbour would
+ * move that neighbour out from under it. A card outside a stack uses its own
+ * hover.
+ */
+export const AppNoticeHoverRegion = createContext<boolean | undefined>(
+  undefined,
+);
+
+type CardSize = { width: number; height: number };
+
 export type AppNoticeToastNotice = {
   actions?: readonly {
     label: string;
     onClick: () => void;
     tone?: "primary" | "secondary";
+    /** Set while the action's own work runs, so a second click cannot repeat it. */
+    disabled?: boolean;
   }[];
   autoDismiss?: boolean;
   /** Retain only the highest-priority durable notice in this logical slot. */
@@ -38,7 +62,8 @@ export type AppNoticeToastNotice = {
   onDismiss?: () => void;
   /**
    * Names the close button when closing does more than hide the notice, as
-   * when it ends a live session. The button itself stays the card's own.
+   * when it cancels the update download the notice reports. The button
+   * itself stays the card's own.
    */
   dismissLabel?: string;
   detail?: string;
@@ -55,6 +80,17 @@ export type AppNoticeToastNotice = {
   status?: {
     label: string;
     state: "progress" | "success" | "error";
+  };
+  /**
+   * Work in flight with a measurable extent, drawn as a bar under the
+   * message: determinate with `percent`, a sweep without it. `meter` is the
+   * byte count or rate beside it. The message, bar and meter change every
+   * tick, so they opt out of the card's live region; the title announces.
+   */
+  progress?: {
+    label: string;
+    percent?: number;
+    meter?: string;
   };
   /** At most one auto-dismissing notice is retained for a producer slot. */
   transientSlot?: string;
@@ -86,6 +122,55 @@ export function AppNoticeToast(props: {
   const noticeId = props.notice?.id;
   const noticePresent = props.notice !== undefined;
   const autoDismiss = props.notice?.autoDismiss !== false;
+  const regionHovered = useContext(AppNoticeHoverRegion);
+  const [selfHovered, setSelfHovered] = useState(false);
+  const hovered = regionHovered ?? selfHovered;
+  const hoveredRef = useRef(hovered);
+  hoveredRef.current = hovered;
+  const sizeRef = useRef<CardSize | undefined>(undefined);
+  const observerRef = useRef<ResizeObserver | undefined>(undefined);
+  const shownIdRef = useRef(noticeId);
+  const [held, setHeld] = useState<CardSize>();
+
+  // The card's last laid-out size, read without forcing a layout of its own.
+  const observeCard = useCallback((card: HTMLElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = undefined;
+    if (!card || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry?.borderBoxSize?.[0];
+      sizeRef.current = box
+        ? { width: box.inlineSize, height: box.blockSize }
+        : { width: card.offsetWidth, height: card.offsetHeight };
+    });
+    observer.observe(card);
+    observerRef.current = observer;
+  }, []);
+
+  // One card shows one notice after another: the next durable notice when
+  // this one closes, the page Previous or Next turns to, the update offer
+  // when its download lands. The stack is anchored at its bottom and the
+  // close button sits top-right, so a next notice of another size would
+  // move that button out from under a pointer about to click it again.
+  // While the pointer stays, the card never shrinks below the notice it
+  // replaced, as a browser tab strip holds its tabs through a run of closes.
+  // It still grows for a larger notice, so nothing is ever clipped. Runs
+  // before paint, so the next notice never draws at its own size first.
+  useLayoutEffect(() => {
+    const previousId = shownIdRef.current;
+    shownIdRef.current = noticeId;
+    if (noticeId === undefined) {
+      setHeld(undefined);
+      return;
+    }
+    if (previousId === undefined || previousId === noticeId) return;
+    const size = sizeRef.current;
+    if (hoveredRef.current && size) setHeld(size);
+  }, [noticeId]);
+
+  useEffect(() => {
+    if (!hovered) setHeld(undefined);
+  }, [hovered]);
 
   useEffect(() => {
     onDismissRef.current = props.onDismiss;
@@ -142,6 +227,7 @@ export function AppNoticeToast(props: {
   // One dot carries the state: a status when the notice reports one, the
   // tone otherwise. The card itself stays neutral.
   const dotState = props.notice.status?.state === "progress"
+    || (props.notice.progress && !props.notice.status)
     ? "warning status-dot--blink"
     : props.notice.status?.state === "success"
       ? "ok"
@@ -155,10 +241,13 @@ export function AppNoticeToast(props: {
               ? "error"
               : "neutral";
   const facts = props.notice.facts ?? [];
+  const progress = props.notice.progress;
 
   return (
     <aside
+      ref={observeCard}
       className="app-notice-toast"
+      data-held={held ? "true" : undefined}
       data-navigable={props.navigation ? "true" : undefined}
       // The stack holds several notices at once — a durable backend warning
       // sits here for the whole run on a machine with no agent installed — so
@@ -168,8 +257,13 @@ export function AppNoticeToast(props: {
       data-tone={props.notice.tone ?? "neutral"}
       role="status"
       aria-live="polite"
+      style={held
+        ? { minWidth: held.width, minHeight: held.height }
+        : undefined}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
+      onPointerEnter={() => setSelfHovered(true)}
+      onPointerLeave={() => setSelfHovered(false)}
       onFocus={() => setPaused(true)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
@@ -215,7 +309,38 @@ export function AppNoticeToast(props: {
             {props.notice.status.label}
           </p>
         ) : null}
-        <p className="app-notice-toast__message">{props.notice.message}</p>
+        <p
+          className="app-notice-toast__message"
+          aria-live={progress ? "off" : undefined}
+        >
+          {props.notice.message}
+        </p>
+        {progress ? (
+          <>
+            <span
+              className={progress.percent === undefined
+                ? "app-notice-toast__track app-notice-toast__track--indeterminate"
+                : "app-notice-toast__track"}
+              role="progressbar"
+              aria-live="off"
+              aria-label={progress.label}
+              aria-valuemin={progress.percent === undefined ? undefined : 0}
+              aria-valuemax={progress.percent === undefined ? undefined : 100}
+              aria-valuenow={progress.percent}
+            >
+              <i
+                style={progress.percent === undefined
+                  ? undefined
+                  : { width: `${progress.percent}%` }}
+              />
+            </span>
+            {progress.meter ? (
+              <p className="app-notice-toast__meter" aria-live="off">
+                {progress.meter}
+              </p>
+            ) : null}
+          </>
+        ) : null}
         {props.notice.threadLink && props.onOpenThread ? (
           <div className="app-notice-toast__thread-link">
             <ThreadChip
@@ -311,6 +436,7 @@ export function AppNoticeToast(props: {
                   key={action.label}
                   className={`button button--${action.tone ?? "secondary"} app-notice-toast__button`}
                   type="button"
+                  disabled={action.disabled}
                   onClick={action.onClick}
                 >
                   {action.label}

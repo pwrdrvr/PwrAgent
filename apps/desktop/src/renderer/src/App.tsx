@@ -135,7 +135,10 @@ import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIn
 import { useThreadDraftIndicators, useUnassignedThreadDraftCount } from "./lib/useThreadDraftIndicators";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
-import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
+import {
+  CODEX_CONFIG_WARNING_NOTICE_ID_PREFIXES,
+  CodexConfigWarningNotice,
+} from "./features/codex-config/CodexConfigWarningNotice";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
@@ -876,6 +879,16 @@ function DesktopAppShell(props: {
     // A notice whose condition cleared (Codex updated, or the managed build
     // took over) must leave the screen, so sweep before showing the current one.
     for (const prefix of CODEX_VERSION_NOTICE_ID_PREFIXES) {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix });
+    }
+    if (notice) {
+      showAppNotice(notice);
+    }
+  }, [showAppNotice]);
+  const syncCodexConfigWarningNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    for (const prefix of CODEX_CONFIG_WARNING_NOTICE_ID_PREFIXES) {
       dispatchAppNotice({ type: "dismiss-prefix", prefix });
     }
     if (notice) {
@@ -3761,7 +3774,10 @@ function DesktopAppShell(props: {
           </Suspense>
         ) : null}
 
-        <CodexConfigWarningBanner desktopApi={desktopApi} />
+        <CodexConfigWarningNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={syncCodexConfigWarningNotice}
+        />
         <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
         <MessagingErrorNotices
           desktopApi={desktopApi}
