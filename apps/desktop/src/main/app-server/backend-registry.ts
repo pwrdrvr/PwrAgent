@@ -31,6 +31,7 @@ import {
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
+import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
@@ -1146,14 +1147,6 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
-}
-
-function mergedPrCommitShas(prs: PrSummary[]): string[] {
-  return prs
-    .filter((pr) => pr.lifecycleState === "merged" || pr.state === "merged")
-    .flatMap((pr) => pr.commitShas ?? [])
-    .map((sha) => sha.trim().toLowerCase())
-    .filter((sha) => /^[0-9a-f]{40}$/.test(sha));
 }
 
 function linkedDirectoriesHaveSameWorkspaceIdentity(
@@ -15142,7 +15135,7 @@ export class DesktopBackendRegistry {
     Thread extends AppServerThreadSummary,
   >(threads: Thread[], worktreePaths: string[]): Promise<void> {
     const acceptedPushedCommitShasByWorktreePath =
-      await this.readAcceptedMergedPrCommitShasByWorktreePath(
+      await this.readAcceptedPublishedPrCommitShasByWorktreePath(
         threads,
         worktreePaths,
       );
@@ -15157,7 +15150,7 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async readAcceptedMergedPrCommitShasByWorktreePath<
+  private async readAcceptedPublishedPrCommitShasByWorktreePath<
     Thread extends AppServerThreadSummary,
   >(
     threads: Thread[],
@@ -15184,7 +15177,18 @@ export class DesktopBackendRegistry {
         ...(overlay?.prs ?? []),
         ...(overlay?.detachedPrs ?? []),
       ];
-      for (const commitSha of mergedPrCommitShas(prs)) {
+      let canonicalPrs = prs;
+      if (this.threadPullRequestCanonicalizer && prs.length > 0) {
+        try {
+          canonicalPrs = await this.threadPullRequestCanonicalizer(prs);
+        } catch (error) {
+          backendRegistryLog.warn("working-state PR canonicalization failed", {
+            error: error instanceof Error ? error.message : String(error),
+            threadId: thread.id,
+          });
+        }
+      }
+      for (const commitSha of publishedPrCommitShas(canonicalPrs)) {
         accepted.add(commitSha);
       }
     }));
@@ -15312,7 +15316,7 @@ export class DesktopBackendRegistry {
    * Resolve a renderer-supplied worktree path against the owning thread before
    * a federated peer can read commit metadata from it. The peer supplies the
    * path it rendered, but this instance remains authoritative for both the
-   * linked-directory boundary and merged-PR exclusions.
+   * linked-directory boundary and published-PR exclusions.
    */
   async resolveThreadWorktreeGitReadContext(params: {
     backend?: AppServerBackendKind;
@@ -15374,7 +15378,7 @@ export class DesktopBackendRegistry {
     }
     return {
       worktreePath: matchedPath,
-      acceptedPushedCommitShas: mergedPrCommitShas(canonicalPrs),
+      acceptedPushedCommitShas: publishedPrCommitShas(canonicalPrs),
     };
   }
 

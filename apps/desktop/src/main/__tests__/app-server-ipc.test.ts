@@ -8552,7 +8552,8 @@ describe("app server ipc", () => {
     });
   });
 
-  it("passes merged PR commit SHAs into working-state probes", async () => {
+  it.each(["open", "closed", "merged"] as const)("passes published %s PR heads into working-state probes", async (lifecycleState) => {
+    const { appServerService } = await import("../ipc/app-server");
     const mergedPrSha = "a".repeat(40);
 
     listThreads.mockResolvedValueOnce([
@@ -8571,9 +8572,9 @@ describe("app server ipc", () => {
             repo: "PwrAgent",
             title: "PR canonical info store",
             state: "passing",
-            lifecycleState: "merged",
+            lifecycleState,
             url: "https://github.com/pwrdrvr/PwrAgent/pull/806",
-            commitShas: [mergedPrSha],
+            headSha: mergedPrSha,
           }),
         ],
       },
@@ -8581,16 +8582,16 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
     await refreshOwnerMetadata();
-
-    await vi.waitFor(() => {
-      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
-        ["/repo/wt"],
-        {
-          acceptedPushedCommitShasByWorktreePath: {
-            "/repo/wt": [mergedPrSha],
-          },
-        },
-      );
+    scheduleWorktreeGitWorkingStateRefresh.mockClear();
+    await appServerService.refreshThreadGitWorkingState({
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+    });
+    expect(scheduleWorktreeGitWorkingStateRefresh).toHaveBeenCalledWith({
+      worktreePath: "/repo/wt",
+      userAction: true,
+      acceptedPushedCommitShas: [mergedPrSha],
     });
   });
 

@@ -3858,7 +3858,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("preserves merged PR commit exclusions in review working-state probes", async () => {
+  it.each(["open", "closed", "merged"] as const)("preserves published %s PR heads in review working-state probes", async (lifecycleState) => {
     const worktreePath = "/worktrees/PwrAgnt";
     const attachedCommitSha = "a".repeat(40);
     const detachedCommitSha = "b".repeat(40);
@@ -3870,9 +3870,9 @@ describe("DesktopBackendRegistry", () => {
       number: params.number,
       org: "pwrdrvr",
       repo: "PwrAgent",
-      state: "merged",
-      lifecycleState: "merged",
-      commitShas: params.commitShas,
+      state: "passing",
+      lifecycleState,
+      headSha: params.commitShas[0],
       url: `https://github.com/pwrdrvr/PwrAgent/pull/${params.number}`,
     });
     const readWorkingStateEntries = vi.fn(() =>
@@ -3936,8 +3936,13 @@ describe("DesktopBackendRegistry", () => {
           path: "/repos/PwrSnap",
         },
       ],
-      prs: [mergedPr({ number: 735, commitShas: [attachedCommitSha] })],
+      prs: [mergedPr({ number: 735, commitShas: ["c".repeat(40)] })],
     };
+    registry.setThreadPullRequestCanonicalizer(async (prs) =>
+      prs.map((pr) => pr.number === 735
+        ? { ...pr, headSha: attachedCommitSha }
+        : pr),
+    );
 
     try {
       await registry.hydrateThreadGitWorkingStates(
@@ -4506,7 +4511,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("authorizes federated commit reads against the owner thread and PR overlay", async () => {
+  it.each(["open", "merged"] as const)("authorizes federated commit reads using the published %s PR head", async (lifecycleState) => {
     const worktreePath = "/worktrees/PwrAgnt";
     const attachedCommitSha = "a".repeat(40);
     const detachedCommitSha = "b".repeat(40);
@@ -4548,7 +4553,7 @@ describe("DesktopBackendRegistry", () => {
     });
     registry.setThreadPullRequestCanonicalizer(async (prs) =>
       prs.map((pr) => pr.number === 735
-        ? { ...pr, state: "merged", lifecycleState: "merged" }
+        ? { ...pr, state: "passing", lifecycleState, headSha: attachedCommitSha, commitShas: [] }
         : pr),
     );
 
