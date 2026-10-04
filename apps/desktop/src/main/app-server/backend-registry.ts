@@ -310,6 +310,8 @@ import {
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
+  type MarkProjectReadToolArgs,
+  type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
@@ -7928,6 +7930,7 @@ function threadOrchestrationFailure(
 
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
 export type AgentThreadActions = {
+  markProjectRead?: (args: MarkProjectReadToolArgs) => Promise<MarkProjectReadResult>;
   archiveThread: (request: ArchiveThreadRequest) => Promise<ArchiveThreadResponse>;
   setThreadPin: (request: SetThreadPinRequest) => Promise<SetThreadPinResponse>;
   markThreadSeen: (
@@ -40371,6 +40374,27 @@ export class DesktopBackendRegistry {
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
       });
+    }
+
+    if (request.operation === "mark_project_read") {
+      const args = request.args;
+      if (typeof args.projectKey !== "string" || !args.projectKey.trim()
+        || (args.instanceId !== undefined && (typeof args.instanceId !== "string" || !args.instanceId.trim()))
+        || Object.keys(args).some((key) => key !== "projectKey" && key !== "instanceId")) {
+        return threadInspectionFailure("invalid_arguments", "Provide an exact projectKey and optional nonempty instanceId.");
+      }
+      if (!this.agentThreadActions?.markProjectRead) {
+        return threadInspectionFailure("unsupported_operation", "Project mark-read is unavailable on this instance.");
+      }
+      try {
+        const projectRead = await this.agentThreadActions.markProjectRead({
+          projectKey: args.projectKey,
+          ...(args.instanceId !== undefined ? { instanceId: args.instanceId.trim() } : {}),
+        });
+        return { ok: true, data: { projectRead } };
+      } catch (error) {
+        return threadInspectionFailure("internal_error", error instanceof Error ? error.message : String(error));
+      }
     }
 
     if (request.operation === "mutate_thread") {

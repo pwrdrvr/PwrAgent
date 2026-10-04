@@ -1,4 +1,5 @@
 import { registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { markAgentProjectRead } from "./app-server/agent-project-read";
 import { configureBundledGit } from "./bundled-git";
 import {
   applyRememberedLinuxPasswordStore,
@@ -1563,6 +1564,7 @@ export function bootstrapApp(): void {
     // children on other instances, and its pins and read marks reach every
     // window the way a click does.
     getDesktopBackendRegistry().setAgentThreadActions({
+      markProjectRead: async (args) => await markAgentProjectRead(getDesktopFederationRuntime(), args),
       archiveThread: async (request) =>
         await appServerService.archiveThread(request),
       setThreadPin: async (request) =>

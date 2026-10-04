@@ -725,12 +725,13 @@ export type MessagingDynamicToolCategory =
  *
  * The gate is category-level EXCEPT where a tool doesn't fit its catalog:
  *   - thread_inspection is READ-ONLY → `tools.thread_inspection` (search / read /
- *     status). Two writes ship in that catalog and are re-homed:
+ *     status). Writes in that catalog are re-homed:
  *       · `mutate_thread` returns `undefined` here — it changes thread settings
  *         (model, reasoning, fast mode, rename, execution mode) and is gated
  *         PER FIELD via `permissionsForThreadMutation`, at parity with the
  *         status-card buttons (including the Full Access danger gate).
  *       · `attach_thread_pull_request` is a write → `tools.thread_orchestration`.
+ *       · `mark_project_read` changes seen state → `thread.control.organize`.
  *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
  *   - app_management / automation_inspection → `tools.instance_management`
  *   - messaging_context: `get_current_messaging_surface` is benign (ungated);
@@ -747,6 +748,9 @@ export function permissionForDynamicTool(
 ): MessagingPermissionId | undefined {
   switch (category) {
     case "thread_inspection":
+      if (tool === "mark_project_read") {
+        return "thread.control.organize";
+      }
       if (tool === "mutate_thread") {
         // Handled per-field by permissionsForThreadMutation (args-aware).
         return undefined;

@@ -147,7 +147,9 @@ function descriptionForOperation(
     case "watch_thread_pull_request":
       return "Create a durable, one-time watch for an attached pull request at the current head. The watch wakes the thread after CI success, early failure, or a merge conflict. Only a primary-workspace PR is eligible. The oldest duplicate watch receives the result. A terminal snapshot returns currentOutcome without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups without a duplicate turn.";
     case "mutate_thread":
-      return "Change guarded settings on a PwrAgent thread, its project, its pin, its read state, or whether it is archived. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it.";
+      return "Change guarded settings on a PwrAgent thread, its project, its pin, its read state, or whether it is archived. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it.";
+    case "mark_project_read":
+      return "Mark every unread thread in one project read in a single call, across all backends and beyond listing limits. Use the exact projectKey from list_instance_projects (directory:<absolute path> for a checkout). Omit instanceId for this machine; pass it for a known peer. Returns projectRead.changedCount. Uses the same guarded, atomic action as the sidebar. Does not archive threads or stop turns. Prefer this over repeated mutate_thread calls. For several projects in Code Mode, call tools.pwragent__mark_project_read for each and print only aggregate results.";
   }
 }
 
@@ -155,6 +157,16 @@ function inputSchemaForOperation(
   operation: PwrAgentThreadInspectionOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "mark_project_read":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["projectKey"],
+        properties: {
+          projectKey: { type: "string", minLength: 1, description: "Exact owner directory key from list_instance_projects, such as directory:/repo." },
+          instanceId: { type: "string", minLength: 1, description: "Owning Federation instance. Omit for this instance." },
+        },
+      };
     case "search_threads":
       return {
         type: "object",
