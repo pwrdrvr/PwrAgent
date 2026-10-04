@@ -743,8 +743,12 @@
   --bg-app: #002b36;
   --bg-sidebar: #073642;
   --bg-panel: #002b36;
+  /* Solarized publishes two background tones per scheme, so hover sits
+     midway between them: lighter than base03 on the panel, darker than
+     base02 in the sidebar. A lighter hover would put the text below AA on
+     its accent tints. */
   --bg-panel-elevated: #073642;
-  --bg-panel-hover: #073642;
+  --bg-panel-hover: #04313c;
   --bg-row-active: #163731;
   --bg-input: #073642;
 
@@ -789,10 +793,10 @@
   --terminal-ansi-bright-white: #fdf6e3;
 
   /* Semantic */
-  --danger-base: #dc322f;
+  --danger-base: #e43b36;
   --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
   --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
-  --danger-text: #efa09e;
+  --danger-text: #f1a2a0;
   --danger-text-light: #f1a281;
   --success-soft: color-mix(in srgb, #859900 18%, transparent);
   --success-border: color-mix(in srgb, #859900 32%, transparent);
@@ -814,7 +818,7 @@
   --usage-series-2: #268bd2;
   --usage-series-3: #2aa198;
   --usage-series-4: #6f74c5;
-  --usage-series-5: #b58900;
+  --usage-series-5: #d2521f;
 }
 
 :root[data-color-theme="solarized-light"] {
@@ -824,8 +828,11 @@
   --bg-app: #fdf6e3;
   --bg-sidebar: #eee8d5;
   --bg-panel: #fdf6e3;
-  --bg-panel-elevated: #fdf6e3;
-  --bg-panel-hover: #eee8d5;
+  /* Solarized publishes two background tones per scheme. Hover sits midway
+     between base3 and base2, and raised surfaces sit just above base3, so
+     neither matches the panel or the sidebar. */
+  --bg-panel-elevated: #fffcf5;
+  --bg-panel-hover: #f6efdc;
   --bg-row-active: #f5e7d2;
   --bg-input: #fdf6e3;
 

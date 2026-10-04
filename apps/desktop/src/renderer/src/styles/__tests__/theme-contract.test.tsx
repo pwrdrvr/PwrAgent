@@ -2648,6 +2648,47 @@ describe("color theme contract", () => {
     }
   });
 
+  it("never paints hover or raised surfaces in the color they sit on", () => {
+    // Thread rows hover in the sidebar and the panel, and secondary buttons
+    // and cards sit raised on the panel. A hover or raised token equal to
+    // the surface under it draws nothing, which is how both Solarized
+    // themes first shipped.
+    for (const [name, theme] of Object.entries(themes)) {
+      const surface = (token: string): string => paint(theme, theme[token], "#000000");
+      expect(surface("bg-panel-hover"), `${name}: hover on the panel`)
+        .not.toBe(surface("bg-panel"));
+      expect(surface("bg-panel-hover"), `${name}: hover in the sidebar`)
+        .not.toBe(surface("bg-sidebar"));
+      expect(surface("bg-panel-elevated"), `${name}: raised on the panel`)
+        .not.toBe(surface("bg-panel"));
+    }
+  });
+
+  it("keeps non-text marks at 3:1 on every flat surface", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const flat = [
+        "bg-app",
+        "bg-sidebar",
+        "bg-panel",
+        "bg-panel-elevated",
+        "bg-panel-hover",
+        "bg-input",
+      ].map((token) => paint(theme, theme[token], "#000000"));
+      for (const token of [
+        "danger-base",
+        "status-suspended",
+        "usage-series-1",
+        "usage-series-2",
+        "usage-series-3",
+        "usage-series-4",
+        "usage-series-5",
+      ]) {
+        expect(worstCase(theme, token, flat), `${name}: ${token}`)
+          .toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
   it("keeps Solarized's canonical canvas and terminal", () => {
     // Text moves off Solarized's values only as far as AA needs; the
     // surfaces and the terminal stay the published palette.

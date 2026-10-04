@@ -361,7 +361,10 @@ Per theme:
   `base01` is 2.4:1. Text, accent, and semantic colors therefore move in
   lightness only, by the least that clears the floor, with a tighter
   ladder (5.75 / 5.05 / 4.55). The dark accent is Solarized yellow, because
-  orange cannot clear AA as text on `base03`.
+  orange cannot clear AA as text on `base03`. With only two background
+  tones per scheme, hover sits midway between them, and Light's raised
+  surface sits just above `base3`, so neither disappears into the surface
+  under it.
 - **Gray** and **Blue** are PwrAgent designs, and keep their designed values
   wherever those already clear the floor. Blue is an explicit product
   choice. Its navy surfaces stay low-saturation, so the anti-pattern below
