@@ -80,9 +80,9 @@ Status colors should not compete with tangerine as the main action and focus sig
 ### Theme Variants
 
 The renderer ships two themes (dark + light) plus a system mode that
-follows `prefers-color-scheme`. Each theme renders in the selected
-palette (see [Palettes](#palettes)). The token tables below are the
-Tangerine palette. Theme selection lives in per-profile
+follows `prefers-color-scheme`. Each scheme renders in the color theme the
+operator picked for it (see [Color themes](#color-themes)). The token
+tables below are the Tangerine pair, the default for both schemes. Theme selection lives in per-profile
 `config.toml` under `[general.appearance]` and is applied via a
 `data-theme` attribute on `<html>`. The dark palette is the unscoped
 `:root` block; the light palette is opt-in under
@@ -301,54 +301,79 @@ alphas. Illustration assets that intentionally don't theme-flip
 substring-allowlisted in
 [`scripts/lint-renderer-colors.mjs`](../scripts/lint-renderer-colors.mjs).
 
-### Palettes
+### Color themes
 
-Palette is a separate axis from theme. Theme picks the scheme (dark, light,
-or follow the OS). Palette picks the colors that fill it.
-`[general.appearance] palette` in `config.toml` holds the choice. The
-default is `tangerine`, which is not written to the file. Settings →
-General → Appearance → Palette sets it.
+The operator picks a **dark theme** and a **light theme** independently,
+as most editors do. Theme (system, dark, or light) still picks the scheme;
+the scheme the window resolves to chooses which of the two renders. So
+"system" follows the OS between any dark theme and any light theme.
+`[general.appearance] dark_theme` and `light_theme` in `config.toml` hold
+the choices. The Tangerine defaults are not written to the file. Settings →
+General → Appearance sets them.
 
-| Palette | Dark scheme | Light scheme | Selector |
-|---|---|---|---|
-| Tangerine (default) | Tangerine Terminal | Tangerine light | bare `:root` / `:root[data-theme="light"]` |
-| Catppuccin | Mocha | Latte | `:root[data-palette="catppuccin"]` / `:root[data-theme="light"][data-palette="catppuccin"]` |
+| Dark theme | Light theme | Origin |
+|---|---|---|
+| `tangerine-dark` (default) | `tangerine-light` (default) | PwrAgent. The bare `:root` / `:root[data-theme="light"]` blocks. |
+| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com), tuned to the lowest compliant contrast. |
+| `solarized-dark` | `solarized-light` | [Solarized](https://ethanschoonover.com/solarized/), canonical surfaces and terminal, text moved only as far as AA needs. |
+| `gray-dark` | `gray-light` | PwrAgent. Neutral charcoal or light-gray surfaces with the Tangerine accent. |
+| `blue-dark` | `blue-light` | PwrAgent. Navy or pale-blue surfaces with a blue accent. |
 
-`data-theme` stays the scheme whatever the palette. Rules and scripts that
-key on `data-theme="light"`, such as brand marks and Mermaid, need no
-palette knowledge. The dark palette block also matches a light-scheme
-window, so the light block must override every token the dark block sets.
-The theme contract test enforces this. A palette never sets the
-theme-neutral tokens listed above. Those follow the scheme block.
+Each non-default theme is one `:root[data-color-theme="<id>"]` block in
+`app.css`, and `data-color-theme` is set only while that theme renders.
+`data-theme` stays the scheme whatever the color theme. Rules and scripts
+that key on `data-theme="light"`, such as brand marks and Mermaid, need no
+theme knowledge. A light theme's block has the same specificity as
+`:root[data-theme="light"]` and comes later in the file, so it wins.
 
-#### Catppuccin: lowest compliant contrast
+Every block sets the full themeable token set (Catppuccin Mocha's block is
+the reference list). A token a block leaves out would fall through to a
+stray Tangerine color. Terminal ANSI colors are the one optional group: a
+theme without its own keeps Tangerine's. No block sets the theme-neutral
+tokens listed above. Those follow the scheme block.
 
-Catppuccin is tuned to sit as close to the contrast floor as this document
-allows:
+#### Contrast
 
-- Every token read as text measures at least 4.55:1. That is AA plus 0.05
-  of margin for rendering. Each is measured against the lowest-contrast
-  background it can land on: the flat surfaces, the 12% and 16% accent
-  tints over panel, sidebar, and hover, and, for semantic text, its own
-  soft tint.
-- The text ladder is primary 7.5, secondary 5.75, and muted 4.55
-  (worst case).
-- `--accent` is floored against the accent tints too. That keeps the
-  `--accent` on `--accent-soft` debt above out of this palette.
-  `--text-subtle` clears AA here as well.
-- Mocha colors dim toward its base, so the pastels keep their hue. Latte
-  colors move in lightness only. Hue and saturation are held, as for the
-  Tangerine light accent.
-- Non-text marks sit at 3.05:1 on the flat surfaces. These are
+Every color theme holds the same floor, measured against the
+lowest-contrast background each token can land on. Those backgrounds are
+the flat surfaces, plus the 12% and 16% accent tints over panel, sidebar,
+and hover:
+
+- Every token read as text clears 4.55:1. That is AA plus 0.05 of margin
+  for rendering. Semantic text also clears its own soft tint.
+- `--accent` is floored against the accent tints too, and `--text-subtle`
+  clears AA. The color themes inherit none of the light-theme debt above.
+- Non-text marks clear 3.05:1 on the flat surfaces. These are
   `--danger-base`, `--status-suspended`, and the usage chart series.
-- Mocha's terminal ANSI colors are Catppuccin's own. In Latte, each ANSI
-  color that misses 4.5:1 on the canvas is darkened to it.
+- Text ladders (primary, secondary, muted) and accent ramps keep their
+  emphasis order.
 
-The theme contract test measures all of this and fails if `--text-muted`
-or `--accent` drifts to 4.7:1 or above. Retune by moving a value back to
-the floor, not by eye. The native window colors in `native-appearance.ts`
-and the quit dialog palette in `quit-confirmation-dialog.ts` carry
-literal copies. Keep them in lockstep.
+Per theme:
+
+- **Catppuccin** sits at the floor on purpose. Its text ladder is
+  7.5 / 5.75 / 4.55. Mocha colors dim toward its base, so the pastels keep
+  their hue. Latte colors move in lightness only. Mocha's terminal ANSI
+  colors are Catppuccin's own. In Latte, each one under 4.5:1 is darkened
+  to it.
+- **Solarized** keeps the published surfaces (`base03`/`base02`,
+  `base3`/`base2`), terminal canvas, foreground, and 16-color ANSI mapping.
+  Its stock text does not clear AA on `base02`: `base0` is 4.1:1 and
+  `base01` is 2.4:1. Text, accent, and semantic colors therefore move in
+  lightness only, by the least that clears the floor, with a tighter
+  ladder (5.75 / 5.05 / 4.55). The dark accent is Solarized yellow, because
+  orange cannot clear AA as text on `base03`.
+- **Gray** and **Blue** are PwrAgent designs, and keep their designed values
+  wherever those already clear the floor. Blue is an explicit product
+  choice. Its navy surfaces stay low-saturation, so the anti-pattern below
+  against saturated navy dashboards still holds.
+
+The theme contract test checks all of this. It reads `app.css` and fails if
+a theme drops a token, misses the floor, breaks a ladder, or if
+Catppuccin's `--text-muted` or `--accent` drifts to 4.7:1 or above. The
+a11y E2E gate audits every theme in its scheme. The native window colors
+(`native-appearance.ts`) and the quit dialog palettes
+(`quit-confirmation-dialog.ts`) carry literal copies. Tests hold each one
+to its `app.css` block.
 
 ### Status indicator dots
 
@@ -622,7 +647,7 @@ Long titles, paths, and branch names must truncate or wrap predictably without c
 Avoid:
 
 - gray text on darker gray
-- saturated slate, navy, or purple-blue dashboard palettes
+- saturated slate, navy, or purple-blue dashboard palettes (the opt-in Blue color theme keeps its navy low-saturation)
 - purple accents, gradient orbs, and decorative glows
 - orange-dominant panels or orange body copy
 - browser-default controls

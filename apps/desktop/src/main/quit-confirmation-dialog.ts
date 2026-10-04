@@ -1,6 +1,9 @@
 import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
-import type { DesktopAppearanceTheme } from "@pwragent/shared";
+import type {
+  DesktopAppearanceTheme,
+  DesktopColorTheme,
+} from "@pwragent/shared";
 import type {
   QuitBlockerItem,
   QuitBlockerQueueSnapshot,
@@ -97,11 +100,15 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
   },
 };
 
-/** Catppuccin palette (Mocha dark, Latte light). Keep in lockstep with the
- *  `:root[data-palette="catppuccin"]` blocks in app.css; the border is
- *  their `--border-subtle` mix resolved to a literal. */
-export const CATPPUCCIN_QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
-  dark: {
+/** Every other color theme, from its `:root[data-color-theme="<id>"]` block
+ *  in app.css; the border is that block's `--border-subtle` mix resolved to a
+ *  literal. A test reads app.css and fails when an entry drifts. Tangerine
+ *  is `QUIT_DIALOG_PALETTES` above. */
+export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
+  Exclude<DesktopColorTheme, "tangerine-dark" | "tangerine-light">,
+  QuitDialogPalette
+> = {
+  "catppuccin-mocha": {
     bg: "#1e1e2e",
     sidebar: "#181825",
     surface: "#252536",
@@ -115,7 +122,7 @@ export const CATPPUCCIN_QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialo
     accentBright: "#e4a47e",
     buttonText: "#11111b",
   },
-  light: {
+  "catppuccin-latte": {
     bg: "#eff1f5",
     sidebar: "#e6e9ef",
     surface: "#f7f8fa",
@@ -129,7 +136,99 @@ export const CATPPUCCIN_QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialo
     accentBright: "#8e3401",
     buttonText: "#eff1f5",
   },
+  "solarized-dark": {
+    bg: "#002b36",
+    sidebar: "#073642",
+    surface: "#073642",
+    rowActive: "#163731",
+    panelHover: "#073642",
+    border: "rgba(188, 197, 197, 0.1)",
+    textPrimary: "#bcc5c5",
+    textSecondary: "#aeb9ba",
+    textMuted: "#a0b1b7",
+    accent: "#dba600",
+    accentBright: "#e7af00",
+    buttonText: "#002b36",
+  },
+  "solarized-light": {
+    bg: "#fdf6e3",
+    sidebar: "#eee8d5",
+    surface: "#fdf6e3",
+    rowActive: "#f5e7d2",
+    panelHover: "#eee8d5",
+    border: "rgba(60, 76, 80, 0.09)",
+    textPrimary: "#3c4c50",
+    textSecondary: "#45545a",
+    textMuted: "#4f5a5a",
+    accent: "#9a3911",
+    accentBright: "#8e3510",
+    buttonText: "#fdf6e3",
+  },
+  "gray-dark": {
+    bg: "#2b2b2e",
+    sidebar: "#252528",
+    surface: "#323236",
+    rowActive: "#403832",
+    panelHover: "#37373b",
+    border: "rgba(236, 236, 238, 0.1)",
+    textPrimary: "#ececee",
+    textSecondary: "#c8c8cb",
+    textMuted: "#bcbcc0",
+    accent: "#ffa95a",
+    accentBright: "#ffb876",
+    buttonText: "#1c1c1e",
+  },
+  "gray-light": {
+    bg: "#ebebed",
+    sidebar: "#e2e2e5",
+    surface: "#f6f6f7",
+    rowActive: "#e6e0dd",
+    panelHover: "#dddde1",
+    border: "rgba(29, 29, 32, 0.09)",
+    textPrimary: "#1d1d20",
+    textSecondary: "#45454b",
+    textMuted: "#515157",
+    accent: "#8a3900",
+    accentBright: "#7f3400",
+    buttonText: "#ffffff",
+  },
+  "blue-dark": {
+    bg: "#0f1724",
+    sidebar: "#0b121d",
+    surface: "#162133",
+    rowActive: "#18283e",
+    panelHover: "#1a2740",
+    border: "rgba(228, 236, 248, 0.1)",
+    textPrimary: "#e4ecf8",
+    textSecondary: "#b6c4da",
+    textMuted: "#95a7c2",
+    accent: "#5baaff",
+    accentBright: "#6db4ff",
+    buttonText: "#06111f",
+  },
+  "blue-light": {
+    bg: "#f3f7fc",
+    sidebar: "#e8eff8",
+    surface: "#ffffff",
+    rowActive: "#e5ecf7",
+    panelHover: "#e1e9f4",
+    border: "rgba(15, 34, 59, 0.09)",
+    textPrimary: "#0f223b",
+    textSecondary: "#33486a",
+    textMuted: "#475976",
+    accent: "#1c56ac",
+    accentBright: "#1a4f9f",
+    buttonText: "#ffffff",
+  },
 };
+
+function quitDialogPalette(
+  colorTheme: DesktopColorTheme,
+): QuitDialogPalette {
+  if (colorTheme === "tangerine-dark") return QUIT_DIALOG_PALETTES.dark;
+  if (colorTheme === "tangerine-light") return QUIT_DIALOG_PALETTES.light;
+  return COLOR_THEME_QUIT_DIALOG_PALETTES[colorTheme];
+}
 
 /** Resolve the active PwrAgent theme (honoring the in-app setting, not just the
  *  OS). "system" falls back to the OS scheme via nativeTheme. */
@@ -269,11 +368,9 @@ export async function showQuitConfirmationDialog(
   const parent = resolveQuitDialogParent();
   const appearance = readBootstrapAppearance();
   const colorScheme = resolveQuitDialogTheme(appearance.theme);
-  const palette = (
-    appearance.palette === "catppuccin"
-      ? CATPPUCCIN_QUIT_DIALOG_PALETTES
-      : QUIT_DIALOG_PALETTES
-  )[colorScheme];
+  const palette = quitDialogPalette(
+    colorScheme === "light" ? appearance.lightTheme : appearance.darkTheme,
+  );
   const items = options.items ?? [];
   const countdownSeconds = resolveQuitCountdownSeconds(
     options.countdownSeconds,

@@ -318,7 +318,8 @@ export function App() {
     snapshotPreference: settings.snapshot?.general.appearance
       ? {
         theme: settings.snapshot.general.appearance.theme.value,
-        palette: settings.snapshot.general.appearance.palette.value,
+        darkTheme: settings.snapshot.general.appearance.darkTheme.value,
+        lightTheme: settings.snapshot.general.appearance.lightTheme.value,
         density: settings.snapshot.general.appearance.density.value,
         sidebarTextSize:
           settings.snapshot.general.appearance.sidebarTextSize.value,

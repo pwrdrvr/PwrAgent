@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import type {
   DesktopAppearanceDensity,
-  DesktopAppearancePalette,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -41,14 +42,16 @@ import type {
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
-  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   isDesktopAppearanceDensity,
-  isDesktopAppearancePalette,
+  isDesktopDarkTheme,
+  isDesktopLightTheme,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
   isDesktopCodexProfileModel,
@@ -120,7 +123,8 @@ export type DesktopSettingsConfig = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
-      palette?: DesktopAppearancePalette;
+      darkTheme?: DesktopDarkTheme;
+      lightTheme?: DesktopLightTheme;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -860,17 +864,34 @@ export function desktopSettingsPatchToEdits(
       set(["general", "appearance", "theme"], patch.general.appearance.theme);
     }
   }
-  if (patch.general?.appearance?.palette !== undefined) {
-    if (
-      patch.general.appearance.palette === DESKTOP_APPEARANCE_PALETTE_DEFAULT
-    ) {
-      edits.push({ op: "delete", path: ["general", "appearance", "palette"] });
+  if (patch.general?.appearance?.darkTheme !== undefined) {
+    if (patch.general.appearance.darkTheme === DESKTOP_DARK_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "dark_theme"] });
     } else {
       set(
-        ["general", "appearance", "palette"],
-        patch.general.appearance.palette,
+        ["general", "appearance", "dark_theme"],
+        patch.general.appearance.darkTheme,
       );
     }
+  }
+  if (patch.general?.appearance?.lightTheme !== undefined) {
+    if (patch.general.appearance.lightTheme === DESKTOP_LIGHT_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "light_theme"] });
+    } else {
+      set(
+        ["general", "appearance", "light_theme"],
+        patch.general.appearance.lightTheme,
+      );
+    }
+  }
+  if (
+    patch.general?.appearance?.darkTheme !== undefined
+    || patch.general?.appearance?.lightTheme !== undefined
+  ) {
+    // `palette` was a development-only key that dark_theme / light_theme
+    // replaced before any release read it. Drop it once the operator picks
+    // a theme so it does not linger as a setting nothing reads.
+    edits.push({ op: "delete", path: ["general", "appearance", "palette"] });
   }
   if (patch.onboarding?.completed !== undefined) {
     set(["onboarding", "completed"], patch.onboarding.completed);
@@ -1956,7 +1977,8 @@ function normalizeDesktopConfig(
       },
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
-        palette: readAppearancePalette(generalAppearance?.palette),
+        darkTheme: readDarkTheme(generalAppearance?.dark_theme),
+        lightTheme: readLightTheme(generalAppearance?.light_theme),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
@@ -2717,10 +2739,18 @@ function readAppearanceTheme(
     : undefined;
 }
 
-function readAppearancePalette(
+function readDarkTheme(
   value: TomlScalar | undefined,
-): DesktopAppearancePalette | undefined {
-  return typeof value === "string" && isDesktopAppearancePalette(value)
+): DesktopDarkTheme | undefined {
+  return typeof value === "string" && isDesktopDarkTheme(value)
+    ? value
+    : undefined;
+}
+
+function readLightTheme(
+  value: TomlScalar | undefined,
+): DesktopLightTheme | undefined {
+  return typeof value === "string" && isDesktopLightTheme(value)
     ? value
     : undefined;
 }

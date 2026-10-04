@@ -21,28 +21,34 @@
 
 import type {
   DesktopAppearanceDensity,
-  DesktopAppearancePalette,
+  DesktopColorTheme,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
-  DESKTOP_APPEARANCE_PALETTE_DEFAULT,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
-  isDesktopAppearancePalette,
+  isDesktopDarkTheme,
+  isDesktopLightTheme,
   isDesktopTextSize,
 } from "@pwragent/shared";
 
 export type ThemePreference = DesktopAppearanceTheme;
-export type PalettePreference = DesktopAppearancePalette;
+export type DarkThemePreference = DesktopDarkTheme;
+export type LightThemePreference = DesktopLightTheme;
 export type DensityPreference = DesktopAppearanceDensity;
 export type TextSizePreference = DesktopTextSize;
 export type ResolvedTheme = "dark" | "light";
 
 export type AppearancePreference = {
   theme: ThemePreference;
-  palette: PalettePreference;
+  darkTheme: DarkThemePreference;
+  lightTheme: LightThemePreference;
   density: DensityPreference;
   sidebarTextSize: TextSizePreference;
   transcriptTextSize: TextSizePreference;
@@ -50,7 +56,8 @@ export type AppearancePreference = {
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
-  palette: DESKTOP_APPEARANCE_PALETTE_DEFAULT,
+  darkTheme: DESKTOP_DARK_THEME_DEFAULT,
+  lightTheme: DESKTOP_LIGHT_THEME_DEFAULT,
   density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
   transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
@@ -72,15 +79,27 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
     : "dark";
 }
 
+/** The color theme a window renders in: the dark or light theme the
+ *  operator picked, chosen by the resolved scheme. */
+export function resolveColorTheme(
+  resolvedTheme: ResolvedTheme,
+  darkTheme: DarkThemePreference,
+  lightTheme: LightThemePreference,
+): DesktopColorTheme {
+  return resolvedTheme === "light" ? lightTheme : darkTheme;
+}
+
 /** Apply the resolved appearance to `<html>` via data-* attributes.
  *  CSS in app.css picks them up via attribute selectors. Removing the
  *  attribute (when the value is the default) keeps the cascade simple.
- *  `data-theme` stays the scheme (light or absent) whatever the palette,
- *  so scheme-keyed consumers (brand marks, Mermaid) need no palette
- *  knowledge; `data-palette` only recolors the tokens. */
+ *  `data-theme` stays the scheme (light or absent) whatever the color
+ *  theme, so scheme-keyed consumers (brand marks, Mermaid) need no theme
+ *  knowledge; `data-color-theme` only recolors the tokens. Tangerine is the
+ *  bare `:root` / `:root[data-theme="light"]`, so it sets no attribute. */
 export function applyAppearanceAttributes(
   resolvedTheme: ResolvedTheme,
-  palette: PalettePreference,
+  darkTheme: DarkThemePreference,
+  lightTheme: LightThemePreference,
   density: DensityPreference,
   sidebarTextSize: TextSizePreference,
   transcriptTextSize: TextSizePreference,
@@ -92,10 +111,14 @@ export function applyAppearanceAttributes(
   } else {
     root.removeAttribute("data-theme");
   }
-  if (palette !== DESKTOP_APPEARANCE_PALETTE_DEFAULT) {
-    root.setAttribute("data-palette", palette);
+  const colorTheme = resolveColorTheme(resolvedTheme, darkTheme, lightTheme);
+  if (
+    colorTheme !== DESKTOP_DARK_THEME_DEFAULT
+    && colorTheme !== DESKTOP_LIGHT_THEME_DEFAULT
+  ) {
+    root.setAttribute("data-color-theme", colorTheme);
   } else {
-    root.removeAttribute("data-palette");
+    root.removeAttribute("data-color-theme");
   }
   if (density === "compact") {
     root.setAttribute("data-density", "compact");
@@ -128,7 +151,8 @@ export function readBridgedAppearance(): AppearancePreference {
   }).__pwragentAppearance;
   return {
     theme: normalizeTheme(bridged?.theme),
-    palette: normalizePalette(bridged?.palette),
+    darkTheme: normalizeDarkTheme(bridged?.darkTheme),
+    lightTheme: normalizeLightTheme(bridged?.lightTheme),
     density: normalizeDensity(bridged?.density),
     sidebarTextSize: normalizeTextSize(bridged?.sidebarTextSize),
     transcriptTextSize: normalizeTextSize(bridged?.transcriptTextSize),
@@ -141,10 +165,16 @@ function normalizeTheme(value: unknown): ThemePreference {
     : DEFAULT_APPEARANCE.theme;
 }
 
-function normalizePalette(value: unknown): PalettePreference {
-  return typeof value === "string" && isDesktopAppearancePalette(value)
+function normalizeDarkTheme(value: unknown): DarkThemePreference {
+  return typeof value === "string" && isDesktopDarkTheme(value)
     ? value
-    : DEFAULT_APPEARANCE.palette;
+    : DEFAULT_APPEARANCE.darkTheme;
+}
+
+function normalizeLightTheme(value: unknown): LightThemePreference {
+  return typeof value === "string" && isDesktopLightTheme(value)
+    ? value
+    : DEFAULT_APPEARANCE.lightTheme;
 }
 
 function normalizeDensity(value: unknown): DensityPreference {

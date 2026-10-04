@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { DesktopDarkTheme, DesktopLightTheme } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const electronMocks = vi.hoisted(() => ({
@@ -9,7 +13,8 @@ const electronMocks = vi.hoisted(() => ({
 const appearanceMocks = vi.hoisted(() => ({
   appearance: {
     density: "mission-control" as const,
-    palette: "tangerine" as "tangerine" | "catppuccin",
+    darkTheme: "tangerine-dark" as DesktopDarkTheme,
+    lightTheme: "tangerine-light" as DesktopLightTheme,
     sidebarTextSize: "md" as const,
     theme: "system" as "system" | "dark" | "light",
     transcriptTextSize: "md" as const,
@@ -49,7 +54,8 @@ beforeEach(() => {
   electronMocks.nativeThemeOn.mockReset();
   electronMocks.systemUsesDarkColors = false;
   appearanceMocks.appearance.theme = "system";
-  appearanceMocks.appearance.palette = "tangerine";
+  appearanceMocks.appearance.darkTheme = "tangerine-dark";
+  appearanceMocks.appearance.lightTheme = "tangerine-light";
   vi.resetModules();
 });
 
@@ -101,13 +107,14 @@ describe("native appearance", () => {
     );
   });
 
-  it("paints Catppuccin base and mantle in both schemes", async () => {
+  it("paints the dark or light theme the scheme resolves to", async () => {
     const {
       themedTitleBarOverlay,
       themedWindowBackgroundColor,
     } = await import("../native-appearance");
 
-    appearanceMocks.appearance.palette = "catppuccin";
+    appearanceMocks.appearance.darkTheme = "solarized-dark";
+    appearanceMocks.appearance.lightTheme = "catppuccin-latte";
     expect(themedWindowBackgroundColor(appearanceMocks.appearance)).toBe(
       "#eff1f5",
     );
@@ -117,11 +124,31 @@ describe("native appearance", () => {
 
     electronMocks.systemUsesDarkColors = true;
     expect(themedWindowBackgroundColor(appearanceMocks.appearance)).toBe(
-      "#1e1e2e",
+      "#002b36",
     );
     expect(themedTitleBarOverlay(appearanceMocks.appearance).color).toBe(
-      "#181825",
+      "#073642",
     );
+  });
+
+  it("matches every color theme's window colors to its app.css block", async () => {
+    const { COLOR_THEME_WINDOW_COLORS } = await import("../native-appearance");
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../renderer/src/styles/app.css",
+      ),
+      "utf8",
+    );
+    for (const [theme, colors] of Object.entries(COLOR_THEME_WINDOW_COLORS)) {
+      if (theme.startsWith("tangerine-")) continue;
+      const block = css.match(
+        new RegExp(`:root\\[data-color-theme="${theme}"\\] \\{([\\s\\S]*?)\\n\\}`),
+      )?.[1];
+      expect(block, theme).toBeDefined();
+      expect(block, theme).toContain(`--bg-app: ${colors.window};`);
+      expect(block, theme).toContain(`--bg-sidebar: ${colors.titleBar};`);
+    }
   });
 
   it("refreshes every overlay when the Windows system appearance changes", async () => {

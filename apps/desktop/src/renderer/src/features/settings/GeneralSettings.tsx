@@ -1,9 +1,11 @@
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   AppearanceController,
+  DarkThemePreference,
   DensityPreference,
-  PalettePreference,
+  LightThemePreference,
   TextSizePreference,
   ThemePreference,
 } from "../../lib/useAppearance";
@@ -28,14 +30,25 @@ const THEME_OPTIONS: Array<{
   { label: "Light", meta: "Always light", value: "light" },
 ];
 
-const PALETTE_OPTIONS: Array<{
-  label: string;
-  meta: string;
-  value: PalettePreference;
-}> = [
-  { label: "Tangerine", meta: "PwrAgent", value: "tangerine" },
-  { label: "Catppuccin", meta: "Mocha dark, Latte light", value: "catppuccin" },
+/* The theme each scheme renders in. Picked independently, so "System"
+   above flips between the two choices with the OS. */
+const DARK_THEME_OPTIONS: readonly SelectOption<DarkThemePreference>[] = [
+  { label: "Tangerine", description: "PwrAgent default", value: "tangerine-dark" },
+  { label: "Catppuccin Mocha", value: "catppuccin-mocha" },
+  { label: "Solarized Dark", value: "solarized-dark" },
+  { label: "Gray", description: "Charcoal surfaces", value: "gray-dark" },
+  { label: "Blue", description: "Navy surfaces", value: "blue-dark" },
 ];
+
+const LIGHT_THEME_OPTIONS: readonly SelectOption<LightThemePreference>[] = [
+  { label: "Tangerine", description: "PwrAgent default", value: "tangerine-light" },
+  { label: "Catppuccin Latte", value: "catppuccin-latte" },
+  { label: "Solarized Light", value: "solarized-light" },
+  { label: "Gray", description: "Light gray surfaces", value: "gray-light" },
+  { label: "Blue", description: "Pale blue surfaces", value: "blue-light" },
+];
+
+const THEME_PICKER_CLASS = "settings-select settings-select--chip";
 
 const DENSITY_OPTIONS: Array<{
   label: string;
@@ -197,15 +210,31 @@ export function GeneralSettings(props: {
               }
             />
             <SettingsField
-              label="Palette"
-              sub="Colors for the theme above. Catppuccin uses Mocha in dark and Latte in light."
+              label="Dark theme"
+              sub="Colors used whenever the app is dark."
               control={
-                <SegmentedControl
-                  label="Palette"
-                  options={PALETTE_OPTIONS}
-                  value={appearance.palette}
+                <Select
+                  aria-label="Dark theme"
+                  className={THEME_PICKER_CLASS}
+                  options={DARK_THEME_OPTIONS}
+                  value={appearance.darkTheme}
                   onChange={(value) => {
-                    props.appearanceController?.setPalette(value);
+                    props.appearanceController?.setDarkTheme(value);
+                  }}
+                />
+              }
+            />
+            <SettingsField
+              label="Light theme"
+              sub="Colors used whenever the app is light."
+              control={
+                <Select
+                  aria-label="Light theme"
+                  className={THEME_PICKER_CLASS}
+                  options={LIGHT_THEME_OPTIONS}
+                  value={appearance.lightTheme}
+                  onChange={(value) => {
+                    props.appearanceController?.setLightTheme(value);
                   }}
                 />
               }

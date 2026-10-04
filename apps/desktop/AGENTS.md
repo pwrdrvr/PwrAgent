@@ -803,13 +803,16 @@ Things to know when extending the audit:
   seeder writing a row nothing reads would leave the audit green while it
   scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
   pins the round-trip in vitest.
-- **Every surface is audited in both themes.** The file wraps its
-  `describe` in `for (const theme of AUDIT_THEMES)` and threads the theme
-  into `launchAuditApp({ theme })`, so a new block is gated in light and
-  dark for free. This matters because contrast is the one rule class that
-  is genuinely theme-dependent — roles, names, and focus order are not.
-  The gate ran dark-only for its whole life, which is how three
-  token-level light-theme contrast failures shipped unnoticed.
+- **Every surface is audited in every color theme.** The file wraps its
+  `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
+  light pair plus each other dark theme in the dark scheme and each light
+  theme in the light scheme. It threads that appearance into
+  `launchAuditApp(appearance)`, so a new block is gated in all of them for
+  free. This matters because contrast is the one rule class that is
+  genuinely theme-dependent — roles, names, and focus order are not. The
+  gate ran dark-only for its whole life, which is how three token-level
+  light-theme contrast failures shipped unnoticed. Add a new color theme to
+  `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
 - **`runAxe(window, { include })` narrows the scan to one subtree.** No
   block passes it today, and it is not a tool for silencing a failure —
   everything outside the scope stops being gated. Prefer a

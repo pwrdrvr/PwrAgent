@@ -7,7 +7,8 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type {
   DesktopAppearanceDensity,
-  DesktopAppearancePalette,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -258,7 +259,8 @@ type LaunchElectronAppParams = {
    */
   appearance?: {
     theme?: DesktopAppearanceTheme;
-    palette?: DesktopAppearancePalette;
+    darkTheme?: DesktopDarkTheme;
+    lightTheme?: DesktopLightTheme;
     density?: DesktopAppearanceDensity;
   };
   /**
@@ -383,7 +385,8 @@ export async function launchElectronApp(
         confirmQuitWithInProgressThreads: false,
         appearance: {
           theme: params.appearance?.theme ?? "dark",
-          palette: params.appearance?.palette ?? "tangerine",
+          darkTheme: params.appearance?.darkTheme ?? "tangerine-dark",
+          lightTheme: params.appearance?.lightTheme ?? "tangerine-light",
           density: params.appearance?.density ?? "mission-control",
         },
       },

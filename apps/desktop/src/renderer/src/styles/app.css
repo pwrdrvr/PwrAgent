@@ -534,30 +534,43 @@
 
 /* =============================================================}
 
-   PALETTE — Catppuccin (Mocha dark, Latte light)
+   COLOR THEMES — one per scheme, picked independently
 
-   Palette is a separate axis from theme. `data-theme` stays the scheme
-   (light or absent) so every scheme-keyed rule and script keeps working;
-   `data-palette="catppuccin"` swaps the colors on top. The dark block
-   matches a Latte window too (same specificity as the Tangerine light
-   block, later in source), so the Latte block must override every token
-   the Mocha block sets. Tokens neither block sets — shadows, scrims, the
-   Star Map float — follow the scheme block, as UI-THEME.md requires.
+   The operator picks a dark theme and a light theme; the scheme the
+   window resolves to (Settings → Theme: system, dark, or light) chooses
+   which one renders. `data-theme` stays the scheme (light or absent) so
+   every scheme-keyed rule and script keeps working, and
+   `data-color-theme="<id>"` recolors the tokens on top. Tangerine is the
+   bare :root / :root[data-theme="light"] pair and sets no attribute.
 
-   LOWEST COMPLIANT CONTRAST. Every token read as text sits just above
-   WCAG AA, at 4.55:1 (0.05 of margin for rendering), measured against the
-   lowest-contrast background it can land on: the flat surfaces plus the 12% and 16% accent
-   tints over panel, sidebar, and hover. Each semantic text is also floored
-   against its own soft tint. The text ladder is 7.5 / 5.75 / 4.55. Mocha
-   colors dim toward base so the pastels keep their hue; Latte colors move
-   in lightness only (hue and saturation held, as for the Tangerine light
-   accent). Non-text marks (--danger-base, --status-suspended, chart
-   series) sit at 3.05:1 on the flat surfaces. --text-subtle clears AA here,
-   unlike the Tangerine blocks. Terminal ANSI colors are Catppuccin's own
-   in Mocha; in Latte each one that misses 4.5:1 on the canvas is darkened
-   to it. Bright black and bright white stay dim by design.
+   Each block sets the full themeable token set. A light theme's block has
+   the same specificity as :root[data-theme="light"] and comes later, so it
+   wins. Tokens no theme sets — shadows, scrims, the Star Map float — follow
+   the scheme block, as UI-THEME.md requires.
+
+   CONTRAST. Every token read as text clears WCAG AA at 4.55:1 (0.05 of
+   margin for rendering) against the lowest-contrast background it can land
+   on: the flat surfaces plus the 12% and 16% accent tints over panel,
+   sidebar, and hover. Each semantic text also clears its own soft tint.
+   Non-text marks (--danger-base, --status-suspended, chart series) clear
+   3.05:1 on the flat surfaces. --text-subtle clears AA in every theme here.
+
+   Catppuccin is tuned to the LOWEST compliant contrast: its text ladder is
+   7.5 / 5.75 / 4.55. Mocha colors dim toward base so the pastels keep
+   their hue; Latte colors move in lightness only. Mocha's terminal ANSI
+   colors are Catppuccin's own; in Latte each one under 4.5:1 is darkened.
+
+   Solarized keeps Ethan Schoonover's canonical surfaces, terminal, and
+   ANSI mapping. Its stock text does not clear AA on base02 (base0 is
+   4.1:1, base01 2.4:1), so text, accent, and semantic colors move in
+   lightness only, by the least that clears it. The dark accent is
+   Solarized yellow; orange cannot clear AA as text on base03.
+
+   Gray and Blue are PwrAgent designs. Gray keeps the Tangerine accent on
+   neutral charcoal or light-gray surfaces; Blue uses a blue accent on navy
+   or pale-blue surfaces. Their terminals keep the Tangerine ANSI colors.
    =========================================================================== */
-:root[data-palette="catppuccin"] {
+:root[data-color-theme="catppuccin-mocha"] {
   color-scheme: dark;
 
   /* Surfaces */
@@ -638,7 +651,7 @@
   --usage-series-5: #837869;
 }
 
-:root[data-theme="light"][data-palette="catppuccin"] {
+:root[data-color-theme="catppuccin-latte"] {
   color-scheme: light;
 
   /* Surfaces */
@@ -717,6 +730,428 @@
   --usage-series-3: #179097;
   --usage-series-4: #a061f2;
   --usage-series-5: #b67418;
+}
+
+:root[data-color-theme="solarized-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #002b36;
+  --bg-sidebar: #073642;
+  --bg-panel: #002b36;
+  --bg-panel-elevated: #073642;
+  --bg-panel-hover: #073642;
+  --bg-row-active: #163731;
+  --bg-input: #073642;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #bcc5c5;
+  --text-secondary: #aeb9ba;
+  --text-muted: #a0b1b7;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 84%, transparent);
+
+  /* Accent */
+  --accent: #dba600;
+  --accent-strong: #e1ab00;
+  --accent-bright: #e7af00;
+  --accent-on: #002b36;
+  --button-text: #002b36;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #002b36;
+  --terminal-fg: #839496;
+  --terminal-cursor: #93a1a1;
+  --terminal-cursor-accent: #002b36;
+  --terminal-ansi-black: #073642;
+  --terminal-ansi-red: #dc322f;
+  --terminal-ansi-green: #859900;
+  --terminal-ansi-yellow: #b58900;
+  --terminal-ansi-blue: #268bd2;
+  --terminal-ansi-magenta: #d33682;
+  --terminal-ansi-cyan: #2aa198;
+  --terminal-ansi-white: #eee8d5;
+  --terminal-ansi-bright-black: #002b36;
+  --terminal-ansi-bright-red: #cb4b16;
+  --terminal-ansi-bright-green: #586e75;
+  --terminal-ansi-bright-yellow: #657b83;
+  --terminal-ansi-bright-blue: #839496;
+  --terminal-ansi-bright-magenta: #6c71c4;
+  --terminal-ansi-bright-cyan: #93a1a1;
+  --terminal-ansi-bright-white: #fdf6e3;
+
+  /* Semantic */
+  --danger-base: #dc322f;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #efa09e;
+  --danger-text-light: #f1a281;
+  --success-soft: color-mix(in srgb, #859900 18%, transparent);
+  --success-border: color-mix(in srgb, #859900 32%, transparent);
+  --success-text: #b3ce00;
+  --info-soft: color-mix(in srgb, #268bd2 16%, transparent);
+  --info-border: color-mix(in srgb, #268bd2 28%, transparent);
+  --info-text: #8dc4ea;
+  --info-teal: #33c2b7;
+  --brand-purple: #a8abdc;
+
+  /* Status */
+  --status-ok: #a1b900;
+  --status-warning: #e4ad00;
+  --status-error: #f1a07e;
+  --status-suspended: #668088;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #268bd2;
+  --usage-series-3: #2aa198;
+  --usage-series-4: #6f74c5;
+  --usage-series-5: #b58900;
+}
+
+:root[data-color-theme="solarized-light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #fdf6e3;
+  --bg-sidebar: #eee8d5;
+  --bg-panel: #fdf6e3;
+  --bg-panel-elevated: #fdf6e3;
+  --bg-panel-hover: #eee8d5;
+  --bg-row-active: #f5e7d2;
+  --bg-input: #fdf6e3;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text */
+  --text-primary: #3c4c50;
+  --text-secondary: #45545a;
+  --text-muted: #4f5a5a;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 89%, transparent);
+
+  /* Accent */
+  --accent: #9a3911;
+  --accent-strong: #933610;
+  --accent-bright: #8e3510;
+  --accent-on: #fdf6e3;
+  --button-text: #fdf6e3;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #fdf6e3;
+  --terminal-fg: #5f747c;
+  --terminal-cursor: #586e75;
+  --terminal-cursor-accent: #fdf6e3;
+  --terminal-ansi-black: #073642;
+  --terminal-ansi-red: #dc322f;
+  --terminal-ansi-green: #859900;
+  --terminal-ansi-yellow: #b58900;
+  --terminal-ansi-blue: #268bd2;
+  --terminal-ansi-magenta: #d33682;
+  --terminal-ansi-cyan: #2aa198;
+  --terminal-ansi-white: #eee8d5;
+  --terminal-ansi-bright-black: #002b36;
+  --terminal-ansi-bright-red: #cb4b16;
+  --terminal-ansi-bright-green: #586e75;
+  --terminal-ansi-bright-yellow: #657b83;
+  --terminal-ansi-bright-blue: #839496;
+  --terminal-ansi-bright-magenta: #6c71c4;
+  --terminal-ansi-bright-cyan: #93a1a1;
+  --terminal-ansi-bright-white: #fdf6e3;
+
+  /* Semantic */
+  --danger-base: #dc322f;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #891917;
+  --danger-text-light: #7b2d0d;
+  --success-soft: color-mix(in srgb, #859900 18%, transparent);
+  --success-border: color-mix(in srgb, #859900 32%, transparent);
+  --success-text: #4a5500;
+  --info-soft: color-mix(in srgb, #268bd2 16%, transparent);
+  --info-border: color-mix(in srgb, #268bd2 28%, transparent);
+  --info-text: #17537e;
+  --info-teal: #1a625d;
+  --brand-purple: #474db1;
+
+  /* Status */
+  --status-ok: #525e00;
+  --status-warning: #6b5100;
+  --status-error: #86320f;
+  --status-suspended: #768787;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #2689cf;
+  --usage-series-3: #26928a;
+  --usage-series-4: #6c71c4;
+  --usage-series-5: #a67e00;
+}
+
+:root[data-color-theme="gray-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #2b2b2e;
+  --bg-sidebar: #252528;
+  --bg-panel: #2b2b2e;
+  --bg-panel-elevated: #323236;
+  --bg-panel-hover: #37373b;
+  --bg-row-active: #403832;
+  --bg-input: #232326;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #ececee;
+  --text-secondary: #c8c8cb;
+  --text-muted: #bcbcc0;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 71%, transparent);
+
+  /* Accent */
+  --accent: #ffa95a;
+  --accent-strong: #ffb169;
+  --accent-bright: #ffb876;
+  --accent-on: #1c1c1e;
+  --button-text: #1c1c1e;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #2b2b2e;
+  --terminal-fg: #d4d4d8;
+  --terminal-cursor: #ffb35c;
+  --terminal-cursor-accent: #2b2b2e;
+
+  /* Semantic */
+  --danger-base: #ff9b8a;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #ffdbd4;
+  --danger-text-light: #f9ddd7;
+  --success-soft: color-mix(in srgb, #8fd6a5 18%, transparent);
+  --success-border: color-mix(in srgb, #8fd6a5 32%, transparent);
+  --success-text: #bce7c9;
+  --info-soft: color-mix(in srgb, #93bff7 16%, transparent);
+  --info-border: color-mix(in srgb, #93bff7 28%, transparent);
+  --info-text: #c0dafa;
+  --info-teal: #5fd3cc;
+  --brand-purple: #c6b3ee;
+
+  /* Status */
+  --status-ok: #8fd6a5;
+  --status-warning: #e8c48b;
+  --status-error: #f4c5ba;
+  --status-suspended: #8a8a90;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #7aa7e0;
+  --usage-series-3: #4fb8a8;
+  --usage-series-4: #b59be0;
+  --usage-series-5: #d8c07a;
+}
+
+:root[data-color-theme="gray-light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #ebebed;
+  --bg-sidebar: #e2e2e5;
+  --bg-panel: #eeeef0;
+  --bg-panel-elevated: #f6f6f7;
+  --bg-panel-hover: #dddde1;
+  --bg-row-active: #e6e0dd;
+  --bg-input: #f6f6f7;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text */
+  --text-primary: #1d1d20;
+  --text-secondary: #45454b;
+  --text-muted: #515157;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 69%, transparent);
+
+  /* Accent */
+  --accent: #8a3900;
+  --accent-strong: #843700;
+  --accent-bright: #7f3400;
+  --accent-on: #ffffff;
+  --button-text: #ffffff;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #ebebed;
+  --terminal-fg: #2e2e33;
+  --terminal-cursor: #d96d00;
+  --terminal-cursor-accent: #ebebed;
+
+  /* Semantic */
+  --danger-base: #8a1f12;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #70190f;
+  --danger-text-light: #612918;
+  --success-soft: color-mix(in srgb, #1a5c2e 18%, transparent);
+  --success-border: color-mix(in srgb, #1a5c2e 32%, transparent);
+  --success-text: #164c26;
+  --info-soft: color-mix(in srgb, #1a4f8a 16%, transparent);
+  --info-border: color-mix(in srgb, #1a4f8a 28%, transparent);
+  --info-text: #174478;
+  --info-teal: #095c58;
+  --brand-purple: #5e4294;
+
+  /* Status */
+  --status-ok: #1a5c2e;
+  --status-warning: #6c4300;
+  --status-error: #75321d;
+  --status-suspended: #7b7b82;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #2f64a8;
+  --usage-series-3: #11806f;
+  --usage-series-4: #7250b0;
+  --usage-series-5: #8a6d12;
+}
+
+:root[data-color-theme="blue-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #0f1724;
+  --bg-sidebar: #0b121d;
+  --bg-panel: #111a28;
+  --bg-panel-elevated: #162133;
+  --bg-panel-hover: #1a2740;
+  --bg-row-active: #18283e;
+  --bg-input: #0c1420;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #e4ecf8;
+  --text-secondary: #b6c4da;
+  --text-muted: #95a7c2;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 61%, transparent);
+
+  /* Accent */
+  --accent: #5baaff;
+  --accent-strong: #64afff;
+  --accent-bright: #6db4ff;
+  --accent-on: #06111f;
+  --button-text: #06111f;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #0f1724;
+  --terminal-fg: #c9d6ea;
+  --terminal-cursor: #7fbcff;
+  --terminal-cursor-accent: #0f1724;
+
+  /* Semantic */
+  --danger-base: #ffa99a;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #ffc1b6;
+  --danger-text-light: #f8c5b9;
+  --success-soft: color-mix(in srgb, #8fdcab 18%, transparent);
+  --success-border: color-mix(in srgb, #8fdcab 32%, transparent);
+  --success-text: #8fdcab;
+  --info-soft: color-mix(in srgb, #a8cdff 16%, transparent);
+  --info-border: color-mix(in srgb, #a8cdff 28%, transparent);
+  --info-text: #a8cdff;
+  --info-teal: #5fd8d2;
+  --brand-purple: #bba6f2;
+
+  /* Status */
+  --status-ok: #8fdcab;
+  --status-warning: #e9bd6a;
+  --status-error: #f4a693;
+  --status-suspended: #63728c;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #5aa9ff;
+  --usage-series-3: #4fb8a8;
+  --usage-series-4: #b59be0;
+  --usage-series-5: #d8c07a;
+}
+
+:root[data-color-theme="blue-light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #f3f7fc;
+  --bg-sidebar: #e8eff8;
+  --bg-panel: #f6f9fd;
+  --bg-panel-elevated: #ffffff;
+  --bg-panel-hover: #e1e9f4;
+  --bg-row-active: #e5ecf7;
+  --bg-input: #ffffff;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text */
+  --text-primary: #0f223b;
+  --text-secondary: #33486a;
+  --text-muted: #475976;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 69%, transparent);
+
+  /* Accent */
+  --accent: #1c56ac;
+  --accent-strong: #1b52a5;
+  --accent-bright: #1a4f9f;
+  --accent-on: #ffffff;
+  --button-text: #ffffff;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #f3f7fc;
+  --terminal-fg: #1f2f47;
+  --terminal-cursor: #1f5fbf;
+  --terminal-cursor-accent: #f3f7fc;
+
+  /* Semantic */
+  --danger-base: #9a2516;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #7b1e12;
+  --danger-text-light: #6c2e1b;
+  --success-soft: color-mix(in srgb, #1a5c2e 18%, transparent);
+  --success-border: color-mix(in srgb, #1a5c2e 32%, transparent);
+  --success-text: #18532a;
+  --info-soft: color-mix(in srgb, #174a8c 16%, transparent);
+  --info-border: color-mix(in srgb, #174a8c 28%, transparent);
+  --info-text: #17498a;
+  --info-teal: #0a6360;
+  --brand-purple: #5e3fa3;
+
+  /* Status */
+  --status-ok: #1a5c2e;
+  --status-warning: #744800;
+  --status-error: #7e3520;
+  --status-suspended: #77859c;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #2f64a8;
+  --usage-series-3: #11806f;
+  --usage-series-4: #7250b0;
+  --usage-series-5: #8a6d12;
 }
 
 /* =============================================================}

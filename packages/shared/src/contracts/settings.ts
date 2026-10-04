@@ -308,15 +308,33 @@ export const DESKTOP_UI_LAYOUT_DEFAULTS: {
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
 
 /**
- * Color palette, a separate axis from theme. Theme picks the scheme (dark,
- * light, or follow the OS); palette picks whose colors fill it. Tangerine is
- * PwrAgent's own palette. Catppuccin renders Mocha in the dark scheme and
- * Latte in the light one, so "system" + "catppuccin" follows the OS between
- * the two flavors.
+ * Color themes, chosen per scheme. `theme` above picks the scheme (dark,
+ * light, or follow the OS); the dark and light theme pick the colors each
+ * scheme renders in, independently, so "system" can follow the OS between
+ * any dark theme and any light theme. Tangerine is PwrAgent's own pair and
+ * the default for both.
  */
-export const DESKTOP_APPEARANCE_PALETTES = ["tangerine", "catppuccin"] as const;
-export type DesktopAppearancePalette = (typeof DESKTOP_APPEARANCE_PALETTES)[number];
-export const DESKTOP_APPEARANCE_PALETTE_DEFAULT: DesktopAppearancePalette = "tangerine";
+export const DESKTOP_DARK_THEMES = [
+  "tangerine-dark",
+  "catppuccin-mocha",
+  "solarized-dark",
+  "gray-dark",
+  "blue-dark",
+] as const;
+export type DesktopDarkTheme = (typeof DESKTOP_DARK_THEMES)[number];
+export const DESKTOP_DARK_THEME_DEFAULT: DesktopDarkTheme = "tangerine-dark";
+
+export const DESKTOP_LIGHT_THEMES = [
+  "tangerine-light",
+  "catppuccin-latte",
+  "solarized-light",
+  "gray-light",
+  "blue-light",
+] as const;
+export type DesktopLightTheme = (typeof DESKTOP_LIGHT_THEMES)[number];
+export const DESKTOP_LIGHT_THEME_DEFAULT: DesktopLightTheme = "tangerine-light";
+
+export type DesktopColorTheme = DesktopDarkTheme | DesktopLightTheme;
 
 export const DESKTOP_APPEARANCE_DENSITIES = [
   "mission-control",
@@ -696,7 +714,8 @@ export type DesktopIntegratedTerminalSettingsSnapshot = {
 
 export type DesktopAppearanceSnapshot = {
   theme: DesktopSettingsValue<DesktopAppearanceTheme>;
-  palette: DesktopSettingsValue<DesktopAppearancePalette>;
+  darkTheme: DesktopSettingsValue<DesktopDarkTheme>;
+  lightTheme: DesktopSettingsValue<DesktopLightTheme>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1466,7 +1485,8 @@ export type DesktopSettingsConfigPatch = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
-      palette?: DesktopAppearancePalette;
+      darkTheme?: DesktopDarkTheme;
+      lightTheme?: DesktopLightTheme;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1742,7 +1762,8 @@ export type DesktopConfigBootstrapSnapshot = {
   configError?: string;
   appearance: {
     theme: DesktopAppearanceTheme;
-    palette: DesktopAppearancePalette;
+    darkTheme: DesktopDarkTheme;
+    lightTheme: DesktopLightTheme;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -2297,12 +2318,12 @@ export function isDesktopAppearanceTheme(
   return DESKTOP_APPEARANCE_THEMES.includes(value as DesktopAppearanceTheme);
 }
 
-export function isDesktopAppearancePalette(
-  value: string,
-): value is DesktopAppearancePalette {
-  return DESKTOP_APPEARANCE_PALETTES.includes(
-    value as DesktopAppearancePalette,
-  );
+export function isDesktopDarkTheme(value: string): value is DesktopDarkTheme {
+  return DESKTOP_DARK_THEMES.includes(value as DesktopDarkTheme);
+}
+
+export function isDesktopLightTheme(value: string): value is DesktopLightTheme {
+  return DESKTOP_LIGHT_THEMES.includes(value as DesktopLightTheme);
 }
 
 export function isDesktopAppearanceDensity(

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -13,6 +16,7 @@ vi.mock("../settings/appearance-bootstrap", () => ({
 }));
 
 import {
+  COLOR_THEME_QUIT_DIALOG_PALETTES,
   QUIT_DIALOG_PALETTES,
   buildQuitConfirmationHtml,
   type QuitBlockerItem,
@@ -194,5 +198,43 @@ describe("quit dialog HTML", () => {
 
     expect(html).not.toContain('<img src=x onerror="alert(1)">');
     expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+  });
+});
+
+describe("quit dialog color theme palettes", () => {
+  it("matches every color theme to its app.css block", () => {
+    // The dialog is a `data:` window with no app.css, so these literals are
+    // copies. Hold them to the source.
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../renderer/src/styles/app.css",
+      ),
+      "utf8",
+    );
+    const fields = {
+      bg: "bg-app",
+      sidebar: "bg-sidebar",
+      surface: "bg-panel-elevated",
+      rowActive: "bg-row-active",
+      panelHover: "bg-panel-hover",
+      textPrimary: "text-primary",
+      textSecondary: "text-secondary",
+      textMuted: "text-muted",
+      accent: "accent",
+      accentBright: "accent-bright",
+      buttonText: "button-text",
+    } as const;
+    for (const [theme, palette] of Object.entries(COLOR_THEME_QUIT_DIALOG_PALETTES)) {
+      const block = css.match(
+        new RegExp(`:root\\[data-color-theme="${theme}"\\] \\{([\\s\\S]*?)\\n\\}`),
+      )?.[1];
+      expect(block, theme).toBeDefined();
+      for (const [field, token] of Object.entries(fields)) {
+        expect(block, `${theme}: ${field}`).toContain(
+          `--${token}: ${palette[field as keyof typeof fields]};`,
+        );
+      }
+    }
   });
 });

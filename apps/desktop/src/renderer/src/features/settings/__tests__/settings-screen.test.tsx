@@ -29,7 +29,9 @@ import type {
 } from "@pwragent/shared";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
@@ -160,7 +162,8 @@ function createSnapshot(
       },
       appearance: {
         theme: { value: "system", source: "default" },
-        palette: { value: "tangerine", source: "default" },
+        darkTheme: { value: "tangerine-dark", source: "default" },
+        lightTheme: { value: "tangerine-light", source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
@@ -622,6 +625,62 @@ describe("SettingsScreen segmented pending", () => {
       fireEvent.click(within(theme).getAllByRole("radio")[0]!);
       expect(document.querySelector(".settings-pending")).toBeNull();
     }
+  });
+});
+
+describe("SettingsScreen color themes", () => {
+  it("picks the dark and light themes independently", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    // Each picker offers only its own scheme's themes.
+    const dark = screen.getByRole("combobox", { name: "Dark theme" });
+    const light = screen.getByRole("combobox", { name: "Light theme" });
+    expect(selectOptionLabels(dark)).toEqual([
+      "Tangerine",
+      "Catppuccin Mocha",
+      "Solarized Dark",
+      "Gray",
+      "Blue",
+    ]);
+    expect(selectOptionLabels(light)).toEqual([
+      "Tangerine",
+      "Catppuccin Latte",
+      "Solarized Light",
+      "Gray",
+      "Blue",
+    ]);
+
+    chooseSelectOption(dark, "Solarized Dark");
+    expect(controller.setDarkTheme).toHaveBeenCalledWith("solarized-dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+
+    chooseSelectOption(light, /Blue/);
+    expect(controller.setLightTheme).toHaveBeenCalledWith("blue-light");
   });
 });
 

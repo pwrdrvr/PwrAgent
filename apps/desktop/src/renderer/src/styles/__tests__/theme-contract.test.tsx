@@ -2441,24 +2441,27 @@ describe("Tangerine Terminal theme contract", () => {
   });
 });
 
-describe("Catppuccin palette contract", () => {
-  const mochaBlock = extractTokensForSelector(css, ':root[data-palette="catppuccin"]');
-  const latteBlock = extractTokensForSelector(
-    css,
-    ':root[data-theme="light"][data-palette="catppuccin"]',
-  );
-  // The cascade each flavor actually renders with. Latte matches the Mocha
-  // block too (data-palette alone), so Mocha sits between the light scheme
-  // block and Latte's own overrides.
-  const flavors = {
-    mocha: { ...extractRootTokens(css), ...mochaBlock },
-    latte: {
-      ...extractRootTokens(css),
-      ...extractTokensForSelector(css, ':root[data-theme="light"]'),
-      ...mochaBlock,
-      ...latteBlock,
-    },
-  };
+describe("color theme contract", () => {
+  const DARK_THEMES = ["catppuccin-mocha", "solarized-dark", "gray-dark", "blue-dark"];
+  const LIGHT_THEMES = ["catppuccin-latte", "solarized-light", "gray-light", "blue-light"];
+  const blockFor = (theme: string): Record<string, string> =>
+    extractTokensForSelector(css, `:root[data-color-theme="${theme}"]`);
+  // The cascade each theme actually renders with: the scheme block it
+  // overrides, then its own block.
+  const themes = Object.fromEntries([
+    ...DARK_THEMES.map((theme) => [
+      theme,
+      { ...extractRootTokens(css), ...blockFor(theme) },
+    ]),
+    ...LIGHT_THEMES.map((theme) => [
+      theme,
+      {
+        ...extractRootTokens(css),
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+        ...blockFor(theme),
+      },
+    ]),
+  ]) as Record<string, Record<string, string>>;
 
   const hexToRgb = (hex: string): number[] =>
     [0, 2, 4].map((start) => Number.parseInt(expandHex(hex).slice(start, start + 2), 16));
@@ -2523,30 +2526,55 @@ describe("Catppuccin palette contract", () => {
       contrastRatio(paint(theme, theme[token], background), background)),
   );
 
-  it("overrides in Latte every token the Mocha block sets", () => {
-    // Otherwise a Mocha value leaks into Latte through the shared
-    // data-palette match.
-    expect(Object.keys(latteBlock).sort()).toEqual(Object.keys(mochaBlock).sort());
-    expect(extractRuleBody(css, ':root[data-palette="catppuccin"]'))
-      .toContain("color-scheme: dark;");
-    expect(extractRuleBody(css, ':root[data-theme="light"][data-palette="catppuccin"]'))
-      .toContain("color-scheme: light;");
+  it("gives every theme in the shared enums a token block, and no others", () => {
+    // The ids in app.css are the ids the settings write; a typo on either
+    // side would render Tangerine with no error anywhere.
+    const blocks = [...css.matchAll(/\n:root\[data-color-theme="([a-z0-9-]+)"\] \{/g)]
+      .map((match) => match[1])
+      .sort();
+    expect(blocks).toEqual([...DARK_THEMES, ...LIGHT_THEMES].sort());
+  });
+
+  it("sets the full themeable token set in every block", () => {
+    // A token a block leaves out falls through to Tangerine, so a theme
+    // that forgets one paints a stray Tangerine color. Catppuccin Mocha is
+    // the reference set; ANSI colors are optional (Tangerine's are kept).
+    const required = Object.keys(blockFor("catppuccin-mocha"))
+      .filter((token) => !token.startsWith("terminal-ansi-"))
+      .sort();
+    for (const theme of [...DARK_THEMES, ...LIGHT_THEMES]) {
+      const tokens = Object.keys(blockFor(theme));
+      expect(required.filter((token) => !tokens.includes(token)), theme).toEqual([]);
+    }
+  });
+
+  it("matches each block's color-scheme to the scheme it renders in", () => {
+    for (const theme of DARK_THEMES) {
+      expect(extractRuleBody(css, `:root[data-color-theme="${theme}"]`), theme)
+        .toContain("color-scheme: dark;");
+    }
+    for (const theme of LIGHT_THEMES) {
+      expect(extractRuleBody(css, `:root[data-color-theme="${theme}"]`), theme)
+        .toContain("color-scheme: light;");
+    }
   });
 
   it("leaves the theme-neutral tokens to the scheme blocks", () => {
-    for (const neutral of [
-      "shadow-base",
-      "shadow-popover",
-      "star-map-float-border",
-      "star-map-float-shadow",
-      "chat-column-max",
-    ]) {
-      expect(mochaBlock, neutral).not.toHaveProperty(neutral);
+    for (const theme of [...DARK_THEMES, ...LIGHT_THEMES]) {
+      for (const neutral of [
+        "shadow-base",
+        "shadow-popover",
+        "star-map-float-border",
+        "star-map-float-shadow",
+        "chat-column-max",
+      ]) {
+        expect(blockFor(theme), `${theme}: ${neutral}`).not.toHaveProperty(neutral);
+      }
     }
   });
 
   it("keeps every text token at AA on the lowest-contrast surface it can land on", () => {
-    for (const [flavor, theme] of Object.entries(flavors)) {
+    for (const [name, theme] of Object.entries(themes)) {
       const backgrounds = textBackgrounds(theme);
       for (const token of [
         "text-primary",
@@ -2568,7 +2596,7 @@ describe("Catppuccin palette contract", () => {
         "savings-even",
         "savings-over",
       ]) {
-        expect(worstCase(theme, token, backgrounds), `${flavor}: ${token}`)
+        expect(worstCase(theme, token, backgrounds), `${name}: ${token}`)
           .toBeGreaterThanOrEqual(4.5);
       }
       for (const [text, soft] of [
@@ -2577,13 +2605,13 @@ describe("Catppuccin palette contract", () => {
         ["info-text", "info-soft"],
       ]) {
         const tinted = backgrounds.map((background) => paint(theme, theme[soft], background));
-        expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${flavor}: ${text}`)
+        expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${name}: ${text}`)
           .toBeGreaterThanOrEqual(4.5);
       }
       for (const fill of ["accent", "accent-strong", "accent-bright"]) {
         expect(
           contrastRatio(theme["button-text"], paint(theme, theme[fill], "#000000")),
-          `${flavor}: button-text on ${fill}`,
+          `${name}: button-text on ${fill}`,
         ).toBeGreaterThanOrEqual(4.5);
       }
       expect(
@@ -2591,36 +2619,57 @@ describe("Catppuccin palette contract", () => {
           paint(theme, theme["terminal-fg"], theme["terminal-bg"]),
           theme["terminal-bg"],
         ),
-        `${flavor}: terminal-fg`,
+        `${name}: terminal-fg`,
       ).toBeGreaterThanOrEqual(4.5);
     }
   });
 
-  it("holds the floor tokens at the lowest compliant contrast", () => {
-    // The palette is deliberately low-contrast: the floor tokens sit just
+  it("keeps the text and accent ladders in emphasis order", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const backgrounds = textBackgrounds(theme);
+      const ratio = (token: string): number => worstCase(theme, token, backgrounds);
+      expect(ratio("text-primary"), name).toBeGreaterThan(ratio("text-secondary"));
+      expect(ratio("text-secondary"), name).toBeGreaterThan(ratio("text-muted"));
+      expect(ratio("accent-bright"), name).toBeGreaterThan(ratio("accent-strong"));
+      expect(ratio("accent-strong"), name).toBeGreaterThan(ratio("accent"));
+    }
+  });
+
+  it("holds Catppuccin's floor tokens at the lowest compliant contrast", () => {
+    // Catppuccin is deliberately low-contrast: its floor tokens sit just
     // above AA instead of drifting up when someone retunes them by eye.
-    for (const [flavor, theme] of Object.entries(flavors)) {
+    for (const name of ["catppuccin-mocha", "catppuccin-latte"]) {
+      const theme = themes[name];
       const backgrounds = textBackgrounds(theme);
       for (const token of ["text-muted", "accent"]) {
-        expect(worstCase(theme, token, backgrounds), `${flavor}: ${token}`)
+        expect(worstCase(theme, token, backgrounds), `${name}: ${token}`)
           .toBeLessThan(4.7);
       }
     }
   });
 
-  it("keeps the text ladder in emphasis order", () => {
-    for (const [flavor, theme] of Object.entries(flavors)) {
-      const backgrounds = textBackgrounds(theme);
-      const ratio = (token: string): number => worstCase(theme, token, backgrounds);
-      expect(ratio("text-primary"), flavor).toBeGreaterThan(ratio("text-secondary"));
-      expect(ratio("text-secondary"), flavor).toBeGreaterThan(ratio("text-muted"));
-      expect(ratio("accent-bright"), flavor).toBeGreaterThan(ratio("accent-strong"));
-      expect(ratio("accent-strong"), flavor).toBeGreaterThan(ratio("accent"));
-    }
+  it("keeps Solarized's canonical canvas and terminal", () => {
+    // Text moves off Solarized's values only as far as AA needs; the
+    // surfaces and the terminal stay the published palette.
+    expect(blockFor("solarized-dark")).toMatchObject({
+      "bg-app": "#002b36",
+      "bg-sidebar": "#073642",
+      "terminal-bg": "#002b36",
+      "terminal-fg": "#839496",
+      "terminal-ansi-red": "#dc322f",
+      "terminal-ansi-blue": "#268bd2",
+    });
+    expect(blockFor("solarized-light")).toMatchObject({
+      "bg-app": "#fdf6e3",
+      "bg-sidebar": "#eee8d5",
+      "terminal-bg": "#fdf6e3",
+      "terminal-ansi-red": "#dc322f",
+      "terminal-ansi-blue": "#268bd2",
+    });
   });
 
   it("keeps Latte terminal ANSI colors readable on its canvas", () => {
-    const theme = flavors.latte;
+    const theme = themes["catppuccin-latte"];
     for (const color of ["red", "green", "yellow", "blue", "magenta", "cyan", "white"]) {
       expect(
         contrastRatio(theme[`terminal-ansi-${color}`], theme["terminal-bg"]),
