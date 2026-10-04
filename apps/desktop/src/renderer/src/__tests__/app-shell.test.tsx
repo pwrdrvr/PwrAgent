@@ -4283,12 +4283,12 @@ describe("App", () => {
 
   it("copies the selected thread's local diagnostics from the Help menu push", async () => {
     let copyDiagnosticsListener: (() => void) | undefined;
-    const copyText = vi.fn(async () => undefined);
+    const copyRichText = vi.fn(async () => undefined);
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: ownerApi({
-        copyText,
+        copyRichText,
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -4379,19 +4379,22 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenCalledWith(expect.stringContaining([
-        "Thread ID: thread-1",
-        "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
-        "Provider/backend: codex",
-        "Thread title: Fix handoff project paths and diagnostics",
-        "PwrAgent version: 1.2.3",
-        "PwrAgent build: Packaged",
-        "PwrAgent profile: work",
-        "Main process PID: 4100",
-        "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
-        "Codex profile path: /Users/operator/.codex/profiles/work",
-      ].join("\n")));
+      expect(copyRichText).toHaveBeenCalledWith({
+        text: expect.stringContaining([
+          "Thread ID: thread-1",
+          "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
+          "Provider/backend: codex",
+          "Thread title: Fix handoff project paths and diagnostics",
+          "PwrAgent version: 1.2.3",
+          "PwrAgent build: Packaged",
+          "PwrAgent profile: work",
+          "Main process PID: 4100",
+          "Renderer process PID: 4101",
+          "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+          "Codex profile path: /Users/operator/.codex/profiles/work",
+        ].join("\n")),
+        html: expect.stringContaining("<pre><code>Collected at (UTC):"),
+      });
     });
   });
 

@@ -2085,12 +2085,12 @@ describe("SettingsScreen", () => {
   });
 
   it("copies Troubleshooting diagnostics with the profile, PIDs, and log path", async () => {
-    const copyText = vi.fn(async () => undefined);
+    const copyRichText = vi.fn(async () => undefined);
 
     render(
       <SettingsScreen
         desktopApi={{
-          copyText,
+          copyRichText,
           readAppMetadata: vi.fn(async () => ({
             applicationName: "PwrAgent",
             applicationVersion: "1.2.3",
@@ -2123,24 +2123,28 @@ describe("SettingsScreen", () => {
     fireEvent.click(copyButton);
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenLastCalledWith([
-        "Collected at (UTC): 2026-09-14T04:30:45.123Z",
-        "PwrAgent version: 1.2.3",
-        "PwrAgent build: Packaged",
-        "PwrAgent profile: work",
-        "Main process PID: 4100",
-        "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
-      ].join("\n"));
+      expect(copyRichText).toHaveBeenLastCalledWith({
+        text: [
+          "Collected at (UTC): 2026-09-14T04:30:45.123Z",
+          "PwrAgent version: 1.2.3",
+          "PwrAgent build: Packaged",
+          "PwrAgent profile: work",
+          "Main process PID: 4100",
+          "Renderer process PID: 4101",
+          "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+        ].join("\n"),
+        html: expect.stringContaining("<pre><code>Collected at (UTC):"),
+      });
     });
 
     timestamp.mockReturnValue("2026-09-14T04:35:00.000Z");
     fireEvent.click(copyButton);
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenLastCalledWith(expect.stringContaining(
-        "Collected at (UTC): 2026-09-14T04:35:00.000Z",
-      ));
+      expect(copyRichText).toHaveBeenLastCalledWith({
+        text: expect.stringContaining("Collected at (UTC): 2026-09-14T04:35:00.000Z"),
+        html: expect.stringContaining("<pre><code>Collected at (UTC): 2026-09-14T04:35:00.000Z"),
+      });
     });
   });
 

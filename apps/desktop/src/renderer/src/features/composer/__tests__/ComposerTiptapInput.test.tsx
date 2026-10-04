@@ -9,6 +9,7 @@ import {
   getPositionAtDocumentDraftIndex,
 } from "../ComposerTiptapInput";
 import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
+import { copyTextAsCodeBlock } from "../../../lib/copy-text";
 
 afterEach(() => {
   cleanup();
@@ -679,6 +680,43 @@ describe("ComposerTiptapInput", () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText(/https:\/\/example\.com/)).toBeInTheDocument();
+  });
+
+  it.each(["both formats", "HTML only"])("pastes copied diagnostics as one literal code block (%s)", async (format) => {
+    const text = [
+      "Collected at (UTC): 2026-10-03T23:47:21.871Z",
+      "Thread ID: fixture-thread",
+      "Thread title: Check <widget> & `markup`",
+      "Project directory/worktree path: /Users/fixture/worktrees/demo",
+      "PwrAgent profile: fixture",
+      "Main process PID: 4100",
+      "PwrAgent log path: /logs/fixture.main.log",
+    ].join("\n");
+    const copyRichText = vi.fn(async (_payload: { text: string; html: string }) => undefined);
+    await copyTextAsCodeBlock(text, { copyRichText });
+    const clipboard = copyRichText.mock.calls[0][0];
+    const { container, onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: format === "both formats" ? ["text/plain", "text/html"] : ["text/html"],
+        getData: (type: string) => type === "text/html"
+          ? clipboard.html
+          : type === "text/plain" && format === "both formats" ? clipboard.text : "",
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(`\`\`\`\n${text}\n\`\`\``, []);
+    });
+    const editor = container.querySelector(".composer-tiptap-input__editor");
+    expect(editor?.querySelectorAll("pre")).toHaveLength(1);
+    expect(editor?.querySelector("pre code")?.textContent).toBe(text);
+    expect(editor?.querySelector("widget")).toBeNull();
+    expect(editor?.querySelectorAll("p").length).toBeLessThanOrEqual(1);
   });
 
   it("pastes HTML anchors into the markdown composer as text instead of link marks", async () => {

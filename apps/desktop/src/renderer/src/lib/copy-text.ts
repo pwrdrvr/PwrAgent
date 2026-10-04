@@ -82,6 +82,17 @@ export async function copyTextWithHtml(
   await copyText(text, desktopApi);
 }
 
+export async function copyTextAsCodeBlock(
+  text: string,
+  desktopApiOverride?: Pick<DesktopApi, "copyText" | "copyRichText">,
+): Promise<void> {
+  const escapedText = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  await copyTextWithHtml(text, `<pre><code>${escapedText}</code></pre>`, desktopApiOverride);
+}
+
 export function formatCopyTooltip(path: string, maxLength = 72): string {
   return `${elideMiddle(path, maxLength)}\nClick to copy to clipboard`;
 }
