@@ -57,7 +57,7 @@ const TOKEN_MISER_SUMMARY_SCHEMA = {
 const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["disposition", "summary", "usefulDetails"],
+  required: ["disposition", "summary", "usefulDetails", "members"],
   properties: {
     disposition: TOKEN_MISER_SUMMARY_SCHEMA.properties.disposition,
     summary: TOKEN_MISER_SUMMARY_SCHEMA.properties.summary,
@@ -68,9 +68,10 @@ const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["toolCallId", "summary"],
+        required: ["toolCallId", "disposition", "summary"],
         properties: {
           toolCallId: { type: "string", minLength: 1, maxLength: 500 },
+          disposition: TOKEN_MISER_SUMMARY_SCHEMA.properties.disposition,
           summary: { type: "string", minLength: 1, maxLength: 1_500 },
         },
       },
@@ -88,11 +89,13 @@ const TOKEN_MISER_SYSTEM_PROMPT = [
   "If a sed result is primarily repetitive data or repeated error/log messages rather than coherent requested source, choose summarize. Do not confuse repeated code syntax, similar tests, or diff context with redundant noise.",
   "Choose summarize for broad file/reference discovery listings, repetitive matches without material source context, verbose logs, test/build execution output, and noisy failures. Test source is source code; it is not test execution output.",
   "For mixed results containing useful source or diffs plus search listings or diagnostics, choose pass_through unless the source itself clearly satisfies the substantial-miss or degenerate-result exception. Minor noise or failed companion commands do not justify discarding useful source.",
-  "For a targeted local symbol, type, or schema lookup, retain the exact matching identifiers and file paths needed for that lookup. An irrelevant companion web search does not justify dropping useful local matches. In grouped results, keep each member's findings and outcome attributable to that member; if a requested member needs exact content, choose pass_through for the group.",
+  "Always pass through reads of AGENTS.md, CLAUDE.md, SKILL.md, theme/style guides, pr-style.md, pull request and issue templates, and GitHub Actions workflow/action definitions. Companion searches, missing parent intent, and truncation do not remove this protection. In grouped results with per-member dispositions, pass through the protected member; otherwise preserve the whole mixed result.",
+  "For a targeted local symbol, type, or schema lookup, retain the exact matching identifiers and file paths needed for that lookup. An irrelevant companion web search does not justify dropping useful local matches. In grouped results, keep each member's findings and outcome attributable to that member; choose pass_through for each member that needs exact content, while evaluating its companions independently.",
   "For other exact query results or focused diagnostics whose details are material, choose pass_through. When uncertain whether source should be summarized, choose pass_through.",
   "The host returns the original bytes itself for pass_through. Never copy or reconstruct the full output in your response.",
   "For pass_through, keep the audit summary under 50 words and omit usefulDetails unless one short fact explains the decision.",
   "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that materially describe the result.",
+  "For UI accessibility output, retain exact control IDs together with their labels and current states for controls relevant to the requested interaction. Do not replace actionable controls with a prose description; choose pass_through if you cannot retain the needed controls faithfully.",
   "Preserve reported read ranges, missing coverage, truncation, and incomplete query results. A partial excerpt is not a complete read, and an absent match in an inspected range is not proof of global absence. For measurements, preserve values, units, denominators, run or experiment labels, configuration, exit status, and caveats that limit the conclusion.",
   "Do not recommend actions, searches, reads, refinements, or next steps.",
   "Do not repeat long passages or give general advice. Keep the complete response under 450 words.",
@@ -530,8 +533,12 @@ export class TokenMiserService {
       readInvocations: capturedGroup && !capturedGroup.overflowed && !capturedGroup.uncaptured
         ? [...capturedGroup.members.values()]
         : [],
+      protectedReadInvocations: [...(capturedGroup?.members.values() ?? [])],
     });
-    if (deterministicPassThrough) {
+    const completeGroup = !hasRetrieval && capturedGroup !== undefined
+      && capturedGroup.members.size > 0 && !capturedGroup.overflowed && !capturedGroup.uncaptured;
+    const hasProtectedMembers = [...(capturedGroup?.members.values() ?? [])].some(isProtectedFileRead);
+    if (deterministicPassThrough && !(completeGroup && hasProtectedMembers)) {
       await this.recordPassThroughDecision({
         threadId: payload.thread_id,
         turnId: payload.turn_id,
@@ -547,7 +554,7 @@ export class TokenMiserService {
       return undefined;
     }
 
-    if (!hasRetrieval && capturedGroup?.members.size && !capturedGroup.overflowed) {
+    if (completeGroup) {
       const grouped = await this.prepareGroupedCodeModeOutput(
         payload,
         output,
@@ -561,6 +568,18 @@ export class TokenMiserService {
       if (grouped) {
         await recordObservation();
         return grouped;
+      }
+      // A failed member reduction must never fall back to summarizing the
+      // entire protected cell through the generic helper.
+      if (deterministicPassThrough) {
+        await this.recordPassThroughDecision({
+          threadId: payload.thread_id, turnId: payload.turn_id,
+          toolUseId: payload.call_id, toolName: "Code Mode", output,
+          signal: options.signal, baselineParentTokenCap,
+          summary: deterministicPassThrough, diagnostic,
+        });
+        await recordObservation();
+        return undefined;
       }
     }
 
@@ -687,21 +706,32 @@ export class TokenMiserService {
     TokenMiserPreparedCodeModeReduction | "passed_through" | undefined
   > {
     const members = [...group.members.values()];
+    const evaluatedMembers = members.filter((member) => !isProtectedFileRead(member));
+    if (!evaluatedMembers.length) {
+      await this.recordPassThroughDecision({
+        threadId: payload.thread_id, turnId: payload.turn_id,
+        toolUseId: payload.call_id, toolName: "Code Mode", output: outerOutput,
+        signal: options.signal, baselineParentTokenCap: payload.max_output_tokens,
+        summary: { summary: "Protected file reads passed through unchanged.", usefulDetails: [] },
+        diagnostic: { input: payload.script, invocations: members },
+      });
+      return "passed_through";
+    }
     const generated = await this.options.generateSummary({
       helper: "token_miser_evaluation",
       system: TOKEN_MISER_SYSTEM_PROMPT,
-      prompt: buildGroupedCodeModeSummaryPrompt(payload, members),
+      prompt: buildGroupedCodeModeSummaryPrompt(payload, evaluatedMembers),
       schema: TOKEN_MISER_GROUP_SUMMARY_SCHEMA,
       timeoutMs: this.summaryTimeoutMs,
     });
     if (options.signal?.aborted || generated.status !== "ok") {
       return undefined;
     }
-    const parsed = parseGroupSummary(generated.object, members);
+    const parsed = parseGroupSummary(generated.object, evaluatedMembers);
     if (!parsed) {
       return undefined;
     }
-    if (parsed.disposition === "pass_through") {
+    const passThrough = async () => {
       await this.recordPassThroughDecision({
         threadId: payload.thread_id,
         turnId: payload.turn_id,
@@ -714,28 +744,41 @@ export class TokenMiserService {
         generated,
         diagnostic: { input: payload.script, invocations: members },
       });
-      return "passed_through";
-    }
-    const groupMembers: TokenMiserGroupMemberSummary[] = members.map((member) => ({
+      return "passed_through" as const;
+    };
+    const summarizedMembers = evaluatedMembers.filter((member) =>
+      (parsed.dispositions.get(member.toolCallId) ?? parsed.disposition) === "summarize"
+    );
+    if (!summarizedMembers.length) return passThrough();
+    const summarizedIds = new Set(summarizedMembers.map((member) => member.toolCallId));
+    const preservedOutput = members.filter((member) => !summarizedIds.has(member.toolCallId))
+      .map((member) => `Tool result ${member.toolCallId} (${member.toolName}):\n${member.output}`)
+      .join("\n\n");
+    const separator = preservedOutput ? "\n\n" : "";
+    const groupMembers: TokenMiserGroupMemberSummary[] = summarizedMembers.map((member) => ({
       objectId: randomUUID(),
       toolCallId: member.toolCallId,
       toolName: member.toolName,
       summary: parsed.members.get(member.toolCallId) ?? "Completed tool result.",
     }));
-    const replacement = buildCappedGroupReplacement({
+    const summarizedReplacement = buildCappedGroupReplacement({
       groupId: payload.cell_id,
       groupMembers,
       maxBytes:
-        payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+        payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN
+        - payload.model_visible_overhead_characters
+        - this.codeModeActionableStateCharacters(payload)
+        - utf8ByteLength(preservedOutput + separator),
       summary: parsed.summary.summary,
     });
-    if (!replacement) {
-      return undefined;
+    if (!summarizedReplacement) {
+      return passThrough();
     }
+    const replacement = `${summarizedReplacement}${separator}${preservedOutput}`;
     const storedOutput: TokenMiserGroupStoredOutput = {
       version: 1,
       groupId: payload.cell_id,
-      members: members.map((member, index) => ({
+      members: summarizedMembers.map((member, index) => ({
         objectId: groupMembers[index]!.objectId,
         toolCallId: member.toolCallId,
         toolName: member.toolName,
@@ -794,7 +837,7 @@ export class TokenMiserService {
       > TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES
     ) {
       await staged.discard();
-      return undefined;
+      return passThrough();
     }
     return { response, staged: serviceStaged };
   }
@@ -1072,10 +1115,8 @@ function hasActionableNonterminalState(member: CapturedGroupMember): boolean {
   );
 }
 
-const INSTRUCTION_FILE_PATTERN = /(?:^|[/\\])(?:AGENTS|CLAUDE|SKILL)\.md\b|(?:^|[/\\])UI-THEME\.md\b|(?:^|[/\\])[^\s"']*style-guide\.md\b/i;
-const EXACT_READ_PATTERN = /\b(?:cat|head|tail|sed|readFile|read_text_file|read_file)\b/i;
-const BROAD_DISCOVERY_PATTERN = /\b(?:find|grep|rg|search)\b/i;
-const READ_INTENT_PATTERN = /\b(?:read|inspect|review|load|follow)\b[\s\S]{0,120}\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b|\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b[\s\S]{0,120}\b(?:read|inspect|review|load|follow)\b/i;
+const INSTRUCTION_FILE_PATTERN = /(?:^|[/\\\s"'`])(?:(?:AGENTS|CLAUDE|SKILL|UI-THEME|pr-style|pull_request_template|[^/\\\s"'`]*style-guide)\.md|action\.ya?ml|(?:\.github[/\\]+(?:PULL_REQUEST_TEMPLATE|ISSUE_TEMPLATE|workflows)|(?:\.github[/\\]+)?workflow-templates)[/\\]+[^\s"'`;&|]+\.(?:md|ya?ml))(?=$|[\s"'`\\;,)}\]])/i;
+const PROTECTED_READ_PATTERN = /\b(?:cat|head|tail|sed|readFile|read_text_file|read_file)\b[^;\n|&]*/gi;
 const AUDIT_READ_ACTION_PATTERN = /\b(?:read|inspect|review|audit|summarize)\b/i;
 const AUDIT_INPUT_PATTERN = /\b(?:archive|transcript|payload|chunk|historical records?)\b/i;
 // One literal file read, without shell expansion, pipelines, or companion
@@ -1097,21 +1138,39 @@ function isLiteralFileRead(invocation: { toolName: string; toolInput: string }):
   }
 }
 
+function containsProtectedFileRead(request: string): boolean {
+  try {
+    const input = JSON.parse(request) as { cmd?: unknown; command?: unknown } | null;
+    const command = input?.cmd ?? input?.command;
+    if (typeof command === "string") request = command;
+  } catch { /* Code Mode scripts are not JSON tool inputs. */ }
+  // Match the file in the read itself, rather than an unrelated companion
+  // search. Code Mode scripts can contain several commands or nested calls.
+  return [...request.matchAll(PROTECTED_READ_PATTERN)]
+    .some((match) => INSTRUCTION_FILE_PATTERN.test(match[0]));
+}
+
+function isProtectedFileRead(invocation: { toolName: string; toolInput: string }): boolean {
+  if (/(?:^|[._])(?:readFile|read_text_file|read_file)$/i.test(invocation.toolName)) {
+    return INSTRUCTION_FILE_PATTERN.test(invocation.toolInput);
+  }
+  return containsProtectedFileRead(invocation.toolInput);
+}
+
 function classifyDeterministicPassThrough(params: {
   parentIntent?: string;
   request: string;
   outputBytes: number;
   maxOutputBytes: number;
   readInvocations: readonly { toolName: string; toolInput: string }[];
+  protectedReadInvocations?: readonly { toolName: string; toolInput: string }[];
 }): TokenMiserSummary | undefined {
   if (
-    EXACT_READ_PATTERN.test(params.request)
-    && !BROAD_DISCOVERY_PATTERN.test(params.request)
-    && INSTRUCTION_FILE_PATTERN.test(params.request)
-    && (!params.parentIntent || READ_INTENT_PATTERN.test(params.parentIntent))
+    containsProtectedFileRead(params.request)
+    || (params.protectedReadInvocations ?? params.readInvocations).some(isProtectedFileRead)
   ) {
     return {
-      summary: "A deliberate exact instruction-file read passed through unchanged by policy.",
+      summary: "A protected instruction, guidance, or template read passed through unchanged by policy.",
       usefulDetails: [],
     };
   }
@@ -1181,7 +1240,10 @@ function buildGroupedCodeModeSummaryPrompt(
     `Group ID: ${payload.cell_id}`,
     `Script status: ${payload.script_status}`,
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
-    "Return one factual group summary and one factual summary for every toolCallId.",
+    "Return one factual group summary and an independent disposition and factual summary for every listed toolCallId.",
+    "Choose pass_through for a member needing exact content and summarize for a noisy companion. The host copies pass-through members exactly; do not reproduce their output.",
+    "Evaluate only the listed members. Other calls in the script may be protected and returned exactly by the host; their policies do not force pass_through for the listed companions.",
+    "Set the group disposition to summarize when any listed member is summarized, otherwise pass_through.",
     "Broad parallel probes are expected. Do not recommend serial follow-up operations.",
     `Member IDs: ${members.map((member) => member.toolCallId).join(", ")}`,
   ].join("\n");
@@ -1482,17 +1544,19 @@ function parseGroupSummary(
   disposition: TokenMiserDecision["disposition"];
   summary: TokenMiserSummary;
   members: Map<string, string>;
+  dispositions: Map<string, TokenMiserDecision["disposition"]>;
 } | undefined {
   const decision = parseDecision(value);
   if (!decision || !value || typeof value !== "object") {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  if (decision.disposition === "pass_through") {
+  if (decision.disposition === "pass_through" && record.members === undefined) {
     return {
       disposition: decision.disposition,
       summary: decision.summary,
       members: new Map(),
+      dispositions: new Map(),
     };
   }
   if (!Array.isArray(record.members)) {
@@ -1500,6 +1564,7 @@ function parseGroupSummary(
   }
   const allowedIds = new Set(capturedMembers.map((member) => member.toolCallId));
   const members = new Map<string, string>();
+  const dispositions = new Map<string, TokenMiserDecision["disposition"]>();
   for (const entry of record.members) {
     if (!entry || typeof entry !== "object") {
       return undefined;
@@ -1508,17 +1573,25 @@ function parseGroupSummary(
     if (
       typeof member.toolCallId !== "string"
       || !allowedIds.has(member.toolCallId)
+      || members.has(member.toolCallId)
       || typeof member.summary !== "string"
       || !member.summary.trim()
+      || (
+        member.disposition !== undefined
+        && member.disposition !== "pass_through" && member.disposition !== "summarize"
+      )
     ) {
       return undefined;
     }
     members.set(member.toolCallId, member.summary.trim());
+    if (member.disposition === "pass_through" || member.disposition === "summarize") {
+      dispositions.set(member.toolCallId, member.disposition);
+    }
   }
   if (members.size !== capturedMembers.length) {
     return undefined;
   }
-  return { disposition: decision.disposition, summary: decision.summary, members };
+  return { disposition: decision.disposition, summary: decision.summary, members, dispositions };
 }
 
 function capturedGroupKey(
