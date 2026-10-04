@@ -32716,12 +32716,20 @@ button.pricing-token-miser__folded:focus-visible {
   object-fit: cover;
 }
 
-/* The Star Map card's row: no chevron (the card has no room to open a full
-   message; Edit puts it in the composer instead), and a size down to match
-   the compact composer below it. */
+/* The Star Map card's row: a size down to match the compact composer below
+   it. The opened message stays inside the band, which scrolls. */
 .composer__queued--message.composer__queued--compact {
   min-height: 28px;
-  padding: 0 8px;
+}
+
+.composer__queued--compact .composer__queued-disclosure::after {
+  height: 28px;
+}
+
+.composer__queued--compact > .queued-message-inspector {
+  max-height: 180px;
+  margin-left: 28px;
+  font-size: 12px;
 }
 
 .composer__queued--compact .composer__queued-line {

@@ -1877,6 +1877,40 @@ describe("StarMapChatCard start-turn queue handling", () => {
     expect(screen.queryByLabelText("Queued message")).not.toBeNull();
   });
 
+  it("opens a queued message's full text from the row's chevron", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const { row } = await queueOne({ readQueuedTurn });
+    const chevron = within(row).getByRole("button", { name: "View full message" });
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(chevron);
+    });
+
+    expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "t-local",
+      queueEntryId: "queue-owner-1",
+    }));
+    const region = await within(row).findByRole("region", {
+      name: "Full queued message",
+    });
+    await waitFor(() => {
+      expect(region.textContent).toContain("wait your turn, in full");
+    });
+    const hide = within(row).getByRole("button", { name: "Hide message" });
+    expect(hide.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.click(hide);
+    });
+    expect(within(row).queryByRole("region")).toBeNull();
+  });
+
   it("takes a queued message back into the composer, after the current draft", async () => {
     const readQueuedTurn = vi.fn(async () => ({
       queueEntryId: "queue-owner-1",

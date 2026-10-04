@@ -20,6 +20,7 @@ import {
   type NavigationLaunchpadFileAttachment,
   type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
+  type ReadQueuedTurnResponse,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
 import { CelestialIcon, PencilIcon, TrashIcon } from "../../icons";
@@ -36,7 +37,10 @@ import {
   type CompactComposerDraftRestore,
   type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
-import { QueuedRowIconButton } from "../composer/QueuedMessageInspector";
+import {
+  QueuedMessageInspector,
+  QueuedRowIconButton,
+} from "../composer/QueuedMessageInspector";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
@@ -1237,6 +1241,31 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [composerScopeKey, desktopApi, federationTarget, ownedComposerDraftStore],
   );
 
+  /** The owner's full input; a row not yet acknowledged shows its own copy. */
+  const readQueuedMessage = useCallback(
+    async (queued: ComposerQueuedTurnSnapshot): Promise<ReadQueuedTurnResponse> => {
+      if (!queued.queueEntryId || queued.backendQueuePending) {
+        return {
+          queueEntryId: queued.id,
+          contentHash: "",
+          input: queued.input ?? [{ type: "text", text: queued.text }],
+        };
+      }
+      if (!desktopApi?.readQueuedTurn) {
+        throw new Error(
+          "Full queued message content is unavailable. The message remains queued.",
+        );
+      }
+      return await desktopApi.readQueuedTurn({
+        backend: thread.source,
+        threadId: thread.id,
+        queueEntryId: queued.queueEntryId,
+        ...(federationTarget ? { federationTarget } : {}),
+      });
+    },
+    [desktopApi, federationTarget, thread.id, thread.source],
+  );
+
   const deleteQueuedTurn = useCallback(
     async (queued: ComposerQueuedTurnSnapshot) => {
       setSendError(undefined);
@@ -1877,7 +1906,33 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
               className="composer__queued composer__queued--message composer__queued--compact"
               key={queued.id}
             >
-              <div className="composer__queued-line">
+              <QueuedMessageInspector
+                load={() => readQueuedMessage(queued)}
+                desktopApi={desktopApi}
+                actions={
+                  <>
+                    <QueuedRowIconButton
+                      label="Edit"
+                      disabled={queued.backendQueuePending || composerDisabled}
+                      onClick={() => {
+                        void editQueuedTurn(queued);
+                      }}
+                    >
+                      <PencilIcon size={14} />
+                    </QueuedRowIconButton>
+                    <QueuedRowIconButton
+                      label="Delete"
+                      tone="danger"
+                      disabled={queued.backendQueuePending}
+                      onClick={() => {
+                        void deleteQueuedTurn(queued);
+                      }}
+                    >
+                      <TrashIcon size={14} />
+                    </QueuedRowIconButton>
+                  </>
+                }
+              >
                 <span className="composer__queued-label">
                   {queued.backendQueuePending
                     ? "Sending…"
@@ -1893,28 +1948,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 >
                   {queued.title ?? queuedTurnPreview(queued)}
                 </span>
-              </div>
-              <div className="composer__queued-actions">
-                <QueuedRowIconButton
-                  label="Edit"
-                  disabled={queued.backendQueuePending || composerDisabled}
-                  onClick={() => {
-                    void editQueuedTurn(queued);
-                  }}
-                >
-                  <PencilIcon size={14} />
-                </QueuedRowIconButton>
-                <QueuedRowIconButton
-                  label="Delete"
-                  tone="danger"
-                  disabled={queued.backendQueuePending}
-                  onClick={() => {
-                    void deleteQueuedTurn(queued);
-                  }}
-                >
-                  <TrashIcon size={14} />
-                </QueuedRowIconButton>
-              </div>
+              </QueuedMessageInspector>
             </div>
           ))}
         </div>
