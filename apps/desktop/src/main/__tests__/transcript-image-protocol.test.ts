@@ -5,6 +5,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -812,6 +813,50 @@ describe("transcript image protocol", () => {
     // Copied, not referenced: it survives the other profile's removal.
     expect(adoptedPath).toBe(path.join(activeRoot, cacheName));
     await expect(readFile(adoptedPath)).resolves.toEqual(svg);
+  });
+
+  it("refuses a symlinked sibling snapshot and scans profiles once per read", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const secretPath = path.join(tempDir, "outside-any-root.svg");
+    await writeFile(secretPath, '<svg xmlns="http://www.w3.org/2000/svg"><text>secret</text></svg>');
+    const message = {
+      id: "message-symlinked-snapshot",
+      role: "assistant" as const,
+      text: [
+        `[One](${path.join(tempDir, "swept", "one.svg")})`,
+        `[Two](${path.join(tempDir, "swept", "two.svg")})`,
+      ].join(" "),
+    };
+    const otherProfileRoot = path.join(tempDir, "symlinking-profile-thread-images");
+    await mkdir(otherProfileRoot, { recursive: true });
+    const cacheName = `markdown-${createHash("sha256")
+      .update(`${message.id}\0${pathToFileURL(path.join(tempDir, "swept", "one.svg")).toString()}`)
+      .digest("hex")}.svg`;
+    await symlink(secretPath, path.join(otherProfileRoot, cacheName));
+    const resolveSiblingRoots = vi.fn(async () => [otherProfileRoot]);
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex" as const,
+        fetchedAt: 1,
+        threadId: "thread-symlinked-snapshot",
+        replay: {
+          entries: [{ type: "message" as const, ...message }],
+          messages: [message],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      {
+        resolveRoot: () => path.join(tempDir, "active-profile-thread-images"),
+        resolveSiblingRoots,
+      },
+      { includeTemporaryImageRoots: true },
+    );
+
+    expect((response.replay.messages[0]?.parts ?? []).some((part) => part.type === "image")).toBe(false);
+    expect(resolveSiblingRoots).toHaveBeenCalledTimes(1);
   });
 
   it("does not adopt a snapshot taken for a different message", async () => {

@@ -11,7 +11,7 @@ import type {
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, mkdir, open, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -163,6 +163,29 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile,
 };
 
+/** One read is one thread, so every missed image shares one profile scan. */
+function withMemoizedSiblingRoots(
+  deps: TranscriptImageMaterializerDependencies,
+): TranscriptImageMaterializerDependencies {
+  const resolveSiblingRoots = deps.resolveSiblingRoots;
+  if (!resolveSiblingRoots) {
+    return deps;
+  }
+  const roots = new Map<string, Promise<readonly string[]>>();
+  return {
+    ...deps,
+    resolveSiblingRoots: (request) => {
+      const key = `${request.backend}\0${request.threadId}`;
+      let resolved = roots.get(key);
+      if (!resolved) {
+        resolved = resolveSiblingRoots(request).catch(() => []);
+        roots.set(key, resolved);
+      }
+      return resolved;
+    },
+  };
+}
+
 function createApprovedLocalImageRootResolver(
   options: TranscriptImageMaterializationOptions,
 ): ApprovedLocalImageRootResolver {
@@ -233,7 +256,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
   dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
   options: TranscriptImageMaterializationOptions = {},
 ): Promise<AppServerReadThreadResponse> {
-  const deps = { ...defaultMaterializerDependencies, ...dependencies };
+  const deps = withMemoizedSiblingRoots({ ...defaultMaterializerDependencies, ...dependencies });
   const resolveApprovedLocalImageRoots = createApprovedLocalImageRootResolver(options);
   const materializedFileWrites = new Map<string, Promise<void>>();
   const fetchedLoopbackImages = new Map<
@@ -841,6 +864,14 @@ async function readCachedMarkdownLinkedImage(
   };
 }
 
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    return (await lstat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 async function isUsableCachedImage(filePath: string): Promise<boolean> {
   try {
     const fileStat = await stat(filePath);
@@ -865,17 +896,24 @@ async function adoptSiblingCachedMarkdownLinkedImage(
   deps: TranscriptImageMaterializerDependencies,
 ): Promise<boolean> {
   const request = { backend: response.backend, threadId: response.threadId };
-  const siblingRoots = await deps.resolveSiblingRoots?.(request).catch(() => []) ?? [];
+  const siblingRoots = await deps.resolveSiblingRoots?.(request) ?? [];
   for (const siblingRoot of siblingRoots) {
     const siblingPath = path.join(siblingRoot, path.basename(filePath));
-    if (!await isUsableCachedImage(siblingPath)) {
+    // A regular file only: a symlink here could name any file on disk, and
+    // the copy would launder it past the protocol's root containment.
+    if (!await isRegularFile(siblingPath) || !await isUsableCachedImage(siblingPath)) {
       continue;
     }
+    // Staged and renamed, so a concurrent read never finds a partial copy at
+    // the cache path and serves it as complete.
+    const stagingPath = `${filePath}.${process.pid}.${Date.now()}.adopting`;
     try {
       await deps.mkdir(path.dirname(filePath), { recursive: true });
-      await copyFile(siblingPath, filePath);
+      await copyFile(siblingPath, stagingPath);
+      await rename(stagingPath, filePath);
       return true;
     } catch {
+      await rm(stagingPath, { force: true }).catch(() => undefined);
       return false;
     }
   }

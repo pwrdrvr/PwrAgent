@@ -422,6 +422,8 @@ export function useViewportTooltip(options: {
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
   const pointerRef = useRef<TooltipPoint | null>(null);
+  /** The showing tooltip's bounds, for the per-frame writes that skip state. */
+  const pointerBoundsRef = useRef<TooltipState["horizontalBounds"]>(undefined);
   const pointerFrameRef = useRef<number | null>(null);
   const [delayPending, setDelayPending] = useState(false);
 
@@ -609,6 +611,7 @@ export function useViewportTooltip(options: {
     }
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
+    pointerBoundsRef.current = horizontalBounds;
     setState({
       content,
       horizontalBounds,
@@ -652,7 +655,7 @@ export function useViewportTooltip(options: {
       const { left, top } = pointerTooltipPosition(
         tooltipElement.getBoundingClientRect(),
         latest,
-        undefined,
+        pointerBoundsRef.current,
       );
       tooltipElement.style.left = `${left}px`;
       tooltipElement.style.top = `${top}px`;
@@ -841,7 +844,9 @@ export function useViewportTooltip(options: {
   };
 }
 
-/** Beside the cursor, flipped above it near the bottom edge, and kept on screen. */
+/** Beside the cursor, flipped to its left near the right edge and above it
+ *  near the bottom, and kept on screen. Flipping, not clamping: a clamped
+ *  tooltip slides under the pointer and covers what it points at. */
 function pointerTooltipPosition(
   rect: { width: number; height: number },
   point: TooltipPoint,
@@ -855,7 +860,11 @@ function pointerTooltipPosition(
       horizontalBounds?.right ?? window.innerWidth - VIEWPORT_PADDING,
     ) - rect.width,
   );
-  const left = Math.min(maxLeft, Math.max(minLeft, point.x + POINTER_OFFSET_X));
+  const right = point.x + POINTER_OFFSET_X;
+  const left = Math.min(
+    maxLeft,
+    Math.max(minLeft, right <= maxLeft ? right : point.x - POINTER_OFFSET_X - rect.width),
+  );
   const viewportTop = portalViewportTop();
   const viewportBottom = window.innerHeight - VIEWPORT_PADDING;
   const below = point.y + POINTER_OFFSET_Y;

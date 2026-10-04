@@ -867,10 +867,10 @@ describe("pointer-anchored viewport tooltips", () => {
     // 680 + 20 + 24 would cross the bottom edge, so it goes above the cursor.
     expect(tooltip.style.top).toBe(`${680 - 10 - 24}px`);
 
-    // Near the right edge it stays on screen.
-    fireEvent.mouseMove(target, { clientX: 990, clientY: 100 });
+    // Near the right edge it flips to the cursor's left, off the pointer.
+    fireEvent.mouseMove(target, { clientX: 950, clientY: 100 });
     act(() => frames.shift()?.(0));
-    expect(tooltip.style.left).toBe(`${1000 - 12 - 120}px`);
+    expect(tooltip.style.left).toBe(`${950 - 12 - 120}px`);
   });
 
   it("stops following once an ordinary tooltip replaces it", async () => {
