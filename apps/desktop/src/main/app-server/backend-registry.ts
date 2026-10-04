@@ -965,6 +965,7 @@ type BackendClient = {
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
+  resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
@@ -31848,8 +31849,9 @@ export class DesktopBackendRegistry {
           throw new Error("This backend does not support live voice.");
         }
         // A running coding task already owns the loaded thread and catalog.
-        // An idle thread must prove its initial catalog in this process or
-        // refresh it before realtime delegates. A thread ID alone is not proof.
+        // Ordinary idle threads need current-process proof or catalog refresh.
+        // The remembered director can restore its PwrAgent-created catalog;
+        // its discovery tool resolves current definitions at dispatch time.
         const running = this.threadHasActiveTurn(threadId);
         const ownsReservation = !this.reservedCodexStartThreadIds.has(threadId);
         if (ownsReservation) this.reservedCodexStartThreadIds.add(threadId);
@@ -31880,8 +31882,19 @@ export class DesktopBackendRegistry {
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
-              const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
-              await client.refreshThreadTools!({ ...admission, dynamicTools });
+              const manager = this.overlayStore.getVoiceManagerThread?.();
+              if (manager?.backend === "codex" && manager.threadId === threadId
+                && !overlay?.codexEnvironmentRuntime
+                && client.resumeNativeVoiceThread
+                && !(await this.supportsTokenMiserDynamicToolsResume(client))) {
+                // Stock resume restores creation-time tools across restarts.
+                // Do not manufacture current-catalog proof from this result.
+                // Custom execution environments still need verified refresh.
+                await client.resumeNativeVoiceThread(admission);
+              } else {
+                const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
+                await client.refreshThreadTools!({ ...admission, dynamicTools });
+              }
             }
           }
           this.nativeVoiceLeases += 1;

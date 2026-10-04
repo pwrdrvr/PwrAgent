@@ -9722,6 +9722,19 @@ export class CodexAppServerClient {
   async refreshThreadTools(params: Parameters<typeof buildThreadResumePayloads>[0] & {
     dynamicTools: CodexDynamicToolSpec[];
   }): Promise<void> {
+    await this.prepareIdleNativeVoiceThread(params);
+  }
+
+  /**
+   * Restore a PwrAgent-owned director's persisted catalog on stock Codex.
+   * This does not acknowledge or replace it with the current tool catalog.
+   * The registry restricts this path to the remembered Voice manager.
+   */
+  async resumeNativeVoiceThread(params: Omit<Parameters<CodexAppServerClient["refreshThreadTools"]>[0], "dynamicTools">): Promise<void> {
+    await this.prepareIdleNativeVoiceThread({ ...params, dynamicTools: undefined });
+  }
+
+  private async prepareIdleNativeVoiceThread(params: Parameters<typeof buildThreadResumePayloads>[0]): Promise<void> {
     await this.ensureInitialized();
     this.freshNativeVoiceThreads.delete(params.threadId);
     this.admittedNativeVoiceThreads.delete(params.threadId);
@@ -10464,6 +10477,11 @@ export class CodexAppServerClient {
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
 
+    // Resume and settings updates can mutate the loaded thread even when
+    // review/start fails. Revoke catalog admission before either request.
+    this.freshNativeVoiceThreads.delete(params.threadId);
+    this.admittedNativeVoiceThreads.delete(params.threadId);
+
     const pendingFirstTurn = this.pendingFirstTurnThreadResults.has(
       params.threadId,
     );
@@ -10527,8 +10545,6 @@ export class CodexAppServerClient {
     if (!turnId) {
       throw new Error("codex app server review/start did not return turnId");
     }
-    this.freshNativeVoiceThreads.delete(params.threadId);
-    this.admittedNativeVoiceThreads.delete(params.threadId);
     this.pendingFirstTurnThreadResults.delete(params.threadId);
     this.pendingFirstTurnShellEnvironments.delete(params.threadId);
 
