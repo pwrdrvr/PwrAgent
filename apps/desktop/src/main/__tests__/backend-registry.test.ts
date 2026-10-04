@@ -41271,6 +41271,74 @@ script = "printf setup"
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")]?.map((entry) => entry.queueEntryId)).toEqual(["held-one", "held-two"]);
   });
 
+  it("groups cross-thread send and steer admissions while a previous steer is dispatching", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient" } },
+    } });
+    let release!: () => void;
+    const dispatch = new Promise<void>((resolve) => { release = resolve; });
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) => {
+      if (steers.mock.calls.length === 1) await dispatch;
+      return { threadId: params.threadId, turnId: params.expectedTurnId };
+    });
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", input: [{ type: "text", text: "Already dispatching" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "first" } },
+    });
+    await waitForCondition(() => steers.mock.calls.length === 1);
+    const sends = await Promise.all(Array.from({ length: 20 }, async (_, index) => {
+      const source = { backend: "codex" as const, threadId: `sender-${index}` };
+      const input: AppServerTurnInputItem[] = [{ type: "text", text: `Evidence ${index}` }];
+      correspondenceStore.record({ id: `message-${index}`, source, destination: { backend: "codex", threadId: "recipient" }, input, createdAt: 1_000 + index, state: "sending" });
+      const messageOrigin = { kind: "agent" as const, sourceThread: { ...source, title: `Sender ${index}`, messageId: `message-${index}` } };
+      return index % 2 === 0
+        ? await registry.submitTurn({ backend: "codex", threadId: "recipient", input, messageOrigin })
+        : await registry.controlActiveTurn({ operation: "steer", backend: "codex", threadId: "recipient", requestId: `request-${index}`, expectedTurnId: "active-recipient", input, messageOrigin });
+    }));
+    const snapshot = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")];
+    expect(snapshot).toHaveLength(1);
+    const queueEntryId = snapshot![0]!.queueEntryId;
+    expect(sends).toHaveLength(20);
+    const queued = await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId });
+    const text = queued.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    for (let index = 0; index < 20; index += 1) {
+      expect(text).toContain(`Evidence ${index}`);
+      expect(text).toContain(`Sender ${index}`);
+    }
+    registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
+      input: [{ type: "text", text: "Sender 7 consolidated evidence" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
+    });
+    expect(steers.mock.calls[0]![0].input).toEqual([{ type: "text", text: "Already dispatching" }]);
+    release();
+    await waitForCondition(() => steers.mock.calls.length === 2);
+    await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.length === 0);
+    expect(codexClient.startTurnCallCount).toBe(0);
+    const delivered = steers.mock.calls[1]![0].input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    expect(delivered).toContain("Sender 7 consolidated evidence");
+    expect(delivered).not.toContain("Evidence 7");
+    expect(delivered).toContain("Evidence 19");
+    for (let index = 0; index < 20; index += 1) {
+      expect(correspondenceStore.message({ backend: "codex", threadId: `sender-${index}` }, `message-${index}`)?.text).toContain("Receiving thread started work");
+    }
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn", delivery: "new_turn",
+      input: [{ type: "text", text: "Start separate work" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(steers).toHaveBeenCalledTimes(2);
+    expect((await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn" })).input)
+      .toEqual([{ type: "text", text: "Start separate work" }]);
+    await codexClient.emit({
+      method: "turn/completed", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient", status: "completed", output: [] } },
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+  });
+
   it("consolidates only the sender's queued message without adding a turn", async () => {
     const correspondenceStore = new ThreadCorrespondenceStore();
     const codexClient = new MockBackendClient({
@@ -41681,6 +41749,7 @@ script = "printf setup"
           input: expectedInput,
         }));
       } else {
+        if (tool === "steer_thread") await waitForCondition(() => codexClient.lastSteerTurnParams !== undefined);
         const delivered = tool === "steer_thread"
           ? codexClient.lastSteerTurnParams
           : codexClient.lastStartTurnParams;
@@ -41850,11 +41919,12 @@ script = "printf setup"
         backend: "codex",
         threadId: "target-thread",
         requestId: "steer-request-1",
-        turnId: "target-turn",
-        disposition: "steered",
+        turnId: expect.stringMatching(/^thread-turn:/),
+        disposition: "queued",
         promptPreview: "Use the smaller fixture before continuing.",
       },
     });
+    await waitForCondition(() => codexClient.lastSteerTurnParams !== undefined);
     expect(codexClient.lastSteerTurnParams).toEqual({
       threadId: "target-thread",
       expectedTurnId: "target-turn",
@@ -42232,11 +42302,11 @@ script = "printf setup"
         backend: "codex",
         threadId: "target-thread",
         requestId: "steer-race",
-        turnId: "turn-1",
-        disposition: "started",
-        fallbackReason: "no_active_turn",
+        turnId: expect.stringMatching(/^thread-turn:/),
+        disposition: "queued",
       },
     });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "target-thread",
       input: [{
@@ -42255,7 +42325,7 @@ script = "printf setup"
     });
     expect(replay).toMatchObject({
       structuredContent: {
-        disposition: "started",
+        disposition: "queued",
         idempotentReplay: true,
         requestId: "steer-race",
       },

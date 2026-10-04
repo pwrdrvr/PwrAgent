@@ -403,6 +403,17 @@ pass `backend` and `model` to `create_instance_thread` without guessing. If
 the instance cannot list its backends, the projects still return and
 `backendsError` says why.
 
+Prefer `steer_thread` for cross-thread guidance. Both it and the default
+`send_message_to_thread` delivery group pending guidance at the recipient into
+one queued steer, preserving each sender, receipt time, and complete input.
+The recipient steers an active turn when supported; otherwise the batch waits
+for one follow-up turn. Once backend dispatch claims a batch, it is immutable
+and subsequent messages accumulate in the next queued steer. Group edits hold
+the entire recipient FIFO until the replacement and queue notifications finish.
+Sender replacement changes only that sender's contribution and preserves the
+other messages and queue position. Use `delivery: "new_turn"` for a distinct
+follow-up. Explicit model or execution overrides also retain separate turns.
+
 The general `send_message_to_thread` tool also routes transparently across
 federation. Remote create and search results carry cross-instance links and an
 `instanceId`; newer tool definitions pass that owner directly. PwrAgent also

@@ -227,6 +227,7 @@ export type FederatedTranscriptImageResponse = {
 
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
+  delivery?: "new_turn";
 };
 
 export type FederationReplaceQueuedMessageRequest = {

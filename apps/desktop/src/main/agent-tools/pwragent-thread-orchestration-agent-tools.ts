@@ -56,6 +56,7 @@ export type PwrAgentFederatedThreadMessageRequest = {
   threadId: SendMessageToThreadToolArgs["threadId"];
   instanceId?: SendMessageToThreadToolArgs["instanceId"];
   replaceQueueEntryId?: string;
+  delivery?: "new_turn";
   resolutionMode?: "remembered_only" | "discover_only";
   input: AppServerTurnInputItem[];
   messageOrigin: AppServerThreadMessageOrigin;
@@ -194,9 +195,9 @@ function descriptionForOperation(
     case "move_thread_workspace":
       return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated worktree. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
-      return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Batch related findings into one message. To update your own pending message, pass its queueEntryId as replaceQueueEntryId. Supply the complete consolidated prompt instead of appending another turn. Replacement preserves queue position and settings. It fails if the message is no longer pending. It never starts a new turn. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
+      return "Send guidance to another PwrAgent thread. Prefer steer_thread for cross-thread communication. Default delivery groups pending messages from all senders into one queued steer with sender and time context, steers an active turn when supported, and starts one follow-up when idle. A batch already dispatching is immutable; later messages form the next batch. Set delivery=new_turn only when a distinct new turn is required. To replace your own pending contribution, pass queueEntryId as replaceQueueEntryId with your complete consolidated prompt; other senders' messages and queue position are preserved. A replacement fails if already dispatched. Use stop_thread for urgent interruption. Find unknown targets with search_threads or read_thread. Pass instanceId for remote targets when known. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
-      return "Advise another PwrAgent thread. PwrAgent steers a matching active turn at the next tool boundary. If the target is idle or changes before admission, PwrAgent preserves the guidance. It starts a follow-up turn or queues one behind the current turn. The result disposition is steered, started, or queued, so this tool never reports a fallback as steered. Use send_message_to_thread when a distinct new turn is required and stop_thread for an urgent interruption. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same steer. This thread cannot steer itself.";
+      return "Preferred tool for cross-thread communication. PwrAgent groups pending guidance from all senders into one queued steer with sender and time context. Once a batch is dispatching, later messages accumulate in the next batch. Guidance steers a matching active turn at the next tool boundary, or starts one grouped follow-up if idle. The result disposition is steered, started, or queued. Use send_message_to_thread with delivery=new_turn for a distinct new turn and stop_thread for urgent interruption. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same steer. This thread cannot steer itself.";
     case "stop_thread":
       return "Stop the active turn on another PwrAgent thread immediately. Use this only for an urgent interruption. This tool interrupts the backend and does not queue text. The owner rejects a stale expectedTurnId. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same stop. This thread cannot stop itself.";
     case "start_review":
@@ -419,10 +420,15 @@ function inputSchemaForOperation(
             type: "string",
             description: "queueEntryId of your own pending message to replace with the complete consolidated prompt. Preserves queue position and settings. Omit model and execution settings when replacing. A missing or already started entry fails without sending another message.",
           },
+          delivery: {
+            type: "string",
+            enum: ["new_turn"],
+            description: "Omit to group guidance and prefer steering. Set new_turn only for a distinct follow-up turn. Model or execution overrides also require a distinct turn and are never merged into guidance.",
+          },
           prompt: {
             type: "string",
             description:
-              "The follow-up message to send as a new turn in the target thread.",
+              "The guidance to deliver to the target thread.",
           },
           model: { type: "string" },
           reasoningEffort: { type: "string" },
@@ -713,6 +719,7 @@ function normalizeSendMessageToThreadArgs(
   const threadId = readTrimmedString(args.threadId);
   const instanceId = readTrimmedString(args.instanceId);
   const replaceQueueEntryId = readTrimmedString(args.replaceQueueEntryId);
+  if (Object.hasOwn(args, "delivery") && args.delivery !== "new_turn") return undefined;
   if (Object.hasOwn(args, "replaceQueueEntryId") && !replaceQueueEntryId) {
     return undefined;
   }
@@ -743,6 +750,7 @@ function normalizeSendMessageToThreadArgs(
       ? { includeRemote: args.includeRemote }
       : {}),
     prompt,
+    ...(args.delivery === "new_turn" ? { delivery: "new_turn" as const } : {}),
     ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}),
     ...(readTrimmedString(args.model)
       ? { model: readTrimmedString(args.model) }
