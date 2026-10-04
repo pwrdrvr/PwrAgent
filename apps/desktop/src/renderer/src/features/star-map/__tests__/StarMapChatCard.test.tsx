@@ -2011,6 +2011,57 @@ describe("StarMapChatCard start-turn queue handling", () => {
       expect(screen.queryByLabelText("Queued message")).toBeNull();
     });
   });
+
+  it("takes a generated title and drops it when the owner replaces the input", async () => {
+    const listeners: Array<(event: AgentEvent) => void> = [];
+    const onAgentEvent = vi.fn((listener: (event: AgentEvent) => void) => {
+      listeners.push(listener);
+      return () => undefined;
+    });
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      turnId: "turn-queued",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-titled",
+      queueEntryCreatedAt: 123,
+    }));
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({ onAgentEvent, startTurn });
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+    await typeAndSend("Local work", "a long queued message");
+    const row = await screen.findByLabelText("Queued message");
+    const emit = (params: Record<string, unknown>): void => {
+      act(() => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            notification: {
+              method: "thread/turnQueue/updated",
+              params: {
+                queueEntryId: "queue-owner-titled",
+                status: "queued",
+                threadId: "t-local",
+                ...params,
+              },
+            },
+          } as AgentEvent);
+        }
+      });
+    };
+    const text = (): string =>
+      row.querySelector(".composer__queued-text")?.textContent ?? "";
+
+    emit({ displayText: "a long queued message", title: "Queued work" });
+    await waitFor(() => expect(text()).toBe("Queued work"));
+
+    emit({ displayText: "the replaced message", inputUpdated: true });
+    await waitFor(() => expect(text()).toBe("the replaced message"));
+  });
 });
 
 describe("StarMapChatCard send failures", () => {

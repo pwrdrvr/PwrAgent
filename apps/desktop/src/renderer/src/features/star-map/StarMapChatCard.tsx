@@ -445,26 +445,59 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         return;
       }
       const notification = event.notification.params as {
+        displayText?: unknown;
+        inputUpdated?: unknown;
         queueEntryId?: unknown;
         status?: unknown;
         threadId?: unknown;
+        title?: unknown;
       };
       if (
         typeof notification.threadId !== "string"
         || typeof notification.queueEntryId !== "string"
         || !agentEventMatchesThread(event, thread, notification.threadId)
-        || (
-          notification.status !== "started"
-          && notification.status !== "failed"
-          && notification.status !== "cancelled"
-          && notification.status !== "terminal"
-        )
       ) {
         return;
       }
       const current = ownedComposerDraftStore?.getQueuedTurns(
         composerScopeKey,
       ) ?? [];
+      if (notification.status === "queued" || notification.status === "held") {
+        // A title or input refresh for a row already shown. The snapshot
+        // projection keeps a title it has when a snapshot has none (the
+        // snapshot may predate the title), so a cleared title clears here,
+        // as it does in the main composer.
+        const title =
+          typeof notification.title === "string" && notification.title
+            ? notification.title
+            : undefined;
+        const inputUpdated = notification.inputUpdated === true;
+        if (!title && !inputUpdated) return;
+        let changed = false;
+        const next = current.map((queued) => {
+          if (queued.queueEntryId !== notification.queueEntryId) return queued;
+          changed = true;
+          return {
+            ...queued,
+            ...(inputUpdated && typeof notification.displayText === "string"
+              ? { text: notification.displayText }
+              : {}),
+            title,
+          };
+        });
+        if (changed) {
+          ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
+        }
+        return;
+      }
+      if (
+        notification.status !== "started"
+        && notification.status !== "failed"
+        && notification.status !== "cancelled"
+        && notification.status !== "terminal"
+      ) {
+        return;
+      }
       const next = current.filter(
         (queued) => queued.queueEntryId !== notification.queueEntryId,
       );

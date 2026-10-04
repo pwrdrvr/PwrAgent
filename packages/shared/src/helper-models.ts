@@ -93,7 +93,8 @@ export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
     label: "Instance names",
     defaultReasoningEffort: "low",
     backends: ["codex"],
-  },  {
+  },
+  {
     id: "queued_message_titles",
     label: "Queued message titles",
     defaultReasoningEffort: "low",
