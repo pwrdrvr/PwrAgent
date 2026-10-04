@@ -114,6 +114,7 @@
 - Close the application to end the command.
 - For README screenshots, run `pnpm --filter @pwragent/desktop screenshot:readme`.
 - The README screenshot command writes files under `docs/assets/screenshots/`.
+- The README itself now uses WebP captures, `docs/assets/screenshots/*.webp`, taken from the built app at 1440×900 on a Retina display with invented showcase data.
 - Read "Capturing README Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) for the complete procedure.
 - That procedure identifies the specification, fixtures, state helpers, and native capture tools.
 - The terminal or IDE that runs the screenshot test needs macOS Screen Recording permission.
@@ -158,74 +159,48 @@
 
 ## Code Formatting & Linting
 
-- Use ESLint only as a correctness linter.
-- Run `pnpm lint:eslint`.
-- The CI `Lint` job also runs these checks:
-  - `lint:sql`.
-  - `lint:codex-storage`.
-  - `lint:colors`.
-  - `licenses:check`.
-  - `typecheck`.
-  - `lint:boundaries`.
-- [`eslint.config.mjs`](eslint.config.mjs) enables the recommended TypeScript ESLint rules.
-- The renderer also uses the classic React Hooks rules.
-- The ESLint configuration has no style rules.
-- Fix all ESLint errors.
-- ESLint sets existing `no-explicit-any`, `exhaustive-deps`, and intentional patterns to `warn`.
-- CI blocks errors. CI does not block warnings.
-- Do not add style or whitespace rules to ESLint.
-- Do not use `eslint --fix` to format code.
+- Use Oxlint only as a correctness linter. Run `pnpm lint:oxlint` after edits.
+- Run `pnpm lint:oxlint:typed` for the production unbound-method check.
+  - CI always runs both passes; routine local syntax lint avoids loading types.
+  - Typed lint is uncached: imported declarations can change its results.
+  - `scripts/lint-typed.mjs` rejects typed-rule suppression comments, including
+    file-wide disables, before invoking the native typed backend. This preserves
+    the former ESLint `--no-inline-config` protection.
+- `pnpm lint:eslint` is a compatibility alias for both Oxlint passes.
+- The former ESLint configs and `lint:eslint:cached` / `lint:eslint:typed`
+  commands remain available for migration comparisons.
+- The CI `Lint` job also runs SQL, Codex-storage, colors, Electron-version,
+  license, typecheck and dependency-boundary checks.
+- `.oxlintrc.json` preserves the recommended correctness rules and classic
+  renderer React Hooks checks. `oxlint.typed.json` scopes the typed rule.
+- Fix all lint errors. Existing `no-explicit-any`, `exhaustive-deps` and
+  intentional patterns remain warnings. CI blocks errors, not warnings.
+- Do not add style or whitespace rules or use linter fixes to format code.
+- Run `pnpm typecheck` to use TypeScript 7's native compiler. The
+  `typescript-native` alias is pinned separately; TypeScript 6 remains for
+  JavaScript API consumers such as ESLint and dependency-cruiser.
+- Dependency-boundary checks run uncached so resolution configuration changes
+  always rebuild the graph.
 
 ### Unused imports and locals fail CI
 
-- `@typescript-eslint/no-unused-vars` is `"error"`, not `"warn"`.
-- `pnpm lint:eslint` is the command that fails.
-- CI runs it as the `ESLint` step of the `Lint` job in
-  [`ci.yml`](.github/workflows/ci.yml).
-- `pnpm build` does not catch this. It is `electron-vite build`, which
-  strips types through Vite and Rollup without checking them.
-- The rule exists for one defect: a refactor moves code out of a file and
-  leaves its imports behind.
-- As a warning the rule printed a line nobody had to act on. Neither ESLint
-  invocation passes `--max-warnings 0`.
-- The escape hatch is an underscore prefix.
-- Under this configuration `_x` silences an unused import, local, type alias,
-  interface, enum, class, parameter, and caught error.
-- Before you delete an unused binding, ask what it was for.
-- An unused binding is sometimes a missing call or a missing assertion.
-- The rule does not see three things. Check each by hand:
-  - A leading unused parameter. `args` defaults to `after-used`, so the rule
-    reports only a trailing one.
-  - An unused class member, including a `private readonly` constructor
-    parameter property.
-  - An export whose last importer you just removed. Grep for the symbol.
+- `typescript/no-unused-vars` is an error in the syntax pass.
+- `pnpm build` strips types and does not replace lint or typecheck.
+- An underscore prefix silences intentionally unused bindings.
+- Before deleting an unused binding, determine whether it represents a missing
+  call or assertion.
+- Check leading unused parameters, unused class members and orphaned exports
+  by hand; the syntax rule does not cover every one of these cases.
 
-#### What the ESLint globs reach
+### Lint scope
 
-- `lint:eslint:cached` runs over `packages/**/*.{ts,tsx}`,
-  `apps/*/**/*.{ts,tsx}`, and root-level `*.ts`.
-- That reaches `apps/desktop/e2e/`, `apps/desktop/scripts/`,
-  `apps/desktop/eval/`, the `apps/desktop/*.config.ts` files, and
-  `vitest.workspace.ts`.
-- No `.mjs` file is linted anywhere, including the build and CI scripts under
-  `scripts/`.
-- `lint:eslint:typed` stays on `apps/*/src/**` and `packages/**`.
-- Its own configuration matches no other path, so widening its globs would
-  lint files against no rules.
-
-#### Why this gate is not `noUnusedLocals`
-
-- `tsconfig.base.json` sets neither `noUnusedLocals` nor `noUnusedParameters`.
-- TypeScript's underscore exemption is narrower than ESLint's.
-- Measured against this repository: `_x` silences an unused import and an
-  unused parameter, and does **not** silence an unused local or an unused type
-  alias.
-- Enabling both flags would reject the existing `_`-prefixed intentionally
-  unused locals and would cost 27 fixes, measured on the current tree.
-- Fifteen of those 27 are parameter renames in the Star Map cluster tests.
-- The flags would add the first two hand checks listed above: a leading
-  unused parameter, and an unused class member.
-- They would not add the third. No tool here reports an unused export.
+- Syntax lint covers `packages/**/*.{ts,tsx}`, `apps/*/**/*.{ts,tsx}` and
+  root-level `*.ts`, including desktop E2E helpers, scripts and configs.
+- JavaScript and `.mjs` files remain outside this correctness gate.
+- Typed lint covers `apps/*/src/**` and `packages/**`, excluding tests, fixtures
+  and generated files. Its guard reads the same patterns from the typed config.
+- Keep both Oxlint configs at the repository root: relative override patterns
+  are resolved against the config location.
 
 ### Formatting
 
@@ -327,7 +302,8 @@
 
 - `mac.icon` in `apps/desktop/electron-builder.yml` points at `build/icon.icon`, an Icon Composer package, and nothing in this repo hand-builds a `.icns`. electron-builder (26.15+, pinned) compiles it with Xcode 26's `actool` into `Contents/Resources/Assets.car` + `CFBundleIconName` (what macOS 26 draws) and derives the legacy `Contents/Resources/icon.icns` + `CFBundleIconFile` (macOS 15 and earlier) from the same source. Each OS reads the format designed for it.
 - Why this is an invariant: macOS 26 auto-normalizes a legacy `.icns` it is handed *instead of* a `.icon`, and how it does so changed between 26.6.1 and 26.6.2. A `.icns` padded to Apple's 824-in-1024 template (#1918 here — the right shape for macOS 15) came out on a light plate in the Dock, Finder, and the DMG window on 26.6.2 for PwrSnap and PwrGit. With the `.icon` present the `.icns` is never opened on macOS 26. Ghostty (MIT) ships exactly this pair.
-- Regenerate with `pnpm --filter @pwragent/desktop generate:macos-app-icon`. `build/icon.png` — the 512px full-bleed master, also shipped as the `pwragent-app-icon.png` resource and used as the Windows/Linux source — stays the authored artwork. The script derives `build/icon.icon/` (the mark drawn from the geometry of `docs/design/pwragent-v2/project/assets/logo-pwragnt.svg` as a transparent, antialiased layer — the master is measured against that geometry first, so a re-export that no longer matches fails the script; the tile gradient is the package `fill`) and `build/icon-macos.png` (padded — the development Dock icon `src/main/index.ts` paints literally) from it. Do not add a `.icns` back, and do not point `mac.icon` at one.
+- Regenerate with `pnpm --filter @pwragent/desktop generate:macos-app-icon`. `build/icon.png` — the 512px full-bleed master, also shipped as the `pwragent-app-icon.png` resource and used as the Windows/Linux source — stays the authored artwork. The script derives `build/icon.icon/` (the mark drawn from the geometry of `docs/design/pwragent-v2/project/assets/logo-pwragnt.svg` as a transparent, antialiased layer — the master is measured against that geometry first, so a re-export that no longer matches fails the script; the tile gradient is the package `fill`) and `build/icon-macos.png` (padded — the development Dock icon `src/main/index.ts` paints literally before macOS 26) from it. Then run `generate:themed-dock-icons`, which renders the macOS 26 development icon and the themed Dock icons from those outputs. Do not add a `.icns` back, and do not point `mac.icon` at one.
+- A themed Dock icon (`src/main/themed-dock-icon.ts`) follows the color theme on screen (a dark tile per dark theme, a light tile per light theme; Tangerine in either scheme keeps the app's own icon) and is a runtime `app.dock.setIcon()` bitmap, and macOS 26 applies Liquid Glass only to the bundle's `.icon`, so the glass is baked in: `build/dock-icons/glass/<theme>.png` (Darwin 25+) beside the flat `build/dock-icons/<theme>.png` (macOS 15 and earlier), and the development build, which has no bundle icon, paints `build/icon-macos-glass.png` on Darwin 25+ instead of `build/icon-macos.png`. `pnpm --filter @pwragent/desktop generate:themed-dock-icons` writes the glass and flat sets by compiling a recolored copy of `build/icon.icon` with actool and rendering it through `NSWorkspace`, which draws in the Mac's current icon style; it needs macOS 26, actool 26, the Default icon style, and Reduce Transparency and Increase Contrast off, and refuses otherwise. AppKit has no alternate-icon API (Apple confirmed it on the developer forums in June 2026), so per-instance icons cannot use the system's own glass.
 - Every job that packages the mac app needs an actool 26 or newer; electron-builder hard-fails below that, and GitHub's `macos-15` image defaults to Xcode 16.4. `.github/actions/select-xcode-for-actool` finds the newest stable Xcode with actool 26+ and returns its Developer directory; `release.yml` (both macOS jobs) and `preview-build.yml` set `DEVELOPER_DIR` from it on exactly the steps that run actool — the unit tests, so the compile test in `apps/desktop/scripts/app-icon.test.mjs` runs instead of skips (that step also sets `PWRAGENT_REQUIRE_ACTOOL=1`, so on the release lane the suite fails rather than skips when the probe finds no actool 26) — and electron-builder, so the icon compile does not move `build:native:dock` (the Dock tile plug-in, built with `xcrun clang`) onto a different SDK. The sign job has no checkout, so the action rides inside the archived signing input. Locally, select an Xcode 26 (`xcode-select`, or `DEVELOPER_DIR`) before `package:dryrun`.
 - The compile test calls electron-builder's own helper (`app-builder-lib/out/util/macosIconComposer.generateAssetCatalogForIcon`), not a copied actool command line, so the two cannot drift.
 - actool's derived `.icns` carries 16, 32, 128 and 256px reps only, the same four Ghostty ships. macOS 15 upsamples the 256px rep for Finder's largest icon sizes and Quick Look, where the deleted hand-built icns had 512 and 1024. Accepted for now; an `afterPack` hook could splice larger reps rendered from `icon-macos.png` if it ever matters.

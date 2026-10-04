@@ -6,7 +6,10 @@ import { isFederationWindowWebContents } from "./window";
 /**
  * Main → renderer push: tell the main-window renderer to open the
  * Settings overlay. Triggered from the PwrAgent → Settings… menu
- * item (macOS) or Help → Settings… (Linux/Windows). Settings is an
+ * item (macOS) or File → Settings… (Linux/Windows), and from the menu
+ * items that land on one section (About, New Profile…, Manage
+ * Profiles…). `subsection` names a sub-screen within `section`.
+ * Settings is an
  * in-renderer overlay, not a separate BrowserWindow, so the main
  * process can't open it directly — it sends a message and the
  * renderer's App shell switches `mainView` to "settings".
@@ -19,7 +22,10 @@ import { isFederationWindowWebContents } from "./window";
  * the Settings overlay, so we have to dispatch to the actual main
  * window.
  */
-export function requestOpenSettings(section?: string): void {
+export function requestOpenSettings(
+  section?: string,
+  subsection?: string,
+): void {
   const focused = BrowserWindow.getFocusedWindow();
   // Remote federation windows register the main-window channels but must
   // never host the LOCAL Settings overlay — dispatch to a local window
@@ -38,7 +44,7 @@ export function requestOpenSettings(section?: string): void {
     if (focusedSubscriber) {
       // Bring the window forward in case it's behind a sibling.
       focused.show();
-      focusedSubscriber.send(WINDOW_OPEN_SETTINGS_CHANNEL, section);
+      focusedSubscriber.send(WINDOW_OPEN_SETTINGS_CHANNEL, section, subsection);
       return;
     }
   }
@@ -51,5 +57,5 @@ export function requestOpenSettings(section?: string): void {
   if (fallbackWindow && !fallbackWindow.isDestroyed()) {
     fallbackWindow.show();
   }
-  fallback.send(WINDOW_OPEN_SETTINGS_CHANNEL, section);
+  fallback.send(WINDOW_OPEN_SETTINGS_CHANNEL, section, subsection);
 }

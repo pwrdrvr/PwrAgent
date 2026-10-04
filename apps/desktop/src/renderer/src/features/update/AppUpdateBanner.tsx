@@ -52,6 +52,12 @@ export function updateCheckOutcomeNotice(
     title: copy.eyebrow,
     message: copy.message,
     tone: copy.tone,
+    ...("manualUpdate" in result && result.manualUpdate ? {
+      detail: result.manualUpdate.description,
+      facts: [{ label: "Command", value: result.manualUpdate.command }],
+      copyText: result.manualUpdate.command,
+      autoDismiss: false,
+    } : {}),
     // This is the one update surface that does NOT render `ReleaseNotesLink`:
     // a notice owns its own action buttons, so the link rides as an action
     // and shares `openReleaseNotes` instead of the markup. Omitted entirely
@@ -234,6 +240,9 @@ export function AppUpdateBanner(props: {
     if (result.status === "error") {
       setRestartError(result.message);
       setRestarting(false);
+      if (result.manualUpdate) {
+        showNoticeRef.current?.({ ...updateCheckOutcomeNotice(result), title: "Update installation failed" });
+      }
     }
   };
 

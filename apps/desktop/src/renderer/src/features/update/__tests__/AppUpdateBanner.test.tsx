@@ -14,7 +14,7 @@ import type {
 } from "../../../../../shared/app-metadata";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
-import { AppUpdateBanner } from "../AppUpdateBanner";
+import { AppUpdateBanner, updateCheckOutcomeNotice } from "../AppUpdateBanner";
 
 afterEach(() => {
   cleanup();
@@ -62,6 +62,18 @@ function progressBar(): HTMLElement | null {
 }
 
 describe("AppUpdateBanner", () => {
+  it("keeps Linux fallback instructions visible and copies only the runnable command", () => {
+    const manualUpdate = {
+      description: "Close PwrAgent and run this in a terminal.",
+      command: "curl -fL -o PwrAgent.deb https://example.test/PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const notice = updateCheckOutcomeNotice({ status: "error", message: "offline", manualUpdate });
+    expect(notice.autoDismiss).toBe(false);
+    expect(notice.detail).toBe(manualUpdate.description);
+    expect(notice.facts).toEqual([{ label: "Command", value: manualUpdate.command }]);
+    expect(notice.copyText).toBe(manualUpdate.command);
+  });
+
   it("appears when an update has been downloaded", async () => {
     renderBanner({ status: "downloaded", version: "1.2.3" });
 

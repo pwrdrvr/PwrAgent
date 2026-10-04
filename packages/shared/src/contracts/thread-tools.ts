@@ -55,7 +55,9 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "attach_thread_pull_request",
   "check_thread_pull_request_status",
   "watch_thread_pull_request",
+  "rename_current_thread",
   "mutate_thread",
+  "mark_project_read",
 ] as const;
 
 export type PwrAgentThreadInspectionOperationName =
@@ -169,6 +171,20 @@ export type ReadThreadToolArgs = {
   maxCharsPerEntry?: number;
 };
 
+export type MarkProjectReadToolArgs = {
+  /** Exact directory key from list_instance_projects; directory:<absolute path> for a checkout. */
+  projectKey: string;
+  /** Omit for this instance. No implicit cross-instance project matching. */
+  instanceId?: FederationInstanceId;
+};
+
+export type MarkProjectReadResult = {
+  projectKey: string;
+  instanceId: FederationInstanceId;
+  isLocal: boolean;
+  changedCount: number;
+};
+
 export type MutateThreadToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -211,9 +227,28 @@ export type MutateThreadToolArgs = {
    */
   unread?: boolean;
   /**
+   * `true` locks the thread: every new, queued or steered turn on it is
+   * refused, from the operator, automations, messaging, peers and agent
+   * tools, until it is unlocked. A running turn is not interrupted. `false`
+   * unlocks it and drops the note. Use it to park a thread whose worktree has
+   * been handed to another agent.
+   */
+  locked?: boolean;
+  /**
+   * Why the thread is locked, shown to the operator on the thread. Locks the
+   * thread when `locked` is omitted, and replaces the note of a thread that
+   * is already locked. Cannot be combined with `locked: false`.
+   */
+  lockNote?: string;
+  /**
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
+};
+
+export type RenameCurrentThreadToolArgs = {
+  /** Rename only the invoking PwrAgent thread, using its trusted identity. */
+  title: string;
 };
 
 export type AttachThreadPullRequestToolArgs = {
@@ -333,7 +368,9 @@ export type ThreadMutationField =
   | "project"
   | "archive"
   | "pinned"
-  | "unread";
+  | "unread"
+  | "locked"
+  | "lock_note";
 
 export type ThreadMutationChangeStatus =
   | "would_apply"
@@ -622,7 +659,9 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   attach_thread_pull_request: AttachThreadPullRequestToolArgs;
   check_thread_pull_request_status: CheckThreadPullRequestStatusToolArgs;
   watch_thread_pull_request: WatchThreadPullRequestToolArgs;
+  rename_current_thread: RenameCurrentThreadToolArgs;
   mutate_thread: MutateThreadToolArgs;
+  mark_project_read: MarkProjectReadToolArgs;
 };
 
 export type PwrAgentThreadInspectionToolArgs<
@@ -677,6 +716,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             mutation: ThreadMutationResult;
+          }
+        | {
+            projectRead: MarkProjectReadResult;
           };
     }
   | {

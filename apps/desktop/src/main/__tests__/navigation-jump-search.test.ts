@@ -5,17 +5,25 @@ import { stampRemoteNavigationQueryPage } from "../federation/federation-navigat
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 
 const owner = (id: string) => ({ label: id, target: { scope: "remote" as const, instanceId: id } });
-async function page(request: NavigationQueryRequest) {
+async function page(request: NavigationQueryRequest, title = "Navigation work") {
   const target = request.federationTarget;
   if (target?.scope !== "remote") throw new Error("Expected an explicit owner");
   const result = await new NavigationQueryStore().readPage({ scopeKey: target.instanceId, request,
     loadIndex: async () => ({ directories: [], threads: [{ id: "same-id", source: "codex",
-      title: "Navigation work", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
+      title, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
     }] }) });
   return stampRemoteNavigationQueryPage({ target, instanceLabel: target.instanceId, page: result });
 }
 
 describe("bounded navigation jump search", () => {
+  it("returns abbreviation matches from the federated owner's compact search", async () => {
+    const result = await searchNavigationOwners({ request: { query: "pWs" }, owners: [owner("lab")],
+      readPage: (request) => page(request, "PwrSuiteLab") });
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({ title: "PwrSuiteLab", ref: { ownerInstanceId: "lab" } });
+    expect(result.incomplete).toBeUndefined();
+  });
+
   it("preserves equal thread ids on different owners and publishes a fast owner independently", async () => {
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => { finish = resolve; });

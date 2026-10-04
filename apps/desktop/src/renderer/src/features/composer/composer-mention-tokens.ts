@@ -122,12 +122,29 @@ export function createComposerDirectoryToken(
   };
 }
 
+/**
+ * An instance chip reads as the machine's short name, and so does the
+ * mention the agent receives; the link's instance id is the identity. The
+ * full label rides on the chip as its `description`, for the tooltip.
+ */
 export function createComposerAtReferenceToken(
-  reference: { label: string; path?: string; kind?: string },
+  reference: { label: string; path?: string; kind?: string; shortLabel?: string },
   index: number,
 ): ComposerSkillToken {
-  const token = createComposerDirectoryToken(reference, index);
-  return reference.kind === "instance" ? { ...token, kind: "instance" } : token;
+  if (reference.kind !== "instance") {
+    return createComposerDirectoryToken(reference, index);
+  }
+  const token = createComposerDirectoryToken(
+    { label: reference.shortLabel ?? reference.label, path: reference.path },
+    index,
+  );
+  return {
+    ...token,
+    kind: "instance",
+    ...(reference.shortLabel && reference.shortLabel !== reference.label
+      ? { description: reference.label }
+      : {}),
+  };
 }
 
 // Exported for the `@`-popover / picker surfaces that mint file-reference

@@ -140,6 +140,52 @@ test("thread reply Tiptap slash review autocomplete stays open on exact command 
   }
 });
 
+test("thread reply Tiptap fork autocomplete stays plain and hints parameters in the input", async () => {
+  const app = await launchElectronApp({
+    fixturePath,
+    windowSize: { width: 1180, height: 760 },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+    const textbox = app.window.getByRole("textbox", { name: "Reply", exact: true });
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await textbox.fill("/fo");
+    const commands = app.window.getByRole("listbox", { name: "Commands" });
+    await expect(commands).toBeVisible();
+    const fork = commands.getByRole("option", { name: /\/fork/i });
+    await expect(fork).toHaveCount(1);
+    await expect(fork).toContainText("Fork a new child thread, with or without history");
+    await expect(fork).not.toContainText("--wt");
+
+    await textbox.press("Enter");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/fork ");
+    await expect(commands).toBeHidden();
+    await expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new] [--no-history]");
+    // The hint is drawn by the paragraph's ::after, outside the draft text.
+    const hint = await textbox.locator("p").last().evaluate((paragraph) => {
+      const after = getComputedStyle(paragraph, "::after");
+      return { content: after.content, text: paragraph.textContent };
+    });
+    expect(hint.content).toContain("[--wt same|new] [--no-history]");
+    expect(hint.text).toBe("/fork ");
+    await app.window.screenshot({ path: test.info().outputPath("fork-command-hint.png") });
+
+    await textbox.pressSequentially("--wt n");
+    await expect(tiptapInput).toHaveAttribute("data-inline-hint", "ew [--no-history]");
+    // Tab accepts the literal part of the hint, like a shell autosuggestion.
+    await textbox.press("Tab");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/fork --wt new ");
+    await expect(textbox).toBeFocused();
+    await expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--no-history]");
+    await expect(app.window.getByRole("button", { name: "Fork", exact: true })).toBeVisible();
+    // Picking the command inserts it; it must not submit a provider turn.
+    expect(await app.getLastStartTurn()).toBeUndefined();
+  } finally {
+    await app.close();
+  }
+});
+
 test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async () => {
   const app = await launchElectronApp({
     fixturePath,

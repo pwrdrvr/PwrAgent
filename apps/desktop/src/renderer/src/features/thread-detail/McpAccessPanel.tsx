@@ -180,30 +180,23 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
         ) : (
           <ul className="mcp-access-panel__list">
             {available?.map((connection) => {
-              const healthy =
-                connection.configured
-                && connection.state !== "reauthorization_required"
-                && connection.state !== "temporarily_unavailable";
-              const checked = props.selection.connectionIds.includes(
-                connection.id,
-              );
-              // A selected connection keeps its switch even when it breaks.
-              // Its credentials can expire after it was chosen -- or after a
-              // new thread was seeded with it by default -- and a row offering
-              // only Authorize would leave it selected with no way to drop it
-              // from inside the thread. It keeps the remedy too, beside the
-              // switch, whenever the remedy is a sign-in; a server that is
-              // only briefly away has nothing to authorize.
-              const showSwitch = healthy || checked;
               const needsSignIn =
                 !connection.configured
                 || connection.state === "disconnected"
                 || connection.state === "reauthorization_required";
-              const showAuthorize = !healthy && (!checked || needsSignIn);
+              const healthy =
+                !needsSignIn
+                && connection.state !== "temporarily_unavailable";
+              const checked = props.selection.connectionIds.includes(
+                connection.id,
+              );
+              // A signed-in connection can be selected while its server is
+              // away, just as it can on the PwrSuite tile. An expired selected
+              // connection keeps its switch so it can still be dropped.
+              const showSwitch = !needsSignIn || checked;
+              const showAuthorize = needsSignIn;
               const authorize = showAuthorize ? (
-                // An unhealthy connection keeps its row and gets the one
-                // action that can fix it. A bare disabled switch would
-                // state a problem and withhold the remedy.
+                // Authorization only remedies missing or rejected credentials.
                 <button
                   className="button button--secondary"
                   disabled={!props.onOpenSettings}

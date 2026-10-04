@@ -55,6 +55,36 @@ export function readCodexEnvironmentActionRuns(
 }
 
 /**
+ * The runs worth showing: for each action, every run still going plus only
+ * its newest finished run. Re-running an action used to leave each earlier
+ * result on screen until the operator dismissed them one by one, so coming
+ * back to a thread meant clearing three stale "exited" rows to find the one
+ * that was running. A finished run is superseded once a newer run of the
+ * same action has finished; a running one never is. Order is preserved.
+ */
+export function withoutSupersededCodexEnvironmentActionRuns(
+  runs: readonly CodexEnvironmentActionRun[],
+): CodexEnvironmentActionRun[] {
+  const newestFinishedByAction = new Map<string, CodexEnvironmentActionRun>();
+  for (const run of runs) {
+    if (run.status === "started") continue;
+    const newest = newestFinishedByAction.get(run.actionId);
+    if (!newest || finishedAt(run) >= finishedAt(newest)) {
+      newestFinishedByAction.set(run.actionId, run);
+    }
+  }
+  return runs.filter(
+    (run) =>
+      run.status === "started"
+      || newestFinishedByAction.get(run.actionId) === run,
+  );
+}
+
+function finishedAt(run: CodexEnvironmentActionRun): number {
+  return run.exitedAt ?? run.startedAt;
+}
+
+/**
  * Apply a single update to the action-runs list, capped at the configured
  * maximum. When a new run is appended and the cap is exceeded, the oldest
  * non-running entry is evicted; "started" runs are never evicted so users

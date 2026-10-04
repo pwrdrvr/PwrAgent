@@ -55,6 +55,9 @@ export function scopeDesktopApiToFederationTarget(
           federationTarget,
         })
       : undefined,
+    // Image bytes come from the viewer's own disk; a remote thread's worktree
+    // lives on its owner, so its rows keep the plain size chip.
+    readWorktreeImage: undefined,
     connectPwrSnap: undefined,
     openPwrSnap: undefined,
     openPwrSnapDownload: undefined,

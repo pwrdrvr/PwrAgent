@@ -81,6 +81,38 @@ describe("NavigationQueryPool", () => {
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
   });
 
+  it("replaces a coalesced selected detail after a branch check without rereading its queue", async () => {
+    const pool = new NavigationQueryPool();
+    const ref = { backend: "codex" as const, threadId: "branch-thread" };
+    let finishStale!: () => void;
+    let reads = 0;
+    const loadDetail = vi.fn(async () => {
+      const read = ++reads;
+      if (read === 1) await new Promise<void>((resolve) => { finishStale = resolve; });
+      return { protocol: 2 as const, ref, revision: read === 1 ? "stale" : "current",
+        readiness: "ready" as const, identity: "unresolved" as const };
+    });
+    const loadQueue = vi.fn(async () => ({
+      protocol: 2 as const, ref, revision: "queue", readiness: "ready" as const,
+      complete: true, entries: [],
+    }));
+    const detailParams = { kind: "detail" as const, consumerId: "selected", identity: "branch-thread",
+      operation: "full", ref, load: loadDetail };
+    const stale = pool.readExact(detailParams);
+    const queue = pool.readExact({ kind: "queue", consumerId: "queue", identity: "branch-thread",
+      operation: "full", ref, load: loadQueue });
+    pool.invalidateExactOwner(undefined, ref, "detail");
+    const joined = pool.readExact(detailParams);
+    finishStale();
+    await expect(stale).resolves.toMatchObject({ revision: "current" });
+    await expect(joined).resolves.toMatchObject({ revision: "current" });
+    await expect(queue).resolves.toMatchObject({ revision: "queue" });
+    expect(loadDetail).toHaveBeenCalledTimes(2);
+    expect(loadQueue).toHaveBeenCalledTimes(1);
+    pool.release("selected");
+    pool.release("queue");
+  });
+
   it("replaces a pre-event query before satisfying a post-event joined refresh", async () => {
     const pool = new NavigationQueryPool();
     let finish!: (value: NavigationQueryPage) => void;

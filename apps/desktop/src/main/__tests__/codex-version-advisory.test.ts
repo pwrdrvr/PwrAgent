@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_MINIMUM_RECOMMENDED_VERSION,
-  buildCodexVersionAdvisory,
-  classifyCodexInstaller,
   isCodexVersionBelowMinimum,
   parseCodexVersionCore,
+} from "@pwragent/shared";
+import {
+  buildCodexVersionAdvisory,
+  classifyCodexInstaller,
 } from "../settings/codex-version-advisory";
 
 describe("Codex version floor", () => {

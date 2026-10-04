@@ -13,8 +13,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  createThreadJumpMatcher,
   isSubthreadLaunchpadKey,
+  isWindowsFilesystemPath,
+  parseThreadJumpQuery,
   threadHasExactPrNumberMatch,
+  textMatchesJumpQuery,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
@@ -26,15 +30,25 @@ import {
   FEDERATED_THREAD_SEARCH_LIMIT,
   useFederatedThreadSearch,
 } from "../../lib/useFederatedThreadSearch";
-import { threadMatchesQuery } from "../thread-search/thread-match";
+import { insertProjectMention, projectMentionAtCursor } from "../thread-search/ProjectSearchInput";
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { PrChip } from "../pr-status/PrChip";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
 
 const MAX_RESULTS = 8;
+
+/** Provider history can include foreign paths without a federation owner. */
+function foreignProjectPlatform(path: string | undefined, platform: string | undefined): string | undefined {
+  if (!path || !platform) return undefined;
+  const windowsPath = isWindowsFilesystemPath(path);
+  if (platform !== "win32" && windowsPath) return "Windows";
+  if (platform === "win32" && !windowsPath && path.startsWith("/")) return "Unix";
+  return undefined;
+}
+
 type JumpResult = { kind: "project"; directory: NavigationDirectoryView }
   | { kind: "thread"; thread: NavigationThreadSummary };
 
@@ -78,8 +92,10 @@ type SidebarSearchPopupProps = {
 export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement {
   const label = props.label ?? (props.onJumpToProject ? "Jump to thread or project" : "Jump to thread");
   const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pendingCursor = useRef<number | undefined>(undefined);
   const listRef = useRef<HTMLUListElement>(null);
   const idPrefix = useId();
   const listId = `${idPrefix}-results`;
@@ -94,22 +110,39 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   });
 
   const trimmed = query.trim();
-  const ownerSearch = useNavigationOwnerSearch({ query: trimmed, desktopApi: getDesktopApi() });
+  // `@project` / `in:@project` scope the threads, as in thread search. The
+  // whole query still goes to every matcher, which parses the mentions
+  // itself; only PR-number ranking reads the free text alone.
+  const parsedQuery = useMemo(() => parseThreadJumpQuery(trimmed), [trimmed]);
+  const jumpText = parsedQuery.text;
+  // While the caret is in an `@…` token, the list completes it with projects,
+  // as thread search's field does; picking one narrows the threads below.
+  const mention = useMemo(() => projectMentionAtCursor(query, cursor), [query, cursor]);
+  // A completed mention is a filter, not a project to jump to.
+  const projectRowsWanted = Boolean(props.onJumpToProject) && parsedQuery.projects.length === 0;
+  const projectFilter = mention
+    ? mention.query.trim().toLowerCase()
+    : trimmed && projectRowsWanted ? trimmed : undefined;
+  const threadQuery = mention ? "" : trimmed;
+  const federationTarget = readRendererFederationTarget();
+  const ownerInstanceId = federationTarget?.instanceId;
+  const platform = getDesktopApi()?.platform;
+  const ownerSearch = useNavigationOwnerSearch({ query: threadQuery, desktopApi: getDesktopApi() });
 
   const projectSearch = useNavigationQueryResource({
     desktopApi: getDesktopApi(),
-    request: trimmed && props.onJumpToProject ? {
+    request: projectFilter !== undefined ? {
       protocol: 2, consumer: "search", inventory: "owner",
-      federationTarget: readRendererFederationTarget(),
-      query: { kind: "directory-index", filter: trimmed }, pageSize: 100,
+      federationTarget,
+      query: { kind: "directory-index", filter: projectFilter }, pageSize: 100,
     } : undefined,
   });
   const projects = useMemo(() => {
-    if (!trimmed || !props.onJumpToProject) return [];
-    const query = trimmed.toLowerCase();
+    if (projectFilter === undefined) return [];
+    const query = projectFilter.toLowerCase();
     const candidates = new Map((props.projects ?? []).map((directory) => [directory.key, directory]));
     if (projectSearch.state?.request.query.kind === "directory-index"
-      && projectSearch.state.request.query.filter === trimmed) {
+      && projectSearch.state.request.query.filter === projectFilter) {
       for (const directory of projectSearch.state.page?.directories ?? []) candidates.set(directory.key, directory);
     }
     const rank = (directory: NavigationDirectoryView): number => {
@@ -120,26 +153,30 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       (directory.kind === "directory" || directory.kind === "workspace")
       && directory.localAvailability !== "unconfigured"
       && !isSubthreadLaunchpadKey(directory.key)
-      && [directory.label, directory.path ?? ""].some((text) => text.toLowerCase().includes(query)))
-      .sort((left, right) => rank(left) - rank(right) || left.label.localeCompare(right.label))
+      && (!query || [directory.label, directory.path].some((text) => textMatchesJumpQuery(text, query))))
+      .sort((left, right) =>
+        (ownerInstanceId ? 0 : Number(Boolean(foreignProjectPlatform(left.path, platform)))
+          - Number(Boolean(foreignProjectPlatform(right.path, platform))))
+        || rank(left) - rank(right)
+        || left.label.localeCompare(right.label))
       .slice(0, MAX_RESULTS);
-  }, [trimmed, props.projects, props.onJumpToProject, projectSearch.state]);
+  }, [projectFilter, props.projects, projectSearch.state, ownerInstanceId, platform]);
 
   const results = useMemo(() => {
-    if (!trimmed) {
+    if (!threadQuery) {
       return [];
     }
     const immediate = props.threads
-      .filter((thread) => threadMatchesQuery(thread, trimmed))
+      .filter(createThreadJumpMatcher(threadQuery))
       .sort(
         (left, right) =>
-          Number(threadHasExactPrNumberMatch(right, trimmed))
-          - Number(threadHasExactPrNumberMatch(left, trimmed)),
+          Number(threadHasExactPrNumberMatch(right, jumpText))
+          - Number(threadHasExactPrNumberMatch(left, jumpText)),
       )
       .slice(0, MAX_RESULTS);
     const ownerKeys = new Set(ownerSearch.rows.map(threadSummaryIdentityKey));
     return [...ownerSearch.rows, ...immediate.filter((thread) => !ownerKeys.has(threadSummaryIdentityKey(thread)))].slice(0, MAX_RESULTS);
-  }, [trimmed, props.threads, ownerSearch.rows]);
+  }, [threadQuery, jumpText, props.threads, ownerSearch.rows]);
 
   const {
     available: remoteSearchAvailable,
@@ -149,7 +186,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     results: remoteResults,
     totalPeerCount: remoteTotalPeerCount,
   } = useFederatedThreadSearch({
-    query: trimmed,
+    query: threadQuery,
     limit: FEDERATED_THREAD_SEARCH_LIMIT,
     search: getDesktopApi()?.jumpSearchRemoteThreads,
   });
@@ -162,10 +199,10 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         threadSummaryIdentityKey(thread),
       ),
     );
-    return remoteResults.filter(
+    return mention ? [] : remoteResults.filter(
       (thread) => !localKeys.has(threadSummaryIdentityKey(thread)),
     );
-  }, [remoteResults, results]);
+  }, [mention, remoteResults, results]);
 
   const combinedRows = useMemo(
     (): JumpResult[] => [
@@ -178,6 +215,29 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   useEffect(() => {
     setActiveIndex(0);
   }, [query]);
+
+  useLayoutEffect(() => {
+    if (pendingCursor.current === undefined) return;
+    inputRef.current?.setSelectionRange(pendingCursor.current, pendingCursor.current);
+    pendingCursor.current = undefined;
+  }, [query]);
+
+  const completeMention = (directory: NavigationDirectoryView): void => {
+    if (!mention) return;
+    const next = insertProjectMention(query, mention, directory);
+    pendingCursor.current = next.cursor;
+    setCursor(next.cursor);
+    setQuery(next.value);
+  };
+
+  const chooseProject = (directory: NavigationDirectoryView): void => {
+    if (mention) {
+      completeMention(directory);
+      return;
+    }
+    props.onJumpToProject?.(directory);
+    props.onClose();
+  };
 
   useEffect(() => {
     setActiveIndex((index) =>
@@ -215,6 +275,17 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const active = combinedRows[activeIndex];
+    if (
+      event.key === "Tab"
+      && mention
+      && active?.kind === "project"
+      && event.target === inputRef.current
+    ) {
+      event.preventDefault();
+      completeMention(active.directory);
+      return;
+    }
     if (event.key === "Tab") {
       event.preventDefault();
       const target = event.target instanceof HTMLElement
@@ -265,12 +336,10 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const result = combinedRows[activeIndex];
-      if (result?.kind === "project") {
-        props.onJumpToProject?.(result.directory);
-        props.onClose();
-      } else if (result) {
-        jump(result.thread);
+      if (active?.kind === "project") {
+        chooseProject(active.directory);
+      } else if (active) {
+        jump(active.thread);
       }
     }
   };
@@ -280,9 +349,9 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     index: number,
   ): ReactElement => {
     const description = describeThread(thread);
-    const prs = orderPullRequestsForQuery(thread, trimmed);
-    const exactPrQuery = threadHasExactPrNumberMatch(thread, trimmed)
-      ? String(Number(trimmed.replace(/^#/, "")))
+    const prs = orderPullRequestsForQuery(thread, jumpText);
+    const exactPrQuery = threadHasExactPrNumberMatch(thread, jumpText)
+      ? String(Number(jumpText.replace(/^#/, "")))
       : "";
     const prStripResetKey = `${exactPrQuery}|${prs
       .map((pr) => pr.url)
@@ -346,10 +415,8 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     Boolean(trimmed) && remoteSearchAvailable && remoteRows.length > 0;
   const showEmpty =
     Boolean(trimmed)
-    && projects.length === 0
-    && results.length === 0
-    && remoteRows.length === 0
-    && !remoteLoading
+    && combinedRows.length === 0
+    && (Boolean(mention) || !remoteLoading)
     && !projectSearch.loading;
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
@@ -406,9 +473,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             }
             autoComplete="off"
             spellCheck={false}
-            placeholder={props.placeholder ?? `${label}, PR #, branch, repo…`}
+            placeholder={props.placeholder ?? `${label}, PR #, branch · @project to narrow`}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setCursor(event.target.selectionStart ?? event.target.value.length);
+              setQuery(event.target.value);
+            }}
+            onSelect={(event) => setCursor(event.currentTarget.selectionStart ?? query.length)}
           />
           <span className="jump-palette__esc" aria-hidden>
             esc
@@ -420,20 +491,29 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             id={listId}
             ref={listRef}
             role="listbox"
-            aria-label={props.onJumpToProject ? "Threads and projects" : "Threads"}
+            aria-label={mention ? "Projects" : props.onJumpToProject ? "Threads and projects" : "Threads"}
           >
             {projects.map((directory, index) => (
               <li key={`project:${directory.key}`} id={rowId(index)} role="option" aria-selected={index === activeIndex}>
                 <button type="button" tabIndex={-1}
                   className={`jump-palette__row${index === activeIndex ? " is-active" : ""}`}
                   onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => { props.onJumpToProject?.(directory); props.onClose(); }}
+                  onClick={() => chooseProject(directory)}
                   title={directory.path}
                 >
                   <FolderIcon size={14} aria-hidden />
                   <span className="jump-palette__row-title">{directory.label}</span>
+                  {ownerInstanceId ? (
+                    <InstanceChip instanceId={ownerInstanceId}
+                      label={readRendererFederationLabel() ?? ownerInstanceId} />
+                  ) : foreignProjectPlatform(directory.path, platform) ? (
+                    <span className="chip chip--instance tooltip-target"
+                      data-tooltip="This path belongs to another operating system.">
+                      Other machine · {foreignProjectPlatform(directory.path, platform)}
+                    </span>
+                  ) : null}
                   <span className="jump-palette__row-branch">{directory.path}</span>
-                  <span className="jump-palette__row-repo">Project</span>
+                  <span className="jump-palette__row-repo">{mention ? "Filter" : "Project"}</span>
                 </button>
               </li>
             ))}
@@ -452,11 +532,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             )}
           </ul>
         ) : showEmpty ? (
-          <p className="jump-palette__empty">{props.onJumpToProject ? "No threads or projects match" : "No threads match"}</p>
+          <p className="jump-palette__empty">{mention
+            ? projectSearch.state?.error ? "Projects unavailable" : "No matching projects"
+            : props.onJumpToProject ? "No threads or projects match" : "No threads match"}</p>
         ) : null}
         <div className="jump-palette__foot">
           <span>↑↓ navigate</span>
-          <span>↵ open</span>
+          <span>{mention ? "↵ narrow to project" : "↵ open"}</span>
           <span>esc close</span>
           <span className="jump-palette__foot-spacer" />
           {/* Peer latency lives in the footer rather than as a list row: a

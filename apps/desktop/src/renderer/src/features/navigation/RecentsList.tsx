@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, type NavigationPresentationOrder } fro
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { useState, type MouseEvent } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type {
   MessagingThreadBindingSummary,
@@ -30,13 +30,16 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { SubthreadPagination } from "./SubthreadPagination";
-import { ThreadRow } from "./ThreadRow";
+import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
+import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import {
   interleaveStartingSubthreads,
+  isSubthreadLaunchpadDraft,
   selectUnlandedStartingThreads,
-  StartingThreadRow,
+  type PendingSidebarRow,
 } from "./StartingThreadRow";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import { PendingThreadRow } from "./SubthreadDraftRow";
+import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
 
 type RecentsListProps = {
   presentationOrder?: NavigationPresentationOrder;
@@ -52,6 +55,10 @@ type RecentsListProps = {
   composerSourceThreadKey?: string;
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
+  /** The row whose title is a rename field. */
+  renamingRow?: RenamingThreadRow;
+  onRequestRenameThread?: (thread: NavigationThreadSummary, row: ThreadRowRef) => void;
+  onCommitRenameThread?: (thread: NavigationThreadSummary, name: string | null) => void;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   selectedThreadKeys?: ReadonlySet<string>;
@@ -59,12 +66,23 @@ type RecentsListProps = {
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   /**
-   * Threads still starting. Each renders where its thread will land: under
-   * its parent when that row is here, otherwise at the top, where a new
-   * thread sorts in every lens that renders this list.
+   * Threads still starting, and sub-threads still being written. Each
+   * renders where its thread will land: under its parent when that row is
+   * here, otherwise at the top, where a new thread sorts in every lens that
+   * renders this list.
    */
-  startingThreads?: PendingLaunchpadCreation[];
-  onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
+  startingThreads?: PendingSidebarRow[];
+  /**
+   * The lane's last item, after every row (the start actions). Inside the
+   * scrolling lane so it scrolls with the rows, outside the `role="list"` so
+   * it is not counted as a thread.
+   */
+  footer?: ReactNode;
+  onSelectStartingThread?: (entry: PendingSidebarRow) => void;
+  onOpenSubthreadDraftContextMenu?: (
+    draft: SubthreadLaunchpadDraft,
+    position: { x: number; y: number },
+  ) => void;
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
@@ -217,12 +235,13 @@ export function RecentsList(props: RecentsListProps) {
         {trayEntries.flatMap((entry) => {
           if (entry.kind === "starting") {
             return [
-              <StartingThreadRow
+              <PendingThreadRow
                 key={entry.creation.selectionKey}
-                creation={entry.creation}
+                entry={entry.creation}
                 locationMode="label"
                 nestedDepth={entry.depth}
                 selected={props.selectedThreadKey === entry.creation.selectionKey}
+                onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
                 onSelect={props.onSelectStartingThread}
               />,
             ];
@@ -242,6 +261,9 @@ export function RecentsList(props: RecentsListProps) {
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               actionsMenuOpen={childKey === props.actionsMenuThreadKey}
+              renaming={isRenamingRow(props.renamingRow, childKey, undefined)}
+              onRequestRename={props.onRequestRenameThread}
+              onCommitRename={props.onCommitRenameThread}
               draggable={
                 canManageSubthreads
                 && directChildKeys.length > 1
@@ -387,8 +409,14 @@ export function RecentsList(props: RecentsListProps) {
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = threadSummaryIdentityKey(thread);
     const children = trays.subtree(key);
-    const subthreadCount = getSubthreadDisclosureCount(thread, children.length);
-    const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+    // A sub-thread being written opens its parent's tray and gives the
+    // parent its chevron, as the thread will once it lands.
+    const holdsDraft = startingSubthreads.some((entry) =>
+      isSubthreadLaunchpadDraft(entry)
+      && (entry.parentThreadKey === key
+        || children.some((child) => threadSummaryIdentityKey(child) === entry.parentThreadKey)));
+    const subthreadCount = getSubthreadDisclosureCount(thread, children.length) + (holdsDraft ? 1 : 0);
+    const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
     const tray = renderSubthreads(thread);
     return (
       <div key={key} className="thread-group">
@@ -400,6 +428,9 @@ export function RecentsList(props: RecentsListProps) {
           draftThreadKeys={props.draftThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
           actionsMenuOpen={key === props.actionsMenuThreadKey}
+          renaming={isRenamingRow(props.renamingRow, key, undefined)}
+          onRequestRename={props.onRequestRenameThread}
+          onCommitRename={props.onCommitRenameThread}
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}
@@ -440,18 +471,23 @@ export function RecentsList(props: RecentsListProps) {
   };
 
   return (
-    <div className="sidebar-list sidebar-list--dense" role="list">
-      {startingRootThreads.map((creation) => (
-        <div key={creation.selectionKey} className="thread-group">
-          <StartingThreadRow
-            creation={creation}
-            locationMode="label"
-            selected={props.selectedThreadKey === creation.selectionKey}
-            onSelect={props.onSelectStartingThread}
-          />
-        </div>
-      ))}
-      {topLevelThreads.map((thread) => renderThreadGroup(thread))}
+    <div className="sidebar-list sidebar-list--dense">
+      <div className="sidebar-list sidebar-list--compact" role="list">
+        {startingRootThreads.map((creation) => (
+          <div key={creation.selectionKey} className="thread-group">
+            <PendingThreadRow
+              entry={creation}
+              locationMode="label"
+              selected={props.selectedThreadKey === creation.selectionKey}
+              showParent
+              onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
+              onSelect={props.onSelectStartingThread}
+            />
+          </div>
+        ))}
+        {topLevelThreads.map((thread) => renderThreadGroup(thread))}
+      </div>
+      {props.footer}
     </div>
   );
 }

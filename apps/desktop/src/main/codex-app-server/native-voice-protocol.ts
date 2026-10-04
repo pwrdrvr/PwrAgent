@@ -1,5 +1,5 @@
 import type { ServerNotification } from "@pwrdrvr/codex-app-server-protocol";
-import type { ThreadRealtimeStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { NativeVoiceAction } from "../../shared/native-voice";
 import { codexVersionFromUserAgent } from "./protocol-compatibility";
 
@@ -17,7 +17,7 @@ export type NativeVoiceToolCall = {
 export type NativeVoiceBackend = {
   start: (params: ThreadRealtimeStartParams) => Promise<void>;
   stop: (threadId: string) => Promise<void>;
-  text: (threadId: string, text: string) => Promise<void>;
+  text: (threadId: string, text: string, role?: ThreadRealtimeAppendTextParams["role"]) => Promise<void>;
   onEvent: (listener: (event: NativeVoiceNotification) => void) => () => void;
   onDisconnect: (listener: () => void) => () => void;
   onToolCall?: (listener: (call: NativeVoiceToolCall) => void) => () => void;

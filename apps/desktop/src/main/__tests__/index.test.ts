@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import { resolve } from "node:path";
+import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import type {
   applyRememberedLinuxPasswordStore,
@@ -9,11 +10,12 @@ import type {
 import { ElectronQuitModel } from "./helpers/electron-quit-model";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
+const powerMonitorEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 // Captures the listeners createMainWindow's return value registers via
 // `window.on(...)` — lets tests drive the main window's "close" handler
 // (quit-on-main-window-close).
-const mainRendererHandlers = new Map<string, (...args: unknown[]) => void>();
+const mainRenderer = new EventEmitter();
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const installWindowFrameSyncMock = vi.fn();
 const wireWindowControlsBridgeMock = vi.fn();
@@ -66,6 +68,7 @@ const disposeProfilesIpcHandlersMock = vi.fn();
 const listDesktopPwrAgentProfilesMock = vi.fn();
 const openDesktopPwrAgentProfileMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
+const disposeRendererErrorIpcHandlersMock = vi.fn();
 const registerBootInfoIpcHandlersMock = vi.fn();
 const disposeBootInfoIpcHandlersMock = vi.fn();
 const registerQuitBlockerIpcHandlersMock = vi.fn();
@@ -198,7 +201,6 @@ const shellOpenPathMock = vi.fn(async () => "");
 const shellShowItemInFolderMock = vi.fn();
 const showMessageBoxSyncMock = vi.fn(() => 0);
 const setNameMock = vi.fn();
-const setAboutPanelOptionsMock = vi.fn();
 const showAboutPanelMock = vi.fn();
 const appFocusMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
@@ -269,9 +271,13 @@ const buildDockProfileSnapshotMock = vi.fn(() => ({
 const writeDockProfileSnapshotMock = vi.fn();
 
 vi.mock("electron", () => ({
+  powerMonitor: {
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      powerMonitorEventHandlers.set(event, handler);
+    }),
+  },
   app: {
     setName: setNameMock,
-    setAboutPanelOptions: setAboutPanelOptionsMock,
     isPackaged: false,
     getAppPath: getAppPathMock,
     getVersion: getVersionMock,
@@ -292,6 +298,7 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
+    getFocusedWindow: vi.fn(() => null),
   },
   safeStorage: {
     isEncryptionAvailable: isEncryptionAvailableMock,
@@ -325,6 +332,7 @@ vi.mock("../linux-password-store", () => ({
 
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
+  isFederationWindowWebContents: vi.fn(() => false),
   stopWindowDiagnostics: stopWindowDiagnosticsMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
 }));
@@ -382,6 +390,14 @@ vi.mock("../ipc/agent-ipc", () => ({
 
 vi.mock("../ipc/native-voice", () => ({
   registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
+}));
+
+vi.mock("../ipc/thread-todos-ipc", () => ({
+  registerThreadTodoIpcHandlers: vi.fn(),
+}));
+
+vi.mock("../ipc/operator-requests-ipc", () => ({
+  registerOperatorRequestIpcHandlers: vi.fn(),
 }));
 
 vi.mock("../ipc/scheduled-actions-ipc", () => ({
@@ -497,6 +513,7 @@ vi.mock("../ipc/profiles", () => ({
 
 vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
+  disposeRendererErrorIpcHandlers: disposeRendererErrorIpcHandlersMock,
 }));
 
 vi.mock("../ipc/boot-info", () => ({
@@ -517,6 +534,13 @@ vi.mock("../ipc/runtime-identity", () => ({
 vi.mock("../ipc/settings", () => ({
   registerSettingsIpcHandlers: registerSettingsIpcHandlersMock,
   disposeSettingsIpcHandlers: disposeSettingsIpcHandlersMock,
+}));
+
+vi.mock("../ipc/keybindings", () => ({
+  registerKeybindingsIpcHandlers: vi.fn(),
+  disposeKeybindingsIpcHandlers: vi.fn(),
+  getKeybindingsSnapshot: vi.fn(() => ({ overrides: {}, filePath: "/tmp/keybindings.toml" })),
+  onKeybindingsChanged: vi.fn(() => () => undefined),
 }));
 
 vi.mock("../ipc/window-pointer", () => ({
@@ -685,6 +709,7 @@ async function flushMicrotasks(): Promise<void> {
 describe("bootstrapApp", () => {
   beforeEach(() => {
     appEventHandlers.clear();
+    powerMonitorEventHandlers.clear();
     processEventHandlers.clear();
     vi.spyOn(process, "once").mockImplementation(
       (event: string | symbol, handler: (...args: unknown[]) => void) => {
@@ -702,13 +727,13 @@ describe("bootstrapApp", () => {
       },
     );
     mainWindowHandlers.clear();
-    mainRendererHandlers.clear();
+    mainRenderer.removeAllListeners();
     createMainWindowMock.mockReset();
     // createMainWindow returns the BrowserWindow; index.ts wraps each call in
     // quitAppOnMainWindowClose(window), which calls window.on("close", …).
     // Return a stub that records its listeners so tests can invoke them.
     createMainWindowMock.mockImplementation(() => ({
-      webContents: { on: (event: string, handler: (...args: unknown[]) => void) => mainRendererHandlers.set(event, handler) },
+      webContents: mainRenderer,
       on: (event: string, handler: (...args: unknown[]) => void) => {
         mainWindowHandlers.set(event, handler);
       },
@@ -783,6 +808,7 @@ describe("bootstrapApp", () => {
       reason: "active",
     });
     registerRendererErrorIpcHandlersMock.mockReset();
+    disposeRendererErrorIpcHandlersMock.mockReset();
     registerBootInfoIpcHandlersMock.mockReset();
     disposeBootInfoIpcHandlersMock.mockReset();
     registerQuitBlockerIpcHandlersMock.mockReset();
@@ -895,7 +921,6 @@ describe("bootstrapApp", () => {
     showMessageBoxSyncMock.mockReturnValue(0);
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
-    setAboutPanelOptionsMock.mockReset();
     showAboutPanelMock.mockReset();
     appFocusMock.mockReset();
     getAppPathMock.mockClear();
@@ -1228,19 +1253,6 @@ describe("bootstrapApp", () => {
     );
   });
 
-  it("sets the About panel version without duplicating it as a build value", async () => {
-    startupProfilerInstance.start.mockResolvedValue();
-
-    await import("../index");
-    await flushMicrotasks();
-
-    expect(setAboutPanelOptionsMock).toHaveBeenCalledWith({
-      applicationName: "PwrAgent",
-      applicationVersion: "1.0.0-alpha.0",
-      copyright: "Copyright © 2026 PwrDrvr LLC.",
-    });
-  });
-
   it("uses the PwrAgent icon for the development Dock icon on macOS", async () => {
     if (process.platform !== "darwin") {
       return;
@@ -1249,9 +1261,12 @@ describe("bootstrapApp", () => {
 
     await import("../index");
     await flushMicrotasks();
+    const { developmentDockIconPath } = await import("../themed-dock-icon");
 
+    // The glass or flat tile by this Mac's version; themed-dock-icon.test.ts
+    // covers the choice.
     expect(nativeImageCreateFromPathMock).toHaveBeenCalledWith(
-      "/test/app/build/icon-macos.png",
+      developmentDockIconPath("/test/app"),
     );
     expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
   });
@@ -1412,39 +1427,34 @@ describe("bootstrapApp", () => {
     expect(installWindowFrameSyncMock).toHaveBeenCalledWith(app);
   });
 
-  it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction"])(
-    "shuts down resources without a renderer confirmation after %s", async (reason) => {
+  it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction", "clean-exit"])(
+    "retains main-owned resources after renderer %s", async (reason) => {
       startupProfilerInstance.start.mockResolvedValue();
       await import("../index");
       await flushMicrotasks();
       requestQuitMock.mockClear();
-      mainRendererHandlers.get("render-process-gone")!({}, { reason, exitCode: 1 });
+      mainRenderer.emit("render-process-gone", {}, { reason, exitCode: 1 });
       await flushMicrotasks();
       expect(requestQuitMock).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalled());
-      await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
-      expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
-      expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+      expect(disposeDesktopMessagingRuntimeMock).not.toHaveBeenCalled();
+      expect(disposeDesktopFederationRuntimeMock).not.toHaveBeenCalled();
+      expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
+      expect(disposeAgentIpcHandlersMock).not.toHaveBeenCalled();
+      expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+      expect(quitMock).not.toHaveBeenCalled();
     },
   );
 
-  it("renderer loss bypasses an unanswered quit confirmation", async () => {
+  it("renderer loss does not approve an unanswered quit confirmation", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     await import("../index");
     await flushMicrotasks();
     requestQuitMock.mockReturnValue(new Promise(() => {}));
     mainWindowHandlers.get("close")!({ preventDefault: vi.fn() });
-    mainRendererHandlers.get("render-process-gone")!({}, { reason: "oom", exitCode: 1 });
-    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
-    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not shut down for a clean renderer exit", async () => {
-    startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    mainRenderer.emit("render-process-gone", {}, { reason: "oom", exitCode: 1 });
     await flushMicrotasks();
-    mainRendererHandlers.get("render-process-gone")!({}, { reason: "clean-exit", exitCode: 0 });
-    await flushMicrotasks();
+    expect(quitMock).not.toHaveBeenCalled();
+    expect(disposeDesktopMessagingRuntimeMock).not.toHaveBeenCalled();
     expect(disposeDesktopFederationRuntimeMock).not.toHaveBeenCalled();
   });
 
@@ -1717,42 +1727,66 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
+    type TemplateItem = {
+      label?: string;
+      click?: () => void | Promise<void>;
+      submenu?: TemplateItem[];
+    };
     const template = buildFromTemplateMock.mock.calls[0]?.[0] as
-      | Array<{
-          role?: string;
-          submenu?: Array<{
-            label?: string;
-            click?: () => void | Promise<void>;
-          }>;
-        }>
+      | TemplateItem[]
       | undefined;
-    const helpMenu = template?.find((item) => item.role === "help");
-    const item = (label: string) =>
-      helpMenu?.submenu?.find((menuItem) => menuItem.label === label);
+    // Check for Updates… and About sit in the app menu on macOS and in Help
+    // elsewhere, so look through every menu rather than Help alone.
+    const flat = (items: TemplateItem[]): TemplateItem[] =>
+      items.flatMap((entry) => [entry, ...flat(entry.submenu ?? [])]);
+    const items = flat(template ?? []);
+    const item = (label: string) => {
+      const found = items.find((menuItem) => menuItem.label === label);
+      if (!found) {
+        throw new Error(`Menu item not found: ${label}`);
+      }
+      return found;
+    };
 
-    item("Check for Updates")?.click?.();
+    item("Check for Updates…").click?.();
     expect(checkForAppUpdatesNowMock).toHaveBeenCalledWith("menu");
 
-    item("Third-Party Notices")?.click?.();
+    item("About PwrAgent").click?.();
+    expect(requestOpenSettingsMock).toHaveBeenCalledWith("about");
+    expect(showAboutPanelMock).not.toHaveBeenCalled();
+
+    item("Third-Party Notices").click?.();
     expect(showThirdPartyNoticesWindowMock).toHaveBeenCalledOnce();
 
-    item("View License")?.click?.();
+    item("View License").click?.();
     expect(showLicenseWindowMock).toHaveBeenCalledOnce();
 
-    await item("PwrAgent Website")?.click?.();
+    await item("PwrAgent Website").click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith("https://pwragent.ai");
 
-    await item("Documentation")?.click?.();
+    await item("PwrAgent Documentation").click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
       "https://docs.pwragent.ai",
     );
 
-    await item("Report an Issue")?.click?.();
+    await item("Report an Issue…").click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
       "https://github.com/pwrdrvr/PwrAgent/issues/new",
     );
 
-    expect(item(["Visit", "Website"].join(" "))).toBeUndefined();
+    await item("Report a Security Vulnerability…").click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/security/advisories/new",
+    );
+
+    await item("View Source").click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent",
+    );
+
+    expect(
+      items.find((menuItem) => menuItem.label === ["Visit", "Website"].join(" ")),
+    ).toBeUndefined();
   });
 
   it("wires the Profiles menu to profile opening and profile settings", async () => {
@@ -1777,6 +1811,7 @@ describe("bootstrapApp", () => {
           default: true,
           name: "default",
           profileDir: "/profiles/default",
+          showInMenu: true,
         },
         {
           active: false,
@@ -1794,6 +1829,7 @@ describe("bootstrapApp", () => {
           default: false,
           name: "work",
           profileDir: "/profiles/work",
+          showInMenu: true,
         },
       ],
     });
@@ -1822,7 +1858,10 @@ describe("bootstrapApp", () => {
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(2);
 
     item("Manage Profiles…")?.click?.();
-    expect(requestOpenSettingsMock).toHaveBeenCalledWith("profiles");
+    expect(requestOpenSettingsMock).toHaveBeenLastCalledWith("profiles");
+
+    item("New Profile…")?.click?.();
+    expect(requestOpenSettingsMock).toHaveBeenLastCalledWith("profiles", "new");
   });
 
   it("logs startup thread list prewarm failures without blocking startup", async () => {
@@ -2244,6 +2283,7 @@ describe("bootstrapApp", () => {
     finishTerminalShutdown();
     await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
+    expect(disposeRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -2689,6 +2729,51 @@ describe("bootstrapApp", () => {
       disposeScheduledThreadActionServiceMock.mock.invocationCallOrder[0]!,
     );
   });
+
+  it.each(["linux", "darwin"] as const)(
+    "handles %s system shutdown during profiler startup through normal cleanup without confirmation",
+    async (platform) => {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: platform } }));
+      let finishStart!: () => void;
+      startupProfilerInstance.start.mockImplementation(() => new Promise<void>((resolve) => {
+        finishStart = resolve;
+      }));
+      await import("../index");
+      await flushMicrotasks();
+
+      // Registration must precede the first asynchronous startup operation.
+      expect(powerMonitorEventHandlers.get("shutdown")).toBeTypeOf("function");
+      expect(createMainWindowMock).not.toHaveBeenCalled();
+      const model = new ElectronQuitModel([]);
+      let quitAllowed = false;
+      isQuitAllowedMock.mockImplementation(() => quitAllowed);
+      const preventDefault = vi.fn();
+      allowImmediateQuitMock.mockImplementation(() => {
+        expect(preventDefault).toHaveBeenCalledOnce();
+        quitAllowed = true;
+      });
+      quitMock.mockImplementation(model.quit);
+      for (const name of ["before-quit", "will-quit", "window-all-closed", "quit"]) {
+        model.on(name, (event) => appEventHandlers.get(name)?.(event));
+      }
+
+      powerMonitorEventHandlers.get("shutdown")?.({ preventDefault });
+      await model.settle();
+      expect(model.hasQuit).toBe(true);
+      expect(model.reentrantQuits).toBe(0);
+      expect(requestQuitMock).not.toHaveBeenCalled();
+      expect(startupProfilerInstance.stop).toHaveBeenCalledExactlyOnceWith("app-quit");
+      expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledOnce();
+      expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledOnce();
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce();
+      expect(exitMock).not.toHaveBeenCalled();
+
+      finishStart();
+      await flushMicrotasks();
+      expect(createMainWindowMock).not.toHaveBeenCalled();
+      expect(initializeAppStateMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not create the lease coordinators on early SIGTERM", async () => {
     whenReadyMock.mockReturnValue(new Promise(() => {}));

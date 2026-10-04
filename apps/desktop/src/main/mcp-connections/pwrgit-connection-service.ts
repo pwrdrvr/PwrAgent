@@ -74,7 +74,9 @@ export class PwrGitConnectionService {
 
   async openDownload(): Promise<OpenPwrGitResponse> {
     try {
-      await (this.options.openExternal ?? shell.openExternal)("https://github.com/pwrdrvr/PwrGit/releases/latest");
+      const url = "https://github.com/pwrdrvr/PwrGit/releases/latest";
+      if (this.options.openExternal) await this.options.openExternal(url);
+      else await shell.openExternal(url);
       return { opened: true };
     } catch (error) {
       return { opened: false, error: error instanceof Error ? error.message : String(error) };
@@ -84,7 +86,9 @@ export class PwrGitConnectionService {
   async openApplication(): Promise<OpenPwrGitResponse> {
     const path = this.findInstalledPath();
     if (!path) return { opened: false, error: "PwrGit is not installed." };
-    const error = await (this.options.openPath ?? shell.openPath)(path);
+    const error = this.options.openPath
+      ? await this.options.openPath(path)
+      : await shell.openPath(path);
     return error ? { opened: false, error } : { opened: true };
   }
 

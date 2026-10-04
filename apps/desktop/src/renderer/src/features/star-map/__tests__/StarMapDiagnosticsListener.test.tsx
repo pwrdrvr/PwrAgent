@@ -23,9 +23,9 @@ const metadata: AppMetadata = {
 
 it("copies the active remote intake target from the Star Map window", async () => {
   let copyDiagnostics: (() => void) | undefined;
-  const copyText = vi.fn(async () => undefined);
+  const copyRichText = vi.fn(async () => undefined);
   const desktopApi: DesktopApi = {
-    copyText,
+    copyRichText,
     readAppMetadata: vi.fn(async () => metadata),
     onCopyLocalDiagnosticsInfoRequested: vi.fn((listener) => {
       copyDiagnostics = listener;
@@ -49,8 +49,8 @@ it("copies the active remote intake target from the Star Map window", async () =
   act(() => copyDiagnostics?.());
 
   await waitFor(() => {
-    expect(copyText).toHaveBeenCalledWith(
-      expect.stringContaining([
+    expect(copyRichText).toHaveBeenCalledWith({
+      text: expect.stringContaining([
         "Surface: Federation Star Map",
         "PwrAgent version: 1.2.3",
         "PwrAgent build: Packaged",
@@ -59,6 +59,7 @@ it("copies the active remote intake target from the Star Map window", async () =
         "Target instance label: Harold-MBP-2018",
         "Federation routing target: remote:peer-2018",
       ].join("\n")),
-    );
+      html: expect.stringContaining("<pre><code>Collected at (UTC):"),
+    });
   });
 });

@@ -5,6 +5,7 @@ import {
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
   buildThreadIdentityKey,
+  isCodexChatsDirectory,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 
@@ -50,14 +51,29 @@ export async function workspaceIsSafeForAutoArchive(
     throw error;
   }
   const options = { signal, timeout: 10_000 };
-  const status = await runGitCommand(cwd, [
-    "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
-  ], options);
+  let status: { stdout: string };
+  try {
+    status = await runGitCommand(cwd, [
+      "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
+    ], options);
+  } catch (error) {
+    // Archive removes only registered Git worktrees, so a directory with no
+    // repository at or above it (a scratch project) is left in place. A broken
+    // worktree link reports a different message and still fails closed.
+    if (isOutsideAnyGitRepository(error)) return true;
+    throw error;
+  }
   if (status.stdout.trim()) return false;
   const retained = await runGitCommand(cwd, [
     "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes",
   ], options);
   return retained.stdout.trim() === "0";
+}
+
+function isOutsideAnyGitRepository(error: unknown): boolean {
+  const stderr = (error as { stderr?: unknown })?.stderr;
+  const text = `${error instanceof Error ? error.message : String(error)}\n${typeof stderr === "string" ? stderr : ""}`;
+  return text.includes("not a git repository (or any of the parent directories)");
 }
 
 export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveCandidate): number {
@@ -71,6 +87,8 @@ export function archiveCandidateProtectionReason({ thread, overlay }: ThreadArch
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
   if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
+  // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
+  if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
   if (overlay?.subAgents?.some((agent) => ["running", "pending", "cancelling", "blocked"].includes(agent.status))) return "Active subagent";
   if (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded") {
     return thread.threadStatus === undefined ? "Provider status unavailable" : "Active or blocked chat";

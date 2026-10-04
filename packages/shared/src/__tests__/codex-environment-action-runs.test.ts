@@ -5,6 +5,7 @@ import {
   type CodexEnvironmentActionRun,
   type CodexThreadEnvironmentRuntime,
   readCodexEnvironmentActionRuns,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "../index";
 
 function buildRun(
@@ -160,5 +161,56 @@ describe("applyCodexEnvironmentActionRunUpdate", () => {
     // All entries are "started"; nothing evictable. List grows past cap.
     expect(next.length).toBe(CODEX_ENVIRONMENT_ACTION_RUNS_MAX + 1);
     expect(next.at(-1)?.runId).toBe("new");
+  });
+});
+
+describe("withoutSupersededCodexEnvironmentActionRuns", () => {
+  const ids = (runs: CodexEnvironmentActionRun[]) => runs.map((run) => run.runId);
+
+  it("keeps only the newest finished run of an action", () => {
+    const runs = [
+      buildRun({ runId: "old", status: "exited", startedAt: 1, exitedAt: 2 }),
+      buildRun({ runId: "failed", status: "failed", startedAt: 3, exitedAt: 4 }),
+      buildRun({ runId: "newest", status: "exited", startedAt: 5, exitedAt: 6 }),
+    ];
+    expect(ids(withoutSupersededCodexEnvironmentActionRuns(runs))).toEqual([
+      "newest",
+    ]);
+  });
+
+  it("keeps every running run beside the newest finished one", () => {
+    const runs = [
+      buildRun({ runId: "old", status: "exited", startedAt: 1, exitedAt: 2 }),
+      buildRun({ runId: "last", status: "failed", startedAt: 3, exitedAt: 4 }),
+      buildRun({ runId: "live-1", status: "started", startedAt: 5 }),
+      buildRun({ runId: "live-2", status: "started", startedAt: 6 }),
+    ];
+    expect(ids(withoutSupersededCodexEnvironmentActionRuns(runs))).toEqual([
+      "last",
+      "live-1",
+      "live-2",
+    ]);
+  });
+
+  it("judges recency by exit time, not list position", () => {
+    // A long run started first can finish after a short one started later.
+    const runs = [
+      buildRun({ runId: "long", status: "exited", startedAt: 1, exitedAt: 90 }),
+      buildRun({ runId: "short", status: "exited", startedAt: 5, exitedAt: 6 }),
+    ];
+    expect(ids(withoutSupersededCodexEnvironmentActionRuns(runs))).toEqual([
+      "long",
+    ]);
+  });
+
+  it("never lets one action's result hide another's", () => {
+    const runs = [
+      buildRun({ runId: "a", actionId: "build", status: "exited", exitedAt: 2 }),
+      buildRun({ runId: "b", actionId: "test", status: "failed", exitedAt: 3 }),
+    ];
+    expect(ids(withoutSupersededCodexEnvironmentActionRuns(runs))).toEqual([
+      "a",
+      "b",
+    ]);
   });
 });

@@ -407,6 +407,73 @@ describe("TranscriptList", () => {
     );
   });
 
+  it.each([undefined, "pwr_remote"])(
+    "links only durable sub-agent handoffs before lazy details load (owner %s)",
+    (instanceId) => {
+      const task = "Monitor release checks";
+      const onShowThread = vi.fn();
+      const { rerender } = render(<></>);
+      for (const { backend, monitorId, durable } of [
+        { backend: "codex", monitorId: "monitor-1", durable: false },
+        { backend: "codex", monitorId: "codex-native:worker-1", durable: true },
+        { backend: "acp:gemini", monitorId: "monitor-1", durable: true },
+      ] as const) {
+        rerender(
+          <ThreadLinkProvider
+            onShowThread={onShowThread}
+            threads={[]}
+          >
+            <TranscriptList
+              entries={[{
+                type: "message",
+                id: "monitor-handoff",
+                role: "user",
+                text: "Checks passed.",
+                origin: {
+                  kind: "sub-agent",
+                  sourceThread: {
+                    backend,
+                    threadId: "worker-thread",
+                    title: task,
+                    ...(instanceId ? { instanceId, instanceLabel: "Fixture machine" } : {}),
+                  },
+                  subAgent: {
+                    kind: "monitor",
+                    monitorId,
+                    task,
+                    outcome: "success",
+                    summary: "Checks passed.",
+                  },
+                },
+              }]}
+              loading={false}
+              loadingMore={false}
+              parentThreadId="parent-thread"
+              onLoadOlder={async () => undefined}
+            />
+          </ThreadLinkProvider>,
+        );
+
+        expect(screen.getByText("Monitor sub-agent").parentElement).toHaveTextContent(task);
+        const threadLink = screen.queryByRole("button", { name: `Open thread ${task}` });
+        const popout = screen.queryByRole("button", { name: /^Open remote viewer for / });
+        if (durable) {
+          expect(threadLink).toBeInTheDocument();
+          fireEvent.click(threadLink!);
+          expect(onShowThread).toHaveBeenLastCalledWith(
+            expect.objectContaining({ backend, threadId: "worker-thread", ...(instanceId ? { instanceId } : {}) }),
+          );
+          expect(Boolean(popout)).toBe(Boolean(instanceId));
+        } else {
+          expect(threadLink).not.toBeInTheDocument();
+          expect(popout).not.toBeInTheDocument();
+          expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+          expect(onShowThread).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
   it("attributes monitor handoffs and keeps their raw payload collapsed", () => {
     const task = "Monitor GitHub CI for PR #1107 until all checks finish.";
     const rawHandoff = [
@@ -5560,6 +5627,18 @@ describe("TranscriptList agent commands line", () => {
     expect(document.querySelector(".thinking-scanner")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
     expect(onShowAgentCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a multi-line command by its first line only", () => {
+    render(
+      <TranscriptList entries={entries} loading={false} loadingMore={false}
+        agentCommandsStatus={{ count: 1, command: "python3 - <<'PY'\nprint('audit')\nPY" }}
+        onShowAgentCommands={vi.fn()} threadId="thread-1" onLoadOlder={async () => undefined} />,
+    );
+    const line = screen.getByText("python3 - <<'PY' …").closest(".transcript-list__agent-commands");
+    expect(line).toHaveTextContent("python3 - <<'PY' … is still running");
+    expect(line).not.toHaveTextContent("print('audit')");
+    expect(screen.getByRole("button", { name: "Actions" })).toBeInTheDocument();
   });
 
   it("counts commands when it cannot name one", () => {

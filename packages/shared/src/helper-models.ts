@@ -19,6 +19,7 @@ export const HELPER_MODEL_IDS = [
   "star_map_intake",
   "usage_analysis",
   "federation_instance_names",
+  "queued_message_titles",
 ] as const;
 
 export type HelperModelId = (typeof HELPER_MODEL_IDS)[number];
@@ -90,6 +91,12 @@ export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
   {
     id: "federation_instance_names",
     label: "Instance names",
+    defaultReasoningEffort: "low",
+    backends: ["codex"],
+  },
+  {
+    id: "queued_message_titles",
+    label: "Queued message titles",
     defaultReasoningEffort: "low",
     backends: ["codex"],
   },

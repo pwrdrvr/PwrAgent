@@ -1,4 +1,7 @@
-import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type {
+  AcpAgentSettingsEntry,
+  DesktopUpdateChannel,
+} from "@pwragent/shared";
 
 export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
   if (entry.installed && entry.authStatus === "required") {
@@ -44,10 +47,45 @@ export function acpRelativeTime(timestamp: number, now = Date.now()): string {
 }
 
 /**
- * The version inside a grok-build tag: `pwragent-v1.0.12-pwragent.2` reads as
- * `1.0.12-pwragent.2`. The repository prefix is the same on every tag, so in a
- * control that shows two of them side by side it is noise.
+ * The version inside a PwrAgent build tag: `pwragent-v1.0.12-pwragent.2` reads
+ * as `1.0.12-pwragent.2`. grok-build and pwrdrvr/codex share the prefix, and it
+ * is the same on every tag, so in a control that shows two of them side by side
+ * it is noise.
  */
-export function managedGrokBuildVersion(tag: string): string {
+export function managedBuildVersion(tag: string): string {
   return tag.startsWith("pwragent-v") ? tag.slice("pwragent-v".length) : tag;
+}
+
+/**
+ * The Build track row, shared by every provider with a PwrAgent build so the
+ * tracks read the same wherever an operator meets them.
+ */
+export const MANAGED_BUILD_TRACK_SUB =
+  "Latest installs promoted builds only. Prerelease installs the newest build whether or not it has been promoted — and stays selectable while both tracks name the same version, which is where a build sits between publication and promotion.";
+
+const MANAGED_BUILD_CHANNEL_OPTIONS: Array<{
+  label: string;
+  value: DesktopUpdateChannel;
+}> = [
+  { label: "Latest", value: "latest" },
+  { label: "Prerelease", value: "prerelease" },
+];
+
+/**
+ * Both tracks, each labelled with the version it resolves to as of the last
+ * release check.
+ *
+ * "Unavailable" is not "there is no such build": a check that fell back to the
+ * public Atom feed can only speak for one track, and no check has run at all
+ * before the first install.
+ */
+export function managedBuildTrackOptions(tags: {
+  latestTag?: string;
+  prereleaseTag?: string;
+}): Array<{ label: string; meta: string; value: DesktopUpdateChannel }> {
+  return MANAGED_BUILD_CHANNEL_OPTIONS.map((option) => {
+    const tag =
+      option.value === "latest" ? tags.latestTag : tags.prereleaseTag;
+    return { ...option, meta: tag ? managedBuildVersion(tag) : "Unavailable" };
+  });
 }

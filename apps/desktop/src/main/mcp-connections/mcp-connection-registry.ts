@@ -5,7 +5,9 @@ import {
   MCP_CONNECTION_IDS,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  isMcpConnectionToolApproval,
   type McpConnectionRecord,
+  type McpConnectionToolApproval,
 } from "@pwragent/shared";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
 import {
@@ -25,6 +27,11 @@ const PWRSNAP_ENABLED_PATH = ["mcp_connections", "pwrsnap_enabled"] as const;
 const BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_select_for_new_threads",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_select_for_new_threads",
+} as const;
+// And the tool approval mode, the third.
+const BUILT_IN_TOOL_APPROVAL_KEYS = {
+  [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_tool_approval",
+  [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_tool_approval",
 } as const;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const PWRSNAP_SERVER_URL = "http://127.0.0.1:51729/mcp";
@@ -146,6 +153,49 @@ export class McpConnectionRegistry {
     return updated;
   }
 
+  /**
+   * Choose when a gateway call to this connection asks first.
+   *
+   * `auto` is stored as absence, like the other defaults, so a row written
+   * before this key existed and one set back to the default read the same.
+   */
+  setToolApproval(
+    connectionId: string,
+    toolApproval: McpConnectionToolApproval,
+  ): McpConnectionRecord {
+    if (
+      connectionId === PWRSNAP_MCP_CONNECTION_ID
+      || connectionId === PWRGIT_MCP_CONNECTION_ID
+    ) {
+      const path = ["mcp_connections", BUILT_IN_TOOL_APPROVAL_KEYS[connectionId]];
+      this.writeConfig((source) =>
+        applyTomlEdits(source, [toolApproval === "auto"
+          ? { op: "delete", path }
+          : { op: "set", path, value: toolApproval }]),
+      );
+      return connectionId === PWRGIT_MCP_CONNECTION_ID
+        ? this.pwrGitConnection()
+        : this.pwrSnapConnection();
+    }
+    const current = this.readStoredConnections();
+    const target = current.find((connection) => connection.id === connectionId);
+    if (!target) {
+      throw new Error("That MCP connection no longer exists.");
+    }
+    if (readToolApproval(target.toolApproval) === toolApproval) return target;
+    const updated: McpConnectionRecord = {
+      ...target,
+      toolApproval,
+      updatedAt: this.now(),
+    };
+    this.writeStoredConnections(
+      current.map((connection) =>
+        connection.id === connectionId ? updated : connection,
+      ),
+    );
+    return updated;
+  }
+
   /** The `[mcp_connections]` table, or undefined when there is no config yet. */
   private readConnectionsTable(): Record<string, unknown> | undefined {
     if (!fs.existsSync(this.configPath)) return undefined;
@@ -162,6 +212,7 @@ export class McpConnectionRegistry {
       ...builtInPwrSnapConnection(),
       enabled: table?.pwrsnap_enabled !== false,
       selectForNewThreads: table?.pwrsnap_select_for_new_threads === true,
+      toolApproval: readToolApproval(table?.pwrsnap_tool_approval),
     };
   }
 
@@ -176,6 +227,7 @@ export class McpConnectionRegistry {
       kind: "pwrgit",
       enabled: table?.pwrgit_enabled !== false,
       selectForNewThreads: table?.pwrgit_select_for_new_threads === true,
+      toolApproval: readToolApproval(table?.pwrgit_tool_approval),
       createdAt: 0,
       updatedAt: 0,
     };
@@ -220,6 +272,7 @@ export class McpConnectionRegistry {
       kind: "remote",
       enabled: true,
       selectForNewThreads: false,
+      toolApproval: "auto",
       createdAt: now,
       updatedAt: now,
     };
@@ -352,6 +405,7 @@ export class McpConnectionRegistry {
       // row. That means an off has to be removed explicitly, or the merge
       // would keep the `true` this row carried before.
       if (!next.selectForNewThreads) delete merged.select_for_new_threads;
+      if (readToolApproval(next.toolApproval) === "auto") delete merged.tool_approval;
       rows.push(merged);
     }
     for (const connection of connections) {
@@ -431,9 +485,16 @@ function builtInPwrSnapConnection(): McpConnectionRecord {
     kind: "pwrsnap",
     enabled: true,
     selectForNewThreads: false,
+    toolApproval: "auto",
     createdAt: 0,
     updatedAt: 0,
   };
+}
+
+// An unknown or hand-mistyped value reads as the default, which still asks
+// for anything the server does not mark safe.
+function readToolApproval(value: unknown): McpConnectionToolApproval {
+  return isMcpConnectionToolApproval(value) ? value : "auto";
 }
 
 function normalizeDisplayName(value: string): string {
@@ -465,6 +526,9 @@ function connectionToRow(
     auth_mode: connection.authMode,
     enabled: connection.enabled,
     ...(connection.selectForNewThreads ? { select_for_new_threads: true } : {}),
+    ...(readToolApproval(connection.toolApproval) === "auto"
+      ? {}
+      : { tool_approval: readToolApproval(connection.toolApproval) }),
     created_at: connection.createdAt,
     updated_at: connection.updatedAt,
   };
@@ -493,6 +557,7 @@ function connectionFromRow(
       // Opt-in: a row written before this key existed, or by hand without it,
       // must not start handing a server to every new thread.
       selectForNewThreads: row.select_for_new_threads === true,
+      toolApproval: readToolApproval(row.tool_approval),
       createdAt: typeof row.created_at === "number" ? row.created_at : 0,
       updatedAt: typeof row.updated_at === "number" ? row.updated_at : 0,
     };

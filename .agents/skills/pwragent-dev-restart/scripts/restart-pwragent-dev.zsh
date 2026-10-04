@@ -156,7 +156,6 @@ is_dev_chain_parent() {
   [[ "$command" == *"pnpm dev"* ]] && return 0
   [[ "$command" == *"pnpm --filter @pwragent/desktop dev"* ]] && return 0
   [[ "$command" == *"electron-vite"* && "$command" == *"dev"* ]] && return 0
-  [[ "$command" == *"scripts/rebuild-native-for-electron.mjs"* && "$command" == *"electron-vite dev"* ]] && return 0
   return 1
 }
 

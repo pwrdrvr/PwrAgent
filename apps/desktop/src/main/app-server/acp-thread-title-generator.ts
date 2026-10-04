@@ -14,6 +14,7 @@ import type {
 
 export type AcpThreadTitleGeneratorOptions = {
   backend: AcpBackendId;
+  resolveUsageAccountKey?: () => Promise<string | undefined>;
   configureHelperSession?: (params: {
     client: AcpRuntimeClient;
     parentSession?: AcpSessionMetadata;
@@ -34,6 +35,7 @@ export type AcpThreadTitleGeneratorOptions = {
 
 export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
   private readonly backend: AcpBackendId;
+  private readonly resolveUsageAccountKey?: () => Promise<string | undefined>;
   private readonly configureHelperSession?: (params: {
     client: AcpRuntimeClient;
     parentSession?: AcpSessionMetadata;
@@ -49,6 +51,7 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
 
   constructor(options: AcpThreadTitleGeneratorOptions) {
     this.backend = options.backend;
+    this.resolveUsageAccountKey = options.resolveUsageAccountKey;
     this.configureHelperSession = options.configureHelperSession;
     this.helperSession = options.helperSession;
     this.getClient = options.getClient;
@@ -67,6 +70,7 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
     }
 
     try {
+      const accountKey = await this.resolveUsageAccountKey?.();
       const parentSession = this.getSession(this.backend, threadId);
       const cwd = parentSession?.cwd;
       if (
@@ -118,6 +122,7 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
       const usageModel = response.model ?? helperModel;
       return {
         status: "ok",
+        ...(accountKey ? { accountKey } : {}),
         object: parseAcpTitleObject(response.text),
         helperThreadId: helperSession.sessionId,
         ...(usageModel ? { model: usageModel } : {}),

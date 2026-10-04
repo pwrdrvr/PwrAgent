@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useRecoverableState } from "./RendererRecoveryState";
 
 /**
  * One entry in the renderer's browser-style navigation history. Only the
@@ -143,7 +144,7 @@ export function useNavigationHistory(args: {
   goBack: () => void;
   goForward: () => void;
 } {
-  const [stacks, setStacks] = useState<HistoryStacks>(EMPTY_STACKS);
+  const [stacks, setStacks] = useRecoverableState<HistoryStacks>("navigation.history", EMPTY_STACKS);
   // Mirror for synchronous reads from goBack/goForward — the setState
   // value alone would go stale inside the stable callbacks below.
   const stacksRef = useRef(stacks);

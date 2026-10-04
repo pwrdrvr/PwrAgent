@@ -20,6 +20,7 @@ import type {
   PrSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
+  ThreadLock,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
 } from "./navigation";
@@ -968,6 +969,8 @@ export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   federationTarget?: FederationTarget;
+  /** Return after archival; cleanup completion arrives as thread/archiveCleanup/completed. */
+  backgroundCleanup?: boolean;
   /** Group archive admission revalidates the exact persisted parent before mutation. */
   expectedParent?: { threadId: ThreadIdentifier; backend: AppServerBackendKind; instanceId?: FederationInstanceId } | null;
 };
@@ -977,6 +980,7 @@ export type ArchiveThreadResponse = {
   threadId: ThreadIdentifier;
   archivedAt: number;
   cleanup: ArchiveThreadCleanupResult[];
+  cleanupPending?: boolean;
 };
 
 /**
@@ -1116,7 +1120,16 @@ export type RenameThreadRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   name: string;
+  /** Refuse an Undo if the owning thread no longer has this title. */
+  expectedName?: string;
 };
+
+/**
+ * The refusal for a stale `expectedName`. The renderer matches it to tell a
+ * permanent refusal, which no retry can fix, from a transient failure.
+ */
+export const RENAME_THREAD_EXPECTED_NAME_MISMATCH =
+  "The thread title has changed. Undo was not applied.";
 
 export type RenameThreadResponse = {
   backend: AppServerBackendKind;
@@ -1212,6 +1225,8 @@ export type AppServerReadThreadResponse = {
    */
   pendingRequest?: AppServerPendingRequestNotification;
   pricing?: {
+    /** Whole-thread estimate input; never added to observed ledger totals. */
+    snapshot?: import("../token-usage-pricing").ThreadPricingSnapshot;
     /** Observed context compactions, oldest first. */
     compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
@@ -1380,7 +1395,7 @@ export type ThreadTokenMiserSavings = {
   withoutGateCostMicros: number;
   /** 2 — what the helper actually charged. */
   gateCostMicros: number;
-  /** 3 — summaries and retrievals the parent did receive, and their replays. */
+  /** 3 — summaries, retrievals and replays, plus full cached prompts on retrieval requests. */
   revealedCostMicros: number;
   /** 1 − 2 − 3. Negative when the gate cost more than it saved. */
   savingsMicros: number;
@@ -1892,6 +1907,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/archiveCleanup/completed";
+      params: {
+        threadId: string;
+        archivedAt: number;
+        cleanup: ArchiveThreadCleanupResult[];
+        error?: string;
+      };
+    }
+  | {
       method: "thread/deleted";
       params: {
         threadId: string;
@@ -2110,6 +2134,10 @@ export type AppServerNotification =
          * and a federated payload is another instance's JSON.
          */
         titleSource?: AppServerRenamedTitleSource;
+        /** Host-attributed Agent tool rename, shown in the notification rail. */
+        renameOrigin?: "agent_tool";
+        /** Previous title, when known, for an in-window Undo action. */
+        previousThreadName?: string;
       };
     }
   | {
@@ -2242,7 +2270,7 @@ export type AppServerNotification =
   | {
       method: "navigation/threadDirectories/updated";
       params: {
-        reason: "selected-thread" | "full-reconcile";
+        reason: "selected-thread" | "full-reconcile" | "thread-created";
         threadIds: string[];
       };
     }
@@ -2310,6 +2338,11 @@ export type AppServerNotification =
         displayText?: string;
         /** The owner replaced pending input, so existing previews must refresh. */
         inputUpdated?: boolean;
+        /**
+         * Generated display title. Sent on a refresh once the helper answers;
+         * an `inputUpdated` refresh without one clears the previous title.
+         */
+        title?: string;
         position?: number;
         turnId?: string;
         automationRunId?: string;
@@ -2332,6 +2365,14 @@ export type AppServerNotification =
         threadId: string;
         /** Complete reaction set, ordered by insertion. */
         reactions: string[];
+      };
+    }
+  | {
+      method: "thread/lock/updated";
+      params: {
+        threadId: string;
+        /** Absent once the thread is unlocked. */
+        lock?: ThreadLock;
       };
     }
   | {
@@ -2463,6 +2504,7 @@ export type AppServerNotification =
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }
+  | { method: "federation/health/changed"; params: Record<string, never> }
   | FederationPeerStatusChangedNotification
   | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification

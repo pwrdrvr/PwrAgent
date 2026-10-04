@@ -1,0 +1,6 @@
+interface:
+  display_name: "PwrAgent Crash Stack Resolver"
+  short_description: "Map desktop crash stacks to exact release sources"
+  default_prompt: "Use $pwragent-resolve-crash-stack to resolve this desktop crash stack with matching release artifacts and explicit installed-byte verification."
+policy:
+  allow_implicit_invocation: true

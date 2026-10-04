@@ -17,6 +17,7 @@
         "methods": [
           "thread/list",
           "thread/read",
+          "thread/fork",
           "skills/list",
           "turn/start"
         ]

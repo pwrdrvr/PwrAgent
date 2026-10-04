@@ -403,6 +403,36 @@ pass `backend` and `model` to `create_instance_thread` without guessing. If
 the instance cannot list its backends, the projects still return and
 `backendsError` says why.
 
+Prefer `steer_thread` for cross-thread guidance. Both it and the default
+`send_message_to_thread` delivery group pending guidance at the recipient into
+one queued steer, preserving each sender, receipt time, and complete input.
+The recipient steers an active turn when supported; otherwise the batch waits
+for one follow-up turn. Once backend dispatch claims a batch, it is immutable
+and subsequent messages accumulate in the next queued steer. Group edits hold
+the entire recipient FIFO until the replacement and queue notifications finish.
+Sender replacement changes only that sender's contribution and preserves the
+other messages and queue position. Use `delivery: "new_turn"` for a distinct
+follow-up. Explicit model or execution overrides also retain separate turns.
+
+`mark_project_read` accepts the exact `projectKey` from `list_instance_projects`
+and an optional `instanceId`. Omit the instance for a local project, or specify
+its owning peer. It uses the same guarded directory action as the sidebar:
+resolve complete owner membership, mark unread members across all backends in
+one SQLite transaction, then emit one navigation update. Its `projectRead`
+result reports `changedCount`, the instance, and the project key. It does not
+archive threads or stop turns. Listing limits do not limit this action.
+
+`list_attention_threads` remains a bounded listing, with `truncated` reporting
+incomplete results. Its returned row counts are not complete per-project unread
+totals. A project mark-read request should use the bulk action directly instead
+of enumerating those rows.
+
+Discovered PwrAgent tools are callable in Code Mode by their returned
+`codeModeName`, including deferred tools. Prefer a bulk operation; for several
+projects, loop over `tools.pwragent__mark_project_read` in one cell and print a
+compact aggregate. Live external MCP tools use the fixed `call_mcp_tool` gateway
+with identities and schemas from `search_mcp_tools` in the same way.
+
 The general `send_message_to_thread` tool also routes transparently across
 federation. Remote create and search results carry cross-instance links and an
 `instanceId`; newer tool definitions pass that owner directly. PwrAgent also

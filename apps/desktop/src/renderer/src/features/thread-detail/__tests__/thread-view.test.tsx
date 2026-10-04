@@ -1,7 +1,7 @@
 import * as composerMentionSources from "../../composer/useComposerMentionSources";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { cloneElement, useState, type ReactElement } from "react";
+import { cloneElement, StrictMode, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -2516,10 +2516,20 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
+    // The transcript slot keeps the short placeholder; the setup command's
+    // progress is a collapsed row in the launchpad composer's band.
     expect(
-      await screen.findByRole("heading", { name: "Running environment setup" }),
+      await screen.findByRole("heading", { name: "Starting PwrSnap" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByLabelText("Preparing transcript")).toHaveTextContent(
+      "Running the PwrSnap setup first.",
+    );
+    const setupRow = screen.getByLabelText("Env setup running");
+    expect(setupRow.closest(".composer__band")).not.toBeNull();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
+    fireEvent.click(within(setupRow).getByRole("button", { expanded: false }));
+    expect(within(setupRow).getByText(/\$ nvm install/)).toHaveTextContent("pnpm install");
+    expect(within(setupRow).getByText("/repo")).toBeInTheDocument();
     const followup = screen.getByRole("textbox", { name: "New thread" });
     expect(followup).toBeEnabled();
     expect(followup).toHaveValue("");
@@ -2536,8 +2546,7 @@ describe("ThreadView", () => {
     expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
     expect(followup).toHaveValue("");
 
-    expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
-    expect(screen.getByText("/repo")).toBeInTheDocument();
+    expect(screen.getAllByText(/PwrSnap/).length).toBeGreaterThan(0);
     expect(
       screen.queryByRole("button", { name: "Copy setup path" }),
     ).not.toBeInTheDocument();
@@ -2567,22 +2576,140 @@ describe("ThreadView", () => {
       command: "nvm install $nodeVersion", cwd: "C:\\fixture", at: 1,
     };
     act(() => setupProgress({ ...event, directoryKey: "thread:codex:other", phase: "started" }));
-    expect(screen.queryByRole("heading", { name: "Running environment setup" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup running")).not.toBeInTheDocument();
     act(() => setupProgress({ ...event, phase: "started" }));
-    expect(screen.getByRole("heading", { name: "Running environment setup" })).toBeVisible();
-    expect(screen.getByLabelText("Setup command")).toHaveTextContent("nvm install $nodeVersion");
+    // One collapsed row in the composer band — never a panel above the
+    // transcript, which pushed the composer off the window.
+    const running = screen.getByLabelText("Env setup running");
+    expect(running.closest(".composer__band")).not.toBeNull();
+    expect(screen.queryByLabelText("Preparing transcript")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
+    fireEvent.click(within(running).getByRole("button", { expanded: false }));
+    expect(within(running).getByText("$ nvm install $nodeVersion")).toBeVisible();
     act(() => setupProgress({ ...event, phase: "stderr", chunk: "install failed" }));
-    expect(screen.getByLabelText("Setup output")).toHaveTextContent("install failed");
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent("install failed");
     act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "nvm failed" }));
-    expect(screen.getByRole("heading", { name: "Environment setup failed" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Dismiss setup output" })).toBeVisible();
+    const failed = screen.getByLabelText("Env setup failed");
+    expect(failed).toHaveAttribute("role", "alert");
+    expect(failed).toHaveTextContent("exit 1");
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent("nvm failed");
+    expect(within(failed).getByRole("button", { name: "Dismiss" })).toBeVisible();
     act(() => setupProgress({ ...event, phase: "started" }));
-    expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("install failed");
-    expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("nvm failed");
+    expect(screen.getByLabelText("Env setup running")).not.toHaveTextContent("install failed");
+    expect(screen.getByLabelText("Env setup running")).not.toHaveTextContent("nvm failed");
     act(() => setupProgress({ ...event, phase: "completed", exitCode: 0, output: "installed" }));
-    expect(screen.queryByRole("heading", { name: "Environment setup complete" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Dismiss setup output" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Setup output")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup running")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup failed")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
+  });
+
+  it("dismisses a failed environment selection and retries it through the picker's call", async () => {
+    let setupProgress: Parameters<NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>>[0] = () => undefined;
+    const setCodexThreadEnvironment = vi.fn(async () => {
+      throw new Error(
+        "Error invoking remote method: CodexEnvironmentStartupError: Codex environment command exited with 1",
+      );
+    });
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          onCodexEnvironmentSetupProgress: (callback) => { setupProgress = callback; return () => undefined; },
+          setCodexThreadEnvironment,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          ...buildTimestampTargetThread("existing", "Existing thread"),
+          codexEnvironmentRuntime: {
+            environmentId: "env",
+            environmentName: "Fixture environment",
+            executionTarget: "local",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />,
+    );
+    const event = {
+      directoryKey: "thread:codex:existing", environmentId: "env", environmentName: "Fixture environment",
+      command: "pnpm install", cwd: "/fixture", at: 1,
+    };
+    act(() => setupProgress({ ...event, phase: "started" }));
+    act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "ERR_PNPM_IGNORED_BUILDS" }));
+    const failed = screen.getByLabelText("Env setup failed");
+    // The collapsed summary says it failed; the error itself is in the body.
+    expect(failed).not.toHaveTextContent("ERR_PNPM_IGNORED_BUILDS");
+    fireEvent.click(within(failed).getByRole("button", { expanded: false }));
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent("ERR_PNPM_IGNORED_BUILDS");
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(setCodexThreadEnvironment).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: "existing", environmentId: "env" }),
+      );
+    });
+    // The rejected selection is the same failure the row already reports:
+    // no second "Environment error" row in the band.
+    await waitFor(() => {
+      expect(within(failed).getByRole("button", { name: "Retry" })).toBeEnabled();
+    });
+    expect(screen.queryByLabelText("Environment error")).not.toBeInTheDocument();
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByLabelText("Env setup failed")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Environment error")).not.toBeInTheDocument();
+  });
+
+  it("retires a failed setup row once the thread moves to another environment", () => {
+    let setupProgress: Parameters<NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>>[0] = () => undefined;
+    const desktopApi: Partial<DesktopApi> = {
+      onCodexEnvironmentSetupProgress: (callback) => { setupProgress = callback; return () => undefined; },
+    };
+    const threadWithEnvironment = (environmentId?: string): NavigationThreadSummary => ({
+      ...buildTimestampTargetThread("existing", "Existing thread"),
+      codexEnvironmentRuntime: environmentId
+        ? { environmentId, environmentName: environmentId, executionTarget: "local" }
+        : undefined,
+    });
+    const view = (thread: NavigationThreadSummary) => (
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={desktopApi}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={thread}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />
+    );
+    const { rerender } = render(view(threadWithEnvironment("previous")));
+    const event = {
+      directoryKey: "thread:codex:existing", environmentId: "failing", environmentName: "failing",
+      command: "pnpm install", cwd: "/fixture", at: 1,
+    };
+    act(() => setupProgress({ ...event, phase: "started" }));
+    act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "install failed" }));
+    // The failed selection's own runtime update names the same environment.
+    rerender(view(threadWithEnvironment("failing")));
+    expect(screen.getByLabelText("Env setup failed")).toHaveTextContent("failing");
+
+    // Choosing an environment with no setup script emits no progress; the
+    // failure no longer describes this thread, and Retry would re-select it.
+    rerender(view(threadWithEnvironment("no-setup")));
+    expect(screen.queryByLabelText("Env setup failed")).not.toBeInTheDocument();
   });
 
   it("shows pending environment setup while a forked worktree is preparing", async () => {
@@ -2800,7 +2927,7 @@ describe("ThreadView", () => {
     expect(screen.getByRole("button", { name: "Start thread" })).toBeInTheDocument();
   });
 
-  it("describes sub-thread launchpads as grouped children with empty history", () => {
+  it("names a sub-thread launchpad's parent beside the input, until it is detached", async () => {
     const selectedDirectory = {
       key: "subthread:codex:thread-parent:new-worktree",
       kind: "directory",
@@ -2825,30 +2952,68 @@ describe("ThreadView", () => {
       workMode: "worktree",
     } satisfies NavigationLaunchpadDraft;
 
-    render(
-      <ThreadView
-        addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
-        clearPendingRequest={() => undefined}
-        composerDisabled={false}
-        loading={false}
-        loadingMore={false}
-        messageCount={0}
-        selectedDirectory={selectedDirectory}
-        selectedLaunchpad={selectedLaunchpad}
-        skills={[]}
-        transcriptEntries={[]}
-        onLoadOlder={async () => undefined}
-        removeOptimisticMessage={(_id) => undefined}
-      />
-    );
+    const onDetachLaunchpadParent = vi.fn();
+    const onSelectLaunchpadParent = vi.fn();
+    function DetachableLaunchpad() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>(selectedLaunchpad);
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          loading={false}
+          loadingMore={false}
+          messageCount={0}
+          selectedDirectory={selectedDirectory}
+          selectedLaunchpad={launchpad}
+          skills={[]}
+          transcriptEntries={[]}
+          onCancelLaunchpad={() => undefined}
+          onDetachLaunchpadParent={(directoryKey) => {
+            onDetachLaunchpadParent(directoryKey);
+            setLaunchpad(({ parentThreadId: _id, parentThreadTitle: _title, ...detached }) => detached);
+          }}
+          onSelectLaunchpadParent={onSelectLaunchpadParent}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
 
-    expect(
-      screen.getByText("Grouped under Issue 193 Markdown attachments"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
+    render(<DetachableLaunchpad />);
+
+    // The breadcrumb says what is being made; the source row says from what.
+    expect(screen.getByRole("heading", { name: "New sub-thread" })).toBeInTheDocument();
+    expect(screen.queryByText(/Grouped under/)).not.toBeInTheDocument();
+    const source = screen.getByRole("group", { name: "Sub-thread source" });
+    expect(source).toHaveTextContent("Sub-thread of");
+    expect(source).toHaveTextContent("· no history");
+    expect(screen.getByRole("button", { name: "Start sub-thread" })).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: "New thread" });
+    expect(input).toHaveAttribute("data-placeholder", "Start a sub-thread of Issue 193 Markdown attachments");
     expect(screen.getAllByText("main").length).toBeGreaterThan(0);
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
+
+    fireEvent.click(within(source).getByRole("button", { name: "Open Issue 193 Markdown attachments" }));
+    expect(onSelectLaunchpadParent).toHaveBeenCalledWith(expect.objectContaining({
+      directoryKey: selectedDirectory.key,
+      parentThreadId: "thread-parent",
+    }));
+
+    fireEvent.click(within(source).getByRole("button", { name: "Detach from Issue 193 Markdown attachments" }));
+
+    expect(onDetachLaunchpadParent).toHaveBeenCalledWith(selectedDirectory.key);
+    expect(screen.queryByRole("group", { name: "Sub-thread source" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "New thread" }))
+      .toHaveAttribute("data-placeholder", "Start a new thread in PwrAgnt");
+    // Detach keeps the settings. With no git status probed yet, the parent
+    // link was what offered a new worktree; the launchpad still is one.
+    expect(screen.getAllByText("New worktree").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus());
   });
 
   it("describes same-worktree sub-thread launchpads as shared worktrees", () => {
@@ -2895,9 +3060,9 @@ describe("ThreadView", () => {
     );
 
     expect(screen.getByText("Same worktree")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
-    expect(screen.getByText("Grouped under Issue 193 Markdown attachments"))
-      .toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New sub-thread" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Sub-thread source" }))
+      .toHaveTextContent("Issue 193 Markdown attachments");
     expect(document.querySelector(".launchpad-panel")).not.toBeInTheDocument();
     expect(screen.queryByText("Local checkout")).not.toBeInTheDocument();
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
@@ -3145,7 +3310,10 @@ describe("ThreadView", () => {
     );
   });
 
-  it.each(["composer", "elsewhere", "moved-after-handoff", "visit-later"])("hands off environment setup without losing or stealing focus (%s)", async (focus) => {
+  // `strict-mode` is the dev build's own shape: StrictMode re-runs a freshly
+  // mounted composer's effects, which rebuilt the editor that focus had just
+  // been handed to.
+  it.each(["composer", "strict-mode", "elsewhere", "moved-after-handoff", "visit-later"])("hands off environment setup without losing or stealing focus (%s)", async (focus) => {
     const { result } = renderHook(useComposerDraftStore);
     const draftStore = result.current;
     const launchpad: NavigationLaunchpadDraft = {
@@ -3199,7 +3367,7 @@ describe("ThreadView", () => {
         <ThreadView {...props} {...overrides} />
       </>
     );
-    const view = render(element());
+    const view = render(element(), focus === "strict-mode" ? { wrapper: StrictMode } : undefined);
     const input = screen.getByRole("textbox", { name: "New thread" }) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Still typing" } });
     // Let initial launchpad hydration finish its existing focus request.
@@ -3229,7 +3397,11 @@ describe("ThreadView", () => {
 
     const reply = screen.getByRole("textbox", { name: "Reply" }) as HTMLInputElement;
     expect(reply).toHaveValue("Still typing");
-    if (focus === "composer") {
+    // The thread a launchpad becomes keeps the launchpad's editor. A detour
+    // through another thread mounts a fresh one, as any other switch does.
+    if (focus === "visit-later") expect(reply).not.toBe(input);
+    else expect(reply).toBe(input);
+    if (focus === "composer" || focus === "strict-mode") {
       await waitFor(() => expect(reply).toHaveFocus());
       expect(reply.selectionStart).toBe(6);
       expect(window.getSelection()?.anchorNode?.textContent).toBe("Still typing");
@@ -3241,6 +3413,94 @@ describe("ThreadView", () => {
     } else {
       expect(otherInput).toHaveFocus();
     }
+  });
+
+  // The handoff test above covers the one move that keeps a composer. Every
+  // other move between a launchpad and a thread mounts a fresh one. Composer
+  // rebuilds its editor on any other scope change, so the editor cannot tell
+  // a kept composer from a fresh one. Its root can: it survives only while
+  // React keeps the Composer instance. Each case starts on a different side,
+  // so each direction fails on its own when the composer is reused.
+  it.each(["launchpad", "thread"] as const)("mounts a fresh composer when a %s switches sides", (start) => {
+    const { result } = renderHook(useComposerDraftStore);
+    const launchpad: NavigationLaunchpadDraft = {
+      backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+      directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+      prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+    };
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      composerDraftStore: result.current,
+      transcriptEntries: [],
+      loading: false,
+      loadingMore: false,
+      messageCount: 0,
+      selectedDirectory: {
+        key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+      },
+      selectedLaunchpad: launchpad,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+    };
+    const composerRoot = () =>
+      screen.getByRole("textbox", { name: /^(New thread|Reply)$/ }).closest(".composer");
+    const showThread = (id: string) => (
+      <ThreadView
+        {...props}
+        selectedLaunchpad={undefined}
+        selectedThread={buildTimestampTargetThread(id, id)}
+      />
+    );
+
+    if (start === "launchpad") {
+      const view = render(<ThreadView {...props} />);
+      const launchpadComposer = composerRoot();
+      expect(launchpadComposer).not.toBeNull();
+      // No handoff names this thread, so it gets its own composer.
+      view.rerender(showThread("first-thread"));
+      expect(composerRoot()).not.toBe(launchpadComposer);
+    } else {
+      const view = render(showThread("first-thread"));
+      const threadComposer = composerRoot();
+      expect(threadComposer).not.toBeNull();
+      // Threads share theirs.
+      view.rerender(showThread("second-thread"));
+      expect(composerRoot()).toBe(threadComposer);
+      view.rerender(<ThreadView {...props} />);
+      expect(composerRoot()).not.toBe(threadComposer);
+    }
+  });
+
+  // A starting launchpad can be selected before its directory row loads.
+  // With no thread either, nothing can render the thread view.
+  it("shows the empty state for a launchpad whose directory has not loaded", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Select a thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /^(New thread|Reply)$/ })).toBeNull();
   });
 
   it("opens submitted image previews while the launchpad is materializing", () => {
@@ -5418,7 +5678,11 @@ describe("ThreadView", () => {
     expect(clearPendingRequest).toHaveBeenCalledWith("input-request-1", "Thinking");
   });
 
-  it("submits pending MCP interactions through the server request bridge", async () => {
+  it.each([
+    { label: "Allow", persist: undefined },
+    { label: "Allow this conversation", persist: "session" },
+    { label: "Always allow", persist: "always" },
+  ])("submits $label MCP interactions through the server request bridge", async ({ label, persist }) => {
     let currentPendingMcpInteraction: PendingMcpInteractionState | undefined = {
       method: "mcpServer/elicitation/request",
       threadId: "thread-2",
@@ -5429,6 +5693,7 @@ describe("ThreadView", () => {
       mode: "form",
       _meta: {
         tool_description: "List, create, close, or select a browser tab.",
+        ...(persist ? { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"] } : {}),
       },
       form: {
         empty: true,
@@ -5615,7 +5880,7 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    fireEvent.click(screen.getByRole("button", { name: label }));
 
     await waitFor(() => {
       expect(submitServerRequest).toHaveBeenCalledWith({
@@ -5626,7 +5891,7 @@ describe("ThreadView", () => {
         response: {
           action: "accept",
           content: {},
-          _meta: null,
+          _meta: persist ? { persist } : null,
         },
       });
     });
@@ -7209,10 +7474,6 @@ describe("ThreadView", () => {
         removeOptimisticMessage={() => undefined}
       />,
     );
-    // jsdom does not implement the browser's scrollTo method used to reveal
-    // a continuation error above the command output.
-    const failureBody = document.querySelector<HTMLElement>(".environment-setup-choice__body")!;
-    failureBody.scrollTo = vi.fn();
     fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
     await screen.findByText("Thread could not be resumed");
     expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
@@ -7228,7 +7489,7 @@ describe("ThreadView", () => {
     expect(screen.queryByRole("button", { name: "Continue anyway" })).not.toBeInTheDocument();
   });
 
-  it("keeps the environment setup failure actions outside the panel's scroll container", () => {
+  it("puts the new-thread setup failure decision in the composer band, visible while collapsed", () => {
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
@@ -7276,24 +7537,26 @@ describe("ThreadView", () => {
       />
     );
 
-    // `__body` is the panel's scroll container and carries its height bound
-    // (see `environment-setup-choice-bounds.test.ts`); the two buttons are the
-    // operator's only way out of this state, so they have to stay outside that
-    // scroller. jsdom does no layout — the height bound itself is asserted in
-    // the stylesheet test — but it can see this containment, which is the half
-    // a refactor would break.
-    const panel = document.querySelector(".environment-setup-choice");
-    const body = panel?.querySelector(".environment-setup-choice__body");
-    const actions = panel?.querySelector(".environment-setup-choice__actions");
-    expect(panel).not.toBeNull();
-    expect(body).not.toBeNull();
-    expect(actions).not.toBeNull();
-    expect(body!.contains(actions!)).toBe(false);
+    // The decision is the operator's only way out of this state. It used to
+    // be a panel above the transcript; it is now a row in the composer band,
+    // which is height-capped and scrolls (see `composer-band-bounds.test.ts`),
+    // and the buttons sit outside the disclosure so they show while the
+    // output is collapsed.
+    const row = screen.getByLabelText("Env setup failed");
+    expect(row.closest(".composer__band")).not.toBeNull();
+    expect(document.querySelector(".thread-view__primary > [aria-label='Env setup failed']")).toBeNull();
+    expect(within(row).getByRole("button", { expanded: false })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
     for (const name of ["Delete worktree and close", "Continue anyway"]) {
-      expect(actions!.contains(screen.getByRole("button", { name }))).toBe(
-        true,
-      );
+      expect(within(row).getByRole("button", { name })).toBeVisible();
     }
+    expect(row).toHaveTextContent("The new worktree is ready, but its setup command failed.");
+
+    fireEvent.click(within(row).getByRole("button", { expanded: false }));
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent(
+      "nvm is not compatible with the npm config prefix",
+    );
+    expect(within(row).getByText(/\$ nvm install/)).toHaveTextContent("pnpm install");
   });
 
   it("hides the environment setup failure choice after the thread has messages", () => {

@@ -33,7 +33,7 @@ export type SendThreadToMachineRequest = {
 
 export type SendThreadToMachineSource = {
   title: string;
-  /** The thread's Git project. Absent for a Workspaces thread: history only. */
+  /** The thread's Git project. Non-Git workspaces travel as an archive. */
   project?: ProjectIdentity;
   gitBranch?: string;
   gitWorkingState?: ThreadGitWorkingState;
@@ -209,7 +209,7 @@ export function SendThreadToMachineDialog(props: {
         ? `${lookup.match.matchedBy === "origin" && project?.repositoryKey
           ? `Matched by origin ${project.repositoryKey}.`
           : "Matched by project name. Check that it is a clone of the same repository."
-        } The thread starts in a new detached worktree there.`
+        } A new worktree uses the source branch when available, or starts detached at the source commit.`
         : `${target.label} has no project ${
           project?.repositoryKey ? "with this origin" : `named ${project?.label ?? "like this one"}`
         }. Enter the path of a clone there that shares this repository's history.`;
@@ -227,7 +227,7 @@ export function SendThreadToMachineDialog(props: {
         <h2>Send to Another Machine</h2>
         <p>
           Continue &ldquo;{source.title}&rdquo; on another PwrAgent with its history
-          {project ? " and uncommitted work" : ""}.
+          {project ? " and published commit" : ""}.
         </p>
         {sending ? (
           <p className="workspace-handoff-dialog__note" role="status">
@@ -307,8 +307,10 @@ export function SendThreadToMachineDialog(props: {
             {!project ? (
               <p className="workspace-handoff-dialog__note">
                 This thread has no Git project. Its history starts in a new workspace
-                {target ? ` on ${target.label}` : ""}. Files in this workspace are not
-                copied.
+                {target ? ` on ${target.label}` : ""}. Any available workspace is also
+                copied, including hidden files. Remove sensitive files before sending.
+                Symlinks pointing outside the workspace are omitted; all symlinks are
+                omitted when Windows is involved.
               </p>
             ) : null}
             <div

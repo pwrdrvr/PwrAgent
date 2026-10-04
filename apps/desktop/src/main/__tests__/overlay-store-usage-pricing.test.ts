@@ -49,6 +49,56 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
+  it("measures the existing usage line transaction without account identity", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const { writes } = await measureSqliteWrites(() => store.upsertThreadUsageLine({
+      line: buildUsageLine({ source: "live", status: "pending" }),
+    }));
+    expectSqliteWriteBudget({ scenario: "usage-line-without-account-attribution", writes,
+      note: "Baseline line write: one existing commit; compare usage-line-account-attribution for account overhead" });
+  });
+
+  it("persists account identity independently of limits in the existing ledger commit", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const dbPath = useFileStateDb();
+    const line = buildUsageLine({ source: "live", status: "pending", accountKey: "account-a" });
+    const { writes } = await measureSqliteWrites(() => store.upsertThreadUsageLine({ line }));
+    expectSqliteWriteBudget({
+      scenario: "usage-line-account-attribution", writes,
+      note: "Account identity rides the existing line transaction: one commit, no separate account write",
+    });
+    await store.upsertThreadUsageLine({ line: { ...line, accountKey: "account-b", outputTokens: 101 } });
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect((await store.readThreadPricing({ backend: "codex", threadId: line.threadId })).lines[0].accountKey)
+      .toBe("account-a");
+    const snapshot = await store.readUsageActivity({ from: PRICING_CATALOG_TIME - 1, to: PRICING_CATALOG_TIME + 60_000 });
+    expect(snapshot.limitHistory).toEqual([]);
+    expect(snapshot.rows[0].accountKey).toBe("account-a");
+    await store.upsertThreadUsageLine({ line: { ...line, source: "hydration", status: "finalized" } });
+    expect((await store.readThreadPricing({ backend: "codex", threadId: line.threadId })).lines[0].accountKey)
+      .toBe("account-a");
+  });
+
+  it("keeps helpers from distinct accounts separate while rolling the same account together", async () => {
+    const start = PRICING_CATALOG_TIME;
+    for (const [id, accountKey] of [["a", "account-a"], ["b", "account-b"], ["c", "account-a"], ["d", undefined]]) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        usageLineId: `helper-${id}`, scope: "monitor", source: "monitor", status: "finalized",
+        sourceItemId: `system:title-helper:${id}`, threadId: `helper-${id}`, turnId: `turn-${id}`,
+        parentThreadId: "thread-1", accountKey, createdAt: start + 1_000,
+      }) });
+    }
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 240_000 });
+    expect(snapshot.rows).toHaveLength(3);
+    expect(snapshot.rows.find((row) => row.accountKey === "account-a")?.rollup?.count).toBe(2);
+    expect(snapshot.rows.find((row) => row.accountKey === "account-b")?.rollup?.count).toBe(1);
+    expect(snapshot.rows.find((row) => !row.accountKey)?.rollup?.count).toBe(1);
+    expect(snapshot.rows.reduce((sum, row) => sum + row.line.totalCostMicros, 0)).toBe(4 * 16_100);
+  });
+
   it("keeps an unfinished interval only while its ledger row can hold usage in the window", async () => {
     const start = PRICING_CATALOG_TIME;
     await store.upsertThreadUsageLine({ line: buildUsageLine({
@@ -91,7 +141,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     const { rows, truncated } = await store.readUsageActivity(window);
     expect(truncated).toBe(false);
     const rollups = rows.filter((row) => row.rollup).sort((a, b) => a.rollup!.kind.localeCompare(b.rollup!.kind));
-    expect(rollups.map((row) => [row.rollup, row.line.threadId, row.line.totalCostMicros])).toEqual([
+    expect(rollups.map((row) => [{ kind: row.rollup!.kind, count: row.rollup!.count }, row.line.threadId, row.line.totalCostMicros])).toEqual([
       [{ kind: "title-helper", count: 1 }, "thread-1", 16_100],
       [{ kind: "token-miser", count: 2 }, "thread-1", 32_200],
     ]);
@@ -382,9 +432,12 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
     const snapshot = await store.readUsageActivity({ from: start, to: start + 5_000 });
     expect(snapshot.limitHistory).toEqual([reading]);
+    expect(snapshot.rows.map((row) => row.accountKey)).toEqual(["acct", "acct"]);
     // A corrupt stored reading is dropped, not thrown.
     stateDb.raw.prepare("UPDATE thread_usage_turns SET rate_limit_snapshot = ? WHERE turn_id = ?").run("{not json", "turn-2");
-    expect((await store.readUsageActivity({ from: start, to: start + 5_000 })).limitHistory).toEqual([reading]);
+    const corrupt = await store.readUsageActivity({ from: start, to: start + 5_000 });
+    expect(corrupt.limitHistory).toEqual([reading]);
+    expect(corrupt.rows.find((row) => row.line.turnId === "turn-2")?.accountKey).toBeUndefined();
   });
 
   it("uses one commit to record a completed turn after its usage row was flushed", async () => {
@@ -2549,3 +2602,29 @@ async function seedUnpricedGrokUsageLines(params: {
     });
   }
 }
+
+describe("SqliteOverlayStore thread pricing summaries", () => {
+  it("reads each thread's stored totals, with sub-agent spend already inside its parent", async () => {
+    await store.upsertThreadUsageLine({ line: buildUsageLine({ usageLineId: "parent-turn" }) });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      usageLineId: "parent-agent", scope: "monitor", sourceItemId: "agent-1",
+      threadId: "agent-thread", turnId: "agent-turn", parentThreadId: "thread-1",
+    }) });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      usageLineId: "child-turn", threadId: "thread-2", turnId: "child-turn",
+    }) });
+
+    const summaries = await store.readThreadPricingSummaries([
+      { backend: "codex", threadId: "thread-1" },
+      { backend: "codex", threadId: "thread-2" },
+      { backend: "codex", threadId: "never-priced" },
+    ]);
+
+    expect(summaries.map((summary) => [summary.threadId, summary.usageLineCount, summary.totalCostMicros])).toEqual([
+      ["thread-1", 2, 32_200],
+      ["thread-2", 1, 16_100],
+    ]);
+    // The same rows the thread's own Pricing summary shows.
+    expect(summaries[0]).toEqual((await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).summaries[0]);
+  });
+});

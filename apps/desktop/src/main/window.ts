@@ -29,10 +29,12 @@ import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { createMainProcessHotCpuTarget } from "./diagnostics/main-process-hot-cpu-target";
 import { SharedHotCpuProfiler } from "./diagnostics/shared-hot-cpu-profiler";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
+import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
 import { mainWindowChromeOptions } from "./main-window-chrome";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
+import { attachRendererProcessRecovery } from "./renderer-process-recovery";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
 import {
@@ -51,12 +53,15 @@ import {
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
   THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
+  THREAD_TODOS_CHANGED_EVENT_CHANNEL,
+  OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   INTEGRATED_TERMINAL_REVEAL_CHANNEL,
   INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
+  KEYBINDINGS_CHANGED_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -68,6 +73,7 @@ import {
   PWRSUITE_INSTALLER_EVENT_CHANNEL,
   PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
   SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
+  WINDOW_OPEN_MAIN_VIEW_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
@@ -284,7 +290,11 @@ function buildNativeContextMenuTemplate(
     template.push({
       label: "Copy Link",
       click: () => {
-        clipboard.writeText(params.linkURL);
+        clipboard.writeText(params.linkURL).catch((error: unknown) => {
+          mainLog.warn("copy link failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       },
     });
   }
@@ -548,11 +558,12 @@ export function createMainWindow(options?: {
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
     target: "main" | "renderer",
   ): Promise<HotCpuProfilerLifecycle | null> => {
+    const appBuildMetadata = await resolveAppBuildMetadata();
     const created = await createHotCpuProfileSession({
       config: hotCpuConfig,
       target,
       versions: {
-        appVersion: app.getVersion(),
+        appVersion: appBuildMetadata.applicationVersion,
         electronVersion: process.versions.electron ?? "unknown",
         chromeVersion: process.versions.chrome ?? "unknown",
         nodeVersion: process.versions.node,
@@ -586,6 +597,7 @@ export function createMainWindow(options?: {
           subscriber.send(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, {
             ...event,
             sourceHostname: hostname(),
+            appBuildMetadata,
           });
         }
       },
@@ -900,6 +912,7 @@ export function createMainWindow(options?: {
   }
 
   applyWindowSecurityHardening(window);
+  attachRendererProcessRecovery(window);
   // Local main windows receive CPU capture notices. Federation viewers
   // also host the app shell, but must not receive local CPU notices.
   // Secondary windows register a narrower
@@ -916,8 +929,14 @@ export function createMainWindow(options?: {
     // restart it.
     ...(options?.federationTarget ? [] : [CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL]),
     ...(options?.federationTarget ? [] : [THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL]),
+    // Cards live on the instance that owns the thread; a peer's window
+    // shows none in v1.
+    ...(options?.federationTarget ? [] : [THREAD_TODOS_CHANGED_EVENT_CHANNEL]),
+    // Requests are answered on the instance that owns the thread.
+    ...(options?.federationTarget ? [] : [OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL]),
     INTEGRATED_TERMINAL_REVEAL_CHANNEL,
     INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
+    KEYBINDINGS_CHANGED_CHANNEL,
     MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
     MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
     MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -930,6 +949,7 @@ export function createMainWindow(options?: {
     // The launchpad tiles download installers onto this machine only.
     ...(options?.federationTarget ? [] : [PWRSUITE_INSTALLER_EVENT_CHANNEL]),
     SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
+    WINDOW_OPEN_MAIN_VIEW_CHANNEL,
     WINDOW_OPEN_NEW_THREAD_CHANNEL,
     WINDOW_OPEN_SETTINGS_CHANNEL,
     WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,

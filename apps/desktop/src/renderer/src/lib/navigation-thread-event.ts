@@ -10,6 +10,7 @@ type CanonicalNotification = Extract<AgentEvent["notification"], { method:
   | "thread/prAutoDispatch/pendingUpdated" | "navigation/thread/seen"
   | "thread/pullRequests/updated" | "pullRequest/status/updated" | "navigation/threadGitWorkingState/updated"
   | "thread/parent/set" | "thread/parent/cleared" | "thread/subAgents/updated" | "thread/reactions/updated"
+  | "thread/lock/updated"
   | "thread/subthreadOrder/updated" | "thread/subthreadsCollapsed/updated"
 }>;
 
@@ -41,6 +42,8 @@ export function applyNavigationThreadEvent(thread: NavigationThreadSummary, even
       return { ...thread, prs: notification.params.prs };
     case "thread/reactions/updated":
       return { ...thread, reactions: notification.params.reactions };
+    case "thread/lock/updated":
+      return { ...thread, lock: notification.params.lock };
     case "thread/subAgents/updated":
       return notification.params.subAgents
         ? { ...thread, subAgents: notification.params.subAgents } : thread;

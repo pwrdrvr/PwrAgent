@@ -80,8 +80,9 @@ describe("SendThreadToMachineDialog", () => {
     expect(machine("build-linux")).toHaveTextContent("No matching project");
   });
 
-  it("defaults to Copy on the first available machine", () => {
+  it("defaults to Copy on the first available machine", async () => {
     renderDialog();
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
     expect(machine("build-linux")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /^Copy/ })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /^Move/ })).toHaveAttribute("aria-checked", "false");
@@ -94,7 +95,7 @@ describe("SendThreadToMachineDialog", () => {
     const input = screen.getByRole("textbox", { name: "Repository on studio-mac" });
     await waitFor(() => expect(input).toHaveValue("/Users/operator/src/PwrAgent"));
     expect(input).toHaveAccessibleDescription(
-      "Matched by origin github.com/pwrdrvr/pwragent. The thread starts in a new detached worktree there.",
+      "Matched by origin github.com/pwrdrvr/pwragent. A new worktree uses the source branch when available, or starts detached at the source commit.",
     );
     expect(screen.getByRole("button", { name: "Copy to studio-mac" })).toBeEnabled();
   });
@@ -143,8 +144,9 @@ describe("SendThreadToMachineDialog", () => {
     });
   });
 
-  it("summarizes what is sent from the row's last Git probe", () => {
+  it("summarizes what is sent from the row's last Git probe", async () => {
     renderDialog();
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
     expect(screen.getByText(
       "History, 2 unpushed commits, 5 changed files and 1 untracked file on fix/crlf-installer",
     )).toBeInTheDocument();
@@ -152,12 +154,17 @@ describe("SendThreadToMachineDialog", () => {
       .toBeInTheDocument();
   });
 
-  it("sends a Workspaces thread as history only, with no repository field", async () => {
+  it("discloses non-Git workspace copying before sending, with no repository field", async () => {
     const { onSend } = renderDialog({
       source: { title: "Sketch the release checklist" },
     });
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByText(/This thread has no Git project/)).toBeInTheDocument();
+    expect(screen.getByText(/including hidden files/)).toBeInTheDocument();
+    expect(screen.getByText(/Remove sensitive files before sending/)).toBeInTheDocument();
+    expect(screen.getByText(/Symlinks pointing outside the workspace/)).toBeInTheDocument();
+    expect(screen.queryByText(/Files in this workspace are not copied/)).not.toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
     await act(async () => {
       screen.getByRole("button", { name: "Copy to build-linux" }).click();
     });
@@ -210,8 +217,9 @@ describe("SendThreadToMachineDialog", () => {
     expect(screen.getByText(/This thread is running/)).toBeInTheDocument();
   });
 
-  it("closes on Escape when idle and keeps Tab inside", () => {
+  it("closes on Escape when idle and keeps Tab inside", async () => {
     const { dialog, onClose } = renderDialog();
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
     expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
     pressEscape();
     expect(onClose).toHaveBeenCalledTimes(1);

@@ -452,3 +452,15 @@ pnpm --filter @pwragent/desktop package:dryrun
 pnpm --filter @pwragent/desktop package
 pnpm --filter @pwragent/desktop release
 ```
+
+## Homebrew automation contract
+
+Routine stable Homebrew updates are published automatically by the vendor tap,
+after artifact-backed native validation; do not open or merge per-release bump
+PRs. Follow the current package-manager runbook's automatic-publication section.
+CI must use the original successful release-build Actions artifacts and verify
+published SHA-256/size. No published release-installer download fallback is
+allowed. Missing/expired artifacts are named blockers, not permission to fetch
+from release URLs or rebuild published bytes. Signed artifact retention is 90
+days. Immediate dispatch is optional; the tap's 15-minute schedule remains the
+fallback. Verify tap main and a refreshed client before declaring publication.

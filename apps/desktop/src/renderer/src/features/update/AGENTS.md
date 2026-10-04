@@ -9,7 +9,8 @@
   checking, available, downloading (with percent and bytes), downloaded,
   canceled, error. Every check moves it, including the hourly background ones.
 - **`app:update-check-result-event`** is emitted from exactly one trigger —
-  `checkForAppUpdatesNow("menu")`, i.e. Help → Check for Updates. It is the
+  `checkForAppUpdatesNow("menu")`, i.e. Check for Updates… in the menu bar
+  (the PwrAgent menu on macOS, Help elsewhere). It is the
   only thing that distinguishes "the operator is waiting for this answer" from
   "the hour hand looked again". Settings → Updates deliberately does
   not emit it: that surface reports its `manual` result inline beside the
@@ -117,9 +118,9 @@ paces it so `e2e/update-check.spec.ts` can click a button that only exists
 mid-download.
 
 Because the opt-in is checked inside the `!productionUpdatesEnabled()` branch,
-which comes *before* the Linux branch, the fake reaches every platform. That
-is what lets one e2e spec cover this flow on the Linux lane, where a packaged
-build answers `skipped` and offers no in-app download at all.
+which comes *before* the portable Linux fallback, the fake reaches every
+platform. Native DEB, RPM, and pacman builds use the production updater;
+portable tar.gz builds answer `skipped`.
 
 ## A version this app names, it must also be able to describe
 

@@ -256,7 +256,7 @@ it("retains a range with a removed anchor until explicit recovery and does not c
   queries.dispose();
 });
 
-it("does not retry a remembered missing anchor or flicker its error on background invalidations", async () => {
+it("forgets a remembered missing anchor once, without an error, and keeps refreshing from the top", async () => {
   const read = vi.fn().mockResolvedValueOnce(page())
     .mockRejectedValueOnce(new Error("[navigation_anchor_missing] The visible anchor was removed."))
     .mockResolvedValue(page({ complete: true, nextCursor: undefined }));
@@ -265,22 +265,23 @@ it("does not retry a remembered missing anchor or flicker its error on backgroun
   await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
   const anchor = { kind: "thread" as const, ref: { backend: "codex" as const, threadId: "removed" } };
   queries.setVisibleAnchor("lens", anchor);
-  await queries.refresh();
-  const states: { loading: boolean; error?: string }[] = [];
+  const states: { loading: boolean; error?: string; rebaselineRequired?: boolean }[] = [];
   queries.subscribe(() => {
     const resource = queries.getSnapshot().resources.get("lens");
-    if (resource) states.push({ loading: resource.loading, error: resource.state.error });
+    if (resource) states.push({ loading: resource.loading, error: resource.state.error, rebaselineRequired: resource.state.rebaselineRequired });
   });
+  await queries.refresh();
+  // The anchored read and its replacement from the top share one logical read.
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[1]?.[0].anchor).toEqual(anchor);
+  expect(read.mock.calls[2]?.[0]).toMatchObject({ anchor: undefined, retainedRange: undefined });
   for (let index = 0; index < 3; index += 1) {
     queries.invalidate();
     await queries.refresh();
   }
-  expect(read).toHaveBeenCalledTimes(2);
-  expect(states.every((state) => !state.loading && state.error?.includes("navigation_anchor_missing"))).toBe(true);
-  await queries.restart("lens");
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(read.mock.calls[2]?.[0].anchor).toBeUndefined();
-  expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
+  expect(read).toHaveBeenCalledTimes(6);
+  expect(read.mock.calls.slice(2).every(([sent]) => sent.anchor === undefined)).toBe(true);
+  expect(states.every((state) => !state.error && !state.rebaselineRequired)).toBe(true);
   queries.dispose();
 });
 
@@ -388,12 +389,128 @@ it("honors explicit recovery queued behind a failing anchor read", async () => {
   const recovery = queries.rebaseline("lens", anchor);
   pending.resolve(page());
   await Promise.all([refresh, recovery]);
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(read.mock.calls[2]?.[0].anchor).toEqual(anchor);
+  // The failing read falls back to the top, then the explicit anchor runs.
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(read.mock.calls[2]?.[0].anchor).toBeUndefined();
+  expect(read.mock.calls[3]?.[0].anchor).toEqual(anchor);
   expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
   queries.dispose();
 });
 
+/**
+ * A directory's unpinned roots as their owner serves them: ten-row pages, an
+ * anchor seeks the page start, and an anchor outside the query is refused the
+ * way `NavigationQueryStore.readPage` refuses it across Electron IPC.
+ */
+function directoryOwner(state: { threads: string[]; revision: string; expiredCursors?: Set<string> }) {
+  const entry = (threadId: string): NavigationQueryEntry => ({
+    row: { id: threadId, source: "codex", title: threadId, titleSource: "explicit", ref: { backend: "codex", threadId },
+      rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+    placement: { kind: "root" }, orderKey: threadId,
+  });
+  return vi.fn(async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+    if (request.cursor && state.expiredCursors?.has(request.cursor)) {
+      throw new Error("Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_cursor_expired] Navigation cursor expired; rebaseline around the visible anchor.");
+    }
+    let start = request.cursor ? Number(request.cursor.split(":")[1]) : 0;
+    if (!request.cursor && request.anchor?.kind === "thread") {
+      start = state.threads.indexOf(request.anchor.ref.threadId);
+      if (start < 0) {
+        throw new Error("Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_anchor_missing] The visible navigation anchor is no longer in this query (reason: not-indexed). Choose another item or restart this list explicitly.");
+      }
+    }
+    const end = Math.min(state.threads.length, start + (request.pageSize ?? 10));
+    return page({ generation: state.revision, countsRevision: state.revision, ...(start ? { rangeStart: start } : {}),
+      complete: end >= state.threads.length, nextCursor: end < state.threads.length ? `${state.revision}:${end}` : undefined,
+      entries: state.threads.slice(start, end).map(entry) });
+  });
+}
+const threadNames = (count: number) => Array.from({ length: count }, (_, index) => `thread-${index}`);
+const unpinnedDirectory = () => new Map([["directory:project", { ...request(),
+  query: { kind: "directory" as const, directoryKey: "project", roots: "unpinned" as const } }]]);
+const loadedThreads = (queries: NavigationWindowQueries) =>
+  queries.getSnapshot().resources.get("directory:project")?.state.page?.entries.map(({ row }) => row.ref.threadId);
+
+it("keeps a directory list working after the selected root it was revealed at leaves the directory", async () => {
+  // Twelve threads: the selected thread's root is on the second page, so
+  // selection reveals it with an anchored rebaseline. That anchor is then
+  // remembered for every later refresh of this directory.
+  const owned = { threads: threadNames(12), revision: "initial" };
+  const read = directoryOwner(owned);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(unpinnedDirectory());
+  await vi.waitFor(() => expect(loadedThreads(queries)).toHaveLength(10));
+  await queries.rebaseline("directory:project", { kind: "thread", ref: { backend: "codex", threadId: "thread-11" } });
+  expect(loadedThreads(queries)).toEqual(["thread-11"]);
+
+  // The revealed root is archived, moved, or reparented. Its canonical event
+  // refreshes the directory, which still carries the remembered anchor.
+  owned.threads = owned.threads.filter((threadId) => threadId !== "thread-11");
+  owned.revision = "archived";
+  queries.invalidate();
+  await queries.refresh();
+
+  const state = queries.getSnapshot().resources.get("directory:project")!.state;
+  expect(state.error).toBeUndefined();
+  expect(state.rebaselineRequired).toBeFalsy();
+  expect(loadedThreads(queries)).toEqual(threadNames(10));
+  expect(state.page?.rangeStart ?? 0).toBe(0);
+
+  // The list keeps following its owner without an explicit restart.
+  owned.threads = ["thread-new", ...owned.threads];
+  owned.revision = "created";
+  queries.invalidate();
+  await queries.refresh();
+  expect(loadedThreads(queries)?.[0]).toBe("thread-new");
+  expect(queries.getSnapshot().resources.get("directory:project")?.state.error).toBeUndefined();
+  queries.dispose();
+});
+
+it("re-anchors a mid-list window on the nearest surviving row when its anchor leaves", async () => {
+  const owned = { threads: threadNames(30), revision: "initial" };
+  const read = directoryOwner(owned);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(unpinnedDirectory());
+  await vi.waitFor(() => expect(loadedThreads(queries)).toHaveLength(10));
+  await queries.rebaseline("directory:project", { kind: "thread", ref: { backend: "codex", threadId: "thread-12" } });
+  expect(loadedThreads(queries)?.[0]).toBe("thread-12");
+
+  owned.threads = owned.threads.filter((threadId) => threadId !== "thread-12");
+  owned.revision = "archived";
+  queries.invalidate();
+  await queries.refresh();
+
+  const state = queries.getSnapshot().resources.get("directory:project")!.state;
+  expect(state.error).toBeUndefined();
+  // The window stays where the operator was reading instead of jumping to the top.
+  expect(loadedThreads(queries)).toEqual(threadNames(23).slice(13));
+  expect(state.page?.rangeStart).toBe(12);
+  queries.dispose();
+});
+
+it("loads more after an idle cursor expires even when the remembered anchor has left", async () => {
+  const owned = { threads: threadNames(12), revision: "initial", expiredCursors: new Set<string>() };
+  const read = directoryOwner(owned);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(unpinnedDirectory());
+  await vi.waitFor(() => expect(loadedThreads(queries)).toHaveLength(10));
+  await queries.rebaseline("directory:project", { kind: "thread", ref: { backend: "codex", threadId: "thread-0" } });
+  expect(queries.getSnapshot().resources.get("directory:project")?.state.page?.nextCursor).toBe("initial:10");
+
+  // Owners keep a cursor for 60 seconds. The remembered anchor also left
+  // while the operator read the page.
+  owned.threads = owned.threads.filter((threadId) => threadId !== "thread-0");
+  owned.revision = "archived";
+  owned.expiredCursors.add("initial:10");
+  await queries.loadMore("directory:project");
+
+  const state = queries.getSnapshot().resources.get("directory:project")!.state;
+  expect(state.error).toBeUndefined();
+  expect(state.rebaselineRequired).toBeFalsy();
+  expect(loadedThreads(queries)).toEqual(threadNames(12).slice(1));
+  queries.dispose();
+});
 
 it("preserves loaded rows through refresh and transparently rebuilds an evicted continuation", async () => {
   let serve = owner("old", 130);
@@ -785,3 +902,137 @@ it("consumes an invalidation once when a scheduled refresh overlaps its replacem
     expect(read).toHaveBeenCalledTimes(2);
   } finally { queries.dispose(); }
 });
+
+// Complete expanded child ranges know their membership. Row-only changes must
+// refresh the affected disclosure, not every expanded group in the window.
+it.each(["thread/name/updated", "thread/pin/added", "navigation/thread/seen", "turn/started"])(
+  "budgets one child read for %s across twelve expanded groups", async (method) => {
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+      const parent = request.query.kind === "children" ? request.query.parent.threadId : "";
+      return page({ complete: true, nextCursor: undefined, entries: [{ placement: { kind: "root" }, orderKey: parent,
+        row: { id: `${parent}-child`, source: "codex", title: "fresh", titleSource: "explicit",
+          linkedDirectories: [], inbox: { inInbox: true }, rowRevision: "r", ordinaryChildCount: 0,
+          nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown", ref: { backend: "codex", threadId: `${parent}-child` } },
+      }] });
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map(Array.from({ length: 12 }, (_, index) => [`group-${index}`, {
+      protocol: 2 as const, consumer: "main-sidebar" as const,
+      query: { kind: "children" as const, parent: { backend: "codex", threadId: `parent-${index}` } },
+    }])));
+    try {
+      await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+      expect(read).toHaveBeenCalledTimes(12);
+      read.mockClear();
+      const event = { backend: "codex", notification: { method, params: { threadId: "parent-0-child" } } } as AgentEvent;
+      queries.invalidate(undefined, undefined, event);
+      await queries.refresh(undefined, undefined, true);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0]?.[0].query).toMatchObject({ parent: { threadId: "parent-0" } });
+      expect(queries.getSnapshot().resources.get("group-0")?.state.page?.entries[0]?.row.title).toBe("fresh");
+      // New children can be unknown to a complete baseline. Keep discovery.
+      read.mockClear();
+      queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+        method: "thread/started", params: { thread: { id: "new-child" } },
+      } } as AgentEvent);
+      await queries.refresh(undefined, undefined, true);
+      expect(read).toHaveBeenCalledTimes(12);
+    } finally {
+      queries.dispose();
+    }
+  },
+);
+
+it("keeps child invalidation scoped to federation identity", async () => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    const ownerInstanceId = request.query.kind === "children" ? request.query.parent.ownerInstanceId : undefined;
+    return page({ complete: true, nextCursor: undefined, entries: [{ placement: { kind: "root" }, orderKey: "child",
+      row: { id: "shared-child", source: "codex", title: "Fresh", titleSource: "explicit", ref: {
+        backend: "codex", threadId: "shared-child", ownerInstanceId,
+      }, rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+    }] });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map(["peer-a", "peer-b"].map((ownerInstanceId) => [ownerInstanceId, {
+    protocol: 2 as const, consumer: "main-sidebar" as const, inventory: "viewer" as const,
+    query: { kind: "children" as const, parent: { backend: "codex", threadId: "parent", ownerInstanceId } },
+  }])));
+  try {
+    await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+    read.mockClear();
+    queries.invalidate(undefined, undefined, { backend: "codex", federationTarget: { scope: "remote", instanceId: "peer-a" },
+      notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/name/updated", threadId: "shared-child" } },
+    });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]?.[0].query).toMatchObject({ parent: { ownerInstanceId: "peer-a" } });
+  } finally { queries.dispose(); }
+});
+
+it.each([
+  { complete: false, nextCursor: "next" },
+  { complete: true, nextCursor: undefined, rangeStart: 10 },
+])("keeps child discovery conservative for incomplete ranges %j", async (range) => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page(range));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["children", { protocol: 2, consumer: "main-sidebar",
+    query: { kind: "children", parent: { backend: "codex", threadId: "parent" } },
+  }]]));
+  try {
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("children")?.loading).toBe(false));
+    read.mockClear();
+    queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+      method: "thread/name/updated", params: { threadId: "off-page-child", threadName: "Changed" },
+    } });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally { queries.dispose(); }
+});
+
+it.each(["thread/started", "thread/parent/set"])(
+  "refreshes a newly discovered child's status during a pending %s read", async (method) => {
+    const membership = deferred<NavigationQueryPage>();
+    const fresh = deferred<NavigationQueryPage>();
+    const empty = page({ complete: true, nextCursor: undefined, counts: { total: 0, active: 0, unread: 0, review: 0 } });
+    const childPage = (threadStatus: "idle" | "active") => page({ complete: true, nextCursor: undefined,
+      counts: { total: 1, active: threadStatus === "active" ? 1 : 0, unread: 0, review: 0 },
+      entries: [{ orderKey: "new-child", placement: { kind: "root" }, row: {
+        id: "new-child", source: "codex", title: "New child", titleSource: "explicit", threadStatus,
+        ref: { backend: "codex", threadId: "new-child" }, rowRevision: threadStatus, linkedDirectories: [],
+        inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+        queueCount: 0, queueState: "unknown",
+      } }],
+    });
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>()
+      .mockResolvedValueOnce(empty).mockReturnValueOnce(membership.promise).mockReturnValueOnce(fresh.promise);
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map([["children", { protocol: 2, consumer: "main-sidebar",
+      query: { kind: "children", parent: { backend: "codex", threadId: "parent" } },
+    }]]));
+    try {
+      await vi.waitFor(() => expect(queries.getSnapshot().resources.get("children")?.loading).toBe(false));
+      queries.invalidate(undefined, undefined, { backend: "codex", notification: { method,
+        params: { threadId: "new-child", thread: { id: "new-child" }, parentThreadId: "parent" },
+      } } as AgentEvent);
+      const refreshing = queries.refresh(undefined, undefined, true);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      // The old complete baseline has no new-child yet. Its status event must
+      // still fence this in-flight membership response and coalesce a replacement.
+      for (let index = 0; index < 2; index++) queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId: "new-child", status: { type: "active" } },
+      } });
+      membership.resolve(childPage("idle"));
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+      expect(queries.getSnapshot().resources.get("children")?.state.page?.entries).toEqual([]);
+      fresh.resolve(childPage("active"));
+      await refreshing;
+      expect(queries.getSnapshot().resources.get("children")?.state.page?.entries[0]?.row.threadStatus).toBe("active");
+      expect(read).toHaveBeenCalledTimes(3);
+    } finally {
+      queries.dispose();
+      membership.resolve(empty);
+      fresh.resolve(empty);
+    }
+  },
+);

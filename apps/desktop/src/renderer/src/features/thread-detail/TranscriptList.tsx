@@ -47,6 +47,7 @@ import {
   subscribeSidebarResizing,
 } from "../../lib/sidebar-resize-signal";
 import { ThinkingScanner } from "./ThinkingScanner";
+import { agentCommandPreview } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { PendingMcpInteraction } from "./PendingMcpInteraction";
@@ -59,11 +60,12 @@ import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { TranscriptError } from "./TranscriptError";
 import type { PendingQuestionnaireState } from "./questionnaire";
-import type { PendingMcpInteractionState } from "./mcp-elicitation";
+import type { McpApprovalPersistence, PendingMcpInteractionState } from "./mcp-elicitation";
 import {
   ACTIVE_WORK_GROUP_THRESHOLD_MS,
   buildTranscriptRenderItems,
 } from "./transcript-render-items";
+import { approvalDisplayCommand } from "./approval-display-command";
 import { readRendererSequence } from "./live-transcript-activity";
 
 type TranscriptViewport = {
@@ -153,7 +155,8 @@ type TranscriptListProps = {
   onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
   onSubmitPendingMcpInteraction?: (
     state: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
+    persist?: McpApprovalPersistence,
   ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
@@ -317,25 +320,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-function firstStringByKeys(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-
-  return "";
-}
-
-function stripShellLauncher(command: string): string {
-  const match = command.match(
-    /^(?:\/[/\w]*\/)?(?:bash|zsh|sh|dash|ksh|tcsh|fish)\s+-lc\s+(['"])([\s\S]*)\1\s*$/
-  );
-
-  return match ? match[2] : command;
-}
-
 function markdownCodeBlock(text: string, language: string): string {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   const longestFence = [...normalized.matchAll(/`{3,}/g)].reduce(
@@ -348,53 +332,6 @@ function markdownCodeBlock(text: string, language: string): string {
   return `${fence}${languageTag}\n${normalized}\n${fence}`;
 }
 
-function commandFromActions(params: Record<string, unknown>): string {
-  const actions = params.commandActions;
-  if (!Array.isArray(actions) || actions.length === 0) {
-    return "";
-  }
-
-  return actions
-    .map((action) => {
-      const record = asRecord(action);
-      const command = record?.command;
-      return typeof command === "string" && command.trim() ? command.trim() : undefined;
-    })
-    .filter((command): command is string => Boolean(command))
-    .join(" && ");
-}
-
-function approvalDisplayCommand(params: Record<string, unknown>): string {
-  const parsedCommand = commandFromActions(params);
-  if (parsedCommand) {
-    return parsedCommand;
-  }
-
-  const promptCommand =
-    commandFromApprovalText(firstStringByKeys(params, ["prompt"])) ||
-    commandFromApprovalText(firstStringByKeys(params, ["reason"]));
-  const rawCommand = firstStringByKeys(params, [
-    "command",
-    "cmd",
-    "displayCommand",
-    "rawCommand",
-    "shellCommand",
-  ]);
-
-  if (promptCommand && (!rawCommand || isGenericShellToolTitle(rawCommand))) {
-    return promptCommand;
-  }
-  return rawCommand ? stripShellLauncher(rawCommand) : "";
-}
-
-function commandFromApprovalText(text: string): string {
-  const match = /^Requesting approval to Running:\s*(.+)$/imu.exec(text);
-  return match?.[1]?.trim() || "";
-}
-
-function isGenericShellToolTitle(command: string): boolean {
-  return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
-}
 
 function isKnownShellExecutable(command: string): boolean {
   const executable = command
@@ -1696,13 +1633,14 @@ export function TranscriptList(props: TranscriptListProps) {
             >
               <div className="transcript-list__pending transcript-list__agent-commands">
                 <span className="transcript-list__agent-commands-glyph" aria-hidden="true">&gt;_</span>
-                <span>
+                <span className="transcript-list__agent-commands-text">
                   {agentCommandsStatus.command ? (
                     <>
                       <code className="transcript-list__agent-commands-command">
-                        {agentCommandsStatus.command}
+                        {agentCommandPreview(agentCommandsStatus.command).text}
                       </code>
-                      {" is still running"}
+                      {" "}
+                      <span className="transcript-list__agent-commands-tail">is still running</span>
                     </>
                   ) : agentCommandsStatus.count === 1
                     ? "An agent command is still running"
@@ -1739,8 +1677,8 @@ export function TranscriptList(props: TranscriptListProps) {
               onChange={(state) => {
                 props.onPendingMcpInteractionChange?.(state);
               }}
-              onSubmit={async (state, action) => {
-                await props.onSubmitPendingMcpInteraction?.(state, action);
+              onSubmit={async (state, action, persist) => {
+                await props.onSubmitPendingMcpInteraction?.(state, action, persist);
               }}
             />
           ) : null}

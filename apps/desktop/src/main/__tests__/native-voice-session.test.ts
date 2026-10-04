@@ -65,6 +65,44 @@ describe("native voice ownership", () => {
     expect(f.events.size + f.disconnects.size).toBe(0);
   });
 
+  it("sends opted-in camera observations as developer context and revokes camera access on stop", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "enthusiastic" })).rejects.toThrow("Enable the camera");
+    f.manager.setCamera(1, f.request.sessionId, true);
+    expect(f.manager.allowsCamera(1)).toBe(true);
+    expect(f.manager.allowsCamera(2)).toBe(false);
+    await expect(f.manager.cameraCue(2, { ...f.request, cue: "enthusiastic" })).rejects.toThrow("Enable the camera");
+    await f.manager.cameraCue(1, { ...f.request, cue: "enthusiastic" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("this is not approval for actions"), "developer");
+    expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "transcript" }));
+    await f.manager.cameraCue(1, { ...f.request, cue: "stop" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("Pause your reply and do not initiate another action"), "developer");
+    await f.manager.stop(1, f.request);
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "away" })).rejects.toThrow("Enable the camera");
+  });
+
+  it("awaits camera appendText acknowledgment on the owning thread and propagates rejection", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    f.manager.setCamera(1, f.request.sessionId, true);
+    const pending = deferred<void>();
+    vi.mocked(f.backend.text).mockImplementationOnce(() => pending.promise);
+    let acknowledged = false;
+    const cue = f.manager.cameraCue(1, { ...f.request, cue: "neutral" }).then(() => { acknowledged = true; });
+    await Promise.resolve();
+    expect(f.backend.text).toHaveBeenCalledWith("fixture-thread", expect.stringContaining("operator is visible"), "developer");
+    expect(acknowledged).toBe(false);
+    pending.resolve();
+    await cue;
+    expect(acknowledged).toBe(true);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("RPC rejected"));
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "bored" })).rejects.toThrow("RPC rejected");
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stop(1, f.request);
+  });
+
   it("rejects duplicate starts and refuses controls from another window or stale session", async () => {
     const f = fixture();
     await f.manager.start(1, f.request, f.emit);

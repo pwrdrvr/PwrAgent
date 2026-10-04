@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationDirectorySummary } from "@pwragent/shared";
+import type { AgentEvent, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { markAgentProjectRead } from "../app-server/agent-project-read";
+import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -18,8 +22,10 @@ vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: ()
   },
 }) }));
 import { removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { markLocalNavigationDirectorySeen } from "../app-server/navigation-directory-actions";
 
 let db: ReturnType<typeof openInMemoryStateDb>;
+let measuredTempDir: string | undefined;
 const key = "directory:/repo";
 const directory: NavigationDirectorySummary = { key, kind: "directory", label: "Repo", path: "/repo", threadKeys: [], needsAttentionCount: 0 };
 beforeEach(async () => {
@@ -32,7 +38,13 @@ beforeEach(async () => {
     backend: "codex", workMode: "local", executionMode: "default", prompt: "Unsent launchpad", createdAt: 1, updatedAt: 1, registeredAt: 1 });
   await mocks.store.setDirectoryPin({ directoryKey: key, pinned: true });
 });
-afterEach(() => { db.close(); mocks.listeners.clear(); vi.unstubAllEnvs(); });
+afterEach(() => {
+  db.close();
+  if (measuredTempDir) removeTempStateDbDir(measuredTempDir);
+  measuredTempDir = undefined;
+  mocks.listeners.clear();
+  vi.unstubAllEnvs();
+});
 
 it("rejects unloaded owner membership without clearing registration or pin", async () => {
   mocks.loadIndex.mockResolvedValue({ threads: [], directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });
@@ -93,6 +105,59 @@ it("does not mark unread state when owner directory membership is incomplete", a
   });
   expect(writes.commits).toBe(0);
   expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it("marks 140 unread project members across backends through one agent call and one commit", async () => {
+  db.close();
+  const temp = createTempStateDb("agent-project-read-");
+  measuredTempDir = temp.tempDir;
+  db = StateDb.open(temp.dbPath);
+  mocks.store = new SqliteOverlayStore(db);
+  const threads: NavigationThreadSummary[] = Array.from({ length: 140 }, (_, index) => ({
+    id: `thread-${index}`, source: index % 2 ? "acp:claude" : "codex",
+    title: `Thread ${index}`, titleSource: "derived", linkedDirectories: [],
+    inbox: { inInbox: true }, updatedAt: index + 1,
+    ...(index === 0 ? { threadStatus: "active" as const } : {}),
+  }));
+  const alreadyRead: NavigationThreadSummary = { ...threads[0]!, id: "already-read", inbox: { inInbox: false } };
+  const elsewhere: NavigationThreadSummary = { ...threads[0]!, id: "elsewhere" };
+  mocks.loadIndex.mockResolvedValue({ threads: [...threads, alreadyRead, elsewhere], directories: [{
+    ...directory, threadKeys: [...threads, alreadyRead].map((thread) => `${thread.source}:${thread.id}`),
+  }] });
+  const localMark = vi.fn(markLocalNavigationDirectorySeen);
+  const runtime = {
+    localFederationInstanceId: () => "local",
+    localBackend: () => ({ markNavigationDirectorySeen: localMark }) as unknown as FederationBackendOperations,
+    remoteBackend: vi.fn(),
+  };
+  const router = buildPwrAgentThreadToolRouter(async (request) => {
+    if (request.operation !== "mark_project_read") throw new Error("Unexpected operation");
+    return { ok: true, data: { projectRead: await markAgentProjectRead(runtime, request.args) } };
+  });
+  const { result, writes } = await measureSqliteWrites(() => router.handleDynamicToolCall({
+    backend: "codex", call: { threadId: "manager", turnId: "turn-1", callId: "call-1",
+      namespace: "pwragent", tool: "mark_project_read", arguments: { projectKey: key } },
+  }));
+  expect(result.success).toBe(true);
+  const output = result.contentItems[0];
+  if (!output || output.type !== "inputText") throw new Error("Expected a text result");
+  expect(JSON.parse(output.text)).toEqual({ projectRead: {
+    projectKey: key, instanceId: "local", isLocal: true, changedCount: 140,
+  } });
+  expect(localMark).toHaveBeenCalledExactlyOnceWith({ directoryKey: key });
+  expect(writes.commits).toBe(1);
+  expect(writes.walBytes).toBeGreaterThan(0);
+  for (const thread of threads) {
+    expect(await mocks.store!.getThreadOverlayState({ backend: thread.source, threadId: thread.id }))
+      .toMatchObject({ lastSeenUpdatedAt: thread.updatedAt });
+  }
+  expect(await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "already-read" })).toBeUndefined();
+  expect(await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "elsewhere" })).toBeUndefined();
+  expect(mocks.publish).toHaveBeenCalledExactlyOnceWith({ backend: "codex", notification: {
+    method: "navigation/directory/seen", params: { directoryKey: key, changedCount: 140 },
+  } });
+  expectSqliteWriteBudget({ scenario: "agent-project-mark-read-140-threads", writes,
+    note: "One explicit agent call marks 140 unread owner members across backends in one commit; observed ~0.054 MB/action (~0.54 MB/day at 10 actions), no idle writes" });
 });
 
 it.each(["checking", "degraded"] as const)("rejects directory actions while provider coverage is %s", async (state) => {

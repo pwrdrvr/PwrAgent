@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.2.0-prerelease.4 - 2026-10-09
+
+- MCP Approvals - Allow a tool once or for the conversation, reducing repeated prompts while keeping permission scoped to that connection and tool.
+- Usage and Cost - See combined spending for a thread and its sub-threads, with individual cost breakdowns and direct links.
+- Attention Queue - Load up to 100 threads initially instead of ten, making running and waiting work easier to find.
+- New Threads - Respect your launchpad's configured access mode instead of silently resetting new chats to Default Access.
+- Performance - Reduce redundant sidebar rebuilding and history parsing during archiving and pull-request bookkeeping.
+- Desktop Polish - Keep queued-message images clear of row actions, improve image viewing, and make the storage-maintenance window follow the app's theme.
+
+## v1.2.0-prerelease.3 - 2026-10-08
+
+- Waiting on You - The To-dos panel now gathers approvals, forms, and questions across threads and projects, with unread counts and inline approval actions. Sidebar labels show exactly what each thread needs.
+- Usage and Cost - Filter usage by provider account across machines and profiles. Inspect and pin chart time slices to see which threads and models contributed to spending.
+- Logs - Rebuilt the Logs window with filtering, surrounding context, line selection, bookmarks, and copying selected lines together with troubleshooting diagnostics.
+- Cloudflare Federation - Added browser sign-in prompts and renewal reminders. Sign-in setup invites can now be exported without re-entering the Cloudflare API token.
+- Thread Handoff - Git transfers now fetch published references instead of copying repository history, fixing tracked-symlink failures. Git handoffs require a clean, published workspace; non-Git workspaces retain archive-based transfer.
+- Project Navigation - Scope the quick-jump palette with @project mentions and combine search terms without busy projects crowding out results.
+- Performance and Reliability - Moved archive cleanup into a paced background queue, improved navigation-list recovery, and corrected overlapping Codex quota updates and repeated-warning dismissal.
+
+## v1.2.0-prerelease.2 - 2026-10-07
+
+- Director Voice - Added optional camera cues for gestures, presence, and head nods or shakes, with conversation-aware filtering to avoid repeated interruptions. Requires a configured local decision model; disabled by default, and gestures never approve actions.
+- Managed Codex Builds - Choose Latest or Prerelease independently. Latest now installs only promoted builds, keeping experimental runtimes opt-in.
+- File Previews - Open JSON, YAML, TOML, CSV, and logs inside PwrAgent, with syntax coloring, table views, and linked-line navigation for local and federated threads.
+- Profiles and Menus - Reorder or hide profiles, use shortcuts for the first nine visible profiles, and access consistent PwrSuite menus across platforms.
+- Appearance - Added theme-matched light and dark Dock icons, including macOS 26 Liquid Glass rendering, and improved terminal colors and Nerd Font glyphs.
+- Accounts and Usage - Recover missing Codex account, plan, and quota information after interrupted startup, and prevent stale readings from appearing as current usage.
+- Federation and Navigation - Fixed incoming-file permission reporting, kept active child threads visible during discovery, and improved project navigation and Git refresh.
+- Updates and Reliability - Let Beta Prerelease users receive newer stable release candidates, reduced irrelevant Codex startup warnings, and improved clean shutdown.
+
+## v1.2.0-prerelease.1 - 2026-10-06
+
+- Thread To-dos - Turn agent follow-ups into visible reminders with actions to start reviews, merge pull requests, or hand work to another thread or machine.
+- Thread Control - Lock a thread with an explanatory note to prevent new turns while its workspace is handed off. Added /fork with workspace choices and clearer sub-thread creation.
+- Color Themes - Choose independent dark and light themes, including Catppuccin, Solarized, Gray, and Blue, with automatic switching alongside the OS.
+- Telegram and Messaging - Added richer replies with tables, formulas, footnotes, collapsible sections, and mixed media. Private monitor and sub-agent updates no longer leak into chat delivery.
+- Image Review - Inspect local image edits with Before, After, and pixel-difference views, synchronized zoom, and navigation across changed images.
+- Queues and Star Map - Added readable queued-message titles, grouped cross-thread guidance, and queue-or-steer controls directly on Star Map cards.
+- Performance and Recovery - Reduced repeated navigation reads and unnecessary Star Map redraws. Failed interface windows can recover automatically without stopping running agents.
+- Linux Updates - Added update checking, downloads, and explicitly authorized installation for DEB, RPM, and pacman packages, with copyable terminal fallback commands.
+- Usage and Cost - Added estimated pricing for previously unobserved Codex threads, improved usage-chart responsiveness, and corrected Token Miser retrieval accounting.
+- MCP Reliability - Improved connection recovery across instance changes, preserved authorization choices, and stopped canceled requests from making healthy connections appear unavailable.
+
 ## v1.1.6 - 2026-10-02
 
 - Live Voice - Talk to local Codex threads, or use Director voice to check on work, start threads, and steer agents across connected machines, with transcripts and action receipts.

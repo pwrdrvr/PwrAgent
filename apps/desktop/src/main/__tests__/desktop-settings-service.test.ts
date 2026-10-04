@@ -242,6 +242,8 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "system",
+          darkTheme: "tangerine-dark",
+          lightTheme: "tangerine-light",
           density: "mission-control",
           sidebarTextSize: "md",
           transcriptTextSize: "md",
@@ -1605,7 +1607,10 @@ describe("DesktopSettingsService", () => {
       issueProviderDiscoveryPermit("settings-user-action"),
     );
 
-    expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
+    expect(ensureManaged).toHaveBeenNthCalledWith(1, {
+      channel: "latest",
+      checkMode: "force",
+    });
     expect(invalidate).toHaveBeenCalledOnce();
     expect(discover).not.toHaveBeenCalled();
     await expect(service.resolveCodexCommand()).resolves.toEqual({
@@ -1666,7 +1671,10 @@ describe("DesktopSettingsService", () => {
         issueProviderDiscoveryPermit("settings-user-action"),
       );
 
-      expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
+      expect(ensureManaged).toHaveBeenNthCalledWith(1, {
+        channel: "latest",
+        checkMode: "force",
+      });
       await expect(service.resolveCodexCommand()).resolves.toMatchObject({
         command: "/managed/codex",
       });
@@ -2716,6 +2724,149 @@ describe("DesktopSettingsService", () => {
     stop();
   });
 
+  it("installs the managed Codex track an operator switches to", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[models.codex]",
+      "managed_builds = true",
+      "",
+    ].join("\n"));
+    const managedRuntime = (tag: string, channel: "latest" | "prerelease") => ({
+      appServerCommand: `/managed/${tag}/codex-app-server`,
+      codeModeHostCommand: `/managed/${tag}/codex-code-mode-host`,
+      command: `/managed/${tag}/codex`,
+      metadata: {
+        asset: `pwragent-codex-${tag.slice("pwragent-v".length)}-linux-x86_64.tar.gz`,
+        channel,
+        checkedAt: 1,
+        installedAt: 1,
+        latestTag: "pwragent-v0.200.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.201.0-pwragent.1",
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag,
+        version: tag.slice("pwragent-v".length),
+      },
+    });
+    const latest = managedRuntime("pwragent-v0.200.0-pwragent.1", "latest");
+    const prerelease = managedRuntime(
+      "pwragent-v0.201.0-pwragent.1",
+      "prerelease",
+    );
+    const ensureManaged = vi.fn(
+      async (options: { channel: "latest" | "prerelease" }) =>
+        options.channel === "prerelease" ? prerelease : latest,
+    );
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    await service.refreshCodexDiscovery(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    // Latest is the default: nobody inherits a build published for testing.
+    expect(ensureManaged).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channel: "latest", checkMode: "force" }),
+    );
+    const before = await service.readSettingsProjection();
+    expect(before.models.codex.managedBuildChannel).toEqual({
+      value: "latest",
+      source: "default",
+    });
+    const changes = vi.fn();
+    const stop = service.watchManagedCodexRuntime(changes);
+
+    await service.writeConfigPatchTargeted(
+      { models: { codex: { managedBuildChannel: "prerelease" } } },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+
+    // The write does not wait out the 24-hour window: it checks the new track
+    // and hands its build to the runtime before returning.
+    expect(ensureManaged).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channel: "prerelease", checkMode: "force" }),
+    );
+    expect(changes).toHaveBeenCalledWith({
+      enabled: true,
+      reason: "update",
+      runtime: prerelease,
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      'managed_build_channel = "prerelease"',
+    );
+    const after = await service.readSettingsProjection();
+    expect(after.models.codex.managedBuildChannel).toEqual({
+      value: "prerelease",
+      source: "config",
+    });
+    expect(after.runtime.tokenMiser?.managedCodex).toMatchObject({
+      version: "0.201.0-pwragent.1",
+      latestTag: "pwragent-v0.200.0-pwragent.1",
+      prereleaseTag: "pwragent-v0.201.0-pwragent.1",
+    });
+    stop();
+  });
+
+  it("installs the saved track when the PwrAgent Codex build is turned on", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const ensureManaged = vi.fn(async () => ({
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.201.0-pwragent.1-linux-x86_64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.201.0-pwragent.1",
+        version: "0.201.0-pwragent.1",
+      },
+    }));
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatchTargeted(
+      {
+        models: {
+          codex: { managedBuilds: true, managedBuildChannel: "prerelease" },
+        },
+      },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+
+    // One check, for the track this write saves rather than the default it
+    // replaces, and no second check for the track change riding along.
+    expect(ensureManaged).toHaveBeenCalledOnce();
+    expect(ensureManaged).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "prerelease", checkMode: "force" }),
+    );
+  });
+
   it("does not install or announce updates from an ordinary settings read", async () => {
     vi.useFakeTimers();
     try {
@@ -2932,6 +3083,46 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults both interactive SVG preferences off and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettingsProjection();
+    expect(initial.general.interactiveSvgSkipNotice).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(initial.general.interactiveSvgAutoOpen).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        interactiveSvgSkipNotice: true,
+        interactiveSvgAutoOpen: true,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("interactive_svg_skip_notice = true");
+    expect(saved).toContain("interactive_svg_auto_open = true");
+    const projected = await service.readSettingsProjection();
+    expect(projected.general.interactiveSvgSkipNotice).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(projected.general.interactiveSvgAutoOpen).toEqual({
+      value: true,
+      source: "config",
+    });
+  });
+
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -2956,6 +3147,8 @@ describe("DesktopSettingsService", () => {
     });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -2967,6 +3160,10 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "light",
+          darkTheme: "solarized-dark",
+          lightTheme: "catppuccin-latte",
+          themedDockIcon: false,
+          terminalMinimumContrast: true,
           density: "compact",
           sidebarTextSize: "lg",
         },
@@ -2976,12 +3173,32 @@ describe("DesktopSettingsService", () => {
     const writtenFile = fs.readFileSync(configPath, "utf8");
     expect(writtenFile).toContain("[general.appearance]");
     expect(writtenFile).toContain('theme = "light"');
+    expect(writtenFile).toContain('dark_theme = "solarized-dark"');
+    expect(writtenFile).toContain('light_theme = "catppuccin-latte"');
+    expect(writtenFile).toContain("themed_dock_icon = false");
+    expect(writtenFile).toContain("terminal_minimum_contrast = true");
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
     const afterWrite = await service.readSettingsProjection();
     expect(afterWrite.general.appearance.theme).toEqual({
       value: "light",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.darkTheme).toEqual({
+      value: "solarized-dark",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.lightTheme).toEqual({
+      value: "catppuccin-latte",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.themedDockIcon).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.terminalMinimumContrast).toEqual({
+      value: true,
       source: "config",
     });
     expect(afterWrite.general.appearance.density).toEqual({
@@ -2994,6 +3211,8 @@ describe("DesktopSettingsService", () => {
     });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "light",
+      darkTheme: "solarized-dark",
+      lightTheme: "catppuccin-latte",
       density: "compact",
       sidebarTextSize: "lg",
       transcriptTextSize: "md",
@@ -3005,6 +3224,10 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "system",
+          darkTheme: "tangerine-dark",
+          lightTheme: "tangerine-light",
+          themedDockIcon: true,
+          terminalMinimumContrast: false,
           density: "mission-control",
           sidebarTextSize: "md",
         },
@@ -3013,21 +3236,68 @@ describe("DesktopSettingsService", () => {
 
     const restoredFile = fs.readFileSync(configPath, "utf8");
     expect(restoredFile).not.toContain('theme = "');
+    expect(restoredFile).not.toContain("dark_theme");
+    expect(restoredFile).not.toContain("light_theme");
+    expect(restoredFile).not.toContain("themed_dock_icon");
+    expect(restoredFile).not.toContain("terminal_minimum_contrast");
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
     const afterRestore = await service.readSettingsProjection();
     expect(afterRestore.general.appearance.theme.source).toBe("default");
+    expect(afterRestore.general.appearance.darkTheme.source).toBe("default");
+    expect(afterRestore.general.appearance.lightTheme.source).toBe("default");
+    expect(afterRestore.general.appearance.themedDockIcon).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(afterRestore.general.appearance.terminalMinimumContrast).toEqual({
+      value: false,
+      source: "default",
+    });
     expect(afterRestore.general.appearance.density.source).toBe("default");
     expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
       "default",
     );
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
     });
+  });
+
+  it("drops the development-only palette key once a color theme is saved", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      '[general.appearance]\n# keep me\ntheme = "dark"\npalette = "catppuccin"\n',
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // Nothing reads it: the themes stay at their defaults until picked.
+    const before = await service.readSettingsProjection();
+    expect(before.general.appearance.darkTheme).toEqual({
+      value: "tangerine-dark",
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: { appearance: { darkTheme: "catppuccin-mocha" } },
+    });
+
+    const written = fs.readFileSync(configPath, "utf8");
+    expect(written).not.toContain("palette");
+    expect(written).toContain('dark_theme = "catppuccin-mocha"');
+    expect(written).toContain('theme = "dark"');
+    expect(written).toContain("# keep me");
   });
 
   it("fires onAppearanceChange only when writeConfigPatch touches general.appearance", async () => {
@@ -3062,6 +3332,8 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(1);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "light",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "compact",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3083,6 +3355,8 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(2);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "system",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3107,6 +3381,25 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(3);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "dark",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
+      density: "mission-control",
+      sidebarTextSize: "md",
+      transcriptTextSize: "md",
+    });
+
+    // A theme-only patch is an appearance change too: every window has to
+    // recolor.
+    await service.writeConfigPatchTargeted({
+      general: {
+        appearance: { lightTheme: "blue-light" },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(4);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "dark",
+      darkTheme: "tangerine-dark",
+      lightTheme: "blue-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -5045,6 +5338,31 @@ describe("DesktopSettingsService", () => {
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_tool_accounting = true",
     );
+  });
+
+  it("persists exact Codex config warning dismissals across service restarts", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "# Keep this comment\n[experimental]\nmarkdown_math_rendering = true\n");
+    const options = { configPath, env: {}, secretStore: new MemoryDesktopSecretStore() };
+    const service = new DesktopSettingsService(options);
+    expect((await service.readSettingsProjection()).experimental.codexConfigWarningsDismissed).toEqual({
+      value: [],
+      source: "default",
+    });
+    const id = JSON.stringify(["Ignoring unknown `features` requirement `example_feature`", "", "", "", ""]);
+    await service.writeConfigPatchTargeted({
+      experimental: { codexConfigWarningsDismissed: [id, id] },
+    });
+    const restarted = new DesktopSettingsService(options);
+    expect((await restarted.readSettingsProjection()).experimental.codexConfigWarningsDismissed).toEqual({
+      value: [id],
+      source: "config",
+    });
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("# Keep this comment");
+    expect(contents).toContain("markdown_math_rendering = true");
+    expect(contents).toContain("codex_config_warnings_dismissed = ");
   });
 
   it("defaults Codex default-mode request_user_input to false and persists it", async () => {

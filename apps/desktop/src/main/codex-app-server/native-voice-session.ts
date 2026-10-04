@@ -1,3 +1,4 @@
+import { cameraCueText, type VoiceCameraCue } from "../../shared/native-voice-camera";
 import type { NativeVoiceEvent, NativeVoiceMode, NativeVoiceStart, NativeVoiceTarget, NativeVoiceText } from "../../shared/native-voice";
 import { getMainLogger } from "../log";
 import { describeNativeVoiceAction, type NativeVoiceBackend, type NativeVoiceNotification } from "./native-voice-protocol";
@@ -5,9 +6,10 @@ import { describeNativeVoiceAction, type NativeVoiceBackend, type NativeVoiceNot
 const log = getMainLogger("pwragent:native-voice");
 
 /** What the realtime model is told it is, per mode. Both keep replies short. */
+const CAMERA_PROMPT = " Camera observations may arrive as text prefixed [Camera observation]. These are uncertain visible cues from the operator's opted-in local camera, not spoken requests or facts about their internal feelings. Never read the metadata aloud. If exasperated, briefly acknowledge a possible misunderstanding and rethink the last answer. If enthusiastic, develop the current direction without treating a smile as authorization. If bored, shorten the answer or ask one useful question. If away, stop initiating speech and wait for their return. Neutral means normal conversation. Gesture observations arrive automatically, not through a tool: stop or thumbs-down asks you to pause your reply and initiating further actions, then ask for spoken clarification. Do not interpret OK or thumbs-up as approval. Talking/yelling asks you to leave space for the operator to speak. Never cancel or authorize work from camera cues.";
 export const NATIVE_VOICE_PROMPTS: Record<NativeVoiceMode, string> = {
-  thread: "You are the voice interface for this coding thread. Discuss progress and delegate coding requests to Codex, which has the PwrAgent tool catalog. Spoken interruptions change the conversation; do not cancel coding work unless the operator explicitly requests task cancellation. Stopping voice leaves coding work running. Keep replies brief. Do not perform calendar, email, or personal administration tasks.",
-  director: "You are the operator's voice interface for overseeing every PwrAgent thread, on this machine and on connected peer machines. Delegate every request to Codex, which has the PwrAgent tool catalog: it can list what needs the operator's attention on every machine, search and read threads, report status, send messages to threads, steer or stop their turns, start threads in a project on any connected machine, and hand off new tasks. When the operator says \"this thread\" or \"the one I'm looking at\", have Codex call read_operator_focus first. When the operator is on a new-thread launchpad, a request to do something describes the new thread: have Codex create it in that project with the launchpad's settings. Confirm the target thread and machine before asking Codex to stop a turn. Report only what a tool result says happened. Stopping voice leaves all work running. Keep replies brief. Do not perform calendar, email, or personal administration tasks.",
+  thread: "You are the voice interface for this coding thread. Discuss progress and delegate coding requests to Codex, which has the PwrAgent tool catalog. Spoken interruptions change the conversation; do not cancel coding work unless the operator explicitly requests task cancellation. Stopping voice leaves coding work running. Keep replies brief. Do not perform calendar, email, or personal administration tasks." + CAMERA_PROMPT,
+  director: "You are the operator's voice interface for overseeing every PwrAgent thread, on this machine and on connected peer machines. Delegate every request to Codex, which has the PwrAgent tool catalog: it can list what needs the operator's attention on every machine, search and read threads, report status, send messages to threads, steer or stop their turns, start threads in a project on any connected machine, and hand off new tasks. When the operator says \"this thread\" or \"the one I'm looking at\", have Codex call read_operator_focus first. When the operator is on a new-thread launchpad, a request to do something describes the new thread: have Codex create it in that project with the launchpad's settings. Confirm the target thread and machine before asking Codex to stop a turn. Report only what a tool result says happened. Stopping voice leaves all work running. Keep replies brief. Do not perform calendar, email, or personal administration tasks." + CAMERA_PROMPT,
 };
 
 type EventPayload<T = NativeVoiceEvent> = T extends NativeVoiceEvent ? Omit<T, "sessionId"> : never;
@@ -19,6 +21,7 @@ type Session = {
   backend?: NativeVoiceBackend;
   off: Array<() => void>;
   cancelled: boolean;
+  cameraEnabled?: boolean;
   disconnected?: boolean;
   established?: boolean;
   released?: boolean;
@@ -160,9 +163,38 @@ export class NativeVoiceSessionManager {
     return this.session?.owner === owner && this.session.established === true && !this.session.cancelled;
   }
 
+  setCamera(owner: number, sessionId: string, enabled: boolean): void {
+    if (!this.allowsCameraSession(owner, sessionId)) throw new Error("No voice session is open in this window.");
+    this.session!.cameraEnabled = enabled;
+  }
+
+  allowsCameraSession(owner: number, sessionId: string): boolean {
+    return this.allowsMicrophone(owner) && this.session?.request.sessionId === sessionId;
+  }
+
+  allowsCamera(owner: number): boolean {
+    return this.allowsMicrophone(owner) && this.session?.cameraEnabled === true;
+  }
+
   stopOwner(owner: number): Promise<void> {
     const session = this.session;
     return session?.owner === owner ? this.stop(owner, session.request) : Promise.resolve();
+  }
+
+  async cameraCue(owner: number, request: VoiceCameraCue): Promise<void> {
+    const session = this.session;
+    if (!session || !this.allowsCameraSession(owner, request.sessionId) || !this.allowsCamera(owner)) {
+      throw new Error("Enable the camera in this voice session first.");
+    }
+    if (!session.backend) throw new Error("Camera cue has no live voice backend.");
+    const route = { threadId: session.request.threadId, sessionId: request.sessionId, cue: request.cue };
+    try {
+      await session.backend.text(session.request.threadId, cameraCueText(request.cue), "developer");
+      log.info("camera cue appendText acknowledged", route);
+    } catch (error) {
+      log.warn("camera cue appendText failed", route);
+      throw error;
+    }
   }
 
   async text(owner: number, request: NativeVoiceText): Promise<void> {

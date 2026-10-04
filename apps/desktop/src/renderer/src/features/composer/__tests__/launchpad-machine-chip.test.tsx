@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeLaunchpadMachineOffline,
+  FixedMachineChip,
   LaunchpadMachineChip,
   type LaunchpadMachineControl,
 } from "../LaunchpadMachineChip";
@@ -29,6 +30,38 @@ function options(): HTMLElement[] {
 }
 
 describe("LaunchpadMachineChip", () => {
+  it("opens its menu below the chip when it sits in the title rail", () => {
+    render(
+      <LaunchpadMachineChip
+        control={control()}
+        menuPlacement="below"
+        onRetarget={() => undefined}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: "Machine" });
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(
+      { bottom: 32, right: 900, top: 8, left: 780, width: 120, height: 24, x: 780, y: 8 } as DOMRect,
+    );
+    fireEvent.click(chip);
+    // Fixed under the trigger, so the header's clipping row cannot cut it.
+    const menu = screen.getByRole("listbox", { name: "Machine" });
+    expect(menu).toHaveClass("composer-dropdown__menu--below");
+    expect(menu.style.top).toBe("40px");
+    expect(menu.style.right).toBe(`${window.innerWidth - 900}px`);
+  });
+
+  it("names a thread's machine by its short label", () => {
+    render(
+      <FixedMachineChip
+        machine={{ label: "Studio Mac / default", shortLabel: "Studio", instanceId: "studio", remote: true }}
+      />,
+    );
+    const chip = screen.getByLabelText("Runs on Studio");
+    expect(chip).toHaveTextContent("Studio");
+    expect(chip).toHaveAttribute("title", "Studio Mac / default");
+    expect(chip).toHaveAttribute("data-remote", "true");
+  });
+
   it("names this machine and stays neutral while the launchpad is local", () => {
     render(<LaunchpadMachineChip control={control()} onRetarget={() => undefined} />);
 

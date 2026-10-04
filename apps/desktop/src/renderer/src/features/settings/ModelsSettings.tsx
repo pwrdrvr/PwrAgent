@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { formatFilesystemPath, isValidatedDiscoveryCandidate } from "@pwragent/shared";
+import {
+  DECISION_PROVIDER_IDS,
+  formatFilesystemPath,
+  isValidatedDiscoveryCandidate,
+  MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
+  resolveDecisionModelSettings,
+} from "@pwragent/shared";
 import type {
   BackendModelOption,
   BackendSummary,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopHelperModelSettings,
+  DesktopDecisionModelSettings,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
@@ -22,6 +29,7 @@ import {
   SettingsIndexRow,
   SettingsPanelHead,
   SettingsPendingIndicator,
+  SegmentedField,
   SettingsSection,
   SettingsSectionStack,
   ToggleField,
@@ -33,13 +41,17 @@ import {
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { sourceBadge } from "./settings-fields";
-import { checkForManagedCodexUpdates } from "./managed-codex-actions";
+import {
+  checkForManagedCodexUpdates,
+  refreshManagedCodexModelCatalog,
+} from "./managed-codex-actions";
 import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
+import { UsageAccountSettings } from "./UsageAccountSettings";
 import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
@@ -49,13 +61,26 @@ import {
   useProviderCatalogRefresh,
   type ProviderCatalogRefreshController,
 } from "./ProviderCatalogRefresh";
-import { acpRelativeTime, acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpRelativeTime,
+  acpStatusLabel,
+  MANAGED_BUILD_TRACK_SUB,
+  managedBuildTrackOptions,
+  managedBuildVersion,
+} from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
   displayOrderedAcpEntries,
   useAcpAgentCatalog,
 } from "./useAcpAgentCatalog";
 import { SettingsSwitch } from "./SettingsSwitch";
+import {
+  DECISION_PROVIDER_FOCUS,
+  DECISION_PROVIDER_NAMES,
+  DecisionModelDefaults,
+  DecisionProviderScreen,
+  decisionSecrets,
+} from "./DecisionModelSettings";
 import {
   commandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure,
@@ -134,9 +159,16 @@ export function ModelsSettings(props: {
   onSaveHelperModels?: (
     helperModels: DesktopHelperModelSettings,
   ) => Promise<unknown>;
+  onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
+  /** Persist Defaults → Decisions and the decision provider screens. */
+  onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  /** Persist which pwrdrvr/codex track the managed runtime follows. */
+  onManagedCodexBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
   /** Jump to Experimental, where Token Miser is switched. */
   onOpenTokenMiser?: () => void;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
@@ -229,6 +261,14 @@ export function ModelsSettings(props: {
     }
     setRefreshingCatalog(true);
     try {
+      if (refreshModels) {
+        if (!props.desktopApi.refreshCodexDiscovery) {
+          throw new Error("Codex executable discovery is unavailable in this build.");
+        }
+        await props.desktopApi.refreshCodexDiscovery({
+          discoveryIntent: "settings-user-action",
+        });
+      }
       const response = await props.desktopApi.listBackends({
         includeUnavailable: true,
         ...(refreshModels
@@ -240,6 +280,9 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      if (refreshModels) {
+        await props.onRefresh();
+      }
       return true;
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
@@ -262,6 +305,40 @@ export function ModelsSettings(props: {
       );
     } finally {
       setCheckingManagedCodex(false);
+    }
+  };
+
+  const changeManagedCodexTrack = async (
+    channel: DesktopUpdateChannel,
+  ): Promise<void> => {
+    setManagedCodexCheckError(undefined);
+    // Between promotions both tracks name the build already running, and a
+    // switch installs nothing. Read before the write, which replaces the
+    // snapshot this closure sees.
+    const trackTag = channel === "latest"
+      ? managedCodexRuntime?.latestTag
+      : managedCodexRuntime?.prereleaseTag;
+    const sameBuild =
+      trackTag !== undefined
+      && managedBuildVersion(trackTag) === managedCodexRuntime?.version;
+    // The write holds until main has checked the track and installed its
+    // build, the same transaction as the PwrAgent build switch.
+    const saved = await props.onManagedCodexBuildChannelChange?.(channel);
+    if (!saved) {
+      return;
+    }
+    await props.onRefresh();
+    if (sameBuild) {
+      return;
+    }
+    try {
+      // The track's build is a different Codex, and its models can differ.
+      await refreshManagedCodexModelCatalog(props.desktopApi);
+      await refreshCatalog();
+    } catch (error) {
+      setManagedCodexCheckError(
+        error instanceof Error ? error.message : String(error),
+      );
     }
   };
 
@@ -366,6 +443,22 @@ export function ModelsSettings(props: {
                   }
                 }) ?? Promise.resolve();
               }}
+            />
+          ) : null}
+          {managedCodexOn && props.onManagedCodexBuildChannelChange ? (
+            <SegmentedField
+              label="Build track"
+              sub={MANAGED_BUILD_TRACK_SUB}
+              disabled={props.saving || catalogBusy || checkingManagedCodex}
+              options={managedBuildTrackOptions(managedCodexRuntime ?? {})}
+              // Same wait as the switch above: the config write, then the
+              // release check that installs and activates the track's build.
+              pendingLabel="Downloading and installing…"
+              value={
+                codex.managedBuildChannel?.value
+                ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT
+              }
+              onChange={changeManagedCodexTrack}
             />
           ) : null}
           <SettingsField
@@ -539,6 +632,23 @@ export function ModelsSettings(props: {
       </SettingsSection>
   );
 
+  const saveDecisionModels = async (settings: DesktopDecisionModelSettings) =>
+    await props.onSaveDecisionModels?.(settings);
+  const decisionProvider = DECISION_PROVIDER_IDS.find((id) => DECISION_PROVIDER_FOCUS[id] === props.focus);
+  if (decisionProvider) {
+    return (
+      <DecisionProviderScreen
+        provider={decisionProvider}
+        snapshot={props.snapshot}
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        onSave={saveDecisionModels}
+        onClearSecret={props.onClearSecret}
+        onReplaceSecret={props.onReplaceSecret}
+      />
+    );
+  }
+
   if (props.focus === "codex") {
     return (
       <SettingsSectionStack
@@ -559,6 +669,14 @@ export function ModelsSettings(props: {
           onEditDefaults={editDefaults}
         />
         {codexSection}
+        {props.onSaveUsageAccountGroups ? (
+          <UsageAccountSettings
+            backend="codex"
+            groups={props.snapshot.models.usageAccountGroups ?? {}}
+            saving={props.saving}
+            onSave={props.onSaveUsageAccountGroups}
+          />
+        ) : null}
       </SettingsSectionStack>
     );
   }
@@ -581,6 +699,14 @@ export function ModelsSettings(props: {
           error={catalogError}
           onEditDefaults={editDefaults}
         />
+        {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
+          <UsageAccountSettings
+            backend={focusedAcpEntry.backendId}
+            groups={props.snapshot.models.usageAccountGroups ?? {}}
+            saving={props.saving}
+            onSave={props.onSaveUsageAccountGroups}
+          />
+        ) : null}
         <AcpAgentsSettings
           catalogRefreshing={catalogBusy}
           desktopApi={props.desktopApi}
@@ -629,6 +755,12 @@ export function ModelsSettings(props: {
         onSave={async (helperModels) => await props.onSaveHelperModels?.(helperModels)}
       />
 
+      <DecisionModelDefaults
+        snapshot={props.snapshot}
+        saving={props.saving}
+        onSave={saveDecisionModels}
+      />
+
       <SettingsSection
         eyebrow="Models"
         title="Providers"
@@ -670,6 +802,20 @@ export function ModelsSettings(props: {
                 }
                 off={!enabled}
                 onOpen={() => props.onFocusChange?.(entry.registryId)}
+              />
+            );
+          })}
+          {DECISION_PROVIDER_IDS.map((provider) => {
+            const decision = resolveDecisionModelSettings(props.snapshot.models.decisionModels);
+            const ready = provider === "local" || decisionSecrets(props.snapshot).jevApiKey.configured;
+            return (
+              <SettingsIndexRow
+                key={provider}
+                name={DECISION_PROVIDER_NAMES[provider]}
+                meta={provider === "local" ? decision.localEndpoint : decision.jevModel}
+                chip={decision.model === provider ? "In use" : ready ? "Decision model" : "No API key"}
+                chipKind={decision.model === provider ? "ok" : "muted"}
+                onOpen={() => props.onFocusChange?.(DECISION_PROVIDER_FOCUS[provider])}
               />
             );
           })}

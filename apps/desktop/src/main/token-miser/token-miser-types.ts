@@ -108,6 +108,7 @@ export type TokenMiserGroupMemberSummary = {
 };
 
 export type TokenMiserHelperUsage = {
+  accountKey?: string;
   helperThreadId?: string;
   helperTurnId?: string;
   model?: string;
@@ -140,6 +141,9 @@ export type TokenMiserObjectMetadata = {
   cachedReplayCount?: number;
   cachedBaselineTokens?: number;
   cachedRevealedTokens?: number;
+  /** Full cached prompts charged once per model request that retrieves a saved result.
+   * Included in cachedRevealedTokens as conservative retrieval overhead. */
+  retrievalRequestCachedTokens?: number;
   replayTrackingStoppedAt?: number;
   parentRequestEpoch?: string;
   summary: TokenMiserSummary;

@@ -209,6 +209,8 @@ export type BackendLaunchpadOptions = {
 
 export type BackendAccountSummary = {
   type?: "apiKey" | "chatgpt" | "provider";
+  /** Stable provider account/workspace identity reported by its protocol. */
+  accountId?: string;
   label?: string;
   email?: string;
   planType?: string;

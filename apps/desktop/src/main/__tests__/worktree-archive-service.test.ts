@@ -53,6 +53,23 @@ describe("WorktreeArchiveService", () => {
     await writeFile(path.join(worktreePath, "node_modules", "left-out.txt"), "ignored\n", "utf8");
 
     const service = new WorktreeArchiveService();
+    for (const denyAtDispatch of [false, true]) {
+      let removalAdmissions = 0;
+      const beforeRemove = async () => {
+        // Admission runs after the snapshot ref exists and can still refuse
+        // the destructive dispatch after its awaited discovery settles.
+        expect(await git(repoPath, ["for-each-ref", "--format=%(refname)", "refs/codex/snapshots/"])).not.toBe("");
+        if (!denyAtDispatch) throw new Error("active shared checkout");
+        return () => {
+          removalAdmissions += 1;
+          if (removalAdmissions === 2) throw new Error("ownership changed after admission");
+        };
+      };
+      await expect(service.archive({ backend: "codex", threadId: "thread-1", worktreePath, repositoryPath: repoPath, beforeRemove }))
+        .rejects.toThrow(denyAtDispatch ? "ownership changed" : "active shared checkout");
+      expect(await pathExists(worktreePath)).toBe(true);
+      expect(await readFile(path.join(worktreePath, "notes.txt"), "utf8")).toBe("untracked note\n");
+    }
     const snapshot = await service.archive({
       backend: "codex",
       threadId: "thread-1",

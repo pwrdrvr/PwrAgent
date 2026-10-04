@@ -19,6 +19,32 @@ export function agentCommandDirectoryLabel(cwd: string): string {
   return segments[segments.length - 1] ?? cwd;
 }
 
+/** About two clamped summary lines at the rail's 360px default width. */
+const AGENT_COMMAND_PREVIEW_CHARS = 80;
+
+export type AgentCommandPreview = {
+  /** The first line, with " …" when more lines follow it. */
+  text: string;
+  lineCount: number;
+  /** The preview leaves part of the command out, so the open row shows all of it. */
+  cut: boolean;
+};
+
+/**
+ * Codex often starts a background command as a heredoc script of dozens of
+ * lines. Every place that names the command shows this one-line preview; only
+ * the expanded rail row shows the whole text.
+ */
+export function agentCommandPreview(command: string): AgentCommandPreview {
+  const lines = command.trim().split(/\r?\n/);
+  const first = lines[0].trimEnd();
+  return {
+    text: lines.length > 1 ? `${first} …` : first,
+    lineCount: lines.length,
+    cut: lines.length > 1 || first.length > AGENT_COMMAND_PREVIEW_CHARS,
+  };
+}
+
 /** Break opportunities after each separator, so a path wraps at a directory. */
 function breakablePath(path: string): ReactNode {
   return path.split(/(?<=[\\/])/).map((part, index) => (
@@ -45,28 +71,30 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
             terminal.cpuPercent !== undefined ? `CPU ${terminal.cpuPercent.toFixed(1)}%` : undefined,
             terminal.memoryKb !== undefined ? `${(terminal.memoryKb / 1024).toFixed(1)} MiB` : undefined,
           ].filter(Boolean).join(" · ");
+          const preview = agentCommandPreview(terminal.command);
           return (
             <details key={terminal.processId}
               className={`composer__queued composer__queued--env-action composer__queued--env-action-running env-action-run env-action-run--sidebar agent-command-run${stopping ? " agent-command-run--stopping" : ""}`}
-              aria-label={`Agent command: ${terminal.command}`}>
+              aria-label={`Agent command: ${preview.text}`}>
               <summary className="composer__queued-env-action-summary">
                 <span className="composer__queued-env-action-chevron" aria-hidden="true" />
                 <span className="status-dot status-dot--active status-dot--blink" aria-hidden="true" />
                 <span className="composer__queued-env-action-summary-text">
                   <span className="composer__queued-label">{stopping ? "Stopping" : "Running"}</span>
-                  <code className="agent-command-run__command">{terminal.command}</code>
+                  <code className="agent-command-run__command">{preview.text}</code>
                   <span className="agent-command-run__meta">
                     <span className="agent-command-run__directory" title={terminal.cwd}>
                       {agentCommandDirectoryLabel(terminal.cwd)}
                     </span>
                     {terminal.osPid ? ` · PID ${terminal.osPid}` : null}
+                    {preview.lineCount > 1 ? ` · ${preview.lineCount} lines` : null}
                   </span>
                 </span>
                 <span className="composer__queued-env-action-actions">
                   <EnvActionControlButton className="composer__queued-env-action-stop"
                     disabled={stopping || !props.onStop}
-                    ariaLabel={`Stop ${terminal.command}`}
-                    tooltip={`Stop ${terminal.command}`}
+                    ariaLabel={`Stop ${preview.text}`}
+                    tooltip={`Stop ${preview.text}`}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -77,6 +105,14 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
                 </span>
               </summary>
               <div className="agent-command-run__body">
+                {preview.cut ? (
+                  <div className="agent-command-run__full-command">
+                    <div className="agent-command-run__output-head">
+                      <span>Command</span>
+                    </div>
+                    <pre className="agent-command-run__command-text"><code>{terminal.command}</code></pre>
+                  </div>
+                ) : null}
                 <dl className="agent-command-run__facts">
                   <dt>Directory</dt>
                   <dd className="agent-command-run__path">{breakablePath(terminal.cwd)}</dd>

@@ -65,9 +65,9 @@ async function main(): Promise<void> {
   client.onRequest(() => ({ decision: "decline" }));
 
   let accountBefore: BackendAccountSummary | undefined;
-  let rateLimitsBefore: BackendRateLimitSummary[] = [];
+  let rateLimitsBefore: BackendRateLimitSummary[];
   let accountAfter: BackendAccountSummary | undefined;
-  let rateLimitsAfter: BackendRateLimitSummary[] = [];
+  let rateLimitsAfter: BackendRateLimitSummary[];
   let accountUsageBefore: unknown;
   let accountUsageAfter: unknown;
   let probe: Awaited<ReturnType<CodexAppServerClient["generateStructuredObject"]>> | undefined;

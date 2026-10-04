@@ -52,7 +52,11 @@ vi.mock("../window-channels", () => ({
   registerWindowChannels: mocks.registerWindowChannels,
 }));
 vi.mock("../settings/appearance-bootstrap", () => ({
-  readBootstrapAppearance: () => ({ theme: "dark" }),
+  readBootstrapAppearance: () => ({
+    theme: "dark",
+    darkTheme: "tangerine-dark",
+    lightTheme: "tangerine-light",
+  }),
   themedWindowAdditionalArguments: () => ["--appearance=dark"],
   themedWindowBackgroundColor: () => "#000000",
 }));

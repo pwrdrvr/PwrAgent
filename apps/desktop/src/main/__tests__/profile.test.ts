@@ -27,6 +27,7 @@ import {
   startProfileFocusRequestWatcher,
   startProfileRuntimeHeartbeat,
   writeDockProfileSnapshot,
+  writeProfilesRegistry,
   normalizeProfileName,
 } from "../profile";
 
@@ -105,6 +106,7 @@ describe("PwrAgent profiles", () => {
       schemaVersion: 2,
       pwragentHome: root,
       defaultProfile: "work",
+      ordered: true,
       profiles: [
         { name: "personal" },
         { name: "work" },
@@ -128,8 +130,40 @@ describe("PwrAgent profiles", () => {
       schemaVersion: 2,
       pwragentHome: root,
       defaultProfile: "default",
+      ordered: true,
       profiles: [],
     });
+  });
+
+  it("writes the Dock snapshot in the Profiles-menu order and marks hidden profiles", () => {
+    const { env, root } = createRoot();
+    ensureNamedProfileExists("work", { env });
+    ensureNamedProfileExists("personal", { env });
+    ensureNamedProfileExists("scratch", { env });
+    ensureNamedProfileExists("alpha", { env });
+    const registry = readProfilesRegistry({ env });
+    // The operator moved alpha to the top and switched scratch off.
+    writeProfilesRegistry(
+      {
+        ...registry,
+        profiles: ["alpha", "work", "personal", "scratch"].map((name) => ({
+          ...registry.profiles.find((entry) => entry.name === name)!,
+          ...(name === "scratch" ? { show_in_menu: false } : {}),
+          ...(name === "alpha" ? { display_name: "Alpha Labs" } : {}),
+        })),
+      },
+      { env },
+    );
+    // A directory the registry never recorded goes after the ordered ones.
+    fs.mkdirSync(path.join(root, "profiles", "legacy"), { recursive: true });
+
+    expect(buildDockProfileSnapshot({ env }).profiles).toEqual([
+      { name: "alpha", displayName: "Alpha Labs" },
+      { name: "work" },
+      { name: "personal" },
+      { name: "scratch", showInMenu: false },
+      { name: "legacy" },
+    ]);
   });
 
   it("seeds [onboarding] completed=false in a freshly created profile's config.toml", () => {

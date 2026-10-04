@@ -45,3 +45,6 @@ AuthKey_*.p8
 # re-import procedure.
 docs/design/pwragent-v2/chats/
 docs/design/pwragent-v2/project/uploads/
+
+# Python release-tool bytecode
+__pycache__/

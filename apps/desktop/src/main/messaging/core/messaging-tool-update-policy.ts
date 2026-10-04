@@ -55,6 +55,9 @@ const MODE_POLICIES: Record<MessagingToolUpdateMode, ModePolicy> = {
 };
 
 export class MessagingToolUpdatePolicy {
+  // Batch deliveries started by a flush timer. No caller awaits them, so the
+  // policy keeps them until they settle and whenIdle() can wait for them.
+  private readonly batchDeliveries = new Set<Promise<void>>();
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
   private readonly now: () => number;
   private readonly onBatchReady?: (
@@ -168,6 +171,17 @@ export class MessagingToolUpdatePolicy {
     this.states.clear();
   }
 
+  /**
+   * Resolves once every batch delivery a flush timer started has settled.
+   * dispose() stops new batches but cannot wait for one already running, so
+   * an owner that is about to remove the delivery's store awaits this first.
+   */
+  async whenIdle(): Promise<void> {
+    while (this.batchDeliveries.size > 0) {
+      await Promise.allSettled(this.batchDeliveries);
+    }
+  }
+
   private stateFor(params: {
     bindingId: string;
     mode: MessagingToolUpdateMode;
@@ -227,9 +241,18 @@ export class MessagingToolUpdatePolicy {
       }
       const delivery = this.flushState(key, current, { clear: false });
       if (delivery) {
-        void this.onBatchReady?.(delivery);
+        this.trackBatchDelivery(Promise.resolve(this.onBatchReady?.(delivery)));
       }
     }, delayMs);
+  }
+
+  private trackBatchDelivery(pending: Promise<void>): void {
+    this.batchDeliveries.add(pending);
+    // Untrack without handling the outcome: a failed delivery still surfaces
+    // as an unhandled rejection, as it did before the policy tracked it.
+    void pending.finally(() => {
+      this.batchDeliveries.delete(pending);
+    });
   }
 
   private flushState(

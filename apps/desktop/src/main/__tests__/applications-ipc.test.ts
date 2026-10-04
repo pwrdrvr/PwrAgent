@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { registerApplicationIpcHandlers } from "../ipc/applications";
+import { MARKDOWN_FILE_READ_CHANNEL } from "../../shared/ipc";
 import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -111,8 +116,37 @@ describe("application IPC", () => {
     mocks.showToolOutputIncidentExplorerWindow.mockClear();
   });
 
+  it("reads local previewable files and rejects unsupported, missing, directory and oversized paths", async () => {
+    registerApplicationIpcHandlers();
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-json-preview-"));
+    const read = (filePath: string) => mocks.handlers.get(MARKDOWN_FILE_READ_CHANNEL)?.({}, { path: filePath });
+    try {
+      const filePath = path.join(root, "widget.JSON");
+      const content = '{"title":"Widget","id":9007199254740993}';
+      await writeFile(filePath, content);
+      expect(await read(filePath)).toEqual({ path: filePath, content });
+      for (const name of ["config.yml", "pyproject.toml", "events.ndjson", "rows.tsv", "build.log"]) {
+        await writeFile(path.join(root, name), "x");
+        expect(await read(path.join(root, name))).toEqual({ path: path.join(root, name), content: "x" });
+      }
+      for (const name of ["script.js", ".env", "secrets.env"]) {
+        expect(await read(path.join(root, name))).toMatchObject({ error: "This file type cannot be previewed." });
+      }
+      await writeFile(path.join(root, ".env"), "SECRET=1");
+      await symlink(path.join(root, ".env"), path.join(root, "notes.txt"));
+      expect(await read(path.join(root, "notes.txt"))).toMatchObject({ error: "This file type cannot be previewed." });
+      expect(await read(path.join(root, "missing.json"))).toMatchObject({ error: expect.stringContaining("does not exist") });
+      const directory = path.join(root, "directory.json");
+      await mkdir(directory);
+      expect(await read(directory)).toMatchObject({ error: expect.stringContaining("not a file") });
+      await writeFile(filePath, Buffer.alloc(2 * 1024 * 1024 + 1));
+      expect(await read(filePath)).toMatchObject({ error: "File is too large to preview." });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("opens applications on the selected federation peer", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { APPLICATION_OPEN_CHANNEL } = await import("../../shared/ipc");
     registerApplicationIpcHandlers();
 
@@ -138,7 +172,6 @@ describe("application IPC", () => {
   });
 
   it("reads application candidates from the selected federation peer", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { APPLICATIONS_READ_CHANNEL } = await import("../../shared/ipc");
     registerApplicationIpcHandlers();
 
@@ -157,7 +190,6 @@ describe("application IPC", () => {
   });
 
   it("opens the thread-scoped tool-output incident explorer", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -183,7 +215,6 @@ describe("application IPC", () => {
   });
 
   it("routes incident-explorer thread navigation through its owner", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL } = await import(
       "../../shared/ipc"
     );

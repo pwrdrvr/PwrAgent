@@ -19,6 +19,7 @@ import type {
   NavigationThreadSummary,
   NavigationQueryRequest,
   NavigationQueryPage,
+  ThreadQueuedTurnSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -260,12 +261,70 @@ async function findReadyTextbox(options: { name: string | RegExp }) {
   return element;
 }
 
+/**
+ * A backend queue that keeps the turn `startTurn` admits. The card re-reads
+ * the queue projection 250 ms after any queue change and drops an owned row
+ * the backend no longer lists, so a fake that admits a queued turn and then
+ * reports an empty queue removes the row whenever a test outlives that
+ * debounce. `readsSinceAdmission` lets a test wait for that read instead.
+ */
+function admittingQueue(threadId: string, queueEntryId: string) {
+  const entries: ThreadQueuedTurnSummary[] = [];
+  let readsSinceAdmission = 0;
+  return {
+    startTurn: vi.fn(async (request: { input?: Array<{ type: string; text?: string }> }) => {
+      entries.push({
+        queueEntryId, origin: "manual", createdAt: 123, position: entries.length,
+        displayText: request.input?.find((item) => item.type === "text")?.text ?? "",
+      });
+      return {
+        backend: "codex" as const,
+        threadId,
+        turnId: "turn-queued",
+        queueStatus: "queued" as const,
+        queueEntryId,
+        queueEntryCreatedAt: 123,
+      };
+    }),
+    getNavigationQueueProjection: vi.fn(async (request: Parameters<NonNullable<DesktopApi["getNavigationQueueProjection"]>>[0]) => {
+      if (entries.length) readsSinceAdmission += 1;
+      return {
+        protocol: 2, ref: request.ref, revision: `fifo:${entries.length}`, readiness: "ready", complete: true, entries: [...entries],
+      };
+    }),
+    readsSinceAdmission: () => readsSinceAdmission,
+  };
+}
+
+/** Wait for the projection read that follows a queued send, and its reconcile. */
+async function settleQueueProjection(queue: ReturnType<typeof admittingQueue>) {
+  await waitFor(() => expect(queue.readsSinceAdmission()).toBeGreaterThan(0));
+  await act(async () => {});
+}
+
 async function typeAndSend(title: string, text: string) {
   const input = await findReadyTextbox( { name: `Message ${title}` });
   await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
   await act(async () => {
     fireEvent.change(input, { target: { value: text } });
     fireEvent.keyDown(input, { key: "Enter" });
+  });
+  return input as HTMLElement & { value: string };
+}
+
+/**
+ * A live turn's secondary path: Enter queues, so steering is the chord.
+ * With no desktop platform in jsdom the chord accepts either modifier.
+ */
+async function typeAndSteer(title: string, text: string) {
+  // Queue is the label only a busy card wears; pressing the chord before
+  // the card knows the turn is running would be an ordinary send.
+  await screen.findByRole("button", { name: "Queue" });
+  const input = await findReadyTextbox( { name: `Message ${title}` });
+  await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
+  await act(async () => {
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
   });
   return input as HTMLElement & { value: string };
 }
@@ -1777,7 +1836,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Queued message").textContent).toBe(
-        "Queued nextwait your turn",
+        "Nextwait your turn",
       );
     });
     expect(startTurn).toHaveBeenCalledWith(
@@ -1797,22 +1856,275 @@ describe("StarMapChatCard start-turn queue handling", () => {
     ]);
   });
 
+  async function queueOne(overrides: Partial<DesktopApi> = {}) {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      turnId: "turn-queued",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-1",
+      queueEntryCreatedAt: 123,
+    }));
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({
+      startTurn,
+      // `messages` too, so the transcript renders the optimistic bubble.
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        replay: { entries: [], messages: [], pagination: undefined },
+      })),
+      ...overrides,
+    } as Partial<DesktopApi>);
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+    const input = await typeAndSend("Local work", "wait your turn");
+    const row = await screen.findByLabelText("Queued message");
+    await waitFor(() => {
+      expect(
+        (within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
+    return { desktopApi, input, row, store: result.current };
+  }
+
+  it("deletes a queued message through the owner and retires its transcript copy", async () => {
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: true,
+      disposition: "cancelled" as const,
+    }));
+    const { row, store } = await queueOne({ cancelQueuedTurn });
+    // The optimistic transcript bubble and the row both show the text.
+    expect(screen.getAllByText("wait your turn").length).toBeGreaterThan(1);
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    });
+
+    expect(cancelQueuedTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ queueEntryId: "queue-owner-1" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).toBeNull();
+    });
+    expect(screen.queryByText("wait your turn")).toBeNull();
+    expect(
+      store.getQueuedTurns(buildThreadComposerScopeKey("codex", "t-local")),
+    ).toEqual([]);
+  });
+
+  it("keeps a queued message the owner already started", async () => {
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: false,
+      disposition: "not_found" as const,
+    }));
+    const { row } = await queueOne({ cancelQueuedTurn });
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The queued turn is no longer waiting.",
+    );
+    expect(screen.queryByLabelText("Queued message")).not.toBeNull();
+  });
+
+  it("opens a queued message's full text from the row's chevron", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const { row } = await queueOne({ readQueuedTurn });
+    const chevron = within(row).getByRole("button", { name: "View full message" });
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(chevron);
+    });
+
+    expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "t-local",
+      queueEntryId: "queue-owner-1",
+    }));
+    const region = await within(row).findByRole("region", {
+      name: "Full queued message",
+    });
+    await waitFor(() => {
+      expect(region.textContent).toContain("wait your turn, in full");
+    });
+    const hide = within(row).getByRole("button", { name: "Hide message" });
+    expect(hide.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.click(hide);
+    });
+    expect(within(row).queryByRole("region")).toBeNull();
+  });
+
+  it("takes a queued message back into the composer, after the current draft", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: true,
+      disposition: "cancelled" as const,
+    }));
+    const { input, row } = await queueOne({ cancelQueuedTurn, readQueuedTurn });
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "half-typed note" } });
+    });
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    });
+
+    expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "t-local",
+      queueEntryId: "queue-owner-1",
+      forEdit: true,
+    }));
+    // The cancel is pinned to the content that was read, so a message that
+    // changed in between stays queued instead of being edited stale.
+    expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      queueEntryId: "queue-owner-1",
+      expectedContentHash: "hash-1",
+    }));
+    await waitFor(() => {
+      expect(input.value).toBe("half-typed note\n\nwait your turn, in full");
+    });
+    expect(screen.queryByLabelText("Queued message")).toBeNull();
+  });
+
+  /**
+   * The first cancel is held open, so a second click lands while the row is
+   * still on screen. Each later cancel answers the way the owner does once
+   * the entry is gone.
+   */
+  function heldCancel() {
+    const firstCancel =
+      deferred<Awaited<ReturnType<NonNullable<DesktopApi["cancelQueuedTurn"]>>>>();
+    const cancelQueuedTurn = vi.fn()
+      .mockImplementationOnce(() => firstCancel.promise)
+      .mockImplementation(async () => ({
+        queueEntryId: "queue-owner-1",
+        cancelled: false,
+        disposition: "not_found" as const,
+      }));
+    return { cancelQueuedTurn, firstCancel };
+  }
+
+  it("takes a double-clicked Edit back into the composer once", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const { cancelQueuedTurn, firstCancel } = heldCancel();
+    const { input, row } = await queueOne({ cancelQueuedTurn, readQueuedTurn });
+    const edit = within(row).getByRole("button", { name: "Edit" }) as HTMLButtonElement;
+
+    // One act: the second click reaches the button before React re-renders
+    // it disabled, which is what a fast double-click does.
+    await act(async () => {
+      fireEvent.click(edit);
+      fireEvent.click(edit);
+    });
+    expect(edit.disabled).toBe(true);
+    expect(
+      (within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      firstCancel.resolve({
+        queueEntryId: "queue-owner-1",
+        cancelled: true,
+        disposition: "cancelled",
+      });
+    });
+
+    await waitFor(() => {
+      expect(input.value).toBe("wait your turn, in full");
+    });
+    expect(readQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByLabelText("Queued message")).toBeNull();
+  });
+
+  it("deletes a double-clicked queued message once", async () => {
+    const { cancelQueuedTurn, firstCancel } = heldCancel();
+    const { row } = await queueOne({ cancelQueuedTurn });
+    const remove = within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+
+    await act(async () => {
+      fireEvent.click(remove);
+      fireEvent.click(remove);
+    });
+    expect(remove.disabled).toBe(true);
+
+    await act(async () => {
+      firstCancel.resolve({
+        queueEntryId: "queue-owner-1",
+        cancelled: true,
+        disposition: "cancelled",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).toBeNull();
+    });
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("re-enables a row's actions when its cancel fails", async () => {
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: false,
+      disposition: "content_changed" as const,
+    }));
+    const { row } = await queueOne({ cancelQueuedTurn });
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The queued message changed.",
+    );
+    expect(
+      (within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
   it("clears a remote queue entry only for its owning peer's lifecycle event", async () => {
     const listeners: Array<(event: AgentEvent) => void> = [];
     const onAgentEvent = vi.fn((listener: (event: AgentEvent) => void) => {
       listeners.push(listener);
       return () => undefined;
     });
-    const startTurn = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "t-remote",
-      turnId: "turn-queued",
-      queueStatus: "queued" as const,
-      queueEntryId: "queue-owner-remote",
-      queueEntryCreatedAt: 123,
-    }));
+    const queue = admittingQueue("t-remote", "queue-owner-remote");
     const { result } = renderHook(() => useComposerDraftStore());
-    const desktopApi = buildApi({ onAgentEvent, startTurn });
+    const desktopApi = buildApi({
+      onAgentEvent,
+      startTurn: queue.startTurn,
+      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+    } as unknown as Partial<DesktopApi>);
     renderCard({
       composerDraftStore: result.current,
       desktopApi,
@@ -1820,6 +2132,8 @@ describe("StarMapChatCard start-turn queue handling", () => {
     });
     await typeAndSend("Remote work", "remote queue");
     await screen.findByLabelText("Queued message");
+    await settleQueueProjection(queue);
+    expect(screen.getByLabelText("Queued message")).toBeTruthy();
 
     act(() => {
       for (const listener of listeners) {
@@ -1858,6 +2172,56 @@ describe("StarMapChatCard start-turn queue handling", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Queued message")).toBeNull();
     });
+  });
+
+  it("takes a generated title and drops it when the owner replaces the input", async () => {
+    const listeners: Array<(event: AgentEvent) => void> = [];
+    const onAgentEvent = vi.fn((listener: (event: AgentEvent) => void) => {
+      listeners.push(listener);
+      return () => undefined;
+    });
+    const queue = admittingQueue("t-local", "queue-owner-titled");
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({
+      onAgentEvent,
+      startTurn: queue.startTurn,
+      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+    } as unknown as Partial<DesktopApi>);
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+    await typeAndSend("Local work", "a long queued message");
+    await screen.findByLabelText("Queued message");
+    await settleQueueProjection(queue);
+    const row = screen.getByLabelText("Queued message");
+    const emit = (params: Record<string, unknown>): void => {
+      act(() => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            notification: {
+              method: "thread/turnQueue/updated",
+              params: {
+                queueEntryId: "queue-owner-titled",
+                status: "queued",
+                threadId: "t-local",
+                ...params,
+              },
+            },
+          } as AgentEvent);
+        }
+      });
+    };
+    const text = (): string =>
+      row.querySelector(".composer__queued-text")?.textContent ?? "";
+
+    emit({ displayText: "a long queued message", title: "Queued work" });
+    await waitFor(() => expect(text()).toBe("Queued work"));
+
+    emit({ displayText: "the replaced message", inputUpdated: true });
+    await waitFor(() => expect(text()).toBe("the replaced message"));
   });
 });
 
@@ -2059,11 +2423,12 @@ describe("satellite toggles", () => {
 });
 
 /**
- * A card over a running turn. Sending here has to reach the live turn: a
- * `startTurn` while one is in flight is not a second conversation, it is a
- * message the operator loses.
+ * A card over a running turn. Queue, the primary, hands the message to the
+ * owner's turn queue, which holds it behind the running turn; the steer
+ * chord hands it
+ * to the running turn itself. Neither starts a second conversation.
  */
-describe("StarMapChatCard steering a live turn", () => {
+describe("StarMapChatCard sending into a live turn", () => {
   /**
    * The session hook takes "is a turn running" from the navigation snapshot
    * as well as the thread read, and resyncs from the snapshot — so a card is
@@ -2106,13 +2471,12 @@ describe("StarMapChatCard steering a live turn", () => {
     } as unknown as Partial<DesktopApi>);
   }
 
-  it("steers the running turn instead of starting a second one", async () => {
+  it("steers the running turn on the chord instead of starting a second one", async () => {
     const desktopApi = busyApi();
     const onUserRepliedToThread = vi.fn();
     const thread = localThread(BUSY);
     renderCard({ desktopApi, onUserRepliedToThread, thread });
-    await screen.findByRole("button", { name: "Steer" });
-    await typeAndSend("Local work", "also check the logs");
+    await typeAndSteer("Local work", "also check the logs");
 
     await waitFor(() => {
       expect(desktopApi.steerTurn).toHaveBeenCalledWith(
@@ -2143,8 +2507,7 @@ describe("StarMapChatCard steering a live turn", () => {
     } as unknown as Partial<DesktopApi>);
     const thread = localThread(BUSY);
     renderCard({ desktopApi, onUserRepliedToThread, thread });
-    await screen.findByRole("button", { name: "Steer" });
-    await typeAndSend("Local work", "and then deploy");
+    await typeAndSteer("Local work", "and then deploy");
 
     // Steered and queued are both accepted sends that land in different
     // places, and only the backend knows which happened.
@@ -2164,8 +2527,7 @@ describe("StarMapChatCard steering a live turn", () => {
       onUserRepliedToThread,
       thread: localThread(BUSY),
     });
-    await screen.findByRole("button", { name: "Steer" });
-    const input = await typeAndSend("Local work", "do not lose me");
+    const input = await typeAndSteer("Local work", "do not lose me");
 
     await waitFor(() => {
       expect(input.value).toBe("do not lose me");
@@ -2184,8 +2546,7 @@ describe("StarMapChatCard steering a live turn", () => {
   it("keeps a peer's steer pointed at that peer", async () => {
     const desktopApi = busyApi();
     renderCard({ desktopApi, thread: remoteThread(BUSY) });
-    await screen.findByRole("button", { name: "Steer" });
-    await typeAndSend("Remote work", "over there");
+    await typeAndSteer("Remote work", "over there");
 
     await waitFor(() => {
       expect(desktopApi.steerTurn).toHaveBeenCalledWith(
@@ -2196,11 +2557,11 @@ describe("StarMapChatCard steering a live turn", () => {
     });
   });
 
-  it("refuses to start a second turn before the running one is identified", async () => {
+  it("refuses to steer before the running turn is identified", async () => {
     // A thread reports busy from the navigation snapshot before any turn id
     // is hydrated — a peer's or a messaging adapter's turn does exactly
-    // this. Starting a turn in that window is the second-turn-on-a-running-
-    // thread the steer path exists to prevent.
+    // this. The operator asked to land inside that turn, so quietly
+    // queueing behind it instead would not be what they asked for.
     const desktopApi = busyApi({
       readThread: vi.fn(async () => ({
         backend: "codex",
@@ -2213,7 +2574,7 @@ describe("StarMapChatCard steering a live turn", () => {
       })),
     } as unknown as Partial<DesktopApi>);
     renderCard({ desktopApi, thread: localThread(BUSY) });
-    const input = await typeAndSend("Local work", "do not double-turn");
+    const input = await typeAndSteer("Local work", "do not double-turn");
 
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /Still identifying the running turn/,
@@ -2223,32 +2584,6 @@ describe("StarMapChatCard steering a live turn", () => {
     // Nothing reached the backend, so the operator keeps what they typed.
     await waitFor(() => {
       expect(input.value).toBe("do not double-turn");
-    });
-  });
-
-  it("leaves the control live so that refusal is reachable", async () => {
-    // Disabling here would hide the state behind a dead button the operator
-    // can neither use nor understand.
-    const desktopApi = busyApi({
-      readThread: vi.fn(async () => ({
-        backend: "codex",
-        threadId: "t-local",
-        replay: {
-          entries: [],
-          messages: [],
-          pagination: { supportsPagination: false, hasPreviousPage: false },
-        },
-      })),
-    } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: localThread(BUSY) });
-    const steer = (await screen.findByRole("button", {
-      name: "Steer",
-    })) as HTMLButtonElement;
-    const input = await findReadyTextbox( { name: "Message Local work" });
-    fireEvent.change(input, { target: { value: "let me through" } });
-
-    await waitFor(() => {
-      expect(steer.disabled).toBe(false);
     });
   });
 
@@ -2269,8 +2604,7 @@ describe("StarMapChatCard steering a live turn", () => {
       }),
     } as unknown as Partial<DesktopApi>);
     renderCard({ desktopApi, thread: localThread(BUSY) });
-    await screen.findByRole("button", { name: "Steer" });
-    await typeAndSend("Local work", "also check the logs");
+    await typeAndSteer("Local work", "also check the logs");
     expect(
       await screen.findByText("Steered into the running turn."),
     ).toBeTruthy();
@@ -2290,18 +2624,220 @@ describe("StarMapChatCard steering a live turn", () => {
     });
   });
 
-  it("disables the control when the bridge cannot steer at all", async () => {
+  it("ignores the steer chord, but not Queue, when the bridge cannot steer", async () => {
     const desktopApi = busyApi({ steerTurn: undefined });
     renderCard({ desktopApi, thread: localThread(BUSY) });
-    const steer = (await screen.findByRole("button", {
-      name: "Steer",
-    })) as HTMLButtonElement;
-    const input = await findReadyTextbox( { name: "Message Local work" });
-    fireEvent.change(input, { target: { value: "no route for this" } });
+    const input = await typeAndSteer("Local work", "no route for this");
+
+    // Asked to steer, so it must not quietly queue instead; the text stays.
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    expect(input.value).toBe("no route for this");
+    // The owner's turn queue does not need steering.
+    expect(
+      (screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  function queuedStartTurn(threadId = "t-local") {
+    return vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId,
+      turnId: "queue-owner-live",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-live",
+      queueEntryCreatedAt: 123,
+    }));
+  }
+
+  it("queues behind the running turn on Enter", async () => {
+    const startTurn = queuedStartTurn();
+    const desktopApi = busyApi({ startTurn });
+    const onUserRepliedToThread = vi.fn();
+    const thread = localThread(BUSY);
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      onUserRepliedToThread,
+      thread,
+    });
+    await screen.findByRole("button", { name: "Queue" });
+    await typeAndSend("Local work", "after this, deploy");
 
     await waitFor(() => {
-      expect(steer.disabled).toBe(true);
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          input: [{ type: "text", text: "after this, deploy" }],
+          queueEntryId: expect.stringMatching(/^queued-turn-/),
+          threadId: "t-local",
+        }),
+      );
     });
+    expect(desktopApi.steerTurn).not.toHaveBeenCalled();
+    const row = await screen.findByLabelText("Queued message");
+    expect(row.textContent).toContain("after this, deploy");
+    expect(
+      result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "t-local")),
+    ).toEqual([
+      expect.objectContaining({
+        backendQueuePending: false,
+        queueEntryId: "queue-owner-live",
+        text: "after this, deploy",
+      }),
+    ]);
+    // The band row is the receipt; a steer notice would claim otherwise.
+    expect(screen.queryByText("Steered into the running turn.")).toBeNull();
+    expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
+  });
+
+  it("keeps a queued copy apart from a running prompt with the same text", async () => {
+    // The running turn's own prompt is "continue". Queueing "continue" again
+    // is a second message, not that one, so it keeps its own transcript copy.
+    const startTurn = queuedStartTurn();
+    const desktopApi = busyApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        threadStatus: "active",
+        replay: {
+          entries: [
+            {
+              type: "message",
+              id: "m-prompt",
+              role: "user",
+              text: "continue",
+              parts: [{ type: "text", text: "continue" }],
+              createdAt: 1,
+              turn: { id: "turn-live", status: "in_progress" },
+            },
+            {
+              type: "message",
+              id: "m-live",
+              role: "assistant",
+              text: "working on it",
+              parts: [{ type: "text", text: "working on it" }],
+              createdAt: 2,
+              turn: { id: "turn-live", status: "in_progress" },
+            },
+          ],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+      startTurn,
+    } as unknown as Partial<DesktopApi>);
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(BUSY),
+    });
+    await screen.findByText("working on it");
+    await screen.findByRole("button", { name: "Queue" });
+    await typeAndSend("Local work", "continue");
+
+    await screen.findByLabelText("Queued message");
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("continue", { ignore: IGNORE_COMPOSER }).length,
+      ).toBe(3);
+    });
+  });
+
+  it("queues from the Queue button too", async () => {
+    const startTurn = queuedStartTurn();
+    const desktopApi = busyApi({ startTurn });
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(BUSY),
+    });
+    const queue = (await screen.findByRole("button", {
+      name: "Queue",
+    })) as HTMLButtonElement;
+    const input = await findReadyTextbox( { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    await waitFor(() => expect(queue.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(queue);
+    });
+
+    await screen.findByLabelText("Queued message");
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(desktopApi.steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("queues before the running turn is identified", async () => {
+    // Unlike a steer, Queue never aims at a turn id: the owner decides what
+    // the message waits behind.
+    const startTurn = queuedStartTurn();
+    const desktopApi = busyApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+      startTurn,
+    } as unknown as Partial<DesktopApi>);
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(BUSY),
+    });
+    await screen.findByRole("button", { name: "Queue" });
+    await typeAndSend("Local work", "whenever you are free");
+
+    await screen.findByLabelText("Queued message");
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says why when the bridge cannot queue", async () => {
+    const desktopApi = busyApi({ startTurn: undefined } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    await screen.findByRole("button", { name: "Queue" });
+    const input = await typeAndSend("Local work", "nowhere to go");
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Sending is not available for this thread.",
+    );
+    // Nothing reached the backend, so the operator keeps what they typed.
+    await waitFor(() => {
+      expect(input.value).toBe("nowhere to go");
+    });
+    expect(desktopApi.steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("queues a peer's message with that peer", async () => {
+    const startTurn = queuedStartTurn("t-remote");
+    const desktopApi = busyApi({ startTurn });
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: remoteThread(BUSY),
+    });
+    await screen.findByRole("button", { name: "Queue" });
+    await typeAndSend("Remote work", "over there, later");
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+          threadId: "t-remote",
+        }),
+      );
+    });
+    await screen.findByLabelText("Queued message");
+    expect(desktopApi.steerTurn).not.toHaveBeenCalled();
   });
 });
 

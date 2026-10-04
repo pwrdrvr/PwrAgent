@@ -41,6 +41,10 @@ import {
   buildPwrAgentStarMapToolRouter,
   type PwrAgentStarMapHandler,
 } from "./pwragent-star-map-agent-tools.js";
+import {
+  buildPwrAgentThreadTodoToolRouter,
+  type PwrAgentThreadTodoHandler,
+} from "./pwragent-thread-todo-agent-tools.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
@@ -67,6 +71,7 @@ export function resolveAgentToolCatalogs(params: {
   tokenMiserStore?: TokenMiserStore;
   tokenMiserFocused?: TokenMiserFocusedSummaries;
   starMapHandler?: PwrAgentStarMapHandler;
+  threadTodoHandler?: PwrAgentThreadTodoHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -108,6 +113,10 @@ export function resolveAgentToolCatalogs(params: {
   const tokenMiserDynamicTools = tokenMiserRouter.buildDynamicToolSpecs();
   const starMapRouter = buildPwrAgentStarMapToolRouter(params.starMapHandler);
   const starMapDynamicTools = starMapRouter.buildDynamicToolSpecs();
+  const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(
+    params.threadTodoHandler,
+  );
+  const threadTodoDynamicTools = threadTodoRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -202,6 +211,22 @@ export function resolveAgentToolCatalogs(params: {
           id: "star_map",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: starMapDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "thread_todos",
+      dynamicTools: threadTodoDynamicTools,
+      router: threadTodoRouter,
+      summary: {
+        id: "thread_todos",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: countDynamicTools(threadTodoDynamicTools),
+        fingerprint: buildCatalogFingerprint({
+          id: "thread_todos",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: threadTodoDynamicTools,
         }),
       },
     },

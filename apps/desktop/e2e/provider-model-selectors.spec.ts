@@ -5,6 +5,7 @@ import { expect, test, type Locator } from "@playwright/test";
 import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { seedProfileOverlayState } from "./fixtures/overlay-state-seeding";
+import { mastheadAction } from "./fixtures/window-chrome";
 
 async function assertTangerineFocusRing(locator: Locator) {
   await expect
@@ -95,7 +96,7 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
   });
 
   try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
@@ -132,7 +133,7 @@ test("OpenAI new-thread launchpad wins when sticky ACP Grok defaults are unavail
   });
 
   try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     await expect(app.window.getByText("Grok CLI", { exact: true })).toHaveCount(0);

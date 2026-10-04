@@ -11,6 +11,7 @@ import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
 } from "@pwragent/shared";
 import {
+  explainMissingNavigationAnchor,
   navigationQueryKey,
   projectNavigationQuery,
   type NavigationQueryIndex,
@@ -296,6 +297,8 @@ export class NavigationQueryStore {
     let generation: NavigationQueryGeneration;
     let newCurrentKey: string | undefined;
     let offset = 0;
+    // An anchor never travels with a cursor, so its generation was built from this index.
+    let anchorIndex: NavigationQueryIndex | undefined;
 
     if (params.request.cursor) {
       const cursor = decodeCursor(params.request.cursor);
@@ -334,6 +337,7 @@ export class NavigationQueryStore {
         if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
       }
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
+      anchorIndex = index;
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
       const materialization = projectNavigationQuery({
         index,
@@ -406,7 +410,10 @@ export class NavigationQueryStore {
         : generation.materialization.entries.findIndex(({ row }) => row.ref.backend === anchor.ref.backend
           && row.ref.threadId === anchor.ref.threadId && row.ref.ownerInstanceId === anchor.ref.ownerInstanceId);
       if (offset < 0) {
-        throw new NavigationQueryError("navigation_anchor_missing", "The visible navigation anchor is no longer in this query. Choose another item or restart this list explicitly.");
+        // The reason reaches the main log through Electron's handler error
+        // line and a peer through its relayed message; it is code vocabulary.
+        const reason = anchorIndex ? explainMissingNavigationAnchor({ index: anchorIndex, request: params.request }) : "filtered";
+        throw new NavigationQueryError("navigation_anchor_missing", `The visible navigation anchor is no longer in this query (reason: ${reason}). Choose another item or restart this list explicitly.`);
       }
     }
     generation.lastAccessedAt = now;

@@ -1,20 +1,32 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { isBranchDrifted } from "@pwragent/shared";
+import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
 import {
   BranchIcon,
   DraftIcon,
   FolderIcon,
   TerminalIcon,
+  TodoIcon,
   WorktreeIcon,
 } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { useThreadTodosForKey } from "../thread-todos/useThreadTodos";
+import {
+  OPERATOR_WAIT_LABELS,
+  isBlockingWait,
+  leadingOperatorWait,
+  type OperatorWait,
+} from "../operator-requests/operator-waits";
+import { useOperatorWaitsContext } from "../operator-requests/useOperatorRequests";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { AgentThreadChip } from "./AgentThreadChip";
+
+const NO_WAITS: OperatorWait[] = [];
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
@@ -91,6 +103,27 @@ export function ThreadMetaChips({
   // Same reason as the terminal chip: the sidebar clips a native `title`, and
   // the Star Map layer would paint over one anyway.
   const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const todoTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const itemThreadKey = thread.federation ? "" : threadSummaryIdentityKey(thread);
+  const openTodos = useThreadTodosForKey(itemThreadKey);
+  const waitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // This window's list of what threads wait on. A peer's window has none, and
+  // a peer's thread is answered on the peer. Whenever the list names nothing
+  // for a thread (a peer's, or before the first list arrives), the session's
+  // own approval and input flags still show.
+  const waitsContext = useOperatorWaitsContext();
+  const waitsKnown = Boolean(waitsContext) && !thread.federation;
+  const waits = waitsKnown
+    ? waitsContext?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS
+    : NO_WAITS;
+  const leadWait = leadingOperatorWait(waits);
+  const openItemCount = openTodos.length + waits.length;
+  // "to-do" while only cards are open, so the chip names what it counts.
+  const openItemNoun = waits.length === 0 ? "to-do" : "item";
+  const unreadItemCount = waitsKnown && waitsContext
+    ? waits.filter((wait) => !waitsContext.seenKeys.has(wait.key)).length
+      + openTodos.filter((todo) => !waitsContext.seenKeys.has(operatorTodoItemKey(todo.id))).length
+    : 0;
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
@@ -302,7 +335,56 @@ export function ThreadMetaChips({
       ) : null}
       {draftTooltip.tooltipNode}
 
-      {hasApprovalRequest ? (
+      {leadWait ? (
+        <span
+          aria-label={`${OPERATOR_WAIT_LABELS[leadWait.kind]}: ${leadWait.title}`}
+          role="img"
+          className={`thread-row__chip ${
+            isBlockingWait(leadWait) ? "thread-row__chip--approval" : "thread-row__chip--question"
+          }`}
+          data-thread-wait={leadWait.kind}
+          onMouseEnter={(event) =>
+            waitTooltip.show(event.currentTarget, formatWaitTooltip(waits))
+          }
+          onMouseLeave={waitTooltip.hide}
+        >
+          {OPERATOR_WAIT_LABELS[leadWait.kind]}
+        </span>
+      ) : null}
+      {waitTooltip.tooltipNode}
+
+      {openItemCount > 0 ? (
+        <span
+          aria-label={`${openItemCount} open ${openItemNoun}${openItemCount === 1 ? "" : "s"}${
+            unreadItemCount > 0 ? `, ${unreadItemCount} unread` : ""
+          }`}
+          role="img"
+          className={`thread-row__chip thread-row__chip--todos thread-row__chip--persistent${
+            unreadItemCount > 0 ? " is-unread" : ""
+          }`}
+          data-thread-todos={openItemCount}
+          data-unread={unreadItemCount > 0 ? unreadItemCount : undefined}
+          onMouseEnter={(event) =>
+            todoTooltip.show(
+              event.currentTarget,
+              formatTodoTooltip(
+                [...waits.map((wait) => wait.title), ...openTodos.map((todo) => todo.title)],
+                openItemNoun,
+                unreadItemCount,
+              ),
+            )
+          }
+          onMouseLeave={todoTooltip.hide}
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <TodoIcon size={12} />
+          </span>
+          <span className="thread-row__chip-label">{openItemCount}</span>
+        </span>
+      ) : null}
+      {todoTooltip.tooltipNode}
+
+      {!leadWait && hasApprovalRequest ? (
         <span
           aria-label="Waiting for approval"
           className="thread-row__chip thread-row__chip--approval"
@@ -312,7 +394,7 @@ export function ThreadMetaChips({
         </span>
       ) : null}
 
-      {hasInputRequest ? (
+      {!leadWait && hasInputRequest ? (
         <span
           aria-label="Input needed"
           className="thread-row__chip thread-row__chip--input"
@@ -585,4 +667,25 @@ export function CopyableThreadChip(props: {
       {tooltip.tooltipNode}
     </>
   );
+}
+
+function formatTodoTooltip(titles: string[], noun: string, unread: number): string {
+  const shown = titles.slice(0, 3).map((title) => `• ${title}`);
+  const more = titles.length - shown.length;
+  const count = `${titles.length} open ${noun}${titles.length === 1 ? "" : "s"}`;
+  return [
+    unread > 0 ? `${count}, ${unread} unread` : count,
+    ...shown,
+    ...(more > 0 ? [`and ${more} more`] : []),
+  ].join("\n");
+}
+
+function formatWaitTooltip(waits: readonly OperatorWait[]): string {
+  const shown = waits.slice(0, 3).map((wait) => `• ${OPERATOR_WAIT_LABELS[wait.kind]}: ${wait.title}`);
+  const more = waits.length - shown.length;
+  return [
+    waits.some(isBlockingWait) ? "Waiting on you" : "Asked you",
+    ...shown,
+    ...(more > 0 ? [`and ${more} more`] : []),
+  ].join("\n");
 }

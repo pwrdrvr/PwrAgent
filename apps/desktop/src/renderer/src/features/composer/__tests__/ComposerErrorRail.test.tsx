@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerErrorRail, type ComposerErrorEntry } from "../ComposerErrorRail";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../../notifications/turn-failure-acknowledgements";
@@ -97,6 +98,54 @@ describe("ComposerErrorRail", () => {
     expect(screen.getByText("Different failure.")).toBeInTheDocument();
   });
 
+  it("presents a new error occurrence without a follow-up cleanup commit", () => {
+    const onRender = vi.fn();
+    const rail = (occurrence: number) => (
+      <Profiler id="error-rail" onRender={onRender}>
+        <ComposerErrorRail entries={[entry({ occurrence })]} />
+      </Profiler>
+    );
+    const { rerender } = render(rail(1));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    onRender.mockClear();
+
+    rerender(rail(2));
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(onRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not carry a dismissal into another thread with the same error", () => {
+    const { rerender } = render(
+      <ComposerErrorRail failureScope="codex:thread-one" entries={[entry()]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    rerender(<ComposerErrorRail failureScope="codex:thread-two" entries={[entry()]} />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps a dismissal when unchanged entries are recreated by background updates", () => {
+    const onRender = vi.fn();
+    const rail = () => (
+      <Profiler id="error-rail" onRender={onRender}>
+        <ComposerErrorRail entries={[entry()]} />
+      </Profiler>
+    );
+    const { rerender } = render(rail());
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    onRender.mockClear();
+
+    for (let update = 0; update < 60; update += 1) {
+      rerender(rail());
+    }
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onRender).toHaveBeenCalledTimes(60);
+  });
+
   it("shows the same message again after the source cleared in between", () => {
     const { rerender } = render(<ComposerErrorRail entries={[entry()]} />);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
@@ -105,7 +154,7 @@ describe("ComposerErrorRail", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
-  it("copies the raw message, not the cleaned one", () => {
+  it("copies the raw message, not the cleaned one", async () => {
     const copyText = vi.fn().mockResolvedValue(undefined);
     const raw = "Error invoking remote method 'x': Error: Boom";
     render(
@@ -114,9 +163,11 @@ describe("ComposerErrorRail", () => {
         entries={[entry({ message: raw })]}
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Copy error: Environment error" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Copy error: Environment error" }),
+      );
+    });
     expect(copyText).toHaveBeenCalledWith(raw);
   });
 
@@ -127,12 +178,16 @@ describe("ComposerErrorRail", () => {
     expect(screen.queryByRole("button", { expanded: false })).toBeNull();
   });
 
-  it("does not toggle the row when the copy or dismiss buttons are used", () => {
+  it("does not toggle the row when the copy or dismiss buttons are used", async () => {
     render(<ComposerErrorRail entries={[entry()]} />);
     const toggle = screen.getByRole("button", { expanded: false });
-    fireEvent.click(screen.getByRole("button", { name: /Copy error/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Copy error/ }));
+    });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(toggle);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText(/npm ERR! network timeout/)).toBeInTheDocument();
   });

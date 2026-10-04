@@ -1,5 +1,5 @@
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationIdentityKey, navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -15,6 +15,7 @@ import {
   type ReactElement,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -42,6 +43,11 @@ import {
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
+import {
+  isRenamingRow,
+  matchMoveHotkey,
+  type RenamingThreadRow,
+} from "./thread-action-hotkeys";
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
@@ -89,19 +95,55 @@ import {
 import { createSubthreadTrays } from "./subthread-trays";
 import {
   interleaveStartingSubthreads,
+  isSubthreadLaunchpadDraft,
   selectUnlandedStartingThreads,
-  StartingThreadRow,
+  type PendingSidebarRow,
 } from "./StartingThreadRow";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import { PendingThreadRow } from "./SubthreadDraftRow";
+import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
+
+/**
+ * Scroll a project's section to the top of the lens, expanding it first.
+ *
+ * Each reveal waits for a selection, because its caller selects and reveals
+ * in one gesture and the selection can land a render later. A launchpad
+ * reveal (⌘K's project jump, a selected launchpad) waits for that project's
+ * launchpad. A reveal from the thread header's project name names the thread
+ * it was clicked from instead: it keeps that row in view, and flashes the
+ * project's summary, because that click can also switch the lens and the
+ * eye needs somewhere to land.
+ */
+export type ProjectRevealRequest = {
+  key: string;
+  selectedThreadKey?: string;
+};
+
+/** How long a header reveal outlines the project's summary. */
+const PROJECT_REVEAL_FLASH_MS = 1200;
 
 type DirectoriesListProps = {
   presentationOrder?: NavigationPresentationOrder;
   /**
-   * Threads still starting. Each renders in the slot its thread will take:
-   * under its parent, or in its project where a new top-level thread sorts.
+   * Threads still starting, and sub-threads still being written. Each
+   * renders in the slot its thread will take: under its parent, or in its
+   * project where a new top-level thread sorts.
    */
-  startingThreads?: PendingLaunchpadCreation[];
-  onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
+  startingThreads?: PendingSidebarRow[];
+  onSelectStartingThread?: (entry: PendingSidebarRow) => void;
+  onOpenSubthreadDraftContextMenu?: (
+    draft: SubthreadLaunchpadDraft,
+    position: { x: number; y: number },
+  ) => void;
+  /**
+   * Shown when no project has a row. Defaults to the lens's own reading; the
+   * Sidebar says "No threads yet." when no thread exists in any lens.
+   */
+  emptyLabel?: string;
+  /**
+   * The lane's last item (the start actions), after every directory, so it
+   * scrolls with them. Also follows the empty state.
+   */
+  footer?: ReactNode;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -114,8 +156,13 @@ type DirectoriesListProps = {
   composerSourceThreadKey?: string;
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
+  /** The row whose title is a rename field. */
+  renamingRow?: RenamingThreadRow;
+  onRequestRenameThread?: (thread: NavigationThreadSummary, row: ThreadRowRef) => void;
+  onCommitRenameThread?: (thread: NavigationThreadSummary, name: string | null) => void;
   directories: NavigationDirectorySummary[];
-  projectReveal?: { key: string; focus?: boolean };
+  /** Expand and scroll to a project. Focus stays where it is: the launchpad's composer takes it. */
+  projectReveal?: ProjectRevealRequest;
   onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
@@ -899,7 +946,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   );
   // The projects a starting thread will render in. A sub-thread launchpad's
   // own key names no project; its thread lands under the parent's row.
-  const startingThreadDirectoryKeys = useCallback((creation: PendingLaunchpadCreation): string[] => {
+  const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
     return parent
       ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
@@ -912,7 +959,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
-  const handledProjectReveal = useRef<{ key: string; focus?: boolean } | undefined>(undefined);
+  const handledProjectReveal = useRef<ProjectRevealRequest | undefined>(undefined);
+  const [flashedProjectKey, setFlashedProjectKey] = useState<string>();
+  useEffect(() => {
+    if (flashedProjectKey === undefined) return;
+    const timeout = window.setTimeout(
+      () => setFlashedProjectKey(undefined),
+      PROJECT_REVEAL_FLASH_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [flashedProjectKey]);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -977,7 +1033,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   useEffect(() => {
     const request = props.projectReveal;
     if (!request || handledProjectReveal.current === request
-      || props.selectedItemKey !== buildLaunchpadSelectionKey(request.key)) return;
+      || props.selectedItemKey !== (
+        request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
+      )) return;
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -987,13 +1045,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // Loaded threads provide the scroll extent below the header and can
     // shift it when another expanded directory above finishes loading.
     if (revealPagesInFlight) return;
-    // Wait until the palette's modal cleanup has restored its prior focus.
     const frame = requestAnimationFrame(() => {
       // The header is sticky: its visual top may already be at the viewport
       // edge while the project's threads are scrolled out above it. Reveal the
-      // section's normal-flow start, then focus without moving the scroll.
-      header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
-      if (request.focus !== false) header.focus({ preventScroll: true });
+      // section's normal-flow start.
+      const section = header.closest(".directory-row");
+      section?.scrollIntoView?.({ block: "start" });
+      if (request.selectedThreadKey) {
+        // Then bring the thread the reveal came from to the nearest edge.
+        // The header is sticky, so it stays on screen wherever the section
+        // scrolls to; when the project is too long for both, the row wins.
+        // The summary carries `.thread-row.is-selected` too, when the
+        // project itself is selected, so it is excluded by name.
+        section
+          ?.querySelector(".thread-row.is-selected:not(.directory-row__summary)")
+          ?.scrollIntoView?.({ block: "nearest" });
+        setFlashedProjectKey(request.key);
+      }
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });
@@ -1340,8 +1408,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   });
 
-  if (visibleDirectories.length === 0) {
-    return <p className="sidebar-empty">No directory-linked threads.</p>;
+  // A starting thread with no loaded project still needs its row: an empty
+  // index is exactly when navigation shows this lens for the first thread.
+  if (visibleDirectories.length === 0 && unplacedStartingThreads.length === 0) {
+    return (
+      <>
+        <p className="sidebar-empty">{props.emptyLabel ?? "No directory-linked threads."}</p>
+        {props.footer}
+      </>
+    );
   }
 
   /**
@@ -1467,13 +1542,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {trayEntries.flatMap((entry) => {
               if (entry.kind === "starting") {
                 return [
-                  <StartingThreadRow
+                  <PendingThreadRow
                     key={`${directory.key}:${entry.creation.selectionKey}`}
                     compact
-                    creation={entry.creation}
+                    entry={entry.creation}
                     locationMode="kind"
                     nestedDepth={entry.depth}
                     selected={props.selectedItemKey === entry.creation.selectionKey}
+                    onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
                     onSelect={props.onSelectStartingThread}
                   />,
                 ];
@@ -1493,6 +1569,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 actionsMenuOpen={childKey === props.actionsMenuThreadKey}
+                renaming={isRenamingRow(props.renamingRow, childKey, directory.key)}
+                onRequestRename={props.onRequestRenameThread}
+                onCommitRename={props.onCommitRenameThread}
                 compact
                 directoryKey={directory.key}
                 draggable={reorderable && directChildKeySet.has(childKey)}
@@ -1633,16 +1712,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
       creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+    // A sub-thread being written opens its parent's tray and gives the
+    // parent its chevron, as the thread will once it lands.
+    const draftParentKeys = new Set(
+      startingSubthreads.filter(isSubthreadLaunchpadDraft).map((draft) => draft.parentThreadKey),
+    );
+    const holdsSubthreadDraft = (threadKey: string): boolean =>
+      draftParentKeys.size > 0
+      && (draftParentKeys.has(threadKey)
+        || trays.subtree(threadKey).some((child) => draftParentKeys.has(threadSummaryIdentityKey(child))));
     const startingRootSlot = !directoryThreadsCollapsed
       ? "unpinned"
       : (directory.pinnedRootCount ?? 0) > 0 ? "pinned" : "selected";
     const renderStartingRootThreads = (slot: typeof startingRootSlot): ReactElement[] | null =>
       slot === startingRootSlot
         ? startingRootThreads.map((creation) => (
-            <StartingThreadRow
+            <PendingThreadRow
               key={`${directory.key}:${creation.selectionKey}`}
               compact
-              creation={creation}
+              entry={creation}
               locationMode="kind"
               selected={props.selectedItemKey === creation.selectionKey}
               onSelect={props.onSelectStartingThread}
@@ -1683,11 +1771,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
     ): ReactElement => {
       const threadKey = threadSummaryIdentityKey(thread);
       const ordinarySubthreadCount = trays.subtree(threadKey).length;
+      const holdsDraft = holdsSubthreadDraft(threadKey);
       const subthreadCount = getSubthreadDisclosureCount(
         thread,
         ordinarySubthreadCount,
-      );
-      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+      ) + (holdsDraft ? 1 : 0);
+      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
       return (
         <Fragment key={`${directory.key}:${threadKey}`}>
           <ThreadRow
@@ -1699,6 +1788,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
+            renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
+            onRequestRename={props.onRequestRenameThread}
+            onCommitRename={props.onCommitRenameThread}
             compact
             directoryKey={directory.key}
             pointerDraggable={Boolean(props.onReorderThreadPins)}
@@ -1897,14 +1989,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
           onKeyDown={
             directoryDragEnabled && directoryPinned
               ? (event) => {
-                  if (!event.metaKey || !event.shiftKey) return;
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    movePinnedDirectoryByKeyboard(directory, "up");
-                  } else if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    movePinnedDirectoryByKeyboard(directory, "down");
-                  }
+                  const direction = matchMoveHotkey(event);
+                  if (direction === null) return;
+                  event.preventDefault();
+                  movePinnedDirectoryByKeyboard(directory, direction);
                 }
               : undefined
           }
@@ -1920,6 +2008,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
             aria-pressed={selectedDirectory}
             className={`thread-row thread-row--compact directory-row__summary${
               selectedDirectory ? " is-selected" : ""
+            }${
+              flashedProjectKey === directory.key ? " is-revealed" : ""
             }${
               directoryUnconfigured ? " directory-row__summary--unconfigured" : ""
             }`}
@@ -2118,11 +2208,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
                             trays.subtree(threadKey).length;
+                          const holdsDraft = holdsSubthreadDraft(threadKey);
                           const subthreadCount = getSubthreadDisclosureCount(
                             thread,
                             ordinarySubthreadCount,
-                          );
-                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+                          ) + (holdsDraft ? 1 : 0);
+                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
                               {pinnedIndex === keepAtTopSeamIndex ? (
@@ -2153,6 +2244,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
+                          renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
+                          onRequestRename={props.onRequestRenameThread}
+                          onCommitRename={props.onCommitRenameThread}
                           compact
                           directoryKey={directory.key}
                           pointerDraggable={Boolean(props.onReorderThreadPins)}
@@ -2227,7 +2321,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor
                       || (pinResource.state.page?.rangeStart ?? 0) > 0) ? (
                       <div role="listitem">
-                        {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
+                        {pinResource.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(pinResource.state.error)}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
                           <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
@@ -2297,7 +2391,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 ) : (
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
-                {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
+                {rootResource?.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(rootResource.state.error)}</p> : null}
                 {/* `directory-row__empty` reads as "empty" but means "a status
                     line in a directory's lane" — the sibling above already
                     wears it for "Loading directory counts…". Without it this
@@ -2323,12 +2417,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
         // they wait at the top, the one place every lens can show them.
         <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
           {unplacedStartingThreads.map((creation) => (
-            <StartingThreadRow
+            <PendingThreadRow
               key={creation.selectionKey}
               compact
-              creation={creation}
+              entry={creation}
               locationMode="label"
               selected={props.selectedItemKey === creation.selectionKey}
+              showParent
+              onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
               onSelect={props.onSelectStartingThread}
             />
           ))}
@@ -2394,6 +2490,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         </div>
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
+      {props.footer}
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );

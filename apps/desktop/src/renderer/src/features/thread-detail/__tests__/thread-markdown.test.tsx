@@ -492,13 +492,15 @@ describe("ThreadMarkdown", () => {
     expect(openApplication).not.toHaveBeenCalled();
   });
 
-  it("opens markdown file links in a document modal and keeps the editor icon separate", async () => {
+  it.each(["Markdown", "JSON"])("opens %s file links in a document modal and keeps the editor icon separate", async (kind) => {
+    const fileName = kind === "JSON" ? "widget.json" : "AGENTS.md";
+    const content = kind === "JSON" ? '{"title":"Widget","enabled":true}' : "# AGENTS\n\nUse the repo guidance.";
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
     const copyPath = vi.fn(async () => undefined);
     const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
       path: request.path,
-      content: "# AGENTS\n\nUse the repo guidance.",
+      content,
     }));
 
     render(
@@ -539,43 +541,49 @@ describe("ThreadMarkdown", () => {
           threadTitle: "Thread title",
           projectPath: "/repo/PwrAgent",
         }}
-        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
+        text={`I updated [${fileName}](${kind === "JSON" ? "file://" : ""}/repo/PwrAgent/${fileName}:17).`}
       />
     );
 
-    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: fileName })).toHaveAttribute(
       "title",
-      "/repo/PwrAgent/AGENTS.md"
+      `/repo/PwrAgent/${fileName}`
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" })
+      screen.getByRole("button", { name: `Open file in Zed: ${fileName}` })
     );
 
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "zed",
         kind: "editor",
-        targetPath: "/repo/PwrAgent/AGENTS.md",
+        targetPath: `/repo/PwrAgent/${fileName}`,
         targetLine: 17,
         targetColumn: undefined,
       });
     });
 
     openApplication.mockClear();
-    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+    fireEvent.click(screen.getByRole("link", { name: fileName }));
 
-    expect(await screen.findByRole("dialog", { name: "Markdown document: AGENTS.md" }))
+    expect(await screen.findByRole("dialog", { name: `${kind} document: ${fileName}` }))
       .toBeInTheDocument();
     expect(readMarkdownFile).toHaveBeenCalledWith({
-      path: "/repo/PwrAgent/AGENTS.md",
+      path: `/repo/PwrAgent/${fileName}`,
     });
-    expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
+    if (kind === "JSON") {
+      expect(await screen.findByLabelText("JSON contents")).toHaveTextContent('"title": "Widget"');
+    } else {
+      expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("button", { name: `Copy ${kind}` }));
+    await waitFor(() => expect(copyPath).toHaveBeenCalledWith(content));
     expect(openApplication).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
     await waitFor(() => {
-      expect(copyPath).toHaveBeenCalledWith("/repo/PwrAgent/AGENTS.md");
+      expect(copyPath).toHaveBeenCalledWith(`/repo/PwrAgent/${fileName}`);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
@@ -593,13 +601,80 @@ describe("ThreadMarkdown", () => {
           name: "Zed",
         }),
         file: {
-          path: "/repo/PwrAgent/AGENTS.md",
-          label: "AGENTS.md",
+          path: `/repo/PwrAgent/${fileName}`,
+          label: fileName,
           line: 17,
           column: undefined,
         },
       });
     });
+  });
+
+  it.each([
+    ["config.yaml", "YAML", "service:\n  replicas: 3\n  region: us-west-2"],
+    ["pyproject.toml", "TOML", "[project]\nname = \"example\"\nversion = \"0.3.1\""],
+    ["events.jsonl", "JSON Lines", '{"t":0}\n{"t":1}\n{"t":2}'],
+    ["build.log", "Text", "start\nwarn: slow step\ndone"],
+  ])("previews %s at its linked line", async (fileName, kind, content) => {
+    const readMarkdownFile = vi.fn(async (request: { path: string }) => ({ path: request.path, content }));
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    render(
+      <ThreadMarkdown
+        desktopApi={{ openApplication, readMarkdownFile }}
+        text={`See [${fileName}](/repo/PwrAgent/${fileName}:2).`}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: fileName }));
+
+    const dialog = await screen.findByRole("dialog", { name: `${kind} document: ${fileName}` });
+    const contents = await within(dialog).findByRole("region", { name: `${kind} contents` });
+    expect(contents.querySelector('[data-state="target"]')).toHaveAttribute("data-line", "2");
+    expect(within(dialog).getByRole("button", { name: `Copy ${kind === "Text" ? "text" : kind}` }))
+      .toBeInTheDocument();
+    expect(openApplication).not.toHaveBeenCalled();
+  });
+
+  it("keeps source code links opening the editor", async () => {
+    const readMarkdownFile = vi.fn();
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "zed",
+              kind: "editor",
+              name: "Zed",
+              source: "application",
+              appPath: "/Applications/Zed.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "zed", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            enabled: { value: false, source: "default" },
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+        }}
+        desktopApi={{ openApplication, readMarkdownFile }}
+        text={"Open [.env](/repo/PwrAgent/.env) and [main.py](/repo/PwrAgent/main.py)."}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: ".env" }));
+    fireEvent.click(screen.getByRole("link", { name: "main.py" }));
+
+    await waitFor(() => expect(openApplication).toHaveBeenCalledTimes(2));
+    expect(readMarkdownFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("passes local file link line and column metadata to the configured editor", async () => {
@@ -1029,6 +1104,67 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelectorAll("hr.transcript-message__rule")).toHaveLength(2);
     expect(container.querySelectorAll("ul.transcript-message__list")).toHaveLength(3);
     expect(screen.getByText("Second List - One")).toBeInTheDocument();
+  });
+
+  it.each([".", ")"])("preserves section numbers separated by unindented bullets (%s delimiter)", (delimiter) => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          `1${delimiter} First category:`,
+          "- First finding",
+          "",
+          `2${delimiter} Second category:`,
+          "- Second finding",
+          "",
+          `3${delimiter} Third category:`,
+          "- Third finding",
+          "",
+          `4${delimiter} Fourth category:`,
+          "- Fourth finding",
+        ].join("\n")}
+      />
+    );
+
+    const lists = container.querySelectorAll<HTMLOListElement>(".thread-markdown > ol");
+    expect(Array.from(lists, (list) => list.start)).toEqual([1, 2, 3, 4]);
+    expect(container.querySelectorAll(".thread-markdown > ul")).toHaveLength(4);
+    expect(container.querySelector("ol ul")).toBeNull();
+  });
+
+  it("preserves nested list starts and indented bullets", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "5. Fifth category:",
+          "   - Nested finding",
+          "   - Another nested finding",
+          "",
+          "   9. Nested numbered finding",
+          "   1. Next nested numbered finding",
+          "6. Sixth category",
+        ].join("\n")}
+      />
+    );
+
+    const rootList = container.querySelector<HTMLOListElement>(".thread-markdown > ol");
+    expect(rootList?.start).toBe(5);
+    expect(rootList?.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(rootList?.querySelectorAll(":scope > li:first-child > ul > li")).toHaveLength(2);
+    const nestedList = rootList?.querySelector<HTMLOListElement>(":scope > li:first-child > ol");
+    expect(nestedList?.start).toBe(9);
+    expect(nestedList?.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(container.querySelector(".thread-markdown > ul")).toBeNull();
+  });
+
+  it("preserves zero starts and explicit restarts after a thematic break", () => {
+    const { container } = render(
+      <ThreadMarkdown text={"0. Zero\n1. One\n\n---\n\n1. Restart\n1. Continue"} />
+    );
+
+    const lists = container.querySelectorAll<HTMLOListElement>(".thread-markdown > ol");
+    expect(Array.from(lists, (list) => list.start)).toEqual([0, 1]);
+    expect(Array.from(lists, (list) => list.querySelectorAll(":scope > li").length))
+      .toEqual([2, 2]);
   });
 
   it("renders nested numbered lists instead of flattening them", () => {

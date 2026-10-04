@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/out/**",
+    "**/dist/**",
+    "**/.vite/**",
+    "**/coverage/**",
+    "apps/desktop/.local/**",
+    "**/protocol-captures/**",
+    "**/e2e/fixtures/**",
+    "**/__fixtures__/**",
+    "**/*.js",
+    "**/*.jsx",
+    "**/*.mjs",
+    "**/*.cjs",
+    "**/*.mts",
+    "**/*.cts",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "apps/*/src/**/*.{ts,tsx}",
+        "packages/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "typescript/unbound-method": "error"
+      },
+      "plugins": [
+        "typescript"
+      ]
+    }
+  ]
+}

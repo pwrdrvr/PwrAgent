@@ -3,6 +3,8 @@ import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 import type { DesktopHelperModelSettings } from "../helper-models";
+import type { DesktopDecisionModelSettings } from "../decision-models";
+import type { ThreadTodoMergeMethod } from "./thread-todos";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -67,6 +69,14 @@ export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
  * something an operator opts into, never something they inherit.
  */
 export const MANAGED_GROK_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
+  "latest";
+
+/**
+ * PwrAgent's managed Codex build follows the same two tracks, for the same
+ * reason: pwrdrvr/codex publishes a build for testing as a GitHub pre-release,
+ * and an operator has to opt in to run one.
+ */
+export const MANAGED_CODEX_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
   "latest";
 
 export const DESKTOP_UPDATE_TRAINS = ["stable", "beta"] as const;
@@ -305,7 +315,93 @@ export const DESKTOP_UI_LAYOUT_DEFAULTS: {
   sidebarHidden: false,
 };
 
+/** Help → Logs: what a search does to the lines it does not match. */
+export type DesktopLogsSearchMode = "filter" | "highlight";
+/** The log levels the Logs window remembers. Debug is never stored. */
+export type DesktopLogsStoredLevel = "error" | "warn" | "info";
+
+export const DESKTOP_LOGS_CONTEXT_LINE_OPTIONS = [0, 1, 3, 5] as const;
+export type DesktopLogsContextLines =
+  (typeof DESKTOP_LOGS_CONTEXT_LINE_OPTIONS)[number];
+
+/**
+ * Help → Logs viewer preferences, stored in the profile's `[ui.logs]` table.
+ * Debug is deliberately absent: turning it on starts debug collection in the
+ * main process, so it always opens off.
+ */
+export type DesktopLogsViewerPreferences = {
+  wrap: boolean;
+  searchMode: DesktopLogsSearchMode;
+  contextLines: DesktopLogsContextLines;
+  includeDiagnostics: boolean;
+  levels: DesktopLogsStoredLevel[];
+};
+
+export const DESKTOP_LOGS_VIEWER_DEFAULTS: Readonly<DesktopLogsViewerPreferences> = {
+  wrap: true,
+  searchMode: "filter",
+  contextLines: 0,
+  includeDiagnostics: true,
+  levels: ["error", "warn", "info"],
+};
+
+export function isDesktopLogsSearchMode(value: unknown): value is DesktopLogsSearchMode {
+  return value === "filter" || value === "highlight";
+}
+
+export function isDesktopLogsContextLines(value: unknown): value is DesktopLogsContextLines {
+  return (DESKTOP_LOGS_CONTEXT_LINE_OPTIONS as readonly unknown[]).includes(value);
+}
+
+export function isDesktopLogsStoredLevel(value: unknown): value is DesktopLogsStoredLevel {
+  return value === "error" || value === "warn" || value === "info";
+}
+
+/** Fill unset `[ui.logs]` keys with the defaults. */
+export function resolveDesktopLogsViewerPreferences(
+  stored: Partial<DesktopLogsViewerPreferences> | undefined,
+): DesktopLogsViewerPreferences {
+  return {
+    wrap: stored?.wrap ?? DESKTOP_LOGS_VIEWER_DEFAULTS.wrap,
+    searchMode: stored?.searchMode ?? DESKTOP_LOGS_VIEWER_DEFAULTS.searchMode,
+    contextLines: stored?.contextLines ?? DESKTOP_LOGS_VIEWER_DEFAULTS.contextLines,
+    includeDiagnostics:
+      stored?.includeDiagnostics ?? DESKTOP_LOGS_VIEWER_DEFAULTS.includeDiagnostics,
+    levels: stored?.levels ? [...stored.levels] : [...DESKTOP_LOGS_VIEWER_DEFAULTS.levels],
+  };
+}
+
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
+
+/**
+ * Color themes, chosen per scheme. `theme` above picks the scheme (dark,
+ * light, or follow the OS); the dark and light theme pick the colors each
+ * scheme renders in, independently, so "system" can follow the OS between
+ * any dark theme and any light theme. Tangerine is PwrAgent's own pair and
+ * the default for both.
+ */
+export const DESKTOP_DARK_THEMES = [
+  "tangerine-dark",
+  "catppuccin-mocha",
+  "solarized-dark",
+  "gray-dark",
+  "blue-dark",
+  "phosphor-dark",
+] as const;
+export type DesktopDarkTheme = (typeof DESKTOP_DARK_THEMES)[number];
+export const DESKTOP_DARK_THEME_DEFAULT: DesktopDarkTheme = "tangerine-dark";
+
+export const DESKTOP_LIGHT_THEMES = [
+  "tangerine-light",
+  "catppuccin-latte",
+  "solarized-light",
+  "gray-light",
+  "blue-light",
+] as const;
+export type DesktopLightTheme = (typeof DESKTOP_LIGHT_THEMES)[number];
+export const DESKTOP_LIGHT_THEME_DEFAULT: DesktopLightTheme = "tangerine-light";
+
+export type DesktopColorTheme = DesktopDarkTheme | DesktopLightTheme;
 
 export const DESKTOP_APPEARANCE_DENSITIES = [
   "mission-control",
@@ -592,7 +688,9 @@ export type DesktopSettingsSecretName =
   | "federationCloudflareAccessClientSecret"
   | "mcpConnectionCredentials"
   | "pwrsnapMcpCredential"
-  | "pwrgitMcpCredential";
+  | "pwrgitMcpCredential"
+  | "decisionLocalApiKey"
+  | "typesafeJevApiKey";
 
 /**
  * Predicate: does writing or clearing this secret affect the
@@ -635,6 +733,8 @@ export function isMessagingRuntimeSecret(
     case "mcpConnectionCredentials":
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
+    case "decisionLocalApiKey":
+    case "typesafeJevApiKey":
       return false;
   }
 }
@@ -685,6 +785,15 @@ export type DesktopIntegratedTerminalSettingsSnapshot = {
 
 export type DesktopAppearanceSnapshot = {
   theme: DesktopSettingsValue<DesktopAppearanceTheme>;
+  darkTheme: DesktopSettingsValue<DesktopDarkTheme>;
+  lightTheme: DesktopSettingsValue<DesktopLightTheme>;
+  /** macOS: a running instance's Dock icon follows its dark theme, so two
+   *  profiles in two themes are told apart in the Dock. On by default. */
+  themedDockIcon: DesktopSettingsValue<boolean>;
+  /** The integrated terminal lifts text that falls below 4.5:1 on its
+   *  background (xterm's `minimumContrastRatio`). Off by default, so each
+   *  theme's own ANSI colors render as published. */
+  terminalMinimumContrast: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -698,6 +807,17 @@ export type DesktopGeneralSettingsSnapshot = {
    * the one exception: whether a finished turn earns one last move to the top.
    */
   attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
+  /**
+   * Skip the notice the image lightbox shows before an SVG's own scripts run
+   * in its isolated frame. The notice's "Always Run" sets this.
+   */
+  interactiveSvgSkipNotice: DesktopSettingsValue<boolean>;
+  /**
+   * Open an SVG that has scripts or hover styles straight into its
+   * interactive frame, instead of the static preview. Implies the notice was
+   * accepted: the lightbox does not ask before running it.
+   */
+  interactiveSvgAutoOpen: DesktopSettingsValue<boolean>;
   /**
    * Whether the profile runs the PwrAgent-managed MCP connection gateway.
    *
@@ -1070,6 +1190,10 @@ export type DesktopSettingsSnapshot = {
         reason?: string;
         version?: string;
         checkedAt?: number;
+        /** Newest promoted tag the last release check saw. */
+        latestTag?: string;
+        /** Newest tag overall the last release check saw, promoted or not. */
+        prereleaseTag?: string;
       };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails
@@ -1176,6 +1300,8 @@ export type DesktopSettingsSnapshot = {
     codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
     /** Hide only Codex's default-mode request_user_input development warning toast. */
     codexSkillQuestionsWarningDismissed: DesktopSettingsValue<boolean>;
+    /** Exact Codex config warning identities hidden in this PwrAgent profile. */
+    codexConfigWarningsDismissed?: DesktopSettingsValue<string[]>;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
@@ -1309,6 +1435,10 @@ export type DesktopSettingsSnapshot = {
     };
   };
   models: {
+    /** Explicit account groups for providers without a stable protocol identity. */
+    usageAccountGroups?: Record<string, string>;
+    /** Usage Activity names, keyed `provider:accountKey`. Local to this profile. */
+    usageAccountNames?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
@@ -1316,6 +1446,13 @@ export type DesktopSettingsSnapshot = {
     >;
     /** Models for work PwrAgent starts on its own. Absent on older builds. */
     helperModels?: DesktopHelperModelSettings;
+    /** The decision model and its providers. Absent on older builds. */
+    decisionModels?: DesktopDecisionModelSettings;
+    decisionSecrets?: {
+      /** Optional; sent as a bearer token to the local decision server. */
+      localApiKey: DesktopSettingsSecretState;
+      jevApiKey: DesktopSettingsSecretState;
+    };
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -1326,6 +1463,8 @@ export type DesktopSettingsSnapshot = {
        * on whatever this says.
        */
       managedBuilds?: DesktopSettingsValue<boolean>;
+      /** Which pwrdrvr/codex track the managed runtime follows. */
+      managedBuildChannel?: DesktopSettingsValue<DesktopUpdateChannel>;
       managedBuildsRequiredBy?: "token-miser";
       versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
@@ -1414,6 +1553,11 @@ export type DesktopSettingsSnapshot = {
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
+    /**
+     * What a to-do card's merge button does. A pick from the card's menu
+     * overrides it for that project.
+     */
+    defaultMergeMethod: DesktopSettingsValue<ThreadTodoMergeMethod>;
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
@@ -1427,6 +1571,8 @@ export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -1441,6 +1587,10 @@ export type DesktopSettingsConfigPatch = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
+      darkTheme?: DesktopDarkTheme;
+      lightTheme?: DesktopLightTheme;
+      themedDockIcon?: boolean;
+      terminalMinimumContrast?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1469,6 +1619,7 @@ export type DesktopSettingsConfigPatch = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
+    codexConfigWarningsDismissed?: string[];
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
     diffCondensation?: {
@@ -1497,6 +1648,7 @@ export type DesktopSettingsConfigPatch = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {
     mode?: DesktopFederationMode;
@@ -1606,6 +1758,10 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   models?: {
+    /** Replaces account groups; blank/omitted entries use protocol identity. */
+    usageAccountGroups?: Record<string, string>;
+    /** Replaces Usage Activity account names; an omitted account uses its default name. */
+    usageAccountNames?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
@@ -1613,11 +1769,15 @@ export type DesktopSettingsConfigPatch = {
     >;
     /** Replaces every helper model choice; omit a helper to use Helper default. */
     helperModels?: DesktopHelperModelSettings;
+    /** Replaces the whole decision model section. */
+    decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
       profile?: string;
       allowFast?: boolean;
       managedBuilds?: boolean;
+      /** Which pwrdrvr/codex track the managed runtime follows. */
+      managedBuildChannel?: DesktopUpdateChannel;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
       /** Exact model IDs explicitly declared to have zero local API cost. */
@@ -1651,6 +1811,7 @@ export type DesktopSettingsConfigPatch = {
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
+    defaultMergeMethod?: ThreadTodoMergeMethod;
   };
   applications?: {
     editor?: {
@@ -1716,6 +1877,8 @@ export type DesktopConfigBootstrapSnapshot = {
   configError?: string;
   appearance: {
     theme: DesktopAppearanceTheme;
+    darkTheme: DesktopDarkTheme;
+    lightTheme: DesktopLightTheme;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -1724,6 +1887,8 @@ export type DesktopConfigBootstrapSnapshot = {
     completed: boolean;
     completedSource: DesktopOnboardingCompletedSource | "";
   };
+  /** Help → Logs viewer preferences, defaults filled in. */
+  logs: DesktopLogsViewerPreferences;
 };
 
 export type ReadDesktopConfigBootstrapResponse = {
@@ -1926,12 +2091,41 @@ export type DesktopPwrAgentProfileSummary = {
   profileDir: string;
   canDelete: boolean;
   codexProfile: DesktopCodexAuthProfileCandidate;
+  /**
+   * Whether the Profiles menu lists this profile. A hidden profile keeps its
+   * data and its place in the order, and still opens from Settings →
+   * Profiles and the CLI; it only gives up its menu row and shortcut.
+   */
+  showInMenu: boolean;
 };
 
 export type ListDesktopPwrAgentProfilesResponse = {
   activeProfile: string;
   defaultProfile: string;
+  /** In the operator's order: creation order until they reorder it. */
   profiles: DesktopPwrAgentProfileSummary[];
+};
+
+export type ReorderDesktopPwrAgentProfilesRequest = {
+  /**
+   * Every listed profile name, in the new order. A list that does not name
+   * exactly the current set of profiles is refused as stale.
+   */
+  order: string[];
+};
+
+export type ReorderDesktopPwrAgentProfilesResponse = {
+  order: string[];
+};
+
+export type SetDesktopPwrAgentProfileMenuVisibilityRequest = {
+  profile: string;
+  showInMenu: boolean;
+};
+
+export type SetDesktopPwrAgentProfileMenuVisibilityResponse = {
+  profile: string;
+  showInMenu: boolean;
 };
 
 export type OpenDesktopPwrAgentProfileRequest = {
@@ -2270,6 +2464,14 @@ export function isDesktopAppearanceTheme(
   return DESKTOP_APPEARANCE_THEMES.includes(value as DesktopAppearanceTheme);
 }
 
+export function isDesktopDarkTheme(value: string): value is DesktopDarkTheme {
+  return DESKTOP_DARK_THEMES.includes(value as DesktopDarkTheme);
+}
+
+export function isDesktopLightTheme(value: string): value is DesktopLightTheme {
+  return DESKTOP_LIGHT_THEMES.includes(value as DesktopLightTheme);
+}
+
 export function isDesktopAppearanceDensity(
   value: string,
 ): value is DesktopAppearanceDensity {
@@ -2339,6 +2541,8 @@ export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "slack",
   "feishu",
   "line",
+  "decision-local",
+  "decision-jev",
 ] as const;
 
 export type SettingsCredentialTestKind =

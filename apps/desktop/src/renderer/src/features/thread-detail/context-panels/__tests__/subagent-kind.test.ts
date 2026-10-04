@@ -1,6 +1,7 @@
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import {
+  isSystemQueuedMessageTitleHelperSubAgent,
   isTokenMiserSubAgent,
   subAgentLens,
   subAgentOriginLabel,
@@ -18,6 +19,18 @@ describe("Token Miser sub-agent presentation", () => {
     expect(subAgentOriginLabel(subAgent)).toBe("PwrAgent Token Miser gate");
     expect(subAgentUsageLabel(subAgent)).toBe("Gate");
     expect(subAgentPricingUsageTitle(subAgent)).toBe("Token Miser gate");
+  });
+
+  it("presents the queued-message title row as a PwrAgent system helper", () => {
+    const subAgent = {
+      monitorId: "system:queued-message-titles:codex:thread-1",
+    } as ThreadSubAgentSummary;
+
+    expect(isSystemQueuedMessageTitleHelperSubAgent(subAgent)).toBe(true);
+    expect(subAgentOriginLabel(subAgent)).toBe("PwrAgent system helper");
+    expect(subAgentUsageLabel(subAgent)).toBe("System");
+    expect(subAgentPricingUsageTitle(subAgent)).toBe("Queued message titles");
+    expect(subAgentLens(subAgent)).toBe("pwragent");
   });
 
   it("groups sub-agents by lifecycle owner", () => {

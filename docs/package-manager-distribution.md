@@ -1,82 +1,86 @@
-# Package manager distribution
+# Package-manager distribution
 
-This is the contributor procedure for distributing the desktop app. Operator
-installation documentation belongs in `pwrdrvr/docs.pwragent.ai`. GitHub Releases
-in [pwrdrvr/PwrAgent](https://github.com/pwrdrvr/PwrAgent/releases) remain the
-binary source; package repositories contain metadata, not rebuilt binaries.
+Homebrew publication is owned by `pwrdrvr/homebrew-tap`. Winget validation and
+submission remain in PwrAgent. Both follow the suffix-free, explicitly promoted
+GitHub Stable Latest release; prereleases do not publish either channel.
 
-## Sources and ownership
+## Automatic Homebrew publication
 
-| Channel | Identifier | Authoritative package source | Ownership |
-| --- | --- | --- | --- |
-| Homebrew cask | `pwrdrvr/tap/pwragent` | [pwrdrvr/homebrew-tap, Casks/pwragent.rb](https://github.com/pwrdrvr/homebrew-tap/blob/main/Casks/pwragent.rb) | PwrDrvr owns the tap; changes land through tap PRs |
-| Winget | `PwrDrvr.PwrAgent` | [microsoft/winget-pkgs, manifests/p/PwrDrvr/PwrAgent](https://github.com/microsoft/winget-pkgs/tree/master/manifests/p/PwrDrvr/PwrAgent) | Microsoft reviews/indexes community submissions; PwrDrvr maintains its manifest submissions |
+The tap's `bump-pwragent.yml` calls its shared `sync.yml`, checks Latest every
+15 minutes, and commits the validated cask directly to tap `main`. Routine
+releases need no Homebrew PR or merge. PwrAgent's `homebrew.yml` synchronizes on
+stable release events, manual dispatch, and a reconciliation schedule.
 
-The identifiers above are the registration targets until their initial PRs
-merge. A fork or an open PR is not publication. On the initial audit (2026-10-02),
-neither channel contained PwrAgent and the existing PwrDrvr tap contained only
-PwrSnap. Initial submissions were opened afterward. No PwrAgent formula or official
-Homebrew cask was found. Recheck live sources on every release; this snapshot
-does not prove their current state.
+An optional `HOMEBREW_TAP_DISPATCH_TOKEN` enables immediate dispatch: a
+fine-grained PAT scoped to `pwrdrvr/homebrew-tap` with Actions write permission.
+Without it, synchronization waits for the tap schedule for up to 35 minutes.
+The tap uses its own `GITHUB_TOKEN` for publication. Homebrew does not need
+`DISTRIBUTION_TOKEN`, a Winget fork, CLA acceptance, or Microsoft review.
 
-Initial registration submissions:
+The cask selects arm64 on Apple Silicon and universal on Intel, derives minimum
+macOS from the tagged release configuration, and preserves `~/.pwragent` on
+uninstall. Tap validation uses isolated Intel/Apple Silicon runners for fresh
+installation, upgrade from the published version, app identity/version/minimum
+OS, architectures, Developer ID, Gatekeeper, stapled notarization, and uninstall.
 
-- [Homebrew tap PR #9](https://github.com/pwrdrvr/homebrew-tap/pull/9): cask,
-  documentation and CI for PwrAgent. Pending merge and refreshed-client
-  verification. The tap's existing PwrSnap online-audit lane fails because its
-  main-branch cask is 1.1.2 while PwrSnap Latest is 1.1.12; that channel's pending
-  bump is separate work and must not be overwritten by this registration.
-- [Winget PR #445659](https://github.com/microsoft/winget-pkgs/pull/445659):
-  `PwrDrvr.PwrAgent` 1.1.4. The Microsoft policy bot requires `huntharo` to accept
-  the CLA. The account owner must review and respond to that bot; automation
-  does not sign the agreement. The submission is draft while Windows validation
-  is completed, then requires upstream validation/review and client indexing.
-- [PwrAgent implementation PR #2473](https://github.com/pwrdrvr/PwrAgent/pull/2473):
-  product-side generation, validation, submissions and required release checks.
+## CI artifacts and download statistics
 
-The publisher fork `pwrdrvr/winget-pkgs` and repository variable
-`WINGET_FORK_REPO=pwrdrvr/winget-pkgs` were created for this setup.
-`DISTRIBUTION_TOKEN` is still absent. An authorized operator must provision
-the dedicated credential below before automatic submissions can run. Neither
-channel was live at the initial submission; retain these pending links in the
-release handoff until publication is verified.
+CI acquires signed installers and checksum manifests from **Actions build
+artifacts**, never published release-download URLs. The shared Python resolver
+requires a successful `release.yml` run for the exact stable tag commit and
+rejects PRs, forks, preview workflows, failed runs and expired artifacts. Every
+member must match the release metadata's SHA-256 and size. ZIP member ambiguity,
+unsafe paths, corrupt bytes and moved tags fail explicitly. An assembled release
+artifact can supply older Windows bytes when its platform artifact has expired.
 
-The audited promoted stable release was `v1.1.4` (2026-09-30). Its downloaded
-bytes matched both GitHub asset digests and the publisher's platform SHA256SUMS:
+Signed platform/assembled artifacts retain for 90 days. Exact byte caches are
+independent of validator code, architecture, or current/previous role; restores
+are verified again. Missing/expired original artifacts stop validation. Restore
+the original build artifact instead of fetching release assets or rebuilding
+published installers. Artifact archive acquisition is reused within a job.
 
-| Released artifact | SHA-256 |
-| --- | --- |
-| `PwrAgent-1.1.4-arm64.dmg` | `f128bd02c2896864543593c3893b383e806cc1c74bcdfe05a9e3102a03bfdc92` |
-| `PwrAgent-1.1.4-universal.dmg` | `22c461520afe4775683deedabe45146ac8691767b202196a5cb931e427e273ab` |
-| `PwrAgent-1.1.4-windows-x64-setup.exe` | `3ef2d8aaa5dd68cedbe02a80687994d63774b5cf0852024846aa1a5908837598` |
+Homebrew's actual URL-keyed cache is seeded from verified DMGs. Its CI curl
+guard blocks PwrDrvr release-asset URLs/API downloads. The online audit excludes
+only `url_https_availability`, which would probe the binary URL; URL identity and
+availability of the published asset are checked through release metadata.
+Remaining audits, package checksum verification and native checks still run.
+WinGet's install-only manifests use loopback URLs serving verified EXEs; submitted
+manifests retain production GitHub URLs, hashes, scopes and installer switches.
 
-macOS uses arm64 on Apple Silicon and universal on Intel, with macOS 12 as the
-bundle's minimum. Windows currently ships **x64 only**, with NSIS `/currentuser`
-and `/allusers` installations. Do not declare Windows ARM64 until that signed
-artifact exists. The exact artifact URL templates are:
+Already published tap versions make no installer requests, even after cache
+expiry or validator changes. Identical successful unpublished validations reuse
+trusted success records; changed inputs require fresh coverage using artifact
+bytes. Missing caches never authorize release-download fallback.
 
-```text
-https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-arm64.dmg
-https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-universal.dmg
-https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-windows-x64-setup.exe
-https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-macos-SHA256SUMS
-https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-windows-SHA256SUMS
-```
+## Winget validation and submission
 
-Use `pnpm release:channels --out ...` below to download bytes and compare SHA-256
-against the matching publisher checksum file and available GitHub asset digest.
-The audit alone checks source metadata; it does not download installers.
-Always pin tag-specific, versioned filenames; never use
-`releases/latest/download` aliases or placeholder hashes in package metadata.
-Homebrew uninstall preserves `~/.pwragent`, which contains profiles and state.
+`package-manager-distribution.yml` is scoped to Winget. Preparation audits public
+sources, resolves Stable Latest and the previous stable upgrade baseline,
+generates manifests and selects native Windows checks. It does not open Homebrew
+PRs. Windows coverage validates schema, SHA-256, Authenticode publisher,
+unattended user/machine installs, installed executable/version/signature,
+previous-stable upgrade and uninstall. Native success is keyed by immutable
+assets, generated files, validator code, runner image, architecture and resolved
+WinGet client. PR/other-branch success cannot authorize trusted submission.
 
-## Before every release, including prereleases
+Configure `WINGET_FORK_REPO` to the existing publisher-owned
+`pwrdrvr/winget-pkgs` fork, and `DISTRIBUTION_TOKEN` to a dedicated identity that
+can write that fork and open upstream Microsoft PRs. Missing submission
+credentials report a named blocker after validation; they do not block Homebrew.
+No automatic fork creation, CLA acceptance or upstream merge is performed.
+Submission recognizes already published/pending versions and avoids duplicates.
 
-Run from this checkout with authenticated GitHub CLI and Node 22:
+`DISTRIBUTION_READ_TOKEN || github.token` supplies public reads only. Never
+print, retrieve or copy secret values. Inspect secret metadata to check selected
+repositories, and have the owner verify expiration/rotation. Authentication,
+throttling and incomplete search results are blockers, not evidence of package
+absence. Existing read-token retry budgets remain unchanged.
 
-```bash
-pnpm release:channels --audit
-```
+## Authoritative remote audit
+
+The package identities are `pwrdrvr/tap/pwragent` at
+`pwrdrvr/homebrew-tap/Casks/pwragent.rb` and `PwrDrvr.PwrAgent` at
+`microsoft/winget-pkgs/manifests/p/PwrDrvr/PwrAgent`.
 
 The same helper powers the read-only
 [distribution audit workflow](../.github/workflows/distribution-audit.yml), which
@@ -91,56 +95,29 @@ URLs/hashes, and open/closed submission URLs in the release handoff. The helper
 checks public repository visibility/default branches, searches the tap, Winget,
 official Homebrew casks and formulae by product name and homepage, and compares known source metadata with
 available GitHub asset digests. If a source layout changes, investigate it rather
-than guessing a URL, hash, architecture or identity. Downloaded-byte verification
-remains in the existing generation/platform jobs. Investigate channel versions
+than guessing a URL, hash, architecture or identity. Byte verification uses build artifacts in the existing generation/platform jobs. Investigate channel versions
 ahead of GitHub Latest, stale versions, failed validation, and unresolved PRs
 before planning an update. API/authentication/rate-limit failures are errors,
 not evidence that a package is missing. Compare versions numerically.
 
-Before initial registration or a source migration, also search code and open
-and closed PRs for **PwrAgent**, its homepage and publisher in Winget, official
-Homebrew casks/formulae, and the PwrDrvr tap. Inspect any discovered identifiers,
-owners and installer URLs. Reuse an existing entry rather than registering a
-second spelling. The audit rejects an official Homebrew entry so an operator
-can reconcile a move out of the tap. Do not automatically migrate ownership.
+macOS uses arm64 on Apple Silicon and universal on Intel; derive the minimum OS
+from the tagged configuration. Windows currently ships **x64 only**, with NSIS `/currentuser`
+and `/allusers` installations. Do not declare Windows ARM64 until that signed
+artifact exists. The exact artifact URL templates are:
 
-Alpha, beta and unpromoted stable candidates leave both stable channels alone.
-Still report the comparison and carry pending submissions into their handoff.
+```text
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-arm64.dmg
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-universal.dmg
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-<version>-windows-x64-setup.exe
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-macos-SHA256SUMS
+https://github.com/pwrdrvr/PwrAgent/releases/download/v<version>/PwrAgent-windows-SHA256SUMS
+```
 
-## Automation setup
+Always pin tag-specific filenames. The read-only audit makes no installer requests;
+generation verifies the matching publisher checksums and GitHub digests using
+Actions build artifacts.
 
-[package-manager-distribution.yml](../.github/workflows/package-manager-distribution.yml)
-runs on stable release publication/edit (including promotion), daily, and on
-demand. PRs affecting the scripts or workflow run validation without submission.
-The workflow reads current release automation for promotion of older tags,
-pins that checkout for submission, and serializes channel updates.
-
-Configure these in **pwrdrvr/PwrAgent**, without copying signing secrets:
-
-- Organization Actions secret `DISTRIBUTION_READ_TOKEN`: Harold provisioned a
-  dedicated fine-grained PAT restricted to public repositories with no additional
-  permissions, shared with PwrAgent, PwrGit and PwrSnap. Public package-source
-  audits, existing-identity/submission searches and release-metadata generation
-  use `GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}`. Homebrew's
-  online audit uses the same fallback as `HOMEBREW_GITHUB_API_TOKEN`. This selects
-  user authentication for public reads; it does not grant repository write access
-  or authorize submissions. Unrelated operations retain the default workflow token.
-  Fork PR checks can use that fallback when organization secrets are unavailable.
-- Repository variable `WINGET_FORK_REPO`: `pwrdrvr/winget-pkgs`, an existing
-  publisher-owned fork of `microsoft/winget-pkgs`.
-- Repository secret `DISTRIBUTION_TOKEN`: a credential authorized to read the
-  package/source repositories, create branches/commits in `pwrdrvr/homebrew-tap`
-  and the Winget fork, and open upstream Winget PRs. GitHub's repository
-  `GITHUB_TOKEN` alone cannot write these other repositories. Confirm token type
-  and organization policy support the public upstream PR operation; a
-  repository-scoped fine-grained token may not cover that operation. Use a
-  dedicated automation identity/credential, not an operator's token copied from
-  their CLI login. The Microsoft CLA bot may require an account owner's action.
-
-The automation does not provision credentials, sign a CLA, merge submissions,
-promote product releases, or change existing pending PRs. Missing credentials
-fail the submission job with validated inputs still downloadable. Review the
-workflow's permissions and the credential's expiry during release preflight.
+## Read credential verification and rotation
 
 Verify read-token access using only organization secret metadata and its selected
 repository list; never retrieve, print or copy its value. The prepare log reports
@@ -189,49 +166,29 @@ failure as a blocker; do not register a duplicate based on a partial result.
 See GitHub's [rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)
 and [search response guidance](https://docs.github.com/en/rest/search/search).
 
-## After stable promotion
+## Stable promotion and verification
 
-1. Find the package-manager workflow for the promoted tag. If promotion used
-   `GITHUB_TOKEN`, its edit may not start another workflow; explicitly dispatch
-   this workflow with `submit=true`. A daily run also reconciles missed events.
-2. Review `package-manager-inputs` and the preflight summary. Generation requires
-   the current suffix-free, non-draft, non-prerelease GitHub Latest release.
-   It downloads the versioned artifacts, checks sizes, SHA256SUMS and available
-   GitHub digests, and refuses automatic downgrades. A bad cache fails validation;
-   remove that cached file and retry rather than accepting its bytes.
-3. Require successful macOS arm64 and Intel jobs: cask style and online audit,
-   both DMGs' architectures and minimum OS, Developer ID team `T44CNHC4UH`,
-   signatures, Gatekeeper, stapled notarization, fresh installation and upgrade
-   from the preceding stable release. The cask is `auto_updates true`, so use
-   `brew upgrade --cask --greedy` when testing or reconciling managed upgrades.
-4. Require the Windows job: `winget validate`, SHA-256 and valid PwrDrvr LLC
-   Authenticode signatures, unattended user/machine installs, installed x64
-   executable/version/signature, previous-stable upgrade, and uninstall.
-   A first stable release without an upgrade baseline needs an explicitly
-   recorded manual baseline; the workflow refuses to invent one. Exhausted release-history pagination also requires manual selection.
-5. Review the submission job's PR URLs. Existing pending PRs are reported and
-   reused as the next action; no duplicate is opened. A matching version on the
-   authoritative branch is reported as `published-in-repository`, which still
-   needs client/index verification. Do not equate this with an installed test.
-6. Monitor each submission through validation and merge. Resolve upstream
-   findings on that PR and rerun checks. Report CLA, security-scan, human-review,
-   Homebrew cache and Winget indexing delays by name with the submission URL,
-   observed state, check time and concrete next action. Do not give an invented
-   completion estimate or silently stop at PR creation.
+1. Promote the authorized stable release; keep product publication separate from
+   package-manager repair. Events emitted by `GITHUB_TOKEN` may not start another
+   workflow, so explicitly dispatch `homebrew.yml` if immediate follow-up is
+   needed. The tap schedule independently reconciles missed events.
+2. Require the tap's successful native validation and publication run. It
+   rechecks Stable Latest, release asset identity, tag commit and the previous
+   cask blob before writing, then verifies tap main. Publication failures create
+   one tracking issue per outage with the failed run.
+3. Refresh a clean Homebrew client with `brew update`, then inspect
+   `brew info --cask pwrdrvr/tap/pwragent`. Repository publication and refreshed
+   client discovery are separate checks. Install/upgrade smoke tests belong on
+   isolated clients; never replace an operator's running app or remove profiles.
+4. For Winget, inspect the validation/submission run and existing upstream PR.
+   Resolve account-owned CLA/draft readiness and Microsoft review/indexing
+   blockers, then use `winget source update --name winget` and
+   `winget show --id PwrDrvr.PwrAgent --exact --source winget`.
 
-Manual generation uses the same validation inputs without submission:
-
-```bash
-pnpm release:channels --out .local/distribution/current \
-  --previous-out .local/distribution/previous --tag v<version>
-```
-
-For an initial upstream PR, read that repository's current agent guidance,
-contribution guide and PR template. Winget uses the multi-file 1.12 schema and
-one package/version per PR. Run `winget validate --manifest <version-folder>`
-and `winget install --manifest <version-folder>` in isolated Windows before
-marking those checks complete. If the host cannot execute Winget, leave those
-boxes unchecked and link the actual upstream or workflow validation.
+Manual generation with `pnpm release:channels --out .local/distribution/current
+--previous-out .local/distribution/previous --tag v<version>` uses the same
+artifact-only acquisition. Never report a channel live solely because a PR
+opened or a read-only audit passed.
 
 ## Required follow-up after every GitHub publication
 
@@ -246,21 +203,12 @@ A failed post-publication audit leaves the GitHub release published. Harold owns
 the retry and must link the failed run and action needed. A successful read-only
 audit cannot close install/upgrade or source/client follow-up work.
 
-| Current handoff item (recheck live) | Owner | Action / evidence required |
-| --- | --- | --- |
-| [Homebrew #9](https://github.com/pwrdrvr/homebrew-tap/pull/9) | Harold / PwrDrvr tap maintainers | Review PwrAgent checks and merge when approved; investigate the separate PwrSnap check failure in that tap without overwriting its work. Fetch main's cask, then refresh an isolated client. |
-| [Winget #445659](https://github.com/microsoft/winget-pkgs/pull/445659) | `huntharo` for CLA and draft readiness; Microsoft reviewers for acceptance/indexing | Account owner handles the CLA bot; retain draft status until Windows evidence is complete. Follow upstream checks/review, accepted master manifest, then refreshed Winget source. |
-| Missing `DISTRIBUTION_TOKEN` | Harold / organization maintainers | Provision a separate authorized submission identity if automatic writes are wanted. `DISTRIBUTION_READ_TOKEN` cannot fill this role. |
-| Read PAT expiry/rotation | Harold / organization maintainers | Maintain the expiry inventory, rotate under the same name/scope/repository selection, rerun the read-only workflow and retain its successful URL. |
+Harold (`huntharo`) owns read-token rotation, failed-audit follow-up and Winget
+submission credentials/CLA readiness. Tap maintainers own Homebrew publication;
+Microsoft reviewers own upstream acceptance and indexing. Carry each blocker
+with its checked time, source/submission/run link and concrete next action.
 
-The 2026-10-03 remote audit found GitHub Latest/highest promoted stable `v1.1.4`,
-no published PwrAgent entry at either authoritative package path, no alternate
-identity in complete searches, and both initial submissions still open (Winget
-draft). This is a checked snapshot, not a publication claim. Carry each item with
-its last check time, submission/run URL, owner and next action into every handoff.
-Once merged, review/index/cache delays remain open until source and client agree.
-
-## Verify publication after merge
+## Verify source and client publication
 
 Fetch the authoritative remote files and compare their version, installer URLs,
 architecture, scope and SHA-256 with the signed release. Then use clean clients:
@@ -286,24 +234,18 @@ directories; never replace an operator's running app or delete profiles for a
 smoke test. Record runner/OS/architecture, old/new versions and results.
 
 Only call a channel live when its authoritative branch and refreshed client
-both resolve the submitted version. A merge with an old/absent client result
+both resolve the promoted version. A merge with an old/absent client result
 is **pending cache/index propagation**: retain the PR link, check time and next
 refresh command. Every release handoff includes both channel outcomes; a
 blocked channel is carried forward explicitly even if the product release
 itself is published. Never cut an unrelated product release to repair setup.
 
-## Official requirements
+## Official references
 
-- [Microsoft manifest authoring](https://learn.microsoft.com/en-us/windows/package-manager/package/manifest)
-  and [submission/validation](https://learn.microsoft.com/en-us/windows/package-manager/package/repository).
-- [Winget repository contributor guide](https://github.com/microsoft/winget-pkgs/blob/master/CONTRIBUTING.md)
-  and [current manifest schemas](https://github.com/microsoft/winget-cli/tree/master/schemas/JSON/manifests).
 - [Homebrew tap maintenance](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap),
-  [Cask Cookbook](https://docs.brew.sh/Cask-Cookbook),
-  [acceptable casks](https://docs.brew.sh/Acceptable-Casks) and
+  [Cask Cookbook](https://docs.brew.sh/Cask-Cookbook), and
   [tap trust](https://docs.brew.sh/Tap-Trust).
-
-Recheck these when installer formats, Homebrew APIs, schemas or channel policy
-change. Use the existing vendor tap for initial Homebrew registration; an
-official-cask submission is a separate migration after checking acceptance
-requirements and coordinating the existing token.
+- [WinGet manifest authoring](https://learn.microsoft.com/en-us/windows/package-manager/package/manifest)
+  and [submission requirements](https://learn.microsoft.com/en-us/windows/package-manager/package/repository).
+- [GitHub artifact retention](https://docs.github.com/en/actions/tutorials/store-and-share-data)
+  and [workflow triggering](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).

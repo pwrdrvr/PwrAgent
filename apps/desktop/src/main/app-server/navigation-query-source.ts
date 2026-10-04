@@ -46,9 +46,10 @@ export async function loadLocalNavigationQueryIndex(params: {
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor cost other readers a retry.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    overlayStore.readNavigationSourceVersion?.(), ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+    ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+  const version = overlayStore.readNavigationSourceVersion?.();
   let subscribed = false;
-  return indexReads.read(key, async (signal) => {
+  return indexReads.read(key, async (signal, assertCurrent) => {
     // An event during a scan makes its result stale. The read pool shares one
     // replacement with all consumers admitted in the meantime. Own one event
     // listener for the whole read, including any replacement attempt.
@@ -61,13 +62,13 @@ export async function loadLocalNavigationQueryIndex(params: {
       // Eviction/expiry/cancellation aborts the lifetime and releases it.
       signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     }
-    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal });
+    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal, assertCurrent });
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return index;
-  }, params.signal);
+  }, params.signal, version);
 }
 
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
@@ -109,6 +110,7 @@ async function buildLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<NavigationQueryIndex> {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
@@ -120,6 +122,10 @@ async function buildLocalNavigationQueryIndex(params: {
     ...(params.refreshProviders ? { forceRefresh: true } : {}),
   });
   params.signal?.throwIfAborted();
+  // A mutation during provider pagination already requires a replacement.
+  // Reject that generation before spending CPU on SQLite overlay projection.
+  // Later mutations are still fenced by the pool after hydration completes.
+  params.assertCurrent();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
     threads: listedThreads,

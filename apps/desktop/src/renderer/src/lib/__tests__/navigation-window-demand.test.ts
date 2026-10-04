@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationIdentity, NavigationQueryPage } from "@pwragent/shared";
 import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "../navigation-window-demand";
 
@@ -35,7 +36,14 @@ it("unpinned disclosure and child disclosure create independent explicit demand"
 it("changing lens removes directory membership demand while preserving owner Attention session", () => {
   const demand = buildNavigationWindowDemand({ ...base, browseMode: "attention", expandedByKey: { "directory:42": true } });
   expect([...demand.keys()]).toEqual(["directory-index", "lens"]);
-  expect(demand.get("lens")).toMatchObject({ pageSize: 10, attentionView: base.attentionView, query: { kind: "lens", lens: "attention" } });
+  expect(demand.get("lens")).toMatchObject({ pageSize: 100, attentionView: base.attentionView, query: { kind: "lens", lens: "attention" } });
+});
+
+it("Attention asks for its whole queue while browsing lenses keep a short first page", () => {
+  for (const browseMode of ["inbox", "recents"] as const) {
+    expect(buildNavigationWindowDemand({ ...base, browseMode }).get("lens")).toMatchObject({ pageSize: 10, query: { kind: "lens", lens: browseMode } });
+  }
+  expect(buildNavigationWindowDemand({ ...base, browseMode: "attention" }).get("lens")?.pageSize).toBe(NAVIGATION_QUERY_MAX_PAGE_ROWS);
 });
 
 

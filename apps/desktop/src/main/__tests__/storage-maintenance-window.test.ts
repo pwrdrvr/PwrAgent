@@ -49,7 +49,7 @@ vi.mock("../profile", () => ({
   resolveActiveProfilePath: () => "/synthetic/state.db",
 }));
 vi.mock("../settings/appearance-bootstrap", () => ({ readBootstrapAppearance: () => ({ theme: "dark" }), themedWindowAdditionalArguments: () => [] }));
-vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "black" }));
+vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "black", themedTitleBarOverlay: () => ({}) }));
 import { runStartupStorageMaintenance } from "../storage-maintenance";
 
 const write = vi.fn((_key: string, value: string) => { fixture.record = JSON.parse(value); });

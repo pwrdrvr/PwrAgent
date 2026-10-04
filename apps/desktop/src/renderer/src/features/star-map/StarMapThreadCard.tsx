@@ -1,4 +1,5 @@
-import { type CSSProperties } from "react";
+import { memo, useMemo, type CSSProperties } from "react";
+import { useEventCallback } from "../../lib/useEventCallback";
 import {
   buildThreadIdentityKey,
   type CelestialIconId,
@@ -26,6 +27,7 @@ import {
   type StarMapCardFields,
 } from "./star-map-preferences";
 import type { StarMapSessionKeys } from "./attention";
+import type { AlignmentGuide } from "./star-map-snapping";
 
 /**
  * Compact attention card floating in an instance's lane. Mirrors the
@@ -38,7 +40,7 @@ import type { StarMapSessionKeys } from "./attention";
  * keyframes own the transform channel without snapping the card back to
  * its anchor origin mid-animation.
  */
-export function StarMapThreadCard(props: {
+type StarMapThreadCardProps = {
   thread: NavigationThreadSummary;
   sessionKeys?: StarMapSessionKeys;
   /**
@@ -103,7 +105,110 @@ export function StarMapThreadCard(props: {
    * you cannot otherwise tell from the card's position.
    */
   showInstanceChip?: boolean;
-}) {
+};
+
+/**
+ * The screen rebuilds geometry and card-specific closures on live updates.
+ * Keep the interaction closures current after commit, while the content
+ * boundary compares the values that actually change a card's appearance.
+ */
+export function StarMapThreadCard(props: StarMapThreadCardProps) {
+  const currentProps = useEventCallback(() => props);
+  const handlers = useMemo(() => ({
+    onOpen: (thread: NavigationThreadSummary) => currentProps().onOpen(thread),
+    onToggleSelect: () => currentProps().onToggleSelect?.(),
+    onMenuSelect: (key: string) =>
+      currentProps().menuActions?.find((action) => action.key === key)?.onSelect(),
+    snap: (offset: { dx: number; dy: number }) =>
+      currentProps().drag?.snap?.(offset) ?? { ...offset, guides: [] },
+    onGuidesChange: (guides: AlignmentGuide[]) =>
+      currentProps().drag?.onGuidesChange?.(guides),
+    onGroupDelta: (delta: { dx: number; dy: number }) =>
+      currentProps().drag?.onGroupDelta?.(delta),
+    onGroupCommit: (delta: { dx: number; dy: number }) =>
+      currentProps().drag?.onGroupCommit?.(delta),
+    onCommitOffset: (offset: { dx: number; dy: number }) =>
+      currentProps().drag?.onCommitOffset(offset),
+  }), [currentProps]);
+
+  return (
+    <StarMapThreadCardContent
+      {...props}
+      onOpen={handlers.onOpen}
+      onToggleSelect={props.onToggleSelect ? handlers.onToggleSelect : undefined}
+      menuActions={props.menuActions?.map((action) => ({
+        ...action,
+        onSelect: () => handlers.onMenuSelect(action.key),
+      }))}
+      drag={props.drag ? {
+        ...props.drag,
+        snap: props.drag.snap ? handlers.snap : undefined,
+        onGuidesChange: props.drag.onGuidesChange ? handlers.onGuidesChange : undefined,
+        onGroupDelta: props.drag.onGroupDelta ? handlers.onGroupDelta : undefined,
+        onGroupCommit: props.drag.onGroupCommit ? handlers.onGroupCommit : undefined,
+        onCommitOffset: handlers.onCommitOffset,
+      } : undefined}
+    />
+  );
+}
+
+function samePoint(
+  previous: { dx: number; dy: number } | undefined,
+  next: { dx: number; dy: number } | undefined,
+): boolean {
+  return (previous?.dx ?? 0) === (next?.dx ?? 0)
+    && (previous?.dy ?? 0) === (next?.dy ?? 0);
+}
+
+function sameCardProps(
+  previous: StarMapThreadCardProps,
+  next: StarMapThreadCardProps,
+): boolean {
+  const {
+    baseSlot: previousSlot,
+    offset: previousOffset,
+    cardFields: previousFields,
+    drag: previousDrag,
+    menuActions: previousActions,
+    ...previousRest
+  } = previous;
+  const {
+    baseSlot: nextSlot,
+    offset: nextOffset,
+    cardFields: nextFields,
+    drag: nextDrag,
+    menuActions: nextActions,
+    ...nextRest
+  } = next;
+  if (!samePoint(previousSlot, nextSlot) || !samePoint(previousOffset, nextOffset)) return false;
+  for (const key of Object.keys(previousFields) as (keyof StarMapCardFields)[]) {
+    if (previousFields[key] !== nextFields[key]) return false;
+  }
+  if (Boolean(previousDrag) !== Boolean(nextDrag)) return false;
+  if (previousDrag && nextDrag) {
+    for (const key of Object.keys(previousDrag) as (keyof StarMapCardDrag)[]) {
+      if (previousDrag[key] !== nextDrag[key]) return false;
+    }
+  }
+  if ((previousActions?.length ?? 0) !== (nextActions?.length ?? 0)) return false;
+  for (let index = 0; index < (previousActions?.length ?? 0); index += 1) {
+    const previousAction = previousActions![index];
+    const nextAction = nextActions![index];
+    // onSelect is a key-based proxy to the latest committed action, so its
+    // allocation does not change what the menu displays or invokes.
+    if (previousAction.key !== nextAction.key
+      || previousAction.label !== nextAction.label
+      || previousAction.disabled !== nextAction.disabled
+      || previousAction.danger !== nextAction.danger) return false;
+  }
+  const keys = Object.keys(previousRest) as (keyof typeof previousRest)[];
+  return keys.length === Object.keys(nextRest).length
+    && keys.every((key) => previousRest[key] === nextRest[key]);
+}
+
+const StarMapThreadCardContent = memo(function StarMapThreadCardContent(
+  props: StarMapThreadCardProps,
+) {
   const thread = props.thread;
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
   const status = getThreadRowStatus(
@@ -257,4 +362,4 @@ export function StarMapThreadCard(props: {
       </div>
     </div>
   );
-}
+}, sameCardProps);

@@ -28,6 +28,7 @@ const {
     ) => void;
     private clickHandler?: () => void;
     private closeHandler?: () => void;
+    private failedHandler?: (error: string) => void;
 
     constructor(
       private readonly payload: {
@@ -38,7 +39,7 @@ const {
     ) {}
 
     on(
-      event: "action" | "click" | "close",
+      event: "action" | "click" | "close" | "failed",
       handler: (
         details: { actionIndex?: number; preventDefault?: () => void },
         actionIndex: number,
@@ -58,6 +59,12 @@ const {
       if (event === "close") {
         this.closeHandler = () => {
           (handler as unknown as () => void)();
+        };
+        return;
+      }
+      if (event === "failed") {
+        this.failedHandler = (error) => {
+          (handler as unknown as (event: object, error: string) => void)({}, error);
         };
       }
     }
@@ -82,6 +89,10 @@ const {
 
     emitClose(): void {
       this.closeHandler?.();
+    }
+
+    emitFailed(error: string): void {
+      this.failedHandler?.(error);
     }
 
     close(): void {
@@ -443,6 +454,23 @@ describe("DesktopNotificationService", () => {
 
     expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
     shownNotifications[1]?.instance.emitClick();
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
+  });
+
+  it("releases a notification the OS refuses to show", () => {
+    const service = new DesktopNotificationService();
+    const serviceWithLiveNotifications = service as unknown as {
+      liveNotifications: Set<unknown>;
+    };
+
+    service.notifyTerminal({
+      enabled: true,
+      title: "Turn complete",
+      body: "Fixture thread finished.",
+    });
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
+
+    shownNotifications[0]?.instance.emitFailed("Notifications are not allowed");
     expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
   });
 

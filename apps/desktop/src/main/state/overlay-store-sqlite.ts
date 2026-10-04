@@ -1,8 +1,9 @@
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
@@ -34,6 +35,7 @@ import type {
   ThreadExecutionMode,
   ThreadGitWorkingState,
   ThreadMessagingBindingTransition,
+  ThreadLock,
   ThreadOverlayState,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
@@ -689,8 +691,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
   readNavigationSourceVersion(): string {
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
-    const local = this.stateDb.raw.prepare("SELECT total_changes() AS changes").get() as { changes: number };
-    return `${external}:${local.changes}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+    const local = sqliteNavigationChangeVersion(this.stateDb.raw);
+    return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
   }
 
   /**
@@ -1042,6 +1044,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
             'prs', json_extract(payload, '$.prs'),
             'reactions', json_extract(payload, '$.reactions'),
+            'lock', json_extract(payload, '$.lock'),
             'scheduledStart', json_extract(payload, '$.scheduledStart'),
             'prAutoDispatchEnabled', json(CASE json_type(payload, '$.prAutoDispatchEnabled') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
             'agent', CASE WHEN json_type(payload, '$.agent') = 'object'
@@ -1935,6 +1938,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             usage_line_id,
             usage_turn_id,
             provider,
+            account_key,
             backend,
             thread_id,
             parent_thread_id,
@@ -1988,6 +1992,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             @usageLineId,
             @usageTurnId,
             @provider,
+            @accountKey,
             @backend,
             @threadId,
             @parentThreadId,
@@ -2041,6 +2046,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           ON CONFLICT(usage_line_id) DO UPDATE SET
             usage_turn_id = excluded.usage_turn_id,
             provider = excluded.provider,
+            account_key = COALESCE(thread_usage_lines.account_key, excluded.account_key),
             backend = excluded.backend,
             thread_id = excluded.thread_id,
             parent_thread_id = excluded.parent_thread_id,
@@ -2514,9 +2520,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             completedAt: row.activity_completed_at ?? undefined },
           title: titles.get(identityFor(row)) || row.thread_id,
           updatedAt: row.updated_at,
+          accountKey: row.account_key ?? readings.get(row.activity_rate_limit_snapshot ?? "")?.accountKey,
         })),
         ...rollups.map(({ line, rollup, updatedAt }) => ({
           line, rollup, updatedAt,
+          accountKey: line.accountKey,
           title: titles.get(identityFor({ backend: line.backend, thread_id: line.threadId })) || line.threadId,
         })),
       ],
@@ -2622,6 +2630,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       lines,
       summaries: summaryRows.map(threadPricingSummaryFromRow),
     };
+  }
+
+  /**
+   * Stored running totals only: no usage rows, no repricing repair. A thread
+   * family's card adds these up, so it must stay a cheap read-only pass.
+   */
+  async readThreadPricingSummaries(threads: ReadonlyArray<{
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }>): Promise<ThreadPricingSummary[]> {
+    const statement = this.stateDb.raw.prepare(
+      `SELECT * FROM thread_pricing_summaries
+       WHERE backend = ? AND thread_id = ?
+       ORDER BY provider ASC, currency ASC`,
+    );
+    return threads.flatMap((thread) =>
+      (statement.all(thread.backend, thread.threadId) as ThreadPricingSummaryRow[])
+        .map(threadPricingSummaryFromRow));
   }
 
   private persistThreadUsagePricingRepairsSync(
@@ -3545,6 +3571,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ...current,
       reactions: nextReactions,
     };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  /**
+   * Sets or clears a thread's lock. Passing a lock replaces any earlier one,
+   * so editing the note of a locked thread goes through here too. Returns the
+   * state unchanged, without a write, when the thread is already unlocked.
+   */
+  async setThreadLock(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    lock: ThreadLock | undefined;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    if (!params.lock && !current.lock) {
+      return current;
+    }
+    const { lock: _previousLock, ...rest } = current;
+    const nextState: ThreadOverlayState = params.lock ? { ...rest, lock: params.lock } : rest;
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -5322,6 +5374,40 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       );
   }
 
+  /** Cleanup needs ownership/grouping only, never histories or PR claims. */
+  async getArchiveCleanupOverlayStates(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    if (params.threadIds.length > 25) throw new Error("Archive overlay slice exceeded 25 identities.");
+    const requested = params.threadIds.map((id) => ({
+      id, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
+    }));
+    const rows = this.stateDb.raw.prepare(`
+      SELECT json_extract(requested.value, '$.id') AS id,
+        CASE WHEN threads.payload IS NULL THEN NULL ELSE json_object(
+          'backend', json_extract(threads.payload, '$.backend'),
+          'threadId', json_extract(threads.payload, '$.threadId'),
+          'extraLinkedDirectories', json_extract(threads.payload, '$.extraLinkedDirectories'),
+          'parentThreadId', json_extract(threads.payload, '$.parentThreadId'),
+          'parentThreadBackend', json_extract(threads.payload, '$.parentThreadBackend'),
+          'parentThreadInstanceId', json_extract(threads.payload, '$.parentThreadInstanceId'),
+          'archiveTombstonedAt', json_extract(threads.payload, '$.archiveTombstonedAt')
+        ) END AS payload
+      FROM json_each(?) AS requested
+      LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+    `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
+    return Object.fromEntries(rows.map((row) => {
+      // json_object materializes absent optional fields as JSON null. The
+      // overlay contract uses absence, especially for archive tombstones;
+      // null must not turn every persisted thread into a tombstoned thread.
+      const state = row.payload === null ? undefined : Object.fromEntries(
+        Object.entries(JSON.parse(row.payload) as Record<string, unknown>).filter(([, value]) => value !== null),
+      ) as ThreadOverlayState;
+      return [row.id, state ? normalizeThreadOverlayState(state) : undefined];
+    }));
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
@@ -5650,20 +5736,41 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threads: Array<{ backend: ThreadOverlayState["backend"]; threadId: string; prKeys: string[] }>;
     now: number;
   }): Promise<void> {
-    const existing = this.stateDb.raw.prepare(
-      `SELECT pr_key FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?`,
-    );
-    const changesFor = (thread: typeof params.threads[number]) => {
-      const enabled = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId))?.prAutoDispatchEnabled === true;
-      const desired = new Set(enabled ? thread.prKeys : []);
-      const retained = new Set((existing.all(thread.backend, thread.threadId) as Array<{ pr_key: string }>).map((row) => row.pr_key));
-      return { add: [...desired].filter((key) => !retained.has(key)), remove: [...retained].filter((key) => !desired.has(key)) };
+    const readChanges = () => {
+      const changes: Array<{ thread: typeof params.threads[number]; add: string[]; remove: string[] }> = [];
+      for (let offset = 0; offset < params.threads.length; offset += 500) {
+        const batch = params.threads.slice(offset, offset + 500);
+        const requested = batch.map((thread, index) => ({ index, backend: thread.backend, threadId: thread.threadId,
+          key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.backend, thread.threadId)) }));
+        // Only eligibility and election membership are inputs. Never parse a
+        // full history or pending dispatch prompt to read this one boolean.
+        const rows = this.stateDb.raw.prepare(`
+          SELECT json_extract(requested.value, '$.index') AS ordinal,
+            json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true' AS enabled,
+            candidates.pr_key
+          FROM json_each(?) AS requested
+          LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+          LEFT JOIN pr_auto_dispatch_candidates AS candidates
+            ON candidates.backend = json_extract(requested.value, '$.backend')
+            AND candidates.thread_id = json_extract(requested.value, '$.threadId')
+        `).all(JSON.stringify(requested)) as Array<{ ordinal: number; enabled: number | null; pr_key: string | null }>;
+        const memberships = batch.map(() => ({ enabled: false, retained: new Set<string>() }));
+        for (const row of rows) {
+          const membership = memberships[row.ordinal]!;
+          membership.enabled = row.enabled === 1;
+          if (row.pr_key !== null) membership.retained.add(row.pr_key);
+        }
+        for (const [index, thread] of batch.entries()) {
+          const { enabled, retained } = memberships[index]!;
+          const desired = new Set(enabled ? thread.prKeys : []);
+          changes.push({ thread, add: [...desired].filter((key) => !retained.has(key)),
+            remove: [...retained].filter((key) => !desired.has(key)) });
+        }
+      }
+      return changes;
     };
     // Do not create even an empty transaction for an unchanged owner index.
-    if (!params.threads.some((thread) => {
-      const changes = changesFor(thread);
-      return changes.add.length > 0 || changes.remove.length > 0;
-    })) return;
+    if (!readChanges().some((changes) => changes.add.length > 0 || changes.remove.length > 0)) return;
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare(
         `DELETE FROM pr_auto_dispatch_candidates WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
@@ -5672,10 +5779,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         `INSERT INTO pr_auto_dispatch_candidates(pr_key, backend, thread_id, eligible_since, updated_at)
          VALUES (?, ?, ?, ?, ?) ON CONFLICT(pr_key, backend, thread_id) DO NOTHING`,
       );
-      for (const thread of params.threads) {
-        // Revalidate eligibility and membership inside the write transaction;
-        // another process may have changed them after the read-only preflight.
-        const changes = changesFor(thread);
+      // Revalidate eligibility and membership inside the write transaction;
+      // another process may have changed them after the read-only preflight.
+      for (const changes of readChanges()) {
+        const { thread } = changes;
         for (const key of changes.remove) remove.run(key, thread.backend, thread.threadId);
         for (const key of changes.add) insert.run(key, thread.backend, thread.threadId, params.now, params.now);
       }
@@ -5905,12 +6012,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ownerId: string;
   }): Promise<
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
-    | { status: "disabled" | "stale" | "attempt-limit" }
+    | { status: "disabled" | "locked" | "stale" | "attempt-limit" }
   > {
     const begin = this.stateDb.raw.transaction(() => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      if (this.getThread(threadKey)?.prAutoDispatchEnabled !== true) {
+      const thread = this.getThread(threadKey);
+      if (thread?.prAutoDispatchEnabled !== true) {
         return { status: "disabled" as const };
+      }
+      // Checked before the claim moves, so a locked thread spends no attempt.
+      if (thread.lock) {
+        return { status: "locked" as const };
       }
       const claim = this.stateDb.raw
         .prepare(
@@ -7036,8 +7148,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const providerServersEnabled = params.providerServersEnabled === false
       ? false
       : undefined;
+    // Only a change to the connection set revokes gateway conversation
+    // grants. Reordering it, or toggling the backend's own servers, leaves
+    // every gateway tool exactly as reachable as before.
+    const connectionsChanged = !sameMcpConnectionSet(current.mcpConnectionIds ?? [], connectionIds);
     const nextState: ThreadOverlayState = {
       ...current,
+      ...(connectionsChanged ? { mcpSelectionRevision: randomUUID() } : {}),
       ...(connectionIds.length > 0
         ? { mcpConnectionIds: connectionIds }
         : { mcpConnectionIds: undefined }),
@@ -8297,6 +8414,7 @@ type ThreadUsageLineRow = {
   usage_line_id: string;
   usage_turn_id: string | null;
   provider: string;
+  account_key: string | null;
   backend: string;
   thread_id: string;
   parent_thread_id: string | null;
@@ -8666,6 +8784,9 @@ function mergeThreadUsageLineForUpsert(
 ): ThreadUsageLineRecord {
   const merged: ThreadUsageLineRecord = {
     ...line,
+    ...(existing.accountKey || line.accountKey
+      ? { accountKey: existing.accountKey ?? line.accountKey }
+      : {}),
     createdAt: Math.min(existing.createdAt, line.createdAt),
     ...(line.fastMode !== undefined
       ? { fastMode: line.fastMode }
@@ -8882,6 +9003,7 @@ function clampTokenCount(value: number | undefined): number {
 function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string, unknown> {
   return {
     backend: line.backend,
+    accountKey: line.accountKey ?? null,
     cacheWriteInputCostMicros: line.cacheWriteInputCostMicros ?? 0,
     cacheWriteInputTokens: line.cacheWriteInputTokens ?? 0,
     cachedInputCostMicros: line.cachedInputCostMicros,
@@ -9034,14 +9156,16 @@ function rollUpBackgroundHelperRows(
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
     const bucket = Math.floor(completed / step) * step;
-    const usageLineId = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
+    const groupKey = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
       row.price_status, row.currency, window.from, window.to, bucket].join(":");
+    const usageLineId = row.account_key ? `${groupKey}:${row.account_key}` : groupKey;
     const line = threadUsageLineFromRow(row);
     const existing = groups.get(usageLineId);
     if (!existing) {
       groups.set(usageLineId, {
         line: {
           backend: line.backend, provider: line.provider, threadId, usageLineId,
+          ...(line.accountKey ? { accountKey: line.accountKey } : {}),
           scope: "monitor", source: line.source, status: "finalized",
           ...(line.model ? { model: line.model } : {}),
           ...(line.modelLabel ? { modelLabel: line.modelLabel } : {}),
@@ -9055,7 +9179,7 @@ function rollUpBackgroundHelperRows(
           cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
           totalCostMicros: line.totalCostMicros,
         } as ThreadUsageLineRecord,
-        rollup: { kind, count: 1 },
+        rollup: { kind, count: 1, groupKey },
         updatedAt: row.updated_at,
       });
       continue;
@@ -9085,6 +9209,7 @@ function rollUpBackgroundHelperRows(
 function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {
   return {
     backend: row.backend,
+    ...(row.account_key ? { accountKey: row.account_key } : {}),
     cacheWriteInputCostMicros: row.cache_write_input_cost_micros,
     cacheWriteInputTokens: row.cache_write_input_tokens,
     cachedInputCostMicros: row.cached_input_cost_micros,
@@ -9310,6 +9435,12 @@ function threadToolAnalysisFromRow(
   };
 }
 
+function sameMcpConnectionSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === rightSet.size && [...leftSet].every((id) => rightSet.has(id));
+}
+
 function readStringArrayJson(value: string): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -9365,6 +9496,7 @@ export type OverlayStoreLike = Pick<
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
   | "setThreadReaction"
+  | "setThreadLock"
   | "setThreadArchiveTombstone"
   | "setThreadScheduledStart"
   | "setThreadPin"

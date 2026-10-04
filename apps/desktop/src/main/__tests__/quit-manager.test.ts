@@ -14,9 +14,6 @@ vi.mock("electron", () => ({
   app: {
     quit: vi.fn(),
   },
-  BrowserWindow: {
-    getFocusedWindow: vi.fn(() => null),
-  },
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -63,6 +60,107 @@ beforeEach(() => {
 });
 
 describe("createQuitManager", () => {
+  it.each(["no-work", "confirmation-disabled", "confirmed"] as const)("does not commit quit state when authorization fails (%s)", async (scenario) => {
+    const resumeDispatch = vi.fn();
+    const commitShutdown = vi.fn();
+    const cancelShutdown = vi.fn();
+    const performQuit = vi.fn();
+    const beforeQuit = vi.fn(() => false);
+    const confirm = vi.fn(async () => "manual-confirm" as const);
+    const manager = createQuitManager({
+      getConfirmationEnabled: () => scenario !== "confirmation-disabled",
+      getQuitBlockers: () => ({ count: scenario === "no-work" ? 0 : 1, terminalSessionCount: 0, terminalThreadKeys: [], threadIds: ["active"], actionRunCount: 0, items: [] }),
+      quiesceAutomationDispatch: () => resumeDispatch,
+      commitShutdown, cancelShutdown, performQuit, confirm, log: {},
+    });
+    expect(await manager.requestQuit({ source: "update-install", beforeQuit })).toBe(false);
+    await Promise.resolve();
+    expect(beforeQuit).toHaveBeenCalledOnce();
+    expect(manager.isQuitAllowed()).toBe(false);
+    expect(commitShutdown).not.toHaveBeenCalled();
+    expect(performQuit).not.toHaveBeenCalled();
+    if (scenario === "confirmed") {
+      expect(resumeDispatch).toHaveBeenCalledOnce();
+      expect(cancelShutdown).toHaveBeenCalledOnce();
+    }
+    beforeQuit.mockReturnValue(true);
+    expect(await manager.requestQuit({ source: "update-install", beforeQuit })).toBe(true);
+    expect(manager.isQuitAllowed()).toBe(true);
+    expect(performQuit).toHaveBeenCalledOnce();
+    if (scenario === "confirmed") {
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(commitShutdown).toHaveBeenCalledOnce();
+      expect(beforeQuit.mock.invocationCallOrder[1]).toBeLessThan(commitShutdown.mock.invocationCallOrder[0]);
+    }
+  });
+
+  it("keeps production quit state usable when the native DEB updater denies authorization", async () => {
+    const { ManagedDebUpdater } = await import("../linux-package-updater");
+    const relaunch = vi.fn();
+    const nativeQuit = vi.fn();
+    const updater = new ManagedDebUpdater(null, {
+      version: "1.0.0", name: "PwrAgent", isPackaged: true,
+      appUpdateConfigPath: "/fixture/app-update.yml", userDataPath: "/fixture/user", baseCachePath: "/fixture/cache",
+      whenReady: async () => undefined, onQuit: () => undefined,
+      relaunch, quit: nativeQuit,
+    });
+    updater.logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const errors: string[] = [];
+    updater.on("error", (error: Error) => errors.push(error.message));
+    let authorized = false;
+    Object.assign(updater, {
+      downloadedUpdateHelper: { file: "/fixture/PwrAgent.deb", downloadedFileInfo: {} },
+      hasCommand: () => true,
+      detectPackageManager: () => "dpkg",
+      runCommandWithSudoIfNeeded: () => { if (!authorized) throw new Error("Not authorized"); },
+    });
+    const resumeDispatch = vi.fn();
+    const cancelShutdown = vi.fn();
+    const commitShutdown = vi.fn();
+    const performQuit = vi.fn();
+    const confirm = vi.fn(async () => "manual-confirm" as const);
+    const manager = createQuitManager({
+      getConfirmationEnabled: () => true,
+      getFederationPeerCount: () => 1,
+      getQuitBlockers: () => ({ count: 1, terminalSessionCount: 0, terminalThreadKeys: [], threadIds: ["active"], actionRunCount: 0, automationRunCount: 1, items: [] }),
+      quiesceAutomationDispatch: () => resumeDispatch,
+      confirm, cancelShutdown, commitShutdown, performQuit, log: {},
+    });
+    const request = { source: "update-install" as const, beforeQuit: () => updater.authorizeInstall() };
+    expect(await manager.requestQuit(request)).toBe(false);
+    expect(manager.isQuitAllowed()).toBe(false);
+    expect(resumeDispatch).toHaveBeenCalledOnce();
+    expect(cancelShutdown).toHaveBeenCalledOnce();
+    expect(commitShutdown).not.toHaveBeenCalled();
+    expect(performQuit).not.toHaveBeenCalled();
+    authorized = true;
+    expect(await manager.requestQuit(request), errors.join("; ")).toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(commitShutdown).toHaveBeenCalledOnce();
+    expect(performQuit).toHaveBeenCalledOnce();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(relaunch).not.toHaveBeenCalled();
+    expect(nativeQuit).not.toHaveBeenCalled();
+  });
+
+  it("resumes dispatch and cancels federation shutdown when authorization throws", async () => {
+    const resumeDispatch = vi.fn();
+    const cancelShutdown = vi.fn();
+    const commitShutdown = vi.fn();
+    const manager = createQuitManager({
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({ count: 1, terminalSessionCount: 0, terminalThreadKeys: [], threadIds: ["active"], actionRunCount: 0, items: [] }),
+      quiesceAutomationDispatch: () => resumeDispatch,
+      cancelShutdown, commitShutdown, performQuit: vi.fn(), log: {},
+      confirm: async () => "manual-confirm",
+    });
+    await expect(manager.requestQuit({ source: "update-install", beforeQuit: () => { throw new Error("authorization failed"); } })).rejects.toThrow("authorization failed");
+    expect(manager.isQuitAllowed()).toBe(false);
+    expect(cancelShutdown).toHaveBeenCalledOnce();
+    expect(resumeDispatch).toHaveBeenCalledOnce();
+    expect(commitShutdown).not.toHaveBeenCalled();
+  });
+
   it.each(["manual-confirm", "countdown-expired", "manual-cancel"] as const)("coordinates peer-only quit with %s even when active-work confirmation is disabled", async (resolution) => {
     const announceShutdown = vi.fn();
     const cancelShutdown = vi.fn();

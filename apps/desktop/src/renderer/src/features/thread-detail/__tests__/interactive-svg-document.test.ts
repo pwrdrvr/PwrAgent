@@ -22,6 +22,37 @@ describe("interactiveSvgDocument", () => {
     expect(interactiveSvgDocument(source, "dark")).toContain(":root { color-scheme: dark; }");
   });
 
+  it("sizes only the root SVG, capped at its declared width", () => {
+    const document = interactiveSvgDocument('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="390" viewBox="0 0 1200 390"><script>function init() {}</script><svg id="frames" width="1180"></svg></svg>');
+
+    // A bare `svg` rule would also resize the nested frames <svg>, and an
+    // uncapped `max-width` alone collapses a root whose script removes its
+    // width to Chromium's 300px default.
+    expect(document).not.toMatch(/(^|[;{}])\s*svg\s*\{/m);
+    expect(document).toContain("body > svg {");
+    expect(document).toContain("width: min(100%, 1200px);");
+    // Only while a viewBox exists can the height follow the width without
+    // clipping: a fluid flame graph removes it and keeps its pixel height.
+    expect(document).toContain("body > svg[viewBox] { height: auto; }");
+  });
+
+  it("fills the frame when the SVG declares no pixel width", () => {
+    const fluid = '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="390"><script>function init() {}</script></svg>';
+    const viewBoxOnly = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100"><script>function init() {}</script></svg>';
+
+    expect(interactiveSvgDocument(fluid)).toContain("width: 100%;");
+    expect(interactiveSvgDocument(viewBoxOnly)).toContain("width: min(100%, calc(100vh * 4));");
+  });
+
+  it("caps at a declared width in any unit an image honours", () => {
+    const svg = (width: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="80" viewBox="0 0 400 200"><script>function init() {}</script></svg>`;
+
+    expect(interactiveSvgDocument(svg("4cm"))).toContain("width: min(100%, 4cm);");
+    expect(interactiveSvgDocument(svg("300PT"))).toContain("width: min(100%, 300pt);");
+    expect(interactiveSvgDocument(svg("50%"))).toContain("width: 50%;");
+    expect(interactiveSvgDocument(svg("12em"))).toContain("width: min(100%, calc(100vh * 2));");
+  });
+
   it("rejects non-SVG documents", () => {
     expect(() => interactiveSvgDocument("<html/>"))
       .toThrow("Interactive SVG could not be parsed");

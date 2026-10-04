@@ -27,7 +27,7 @@ export function isPwrAgentThreadDynamicToolCall(
   tool: PwrAgentThreadInspectionOperationName;
 } {
   return (
-    call.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE ||
+    (call.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE && call.tool !== "rename_current_thread") ||
     (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
       PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.includes(
         call.tool as PwrAgentThreadInspectionOperationName,

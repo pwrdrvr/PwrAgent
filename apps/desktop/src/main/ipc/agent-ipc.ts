@@ -9,6 +9,7 @@ import {
   AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
 } from "../../shared/ipc";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { stageQueuedFileInputs } from "../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
@@ -426,7 +427,9 @@ export function broadcastAgentEvent(event: AgentEvent): void {
       ) {
         continue;
       }
-    } else if (windowTarget && hydratedEvent.notification.method !== "federation/shutdown/changed") {
+    } else if (windowTarget
+      && hydratedEvent.notification.method !== "federation/shutdown/changed"
+      && hydratedEvent.notification.method !== "federation/health/changed") {
       continue;
     }
     webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);
@@ -1212,15 +1215,26 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: CheckThreadBranchDriftRequest,
     ): Promise<CheckThreadBranchDriftResponse> => {
+      let result: CheckThreadBranchDriftResponse;
       if (
         request.federationTarget &&
         isRemoteFederationTarget(request.federationTarget)
       ) {
-        return await getDesktopFederationRuntime()
+        result = await getDesktopFederationRuntime()
           .remoteBackend(request.federationTarget)
           .checkThreadBranchDrift(stripFederationTarget(request));
+      } else {
+        result = await registry.checkThreadBranchDrift(request);
       }
-      return await registry.checkThreadBranchDrift(request);
+      // The check may persist a newly observed branch while a selected-detail
+      // read is in flight. Fence that read before the renderer refreshes it,
+      // so an older coalesced response cannot erase the drift warning.
+      getDesktopNavigationQueryPool().invalidateExactOwner(
+        request.federationTarget,
+        { backend: request.backend, threadId: request.threadId },
+        "detail",
+      );
+      return result;
     },
   );
 

@@ -57,6 +57,7 @@ describe("rbac permission coverage", () => {
       "status:compact",
       "status:stop",
       "status:handoff",
+      "status:lock",
       "handoff:confirm",
       "handoff:projects",
       "handoff:select-project",

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Editor } from "@tiptap/react";
 import type {
   NavigationDirectorySummary,
@@ -386,36 +386,188 @@ describe("CompactComposer", () => {
     ).toBeNull();
   });
 
-  it("offers Steer alongside Stop while a turn is running", () => {
+  it("offers Queue alongside Stop while a turn is running", () => {
     const onInterrupt = vi.fn();
-    renderComposer({ busy: true, onInterrupt });
+    renderComposer({ busy: true, onInterrupt, onSteer: vi.fn() });
     // Stop used to be the only control, which read as "you cannot say
-    // anything until this finishes".
+    // anything until this finishes". Queue is the primary, as in the main
+    // composer; steering is the chord its tooltip names, not a button.
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Steer" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
-  it("steers the typed text into the running turn", async () => {
-    const { onSend } = renderComposer({ busy: true, onInterrupt: vi.fn() });
+  it("queues the typed text behind the running turn", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({
+      busy: true,
+      onInterrupt: vi.fn(),
+      onSteer,
+    });
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });
-    fireEvent.change(input, { target: { value: "also check the logs" } });
-    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
     await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("after this, deploy");
+    });
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  it("queues on Enter while a turn is running", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({ busy: true, onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(onSend).toHaveBeenCalledWith("after this, deploy");
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  describe("the steer chord", () => {
+    type PwrWindow = Window & { pwragent?: { platform?: string } };
+    afterEach(() => {
+      delete (window as PwrWindow).pwragent;
+    });
+
+    // An empty draft disables Queue, and React fires no mouse events on a
+    // disabled button, so the hint shows once there is something to queue.
+    function typeDraft(): void {
+      const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+      fireEvent.change(input, { target: { value: "after this, deploy" } });
+    }
+
+    async function pressEnter(
+      modifiers: { ctrlKey?: boolean; metaKey?: boolean },
+      props: Partial<Parameters<typeof CompactComposer>[0]> = { busy: true },
+    ) {
+      const onSteer = vi.fn();
+      const { onSend } = renderComposer({ onSteer, ...props });
+      const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+      fireEvent.change(input, { target: { value: "also check the logs" } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter", ...modifiers });
+      });
+      return { onSend, onSteer };
+    }
+
+    it("steers on Cmd+Enter on macOS, as the main composer does", async () => {
+      (window as PwrWindow).pwragent = { platform: "darwin" };
+      const { onSend, onSteer } = await pressEnter({ metaKey: true });
+      expect(onSteer).toHaveBeenCalledWith("also check the logs");
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("leaves Ctrl+Enter inert on macOS", async () => {
+      (window as PwrWindow).pwragent = { platform: "darwin" };
+      const { onSend, onSteer } = await pressEnter({ ctrlKey: true });
+      expect(onSteer).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("steers on Ctrl+Enter on Windows", async () => {
+      (window as PwrWindow).pwragent = { platform: "win32" };
+      const { onSend, onSteer } = await pressEnter({ ctrlKey: true });
+      expect(onSteer).toHaveBeenCalledWith("also check the logs");
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("leaves the Windows key's Enter inert on Windows", async () => {
+      (window as PwrWindow).pwragent = { platform: "win32" };
+      const { onSend, onSteer } = await pressEnter({ metaKey: true });
+      expect(onSteer).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("sends when no turn is running", async () => {
+      (window as PwrWindow).pwragent = { platform: "darwin" };
+      const { onSend, onSteer } = await pressEnter({ metaKey: true }, {});
       expect(onSend).toHaveBeenCalledWith("also check the logs");
+      expect(onSteer).not.toHaveBeenCalled();
+    });
+
+    it("does nothing, rather than queue, when the turn cannot take a steer", async () => {
+      (window as PwrWindow).pwragent = { platform: "darwin" };
+      const { onSend, onSteer } = await pressEnter(
+        { metaKey: true },
+        { busy: true, canSteer: false },
+      );
+      expect(onSteer).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("is named in Queue's tooltip for this platform", async () => {
+      (window as PwrWindow).pwragent = { platform: "darwin" };
+      renderComposer({ busy: true, onSteer: vi.fn() });
+      typeDraft();
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Queue after this turn · ⌘Enter to steer it in",
+      );
+    });
+
+    it("is named as Ctrl+Enter on Windows", async () => {
+      (window as PwrWindow).pwragent = { platform: "win32" };
+      renderComposer({ busy: true, onSteer: vi.fn() });
+      typeDraft();
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Queue after this turn · Ctrl+Enter to steer it in",
+      );
     });
   });
 
-  it("disables Steer when the running turn cannot take one", () => {
-    renderComposer({ busy: true, canSteer: false, onInterrupt: vi.fn() });
+  it("takes Queue's tooltip down when the turn ends under the pointer", async () => {
+    const onSend = vi.fn();
+    const onSteer = vi.fn();
+    const { rerender } = renderComposer({ busy: true, onSend, onSteer });
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });
-    fireEvent.change(input, { target: { value: "no route for this" } });
-    // Better a dead button than a send that is guaranteed to bounce.
-    expect(
-      (screen.getByRole("button", { name: "Steer" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+
+    rerender(
+      <CompactComposer onSend={onSend} onSteer={onSteer} threadTitle="Thread t1" />,
+    );
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("keeps Queue's tooltip off when the turn cannot take a steer", () => {
+    renderComposer({ busy: true, canSteer: false, onSteer: vi.fn() });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    const queue = screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement;
+    expect(queue.disabled).toBe(false);
+    fireEvent.mouseEnter(queue);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("names a steer in flight on the button", async () => {
+    let resolveSteer: (delivered: boolean) => void = () => undefined;
+    const onSteer = vi.fn(
+      () => new Promise<boolean>((resolve) => { resolveSteer = resolve; }),
+    );
+    renderComposer({ busy: true, onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "also check the logs" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    });
+    const button = screen.getByRole("button", {
+      name: "Steering…",
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    await act(async () => {
+      resolveSteer(true);
+    });
+    expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
   });
 
   it("keeps Stop hidden when the host offers no way to interrupt", () => {
@@ -811,6 +963,28 @@ describe("CompactComposer markdown", () => {
       expect(container.querySelector('[data-mention-kind="instance"]')?.textContent).toBe("@DESKTOP-LAB / dev");
       await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
       expect(onSend).toHaveBeenCalledWith("Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)");
+    });
+
+    it("lists and inserts a Federation machine by its short name, with the full label on hover", async () => {
+      const { onSend, container } = renderComposer({
+        mentionSources: {
+          instances: [{
+            kind: "instance", key: "instance:mini-1", instanceId: "mini-1",
+            label: "Lab-Mac-Mini-1 / dev", shortLabel: "Mini 1 / dev",
+            path: buildInstanceReferenceUrl("mini-1"), status: "connected",
+          }],
+        },
+      });
+      const input = openPicker("Hand off to @mac");
+      const option = screen.getByRole("option");
+      expect(option.querySelector(".compact-composer__mention-title")?.textContent).toBe("Mini 1 / dev");
+      expect(option.getAttribute("title")).toBe("Lab-Mac-Mini-1 / dev · connected");
+      fireEvent.click(option);
+      const chip = container.querySelector('[data-mention-kind="instance"]');
+      expect(chip?.textContent).toBe("@Mini 1 / dev");
+      expect(chip?.getAttribute("data-tooltip")).toContain("Lab-Mac-Mini-1 / dev");
+      await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+      expect(onSend).toHaveBeenCalledWith("Hand off to [@Mini 1 / dev](pwragent://instance/mini-1)");
     });
 
     it.each([

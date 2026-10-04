@@ -397,6 +397,7 @@ export type ControlActiveTurnRequest = {
 };
 
 export type ControlActiveTurnErrorCode =
+  | "forbidden"
   | "invalid_arguments"
   | "no_active_turn"
   | "stale_target"

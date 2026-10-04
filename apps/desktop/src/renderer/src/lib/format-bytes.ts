@@ -16,3 +16,21 @@ export function formatByteCount(value: number): string {
   const gb = mb / 1024;
   return gb < 10 ? `${gb.toFixed(1)} GB` : `${Math.round(gb)} GB`;
 }
+
+/**
+ * A file's size as the Edits rail prints it: one decimal at every unit, so
+ * a re-exported sprite that moved by a few KB reads as changed. The image
+ * previews under a row use it too, so the chip and the frame beneath it agree.
+ */
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "";
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes.toLocaleString()} B`;
+}

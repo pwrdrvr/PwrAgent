@@ -738,6 +738,28 @@ describe("PrAutoDispatchCoordinator", () => {
     })).toBe(1);
   });
 
+  it("drops a repair for a locked thread without spending an attempt or submitting", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    await store.setThreadLock({
+      backend: "codex",
+      threadId: "thread-1",
+      lock: { note: "Worktree handed to another agent", lockedAt: clock, source: "operator" },
+    });
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(0);
+    expect(await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBeUndefined();
+  });
+
   it("refunds repeated busy retries even with only one repair token", async () => {
     const harness = createHarness({ busy: true, budget: { capacity: 1, refillPerMinute: 0 } });
     await observe(harness.coordinator);

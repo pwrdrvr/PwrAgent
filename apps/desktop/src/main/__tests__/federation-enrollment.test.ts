@@ -100,6 +100,7 @@ describe("federation enrollment", () => {
       ["ws://ok.example", "https://evil.example"],
       ["ssh://user:secret@host"],
       ["ssh://-oProxyCommand=touch%20pwned"],
+      ["ws://ok.example", "ws://studio.tail1234.ts..net:47830"],
     ]) {
       const invite = `pwragent-federation:${Buffer.from(
         JSON.stringify({ ...base, gatewayEndpoints }),
@@ -124,6 +125,22 @@ describe("federation enrollment", () => {
       }),
       "utf8",
     ).toString("base64url")}`;
+
+    expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
+      /must be a ws:\/\/, wss:\/\/, or ssh:\/\/ endpoint/,
+    );
+  });
+
+  it("rejects a legacy invite whose gateway hostname contains an empty DNS label", () => {
+    const invite = encodeFederationInvite({
+      version: FEDERATION_INVITE_VERSION,
+      token: "invite-token-empty-label",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: "gateway-key",
+      gatewayNoisePublicKey: "gateway-noise-key",
+      gatewayUrl: "ws://studio.tail1234.ts..net:47830",
+      expiresAt: 2_000,
+    });
 
     expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
       /must be a ws:\/\/, wss:\/\/, or ssh:\/\/ endpoint/,

@@ -150,6 +150,47 @@ describe("shared owner index reads", () => {
     await new Promise((resolve) => setImmediate(resolve));
     await expect(pool.read("ninth", async () => index)).resolves.toBe(index);
   });
+
+  it("replaces a stale revision once and retains only the latest version", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const old = deferred();
+    const fresh = { ...index, localInstanceId: "fresh" };
+    const load = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue(fresh);
+    const first = pool.read("owner", load, undefined, "v1");
+    const second = pool.read("owner", load, undefined, "v2");
+    const third = pool.read("owner", load, undefined, "v2");
+    expect(pool.usage()).toEqual({ physical: 1, readers: 3 });
+    old.resolve({ ...index, localInstanceId: "stale" });
+    await expect(Promise.all([first, second, third])).resolves.toEqual([fresh, fresh, fresh]);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(await pool.read("owner", load, undefined, "v2")).toBe(fresh);
+    expect(load).toHaveBeenCalledTimes(2);
+    await pool.read("owner", load, undefined, "v3");
+    expect(load).toHaveBeenCalledTimes(3);
+    pool.invalidate("owner");
+    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+  });
+
+  it("keeps the replacement limit when durable versions change during every scan", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const gates = [deferred(), deferred(), deferred()];
+    const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]!.promise);
+    const reads = [pool.read("owner", load, undefined, "v0")];
+    for (let attempt = 0; attempt < gates.length; attempt++) {
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
+      const read = pool.read("owner", load, undefined, `v${attempt + 1}`);
+      void read.catch(() => undefined);
+      reads.push(read);
+      gates[attempt]!.resolve(index);
+    }
+    expect(await Promise.allSettled(reads)).toEqual(reads.map(() =>
+      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) })));
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+    await expect(pool.read("owner", async () => index, undefined, "v4")).resolves.toBe(index);
+    pool.invalidate("owner");
+  });
 });
 
 it("shares successive project batches only within a versioned bounded reuse window", async () => {

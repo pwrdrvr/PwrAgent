@@ -87,6 +87,79 @@ function readZIndex(rule: string): number {
   return Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
 }
 
+interface CssRule {
+  selector: string;
+  body: string;
+  line: number;
+}
+
+/**
+ * Every innermost `selector { body }` block in a stylesheet, in source
+ * order, with the 1-based line its selector starts on. Comments are blanked
+ * first, so a brace in prose cannot open a block. An at-rule wrapper such as
+ * `@media` contributes its inner rules, not itself. For the whole-file
+ * sweeps that hold a token to its role, where `extractRuleBody` (first
+ * top-level match) would see one rule of many.
+ */
+function collectRules(source: string): CssRule[] {
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, (comment) =>
+    comment.replace(/[^\n]/g, " "),
+  );
+  const rules: CssRule[] = [];
+  const open: Array<{ preludeStart: number; brace: number; line: number; nested: boolean }> = [];
+  let preludeStart = 0;
+  let preludeLine = 0;
+  let line = 1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n") {
+      line += 1;
+    } else if (char === "{") {
+      if (open.length > 0) {
+        open[open.length - 1].nested = true;
+      }
+      open.push({ preludeStart, brace: index, line: preludeLine, nested: false });
+      preludeStart = index + 1;
+      preludeLine = 0;
+    } else if (char === "}") {
+      const block = open.pop();
+      if (block && !block.nested) {
+        rules.push({
+          selector: text.slice(block.preludeStart, block.brace).trim().replace(/\s+/g, " "),
+          body: text.slice(block.brace + 1, index),
+          line: block.line,
+        });
+      }
+      preludeStart = index + 1;
+      preludeLine = 0;
+    } else if (char === ";" && open.length === 0) {
+      preludeStart = index + 1;
+      preludeLine = 0;
+    } else if (preludeLine === 0 && !/\s/.test(char)) {
+      preludeLine = line;
+    }
+  }
+  return rules;
+}
+
+/**
+ * The class names on each selector's subject, the compound after its last
+ * combinator, one array per selector in the list. Parenthesized arguments
+ * and attribute values are dropped first: a class inside `:not(…)` does not
+ * name the element, and a comma or space inside `:is(…)` or `[…="…"]` does
+ * not split the selector.
+ */
+function subjectClasses(selectorList: string): string[][] {
+  let flat = selectorList.replace(/\[[^\]]*\]/g, "[]");
+  while (/\([^()]*\)/.test(flat)) {
+    flat = flat.replace(/\([^()]*\)/g, "");
+  }
+  return flat.split(",").map((selector) => {
+    const subject = selector.trim().split(/\s*[>+~]\s*|\s+/).pop() ?? "";
+    return [...subject.matchAll(/\.([\w-]+)/g)].map(([, name]) => name);
+  });
+}
+
 function expandHex(hex: string): string {
   const normalized = hex.replace("#", "");
   if (normalized.length === 3) {
@@ -338,47 +411,59 @@ describe("Tangerine Terminal theme contract", () => {
     ).toMatch(/height:\s*24px;/);
     expect(
       extractRuleBody(css, ".thread-row__actions .thread-row__chip--add-reaction"),
-    ).toMatch(/height:\s*24px;[\s\S]*min-width:\s*24px;/);
+    ).toMatch(/height:\s*24px;/);
 
-    // The in-title unpin control is a real 24x24 target too (axe's
+    // The title-line unpin control is a real 24x24 target too (axe's
     // target-size rule gives no inline exception to flex-item buttons);
-    // its negative margins collapse the layout footprint back to the
-    // 18px line slot, so the heading's geometry doesn't move.
-    expect(extractRuleBody(css, ".thread-row__heading-pin")).toMatch(
+    // the actions' negative block margin collapses the layout footprint
+    // back to the title's line, so the card's height doesn't move.
+    expect(extractRuleBody(css, ".thread-row__pin")).toMatch(
       /width:\s*24px;[\s\S]*height:\s*24px;/,
     );
 
-    // A 24px target is worthless while something paints over it — the
-    // pinned-row hover reserve keeps the revealed cluster off the
-    // in-title unpin pin. Pinned (all five reveal arms + the value + the
-    // cluster-side literals it is derived from) so a cluster resize or a
-    // dropped keyboard arm revisits the derivation in the rule's comment
-    // in the same commit.
+    // The pin must not move when the row is hovered: a pin that slid left
+    // as the pointer arrived turned clicks on the title into unpins. It
+    // holds still because nothing right of it changes width — the
+    // timestamp and the kebab share one lane, floored at the kebab's
+    // width so the lane is as wide at rest as on hover. Pin the floor to
+    // the kebab's own width so resizing one without the other fails here
+    // instead of sliding the pin again.
+    const kebabWidth = css.match(
+      /(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*(\d+)px;/,
+    )?.[1];
+    expect(kebabWidth).toBe("26");
+    expect(extractRuleBody(css, ".thread-row__time-lane")).toMatch(
+      new RegExp(`min-width:\\s*${kebabWidth}px;`),
+    );
     expect(
       extractRuleBody(
         css,
-        ".thread-row-shell:hover .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__overflow-button[aria-expanded=\"true\"]) .thread-row--pinned .thread-row__heading",
+        ".thread-row__time-lane > .thread-row__time,\n.thread-row__time-lane > .thread-row__overflow-button",
       ),
-    ).toMatch(/padding-right:\s*46px;/);
+    ).toMatch(/grid-area:\s*1 \/ 1;/);
+    // At rest the hover controls must have zero area, not merely zero
+    // opacity: axe's target-size rule measures invisible controls, and a
+    // border left on a zero-width chip is a 2px target.
+    expect(extractRuleBody(css, ".thread-row__pin-button")).toMatch(
+      /width:\s*0;[\s\S]*border-width:\s*0;/,
+    );
+    expect(
+      extractRuleBody(css, ".thread-row__actions .thread-row__chip.thread-row__chip--add-reaction"),
+    ).toMatch(/border-width:\s*0;/);
+    // The hover controls grow from zero width; caught mid-growth they are
+    // under 24px. Reduced motion (which the a11y gate emulates) must drop
+    // the size transition so they open at full size.
+    const reducedMotionGrowth = css.match(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.thread-row__actions \.thread-row__chip--add-reaction,\s*\.thread-row__pin-button \{([^}]*)\}/,
+    )?.[1];
+    expect(reducedMotionGrowth).toBeDefined();
+    expect(reducedMotionGrowth).toMatch(/transition-property:/);
+    expect(reducedMotionGrowth).not.toMatch(/width|margin/);
+    // The 24px controls give their overhang back at every title notch, so
+    // revealing them never changes the card's height.
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
-      /right:\s*11px;[\s\S]*gap:\s*4px;/,
+      /margin-block:\s*calc\(\(var\(--sidebar-title-size\) \* 1\.25 \+ 2px - 24px\) \/ 2\);/,
     );
-    // The cluster's 11px offset and the reserve inequality's first term
-    // both derive from the card's inline padding (10px + 1px border), so
-    // that literal belongs in the same pin set: shrink the card padding
-    // and 11/46 stay green while the kebab drifts off the content edge
-    // and the pin loses its clearance.
-    expect(extractRuleBody(css, ".thread-row")).toMatch(
-      /padding:\s*4px 10px;/,
-    );
-    // Not extractRuleBody: the bare selector would match the shared
-    // pin+kebab chrome rule first; this anchors the standalone width
-    // rule's own body.
-    expect(css).toMatch(/(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*26px;/);
 
     // And the open-thread overlay keeps the explicit floor the old
     // in-flow button carried: at the XS title notch a chipless card
@@ -538,6 +623,33 @@ describe("Tangerine Terminal theme contract", () => {
       // `--savings-*` theme tokens. Every surface reads its verdict color
       // through it, so the tier → color map exists once.
       "savings-verdict",
+      // Capped composer bands — defined on `.composer__band` and
+      // `.star-map-chat-card__band`, not `:root`. The gap is read back by the
+      // edge fades' negative margins; the fade color is set only to the
+      // band's own surface token.
+      "rail-band-gap",
+      "rail-band-fade-color",
+      // A queued message row's surface, defined on `.composer__queued--message`
+      // so the hover actions' fade matches each row tone. Every value it
+      // resolves to is a theme token.
+      "queued-row-bg",
+      // A slash command's remaining parameters, set inline on
+      // `.composer-tiptap-input` as a CSS string and drawn by the last
+      // paragraph's ::after. Content, not theme.
+      "composer-inline-hint",
+      // The file preview's horizontal inset, defined on `.file-preview` and
+      // set per surface (the dialog and the Files window pad differently).
+      // The notice, the line gutter and the table all read it. Geometry, not
+      // theme.
+      "file-preview-inset",
+      // The gap between usage chart bars, defined on `.usage-timeline__plot`.
+      // The bars and the slice card's inline position both read it, so the
+      // card cannot drift off its bar. Geometry, not theme.
+      "usage-bar-gap",
+      // The Logs window's line-number gutter, defined on `.log-window__lines`
+      // from the digit count of the newest sequence. The rows, the gap rows
+      // and the mark row all indent by it. Geometry, not theme.
+      "log-gutter-width",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
@@ -639,6 +751,93 @@ describe("Tangerine Terminal theme contract", () => {
     expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
   });
 
+  it("keeps confirm modal frames neutral and puts danger on the action", () => {
+    // The detach-PR dialog once drew its whole frame in --danger-border,
+    // which blue-dark's salmon danger base turned into an orange box.
+    for (const selector of [".pr-detach-warning-dialog", ".settings-confirm-dialog"]) {
+      const frame = extractRuleBody(css, selector);
+      expect(frame).toContain("border: 1px solid var(--border-subtle);");
+      expect(frame).not.toContain("--danger");
+    }
+    expect(
+      extractRuleBody(css, ".pr-detach-warning-dialog__actions .button--danger"),
+    ).toContain("border-color: var(--danger-border);");
+  });
+
+  it("keeps the Codex config warning card neutral with a readable amber eyebrow", () => {
+    // The card was tinted 8% amber with an amber border, which read as a
+    // beige panel in the blue themes. The eyebrow carries the warning, in
+    // the text token, since --status-warning is the dot-and-stroke amber.
+    const card = extractRuleBody(css, ".codex-config-warning-banner");
+    expect(card).toContain("border: 1px solid var(--border-subtle);");
+    expect(card).toContain("background: var(--bg-panel-elevated);");
+    expect(card).not.toContain("--status-warning");
+    expect(extractRuleBody(css, ".codex-config-warning-banner__eyebrow"))
+      .toContain("color: var(--status-warning-text);");
+  });
+
+  it("keeps every floating surface frame out of the status tones", () => {
+    // State by emphasis and badges, not colored panels (desktop style
+    // guide). The status tones are per-theme hues, so a frame drawn in one
+    // changes character with the theme: blue-dark's salmon --danger-base
+    // turned the detach-PR dialog into an orange box (#2600), and an 8%
+    // amber tint turned the Codex config warning into a beige panel in
+    // blue-light (#2620). The accent tokens follow each theme's own hue and
+    // stay allowed; the update banner frames itself in them on purpose.
+    const rules = collectRules(css);
+    const frames: string[][] = [];
+    for (const rule of rules) {
+      const fixed = /(?:^|[;{\s])position:\s*fixed\b/.test(rule.body);
+      for (const classes of subjectClasses(rule.selector)) {
+        if (fixed && classes.length > 0) {
+          frames.push(classes);
+        }
+        // A dialog inside a fixed scrim is the frame the eye reads, though
+        // only its modal parent is fixed. `__element` parts are its contents.
+        for (const name of classes) {
+          if (/dialog|modal|banner|toast/.test(name) && !name.includes("__")) {
+            frames.push([name]);
+          }
+        }
+      }
+    }
+    const isFrame = (classes: string[]): boolean =>
+      frames.some((frame) => frame.every((name) => classes.includes(name)));
+    // A walker that found nothing would pass everything.
+    for (const selector of [".pr-detach-warning-dialog", ".codex-config-warning-banner", ".app-notice-toast", ".jump-palette"]) {
+      expect(isFrame(subjectClasses(selector)[0]), `${selector} is a floating frame`).toBe(true);
+    }
+
+    const statusTone =
+      /var\(--(?:status-(?:warning|error|ok)|danger|success|info|warning|savings)(?:-[a-z0-9-]+)?\)/;
+    const frameDeclaration =
+      /(?:^|[;{\s])((?:border(?:-(?:top|right|bottom|left))?|outline)(?:-color)?|background(?:-color)?)\s*:\s*([^;]+)/g;
+    const offenders: string[] = [];
+    for (const rule of rules) {
+      if (!subjectClasses(rule.selector).some(isFrame)) {
+        continue;
+      }
+      for (const [, property, value] of rule.body.matchAll(frameDeclaration)) {
+        if (statusTone.test(value)) {
+          offenders.push(`app.css:${rule.line} ${rule.selector} { ${property}: ${value.trim()} }`);
+        }
+      }
+    }
+    expect(offenders, "floating frames drawn in a status tone").toEqual([]);
+  });
+
+  it("colors warning text with --status-warning-text, never the stroke token", () => {
+    // --status-warning is for dots, strokes, and meters (UI-THEME.md).
+    // Tangerine light gives text its own darker amber, because the stroke
+    // amber fails AA as type; every other theme aliases the two.
+    const offenders = collectRules(css).flatMap((rule) =>
+      [...rule.body.matchAll(/(?:^|[;{\s])color\s*:\s*([^;]+)/g)]
+        .filter(([, value]) => /var\(--status-warning\)/.test(value))
+        .map(([, value]) => `app.css:${rule.line} ${rule.selector} { color: ${value.trim()} }`),
+    );
+    expect(offenders, "color: reads --status-warning instead of --status-warning-text").toEqual([]);
+  });
+
   it("carries notice tone on the title-row dot, not the card", () => {
     // State by emphasis and badges, not colored panels (desktop style guide):
     // the card is neutral in every tone, and the dot and countdown carry it.
@@ -659,6 +858,61 @@ describe("Tangerine Terminal theme contract", () => {
         extractRuleBody(css, `.app-notice-toast[data-tone="${tone}"] .app-notice-toast__timer`),
       ).toContain(`var(${token})`);
     }
+  });
+
+  it("carries inline notice tone on the label, not the panel", () => {
+    // Every theme's danger and warning hues are warm, so a panel tinted with
+    // them read as a salmon or beige box in blue and the other cool themes.
+    // Each frame is a neutral card; a dot, title, eyebrow, icon, or the
+    // line's own text carries the tone. Text may wear a tone token; the
+    // frame's border and fill may not.
+    const statusFill = /--(danger|warning|success|info|status)-|--accent-(soft|border)/;
+    const frameDeclarations = (rule: string) =>
+      rule.match(/^\s*(border|background)[a-z-]*:[^;]*;/gm)?.join("\n") ?? "";
+    for (const selector of [
+      ".settings-archive-banner",
+      ".settings-plugin-notice",
+      ".federation-disconnected-banner",
+      ".settings-inline-notice",
+      ".rbac-callout",
+      ".sidebar-error,\n.transcript-error",
+      ".thread-search__error",
+      ".settings-list-validation__item",
+      ".pr-activity__notice",
+    ]) {
+      const frame = extractRuleBody(css, selector);
+      expect(frame, selector).toContain("border: 1px solid var(--border-subtle);");
+      expect(frame, selector).toContain("background: var(--bg-panel-elevated);");
+      expect(frameDeclarations(frame), selector).not.toMatch(statusFill);
+    }
+    const settled = extractRuleBody(
+      css,
+      ".managed-progress--ok,\n.managed-progress--error,\n.managed-progress--notice",
+    );
+    expect(settled).toContain("border-color: var(--border-subtle);");
+    expect(settled).toContain("background: var(--bg-panel-elevated);");
+    // A modifier may recolor the line, never refill the frame.
+    for (const selector of [
+      ".settings-plugin-notice--success",
+      ".settings-plugin-notice--error",
+      ".settings-mcp-probe--ok",
+      ".settings-mcp-probe--err",
+    ]) {
+      expect(frameDeclarations(extractRuleBody(css, selector)), selector).toBe("");
+    }
+    expect(css).not.toMatch(/\n\.settings-panel--error\s*\{/);
+    expect(css).not.toMatch(/\n\.rbac-callout\.is-danger\s*\{/);
+
+    expect(extractRuleBody(css, ".settings-archive-banner__text b"))
+      .toContain("color: var(--danger-text);");
+    expect(extractRuleBody(css, ".settings-panel--error .settings-panel__header .eyebrow"))
+      .toContain("color: var(--danger-text);");
+    expect(extractRuleBody(css, ".pr-activity__notice-title"))
+      .toContain("color: var(--status-warning-text);");
+    expect(extractRuleBody(css, ".rbac-callout.is-danger .rbac-callout__icon"))
+      .toContain("color: var(--danger-text);");
+    expect(extractRuleBody(css, ".federation-disconnected-banner__dot"))
+      .toContain("background: var(--status-warning);");
   });
 
   it("sizes a notice to its content and scrolls only the text", () => {
@@ -771,6 +1025,35 @@ describe("Tangerine Terminal theme contract", () => {
     expect(messagingNoDragRuleIndex).toBeGreaterThan(titlebarDragRuleIndex);
     expect(css).toMatch(
       /\.settings-titlebar \.messaging-status-bar,\s*\.settings-titlebar \.messaging-status-bar \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+  });
+
+  it("keeps everything inside a title-strip control out of the drag region", () => {
+    // `.thread-header *` and `.settings-titlebar *` make every descendant a
+    // drag region. Opting out only the control left its icon one, so the
+    // breadcrumb's project caret took clicks and hover only at its edges.
+    expect(css).toMatch(
+      /\.thread-header button,\s*\.thread-header button \*,\s*\.thread-header input,\s*\.thread-header a,\s*\.thread-header a \*,\s*\.thread-header select\s*\{\s*-webkit-app-region:\s*no-drag;\s*\}/,
+    );
+    expect(css).toMatch(
+      /\.settings-titlebar button,\s*\.settings-titlebar button \*,[\s\S]*?\.settings-titlebar \[role="button"\] \*\s*\{\s*-webkit-app-region:\s*no-drag;\s*\}/,
+    );
+  });
+
+  it("lets the breadcrumb's project link shrink beside the thread title", () => {
+    // `overflow: clip` is not a scroll container, so without an explicit
+    // `min-width: 0` the flex item's minimum is the whole unwrapped name, and
+    // a narrow header squeezed the thread title to 0px instead.
+    const rule = extractRuleBody(css, ".thread-header__eyebrow--link");
+    expect(rule).toMatch(/overflow:\s*clip;/);
+    expect(rule).toMatch(/min-width:\s*0;/);
+  });
+
+  it("keeps the header machine chip and its menu out of the drag region", () => {
+    // The menu is a descendant of `.thread-header`, so the header's
+    // `.thread-header *` drag rule reaches every box in it.
+    expect(css).toMatch(
+      /\.thread-header \.thread-header__machine,\s*\.thread-header \.thread-header__machine \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
   });
 
@@ -1050,9 +1333,14 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps hidden thread row actions from stealing row clicks", () => {
-    const actionsRule = extractRuleBody(css, ".thread-row__actions");
-
-    expect(actionsRule).toContain("pointer-events: none;");
+    // The actions inherit the title line's pointer transparency; each
+    // hover control opts back in only while it is revealed.
+    expect(extractRuleBody(css, ".thread-row__header")).toContain(
+      "pointer-events: none;",
+    );
+    expect(
+      extractRuleBody(css, ".thread-row__pin-button,\n.thread-row__overflow-button"),
+    ).toContain("pointer-events: none;");
     expect(css).toMatch(
       /\.thread-row-shell:hover \.thread-row__chip--add-reaction,\s*\.thread-row__chip--add-reaction:focus-visible,\s*\.thread-row__chip--add-reaction\.is-open\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
     );
@@ -1061,16 +1349,23 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("hides thread row timestamps behind focused or open row actions", () => {
-    // Pins the FULL six-selector fade list (it once silently grew a
-    // pin-button arm this regex didn't describe, so the test matched a
-    // suffix and stopped being the authoritative statement of the
-    // list). The pinned-row heading reserve mirrors this state set —
-    // its own pin lives with the target-size block above. The last arm
-    // is ⋮ with its menu open: focus has moved into the menu, so without
-    // it the trigger faded out from under the menu it opened.
+  it("hides thread row timestamps exactly while the kebab in their lane shows", () => {
+    // Pins the FULL fade list. The last arm is ⋮ with its menu open:
+    // focus has moved into the menu, so without it the time faded back
+    // in under the trigger of the menu it opened. Scoped to the lane, so
+    // the reaction chip and the pin, which no longer cover the time,
+    // leave it alone, and a kebab-less Starting or Draft row keeps its
+    // label on hover.
+    expect(
+      extractRuleBody(
+        css,
+        ".thread-row-shell:hover .thread-row__time-lane > .thread-row__time,\n"
+          + ".thread-row__time-lane:has(> .thread-row__overflow-button:focus-visible) > .thread-row__time,\n"
+          + ".thread-row__time-lane:has(> .thread-row__overflow-button[aria-expanded=\"true\"]) > .thread-row__time",
+      ),
+    ).toMatch(/opacity:\s*0;/);
     expect(css).toMatch(
-      /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button\[aria-expanded="true"\]\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible,\s*\.thread-row__overflow-button\[aria-expanded="true"\]\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/
     );
   });
 
@@ -1142,20 +1437,21 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
   });
 
-  // The card's title band has no room for an outset ring. The hover cluster
-  // and the subthread toggle sit 1-6px below the card's outer edge, and the
-  // in-title pin's 24px box overhangs its 18px line slot by 3px. At their
+  // The card's title band has no room for an outset ring. The subthread
+  // toggle and the title line's 24px controls sit 1-6px below the card's
+  // outer edge (the controls overhang their 18px line by 3px at md). At their
   // old 1px and 2px offsets, every one of those rings crossed the card's
   // top edge at some title-size notch. The kebab's ring crossed it by 2px
   // at md and was drawn over the selected card's border. One shared rule
-  // rings all five inset. The cluster also needs its `top` to count the
-  // card's border: it is positioned against the shell, whose edge is the
-  // card's OUTER edge. Without the border it sat on that border at the xs
-  // notch, and even an inset ring landed on the border there.
+  // rings all five inset. The subthread toggle also needs its `top` to count
+  // the card's border: it is positioned against the shell, whose edge is the
+  // card's OUTER edge. Without the border the old absolutely positioned
+  // actions cluster sat on that border at the xs notch, and even an inset
+  // ring landed on the border there.
   it("keeps the thread card's title-band focus rings inside the card", () => {
     const controls = [
       ".thread-row__subthread-toggle",
-      ".thread-row__heading-pin",
+      ".thread-row__pin",
       ".thread-row__pin-button",
       ".thread-row__chip--add-reaction",
       ".thread-row__overflow-button",
@@ -1188,15 +1484,12 @@ describe("Tangerine Terminal theme contract", () => {
     const cardBorder = Number(card.match(/border:\s*(\d+)px\s+solid/)?.[1]);
     const cardBlockPadding = Number(card.match(/padding:\s*(\d+)px\s/)?.[1]);
     expect(cardBorder).toBeGreaterThan(0);
-    for (const selector of [
-      ".thread-row__actions",
-      ".thread-row__subthread-toggle",
-    ]) {
-      const titleBandStart = Number(
-        extractRuleBody(css, selector).match(/top:\s*round\(calc\((\d+)px \+/)?.[1],
-      );
-      expect(titleBandStart, selector).toBe(cardBorder + cardBlockPadding);
-    }
+    const titleBandStart = Number(
+      extractRuleBody(css, ".thread-row__subthread-toggle").match(
+        /top:\s*round\(calc\((\d+)px \+/,
+      )?.[1],
+    );
+    expect(titleBandStart).toBe(cardBorder + cardBlockPadding);
   });
 
   it("does not pull an unpinned first directory thread under the sticky header", () => {
@@ -1269,22 +1562,31 @@ describe("Tangerine Terminal theme contract", () => {
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
 
-  it("suppresses the selection-indicator bar on directory-summary rows so it can't paint over the folder icon", () => {
-    // `.directory-row__summary` reuses `.thread-row` for typography and
-    // selection tokens, but tightens its lateral padding to 4px so the
-    // folder icon sits close to the row edge. The base
-    // `.thread-row.is-selected::before` accent bar (positioned at
-    // left:5px, width:3px) would paint over the folder icon under that
-    // tighter inset. The header already conveys selection via the
-    // accent border + tinted background from `.thread-row.is-selected`,
-    // so the redundant bar is suppressed via `content: none`. If this
-    // override is removed, the orange bar reappears across the folder
-    // glyph the next time a directory header is selected.
-    const overrideRule = extractRuleBody(
+  it("marks a selected row with the inset accent edge, not an inner bar", () => {
+    // The edge is PwrGit's `.ref-branch-row.is-current` marker: an inset
+    // shadow, clipped to the padding box, so it follows the card's corners
+    // and takes no layout space. It replaced a 3px `::before` bar drawn 5px
+    // inside the border. That bar shared the left gutter with the sub-thread
+    // chevron and the directory-summary chevron, so it needed a per-kind
+    // offset (`has-subthreads` started it at top: 30px) and a per-kind
+    // suppression (`.directory-row__summary` dropped it). A bar coming back
+    // would bring both workarounds with it.
+    const selectedRule = extractRuleBody(css, ".thread-row.is-selected");
+    expect(selectedRule).toContain("border-color: var(--accent-border);");
+    expect(selectedRule).toContain("background: var(--bg-row-active);");
+    expect(selectedRule).toContain("box-shadow: inset 2px 0 0 0 var(--accent);");
+    expect(css).not.toMatch(/\.is-selected::before\s*[,{]/);
+
+    // The Star Map card speaks the same selection language, but on a
+    // pseudo-element: hover, the Agent's highlight ring, and the chat
+    // tether each set the card's own box-shadow.
+    const cardEdge = extractRuleBody(
       css,
-      ".directory-row__summary.is-selected::before",
+      ".star-map-card-shell--selected .star-map-card::before",
     );
-    expect(overrideRule).toContain("content: none;");
+    expect(cardEdge).toContain("inset: 0;");
+    expect(cardEdge).toContain("box-shadow: inset 2px 0 0 0 var(--accent);");
+    expect(cardEdge).not.toContain("width:");
   });
 
   it("keeps thread context menu hover states visible (skipping disabled rows)", () => {
@@ -2353,11 +2655,12 @@ describe("Tangerine Terminal theme contract", () => {
     // `@` tinted with --accent-soft (matching `.reference-picker__row`,
     // `.project-picker__row`, and `.branch-picker__option`) while the
     // other three drew the thread-row treatment — an --accent-border
-    // outline, a --bg-row-active fill, AND a 3px --accent ::before bar.
+    // outline, a --bg-row-active fill, AND a 3px --accent ::before bar
+    // (the thread-row marker then; it is an inset edge now).
     // That put three separate tangerines on one row and made the same
     // gesture look like two different things.
     //
-    // The tint is the popover language; the bar + border + row-active
+    // The tint is the popover language; the edge + border + row-active
     // fill stays reserved for `.thread-row.is-selected`, which marks a
     // persistent selection rather than a transient "Enter lands here".
     const sharedHighlight = css.match(
@@ -2366,11 +2669,12 @@ describe("Tangerine Terminal theme contract", () => {
     expect(sharedHighlight).toBeTruthy();
     expect(sharedHighlight).toContain("background: var(--accent-soft);");
     expect(sharedHighlight).toContain("color: var(--accent-bright);");
-    // No per-picker override may reintroduce a second highlight: not the
-    // accent bar, and not the thread-row fill/outline pair.
+    // No per-picker override may reintroduce a second highlight: not an
+    // accent bar or edge, and not the thread-row fill/outline pair.
     expect(css).not.toMatch(
       /\.composer__autocomplete-option(?:[^{]*)\.is-active(?:[^{]*)::before\s*\{/
     );
+    expect(sharedHighlight).not.toContain("box-shadow");
     expect(sharedHighlight).not.toContain("var(--bg-row-active)");
     expect(sharedHighlight).not.toContain("var(--accent-border)");
   });
@@ -2420,5 +2724,432 @@ describe("Tangerine Terminal theme contract", () => {
     // "/review". It duplicated the sigil and spent a third tangerine to
     // do it.
     expect(css).not.toContain(".composer__autocomplete-token");
+  });
+});
+
+describe("color theme contract", () => {
+  const DARK_THEMES = [
+    "catppuccin-mocha",
+    "solarized-dark",
+    "gray-dark",
+    "blue-dark",
+    "phosphor-dark",
+  ];
+  const LIGHT_THEMES = ["catppuccin-latte", "solarized-light", "gray-light", "blue-light"];
+  const blockFor = (theme: string): Record<string, string> =>
+    extractTokensForSelector(css, `:root[data-color-theme="${theme}"]`);
+  // The cascade each theme actually renders with: the scheme block it
+  // overrides, then its own block.
+  const themes = Object.fromEntries([
+    ...DARK_THEMES.map((theme) => [
+      theme,
+      { ...extractRootTokens(css), ...blockFor(theme) },
+    ]),
+    ...LIGHT_THEMES.map((theme) => [
+      theme,
+      {
+        ...extractRootTokens(css),
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+        ...blockFor(theme),
+      },
+    ]),
+  ]) as Record<string, Record<string, string>>;
+
+  const hexToRgb = (hex: string): number[] =>
+    [0, 2, 4].map((start) => Number.parseInt(expandHex(hex).slice(start, start + 2), 16));
+  const rgbToHex = (rgb: number[]): string =>
+    `#${rgb.map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+  const composite = (foreground: string, background: string, alpha: number): string => {
+    const front = hexToRgb(foreground);
+    const back = hexToRgb(background);
+    return rgbToHex(front.map((channel, index) => channel * alpha + back[index] * (1 - alpha)));
+  };
+
+  /** Resolve a token to the opaque color it paints on `background`:
+   *  `var()` aliases follow the cascade, and a `color-mix(… X%,
+   *  transparent)` overlay is composited onto the background. */
+  const paint = (
+    theme: Record<string, string>,
+    value: string,
+    background: string,
+  ): string => {
+    const alias = value.match(/^var\(--([a-z0-9-]+)\)$/)?.[1];
+    if (alias) return paint(theme, theme[alias], background);
+    const overlay = value.match(
+      /^color-mix\(in srgb, (?<base>var\(--[a-z0-9-]+\)|#[0-9a-f]{6}) (?<pct>[\d.]+)%, transparent\)$/,
+    )?.groups;
+    if (overlay) {
+      return composite(
+        paint(theme, overlay.base, background),
+        background,
+        Number(overlay.pct) / 100,
+      );
+    }
+    expect(value, "an opaque hex color").toMatch(/^#[0-9a-f]{6}$/);
+    return value;
+  };
+
+  /** Every background a text token can land on: the flat surfaces, plus
+   *  the 12% and 16% accent tints over the surfaces that carry them. */
+  const textBackgrounds = (theme: Record<string, string>): string[] => {
+    const flat = [
+      "bg-app",
+      "bg-sidebar",
+      "bg-panel",
+      "bg-panel-elevated",
+      "bg-panel-hover",
+      "bg-row-active",
+      "bg-input",
+    ].map((name) => paint(theme, theme[name], "#000000"));
+    const tinted = ["bg-panel", "bg-sidebar", "bg-panel-hover"].flatMap((name) => {
+      const surface = paint(theme, theme[name], "#000000");
+      return [12, 16].map((pct) =>
+        composite(paint(theme, theme.accent, surface), surface, pct / 100));
+    });
+    return [...flat, ...tinted];
+  };
+
+  const worstCase = (
+    theme: Record<string, string>,
+    token: string,
+    backgrounds: string[],
+  ): number => Math.min(
+    ...backgrounds.map((background) =>
+      contrastRatio(paint(theme, theme[token], background), background)),
+  );
+
+  it("gives every theme in the shared enums a token block, and no others", () => {
+    // The ids in app.css are the ids the settings write; a typo on either
+    // side would render Tangerine with no error anywhere.
+    const blocks = [...css.matchAll(/\n:root\[data-color-theme="([a-z0-9-]+)"\] \{/g)]
+      .map((match) => match[1])
+      .sort();
+    expect(blocks).toEqual([...DARK_THEMES, ...LIGHT_THEMES].sort());
+  });
+
+  it("sets the full themeable token set in every block", () => {
+    // A token a block leaves out falls through to Tangerine, so a theme
+    // that forgets one paints a stray Tangerine color. Catppuccin Mocha is
+    // the reference set; ANSI colors are optional (Tangerine's are kept).
+    const required = Object.keys(blockFor("catppuccin-mocha"))
+      .filter((token) => !token.startsWith("terminal-ansi-"))
+      .sort();
+    for (const theme of [...DARK_THEMES, ...LIGHT_THEMES]) {
+      const tokens = Object.keys(blockFor(theme));
+      expect(required.filter((token) => !tokens.includes(token)), theme).toEqual([]);
+    }
+  });
+
+  it("matches each block's color-scheme to the scheme it renders in", () => {
+    for (const theme of DARK_THEMES) {
+      expect(extractRuleBody(css, `:root[data-color-theme="${theme}"]`), theme)
+        .toContain("color-scheme: dark;");
+    }
+    for (const theme of LIGHT_THEMES) {
+      expect(extractRuleBody(css, `:root[data-color-theme="${theme}"]`), theme)
+        .toContain("color-scheme: light;");
+    }
+  });
+
+  it("leaves the theme-neutral tokens to the scheme blocks", () => {
+    for (const theme of [...DARK_THEMES, ...LIGHT_THEMES]) {
+      for (const neutral of [
+        "shadow-base",
+        "shadow-popover",
+        "star-map-float-border",
+        "star-map-float-shadow",
+        "chat-column-max",
+      ]) {
+        expect(blockFor(theme), `${theme}: ${neutral}`).not.toHaveProperty(neutral);
+      }
+    }
+  });
+
+  it("keeps every text token at AA on the lowest-contrast surface it can land on", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const backgrounds = textBackgrounds(theme);
+      for (const token of [
+        "text-primary",
+        "text-secondary",
+        "text-muted",
+        "text-subtle",
+        "accent",
+        "accent-strong",
+        "accent-bright",
+        "status-ok",
+        "status-warning",
+        "status-warning-text",
+        "status-error",
+        "info-teal",
+        "brand-purple",
+        "danger-text-light",
+        "savings-great",
+        "savings-good",
+        "savings-even",
+        "savings-over",
+      ]) {
+        expect(worstCase(theme, token, backgrounds), `${name}: ${token}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      for (const [text, soft] of [
+        ["danger-text", "danger-soft"],
+        ["success-text", "success-soft"],
+        ["info-text", "info-soft"],
+      ]) {
+        const tinted = backgrounds.map((background) => paint(theme, theme[soft], background));
+        expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${name}: ${text}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      for (const fill of ["accent-fill", "accent-fill-strong"]) {
+        for (const ink of ["button-text", "accent-on"]) {
+          expect(
+            contrastRatio(theme[ink], paint(theme, theme[fill], "#000000")),
+            `${name}: ${ink} on ${fill}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      expect(
+        contrastRatio(
+          paint(theme, theme["terminal-fg"], theme["terminal-bg"]),
+          theme["terminal-bg"],
+        ),
+        `${name}: terminal-fg`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps the text and accent ladders in emphasis order", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const backgrounds = textBackgrounds(theme);
+      const ratio = (token: string): number => worstCase(theme, token, backgrounds);
+      expect(ratio("text-primary"), name).toBeGreaterThan(ratio("text-secondary"));
+      expect(ratio("text-secondary"), name).toBeGreaterThan(ratio("text-muted"));
+      expect(ratio("accent-bright"), name).toBeGreaterThan(ratio("accent-strong"));
+      expect(ratio("accent-strong"), name).toBeGreaterThan(ratio("accent"));
+    }
+  });
+
+  it("keeps borrowed palettes on their upstream colors unless AA moves them", () => {
+    // Each token starts from Catppuccin's own color. One that clears its
+    // floor there keeps it; one that fails moves by lightness only, so it
+    // lands just above the floor instead of wherever it looked right.
+    // Latte's text ladder is the exception: subtext0 needs AA, which leaves
+    // no room under Catppuccin's text, so primary darkens to keep a ladder.
+    const UPSTREAM: Record<string, Record<string, string>> = {
+      "catppuccin-mocha": {
+        "text-primary": "#cdd6f4",
+        "text-secondary": "#bac2de",
+        "text-muted": "#a6adc8",
+        accent: "#fab387",
+        "danger-base": "#f38ba8",
+        "danger-text": "#f38ba8",
+        "danger-text-light": "#eba0ac",
+        "success-text": "#a6e3a1",
+        "info-text": "#89b4fa",
+        "info-teal": "#94e2d5",
+        "brand-purple": "#cba6f7",
+        "status-ok": "#a6e3a1",
+        "status-warning": "#f9e2af",
+        "status-error": "#eba0ac",
+        "status-suspended": "#6c7086",
+        "usage-series-2": "#89b4fa",
+        "usage-series-3": "#94e2d5",
+        "usage-series-4": "#cba6f7",
+        "usage-series-5": "#f9e2af",
+      },
+      "catppuccin-latte": {
+        "text-muted": "#6c6f85",
+        accent: "#fe640b",
+        "accent-fill": "#fe640b",
+        "danger-base": "#d20f39",
+        "danger-text": "#d20f39",
+        "danger-text-light": "#e64553",
+        "success-text": "#40a02b",
+        "info-text": "#1e66f5",
+        "info-teal": "#179299",
+        "brand-purple": "#8839ef",
+        "status-ok": "#40a02b",
+        "status-warning": "#df8e1d",
+        "status-error": "#e64553",
+        "status-suspended": "#9ca0b0",
+        "usage-series-2": "#1e66f5",
+        "usage-series-3": "#179299",
+        "usage-series-4": "#8839ef",
+        "usage-series-5": "#df8e1d",
+      },
+    };
+    const MARKS = ["danger-base", "status-suspended", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
+    const SOFT: Record<string, string> = {
+      "danger-text": "danger-soft",
+      "success-text": "success-soft",
+      "info-text": "info-soft",
+    };
+    /** [worst-case contrast, floor] for a token as the AA tests measure it,
+     *  with the 0.05 of margin app.css tunes to. */
+    const measure = (theme: Record<string, string>, token: string): [number, number] => {
+      const backgrounds = textBackgrounds(theme);
+      if (MARKS.includes(token)) {
+        const flat = ["bg-app", "bg-sidebar", "bg-panel", "bg-panel-elevated", "bg-panel-hover", "bg-input"]
+          .map((name) => paint(theme, theme[name], "#000000"));
+        return [worstCase(theme, token, flat), 3.05];
+      }
+      if (token === "accent-fill") {
+        return [contrastRatio(theme["button-text"], paint(theme, theme[token], "#000000")), 4.55];
+      }
+      const soft = SOFT[token];
+      const tinted = soft
+        ? backgrounds.map((background) => paint(theme, theme[soft], background))
+        : [];
+      return [worstCase(theme, token, [...backgrounds, ...tinted]), 4.55];
+    };
+    for (const [name, upstream] of Object.entries(UPSTREAM)) {
+      const theme = themes[name];
+      for (const [token, color] of Object.entries(upstream)) {
+        if (theme[token] === color) continue;
+        const [atUpstream, floor] = measure({ ...theme, [token]: color }, token);
+        expect(atUpstream, `${name}: ${token} moved off ${color}, which passes`)
+          .toBeLessThan(floor);
+        expect(measure(theme, token)[0], `${name}: ${token} moved past the floor`)
+          .toBeLessThan(floor + 0.3);
+      }
+    }
+  });
+
+  it("draws each theme picker swatch from its theme's own tokens", () => {
+    // The swatches show every theme while one renders, so they are literal
+    // copies on :root; a retuned block must retune its swatch too.
+    const root = extractRootTokens(css);
+    const swatched = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(swatched)) {
+      for (const [part, token] of [
+        ["app", "bg-app"],
+        ["sidebar", "bg-sidebar"],
+        ["accent", "accent"],
+        ["text", "text-primary"],
+      ]) {
+        expect(root[`theme-swatch-${name}-${part}`], `${name}: ${part}`)
+          .toBe(theme[token]);
+      }
+    }
+  });
+
+  it("never paints hover or raised surfaces in the color they sit on", () => {
+    // Thread rows hover in the sidebar and the panel, and secondary buttons
+    // and cards sit raised on the panel. A hover or raised token equal to
+    // the surface under it draws nothing, which is how both Solarized
+    // themes first shipped.
+    for (const [name, theme] of Object.entries(themes)) {
+      const surface = (token: string): string => paint(theme, theme[token], "#000000");
+      expect(surface("bg-panel-hover"), `${name}: hover on the panel`)
+        .not.toBe(surface("bg-panel"));
+      expect(surface("bg-panel-hover"), `${name}: hover in the sidebar`)
+        .not.toBe(surface("bg-sidebar"));
+      expect(surface("bg-panel-elevated"), `${name}: raised on the panel`)
+        .not.toBe(surface("bg-panel"));
+    }
+  });
+
+  it("keeps non-text marks at 3:1 on every flat surface", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const flat = [
+        "bg-app",
+        "bg-sidebar",
+        "bg-panel",
+        "bg-panel-elevated",
+        "bg-panel-hover",
+        "bg-input",
+      ].map((token) => paint(theme, theme[token], "#000000"));
+      for (const token of [
+        "danger-base",
+        "status-suspended",
+        "usage-series-1",
+        "usage-series-2",
+        "usage-series-3",
+        "usage-series-4",
+        "usage-series-5",
+      ]) {
+        expect(worstCase(theme, token, flat), `${name}: ${token}`)
+          .toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("keeps every palette's own terminal ANSI colors", () => {
+    // Programs pick ANSI colors without knowing the background, and the
+    // terminal is where operators compare PwrAgent with their own setup, so
+    // a borrowed palette's terminal stays upstream even below AA.
+    expect(blockFor("catppuccin-latte")).toMatchObject({
+      "terminal-ansi-black": "#5c5f77",
+      "terminal-ansi-green": "#40a02b",
+      "terminal-ansi-yellow": "#df8e1d",
+      "terminal-ansi-white": "#acb0be",
+      "terminal-ansi-bright-white": "#bcc0cc",
+    });
+    expect(blockFor("catppuccin-mocha")).toMatchObject({
+      "terminal-ansi-black": "#45475a",
+      "terminal-ansi-yellow": "#f9e2af",
+      "terminal-ansi-white": "#bac2de",
+    });
+  });
+
+  it("gives Gray and Blue their own ANSI colors, readable on their canvas", () => {
+    // Gray and Blue have no upstream terminal. Borrowing Tangerine's, which
+    // is tuned for pure black and pure white, put yellow and bright green
+    // near 2:1 on both light canvases and red under 3:1 on Gray Dark.
+    const ansi = [
+      "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+    ].flatMap((color) => [color, `bright-${color}`]);
+    for (const theme of ["gray-dark", "gray-light", "blue-dark", "blue-light"]) {
+      const light = LIGHT_THEMES.includes(theme);
+      const block = blockFor(theme);
+      for (const color of ansi) {
+        expect(block[`terminal-ansi-${color}`], `${theme}: ${color}`).toMatch(/^#[0-9a-f]{6}$/);
+        // Black on a dark canvas and bright white on a light one are drawn
+        // as backgrounds (VS Code's convention), not as text.
+        if (color === (light ? "bright-white" : "black")) continue;
+        expect(
+          contrastRatio(block[`terminal-ansi-${color}`], themes[theme]["terminal-bg"]),
+          `${theme}: ${color}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("puts --button-text and --accent-on ink only on --accent-fill", () => {
+    // Latte fills with peach under dark ink and reads accent as a darker
+    // orange; a rule that paints ink on --accent is dark text on rust.
+    const offenders = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) =>
+        /background(?:-color)?:\s*var\(--accent(?:-strong|-bright)?\)/.test(body)
+        && /(?:^|[;\s])color:\s*var\(--(?:button-text|accent-on)\)/.test(body))
+      .map(([, selector]) => selector.trim());
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps Solarized's canonical canvas and terminal", () => {
+    // Text moves off Solarized's values only as far as AA needs; the
+    // surfaces and the terminal stay the published palette.
+    expect(blockFor("solarized-dark")).toMatchObject({
+      "bg-app": "#002b36",
+      "bg-sidebar": "#073642",
+      "terminal-bg": "#002b36",
+      "terminal-fg": "#839496",
+      "terminal-ansi-red": "#dc322f",
+      "terminal-ansi-blue": "#268bd2",
+    });
+    expect(blockFor("solarized-light")).toMatchObject({
+      "bg-app": "#fdf6e3",
+      "bg-sidebar": "#eee8d5",
+      "terminal-bg": "#fdf6e3",
+      "terminal-ansi-red": "#dc322f",
+      "terminal-ansi-blue": "#268bd2",
+    });
   });
 });

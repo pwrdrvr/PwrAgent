@@ -1,10 +1,12 @@
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
@@ -37,7 +39,7 @@ function voiceFixture() {
   vi.stubGlobal("Audio", class Audio { constructor() { return audio; } });
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: capture } });
   const api: NativeVoiceApi = {
-    nativeVoiceCapability: vi.fn(async () => ({ available: true })),
+    nativeVoiceCapability: vi.fn(async () => ({ available: true, camera: { available: true } })),
     startNativeVoice: vi.fn(async (request) => {
       for (const listener of listeners) listener({ type: "started", version: "v3", sessionId: request.sessionId });
     }),
@@ -74,6 +76,7 @@ function Notices({ api }: { api: NativeVoiceApi }) {
 
 const noticeCard = (id: string) => document.querySelector(`[data-notice-id="${id}"]`);
 const directorPanel = () => screen.queryByRole("region", { name: "Director voice" });
+const state = () => within(directorPanel()!).getByRole("status", { name: "Voice status" });
 
 async function openTranscript() {
   fireEvent.click(await screen.findByRole("button", { name: "Transcript" }));
@@ -174,9 +177,9 @@ it("ends a muted session that stays busy past the stall ceiling", async () => {
   try {
     f.agent({ method: "turn/started", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
     fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
-    act(() => { vi.advanceTimersByTime(MUTED_STALL_END_MS - 1); });
+    await act(async () => { vi.advanceTimersByTime(MUTED_STALL_END_MS - 1); });
     expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
-    act(() => { vi.advanceTimersByTime(1); });
+    await act(async () => { vi.advanceTimersByTime(1); });
     expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -192,10 +195,10 @@ it("treats a thread's already-running turn as busy when voice starts", async () 
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
-    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
+    await act(async () => { vi.advanceTimersByTime(MUTED_IDLE_END_MS * 4); });
     expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
     f.agent({ method: "turn/completed", params: { threadId: "sample-thread", turn: { id: "sample-turn" } } });
-    act(() => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
+    await act(async () => { vi.advanceTimersByTime(MUTED_IDLE_END_MS); });
     expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -302,8 +305,8 @@ it("keeps director voice through navigation and shows what its tools did", async
   expect(feed).toHaveTextContent("send_message_to_threadSample second threadqueued");
   expect(feed).toHaveTextContent("stop_threadfailed");
 
-  // The panel's close button ends the session, and says so.
-  fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
+  // Closing a live panel ends the session too.
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
   await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
   await waitFor(() => expect(directorPanel()).toBeNull());
 });
@@ -336,23 +339,53 @@ it("keeps the director transcript after a muted session ends, until closed or st
 
   const panel = directorPanel();
   expect(panel).toHaveTextContent("Ended after the reply");
-  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("Voice: Two sample PRs are green.");
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("Director: Two sample PRs are green.");
   expect(screen.getByRole("timer")).toHaveAccessibleName(/^Voice was open for /);
-  expect(screen.queryByRole("textbox", { name: "Message voice" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Message director" })).toBeNull();
   // What "this" means only matters while the voice can hear it.
   expect(panel).not.toHaveTextContent("Looking at:");
   // The panel says how it ended; no second notice repeats it.
   expect(noticeCard("native-voice-ended")).toBeNull();
 
   // Starting again replaces the old transcript with the new session's.
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start director voice" })); });
+  // Start again sits where End was, on the state row.
+  const startAgain = within(directorPanel()!).getByRole("button", { name: "Start again" });
+  expect(startAgain.closest("[role=status]")).toBe(state());
+  await act(async () => { fireEvent.click(startAgain); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
   expect(f.api.startNativeVoice).toHaveBeenCalledTimes(2);
   expect(directorPanel()).toHaveTextContent("Microphone live");
   expect(screen.queryByRole("log", { name: "Voice transcript" })).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
   await waitFor(() => expect(directorPanel()).toBeNull());
+});
+
+// Mute, End, Close: End stops the session and keeps the conversation.
+it("ends director voice from End without closing the panel", async () => {
+  const f = voiceFixture();
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
+  f.emit({ sessionId, type: "transcript", role: "user", text: "Pause the sample thread.", done: true });
+  f.emit({ sessionId, type: "transcript", role: "assistant", text: "Paused.", done: true });
+  expect(within(directorPanel()!).getByRole("textbox", { name: "Message director" })).toBeInTheDocument();
+  expect(within(directorPanel()!).getByRole("button", { name: "Send" })).toBeInTheDocument();
+  const end = within(directorPanel()!).getByRole("button", { name: "End director voice" });
+  expect(end).toHaveTextContent("End");
+  expect(end.closest("header")).toBeNull();
+  act(() => end.focus());
+  fireEvent.click(end);
+  await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
+  await waitFor(() => expect(state()).toHaveTextContent("Voice ended"));
+  // Focus follows the session control rather than falling to <body>.
+  expect(within(directorPanel()!).getByRole("button", { name: "Start again" })).toHaveFocus();
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("You: Pause the sample thread.Director: Paused.");
+  // Nothing to mute or film once the session is over.
+  expect(within(directorPanel()!).queryByRole("button", { name: /microphone|camera cues/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
+  expect(directorPanel()).toBeNull();
 });
 
 it("keeps an ended director panel until the operator closes it", async () => {
@@ -368,7 +401,7 @@ it("keeps an ended director panel until the operator closes it", async () => {
   f.emit({ sessionId, type: "closed" });
   await waitFor(() => expect(f.owner.getView().status).not.toBe("listening"));
   await waitFor(() => expect(directorPanel()).toHaveTextContent("Voice ended"));
-  expect(directorPanel()).toHaveTextContent("Voice: Sample answer.");
+  expect(directorPanel()).toHaveTextContent("Director: Sample answer.");
   fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
   expect(directorPanel()).toBeNull();
 });
@@ -496,6 +529,35 @@ it("resizes the director panel from its grip and remembers the size", async () =
   expect(JSON.parse(window.localStorage.getItem("pwragent:director-voice-panel")!)).toMatchObject({ width: before - 16 });
 });
 
+// The panel floats at its own layer and its tooltips portal to the body, so
+// a tooltip left on the default viewport-tooltip layer paints under the
+// panel it describes. Resolved through the real stylesheets, not a copy.
+it("draws the director panel's tooltips above the panel", async () => {
+  const styles = document.createElement("style");
+  styles.textContent = ["../../../styles/app.css", "../native-voice.css"]
+    .map((file) => readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"))
+    .join("\n");
+  document.head.append(styles);
+  try {
+    const f = voiceFixture();
+    // The masthead mic's hover card can drop over the panel too.
+    render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /></>);
+    await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+    await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+    const panelLayer = Number(getComputedStyle(directorPanel()!).zIndex);
+    expect(panelLayer).toBeGreaterThan(0);
+    for (const name of ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
+      fireEvent.mouseEnter(screen.getByRole("button", { name }));
+      const tooltip = await screen.findByRole("tooltip");
+      expect(Number(getComputedStyle(tooltip).zIndex), name).toBeGreaterThan(panelLayer);
+      fireEvent.mouseLeave(screen.getByRole("button", { name }));
+      await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    }
+  } finally {
+    styles.remove();
+  }
+});
+
 // Thread voice opens only on a local Codex thread. Everywhere else the mic
 // starts director voice rather than vanishing or going grey: a peer's thread,
 // another provider's, and a new-thread launchpad, where the spoken request
@@ -551,4 +613,16 @@ it("publishes a launchpad's project and settings, never its draft, and only with
     launchpad,
     thread: { id: "sample-thread", source: "codex", title: "Sample thread" },
   }).launchpad).toBeUndefined();
+});
+
+it("places the camera beside the Director panel mic, outside the thread-list toolbar", async () => {
+  const f = voiceFixture();
+  const toolbar = render(<DirectorVoiceButton api={f.api} />);
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const camera = within(directorPanel()!).getByRole("button", { name: "Turn on camera cues" });
+  expect(camera.closest("header")).toBeInTheDocument();
+  expect(camera.previousElementSibling).toHaveAttribute("aria-label", "Mute microphone");
+  expect(within(toolbar.container).queryByRole("button", { name: /camera cues/ })).not.toBeInTheDocument();
 });

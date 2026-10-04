@@ -21,6 +21,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   isAcpBackendId,
+  isMcpConnectionToolApproval,
   type AppServerBackendKind,
   type CreateMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
@@ -30,12 +31,14 @@ import {
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
+  type McpConnectionToolApproval,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
   type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
+import { resolveActiveProfileName } from "../profile";
 import {
   getRuntimeLeaseManager,
   type RuntimeLeaseManager,
@@ -163,7 +166,7 @@ export type McpConnectionGatewayServiceOptions = {
   credentialVault?: McpCredentialVault;
   leaseManager?: Pick<
     RuntimeLeaseManager,
-    "acquire" | "id" | "release" | "snapshot"
+    "acquire" | "id" | "profile" | "release" | "snapshot" | "shouldRetryAcquisition"
   > | null;
   brokerDiscovery?: McpConnectionBrokerDiscovery;
   /** Profile-wide gateway switch; defaults to the desktop setting. */
@@ -417,7 +420,10 @@ export class McpConnectionGatewayService {
   private readonly registry: McpConnectionRegistry;
   private readonly credentialVault: McpCredentialVault;
   private readonly leaseManager:
-    | Pick<RuntimeLeaseManager, "acquire" | "id" | "release" | "snapshot">
+    | Pick<
+        RuntimeLeaseManager,
+        "acquire" | "id" | "profile" | "release" | "snapshot" | "shouldRetryAcquisition"
+      >
     | null;
   private readonly brokerDiscovery: McpConnectionBrokerDiscovery;
   private readonly launchPollAttempts: number;
@@ -887,6 +893,29 @@ export class McpConnectionGatewayService {
   }
 
   /**
+   * Choose when a gateway call to this connection asks first.
+   *
+   * Nothing live changes. The gateway reads the mode as each call reaches
+   * approval, so the next call follows it and a running one is not touched.
+   */
+  async setConnectionToolApproval(
+    connectionId: string,
+    toolApproval: McpConnectionToolApproval,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-tool-approval",
+        { connectionId, toolApproval },
+      );
+    }
+    this.requireConnection(connectionId);
+    const connection = this.registry.setToolApproval(connectionId, toolApproval);
+    return await this.connectionStatus(connection);
+  }
+
+  /**
    * The tools a managed connection publishes, read outside any thread.
    *
    * A managed connection is only ever opened on a thread's behalf, so
@@ -1175,7 +1204,14 @@ export class McpConnectionGatewayService {
       throw new Error("Complete profile setup before using managed MCP connections.");
     }
     if (!this.leaseManager || this.leaseHeld) return { owned: true };
-    if (this.nonOwnerHolder) {
+    if (
+      this.nonOwnerHolder
+      && !this.leaseManager.shouldRetryAcquisition("mcp_connections")
+    ) {
+      // A different instance may have taken over since the last request.
+      // Keep the dead holder during its safety grace, but refresh a live one.
+      const holder = this.leaseManager.snapshot("mcp_connections").leaseHolder;
+      if (holder) this.nonOwnerHolder = holder;
       return { owned: false, holder: this.nonOwnerHolder };
     }
     const result = this.leaseManager.acquire("mcp_connections");
@@ -1259,7 +1295,7 @@ export class McpConnectionGatewayService {
         else resolve(value as T);
       };
       const timeout = setTimeout(
-        () => finish(new Error("The MCP connection owner did not respond.")),
+        () => finish(this.ownerUnavailableError()),
         MCP_CONNECTION_TOOL_TIMEOUT_MS,
       );
       timeout.unref();
@@ -1298,10 +1334,7 @@ export class McpConnectionGatewayService {
         // grace, so the raw error — a temp socket path — reaches every
         // screen that lists connections until another instance takes over.
         if (error.code === "ECONNREFUSED" || error.code === "ENOENT") {
-          finish(new Error(
-            "Another PwrAgent instance manages MCP connections for this profile and is not responding.",
-            { cause: error },
-          ));
+          finish(this.ownerUnavailableError(error));
           return;
         }
         finish(error);
@@ -1310,6 +1343,14 @@ export class McpConnectionGatewayService {
         finish(new Error("The MCP connection owner closed unexpectedly."));
       });
     });
+  }
+
+  private ownerUnavailableError(cause?: Error): Error {
+    const profile = this.leaseManager?.profile ?? resolveActiveProfileName();
+    return new Error(
+      `MCP connections for PwrAgent profile "${profile}" are temporarily unavailable: its managing instance is not responding.`,
+      { cause },
+    );
   }
 
   private async registerOwnerBridge(
@@ -2041,6 +2082,18 @@ export class McpConnectionGatewayService {
       return await this.setConnectionSelectForNewThreads(
         values.connectionId,
         values.selectForNewThreads,
+      );
+    }
+    if (operation === "broker/set-tool-approval") {
+      if (
+        typeof values.connectionId !== "string"
+        || !isMcpConnectionToolApproval(values.toolApproval)
+      ) {
+        throw new Error("Invalid MCP connection tool approval request.");
+      }
+      return await this.setConnectionToolApproval(
+        values.connectionId,
+        values.toolApproval,
       );
     }
     if (operation === "broker/list-tools") {

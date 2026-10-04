@@ -123,6 +123,12 @@ function matchCodexChatsRoot(value: string): string | undefined {
   return codexChatsRootMatch?.[1];
 }
 
+/** True for a Codex app chat folder (`~/Documents/Codex/<date>/…`), the
+ * directories `classifyDirectory` files under "Codex Chats". */
+export function isCodexChatsDirectory(directory: Pick<LinkedDirectorySummary, "path">): boolean {
+  return matchCodexChatsRoot(canonicalizeNavigationPath(directory.path)) !== undefined;
+}
+
 /**
  * Classify a linked directory into the row the Directories lens would file
  * it under: scratch checkouts collapse into one "Workspaces" pseudo-

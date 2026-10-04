@@ -112,7 +112,7 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "send_message_to_thread",
-            description: expect.stringMatching(/queues the follow-up.*steer_thread/),
+            description: expect.stringMatching(/Prefer steer_thread.*queued steer.*delivery=new_turn/),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["backend", "threadId", "prompt"],
@@ -126,7 +126,7 @@ describe("pwragent thread orchestration agent tools", () => {
             type: "function",
             name: "steer_thread",
             description: expect.stringMatching(
-              /next tool boundary.*starts a follow-up turn or queues one.*never reports a fallback as steered/,
+              /groups pending guidance.*next tool boundary.*grouped follow-up/,
             ),
             deferLoading: false,
             inputSchema: expect.objectContaining({

@@ -21,6 +21,7 @@ import type {
   ThreadTokenMiserAccounting,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
+  ThreadPricingSnapshot,
 } from "@pwragent/shared";
 import {
   estimateOpenAiCodexCreditUsage,
@@ -35,6 +36,7 @@ import {
 } from "../../chrome/ChipContextMenu";
 import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   formatTokenCount,
@@ -54,6 +56,7 @@ import { useThreadDisplayResource } from "../../../lib/useThreadDisplayResource"
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import { ThreadFamilyPricingCard } from "./ThreadFamilyPricingCard";
 import { UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
@@ -87,6 +90,7 @@ type PricingPanelProps = {
   onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
+    snapshot?: ThreadPricingSnapshot;
     compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
@@ -97,6 +101,8 @@ type PricingPanelProps = {
    * Supplies each sub-agent row's name and its live/terminal status.
    */
   subAgents?: ThreadSubAgentSummary[];
+  /** Ordinary sub-threads directly under this thread, from its navigation row. */
+  subThreadCount?: number;
   tokenMiserAccounting?: ThreadTokenMiserAccounting;
   threadReasoningEffort?: string;
   turnFailures?: readonly ThreadTurnFailure[];
@@ -131,6 +137,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
     activeTurnId: props.activeTurnId, threadReasoningEffort: props.threadReasoningEffort, turnFailures: props.turnFailures,
   }), [props.display, props.pricing, props.subAgents, props.tokenMiserAccounting, props.activeTurnId, props.threadReasoningEffort, props.turnFailures]);
   const { summary, spendByModel, tokenMiserSummary, observedCostMicros, totals: pricingTotals } = model;
+  const fallbackEstimate = !summary && model.totalRows === 0 ? model.fallbackEstimate : undefined;
   const roundedSummary = useMemo(() => summary?.currency === "USD"
     && tokenMiserSummary?.terms && tokenMiserSummary.decisionCount > 0
     ? roundPricingSummary(observedCostMicros, tokenMiserSummary.terms,
@@ -203,6 +210,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   return (
     <section className="context-panel__section">
       <h3>Pricing</h3>
+      {fallbackEstimate ? <PricingSnapshotCard estimate={fallbackEstimate} /> : null}
       {summary ? (
         <>
           <div className="rail-summary-card pricing-summary-card">
@@ -293,8 +301,22 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
             </p>
           ) : null}
         </>
-      ) : model.totalRows === 0 ? (
+      ) : model.totalRows === 0 && !fallbackEstimate ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
+      ) : null}
+
+      {/* Stored totals live on the owning machine, so a peer's thread has no
+          family read here, whether the thread or the whole window fronts the
+          peer. Keyed by thread so nothing read for one shows on the next. */}
+      {id !== undefined && source !== undefined
+        && (federation?.ref.target ?? readRendererFederationTarget())?.scope !== "remote" ? (
+        <ThreadFamilyPricingCard
+          key={JSON.stringify([source, id])}
+          desktopApi={props.desktopApi}
+          backend={source}
+          threadId={id}
+          subThreadCount={props.subThreadCount ?? 0}
+        />
       ) : null}
 
       {/* This thread's bill; the account's limit and its pace are the card,
@@ -360,6 +382,45 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
     </section>
   );
 }, equalPricingData);
+
+function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay["fallbackEstimate"]> }) {
+  const { model, tokens, totalCostMicros } = props.estimate;
+  const count = (value: number | undefined) => value === undefined ? "Unavailable" : formatTokenCount(value);
+  const uncached = tokens?.inputTokens !== undefined && tokens.cachedInputTokens !== undefined
+    ? tokens.inputTokens - tokens.cachedInputTokens : tokens?.uncachedInputTokens;
+  return (
+    <div className="rail-summary-card pricing-summary-card pricing-snapshot-card">
+      <div className="rail-summary-card__header">
+        <span className="rail-summary-card__eyebrow">Estimated thread pricing</span>
+      </div>
+      <div className="rail-summary-card__headline">
+        <span className="rail-summary-card__primary">
+          {totalCostMicros === undefined ? "Price unavailable" : `${formatTokenUsageMicrosAsUsd(totalCostMicros)} estimated`}
+        </span>
+      </div>
+      <RailSummaryRow label="Current model" value={model ? formatPricingModelLabel(model, props.estimate.modelLabel) : "Unavailable"} />
+      <RailSummaryRow label="Total tokens" value={count(tokens?.totalTokens)} />
+      <RailSummaryRow label="Input" value={count(tokens?.inputTokens)} />
+      <RailSummaryRow label="Uncached input" value={count(uncached)} />
+      <RailSummaryRow label="Cached input" value={count(tokens?.cachedInputTokens)} />
+      {tokens?.cacheWriteInputTokens !== undefined ? <RailSummaryRow label="Cache writes" value={count(tokens.cacheWriteInputTokens)} /> : null}
+      <RailSummaryRow label="Output" value={count(tokens?.outputTokens)} />
+      <RailSummaryRow label="Reasoning" value={count(tokens?.reasoningOutputTokens)} />
+      <p className="context-empty context-empty--warning">
+        {props.estimate.pricingSource === "provider"
+          ? "Codex estimated this usage from its recorded model and speed groups."
+          : props.estimate.localModel
+          ? "Estimate assumes all tokens used the current model, declared local with zero token cost."
+          : "Estimate assumes all tokens used the current model at today's list prices."}
+        {" "}
+        {props.estimate.pricingSource === "provider" ? "PwrAgent did not observe the individual turns."
+          : "PwrAgent did not observe the turns, so model switches, speed settings, and earlier provider price changes may make it inaccurate."}
+      </p>
+      {!tokens ? <p className="context-empty">Codex has not provided historical token totals for this thread.</p> : null}
+    </div>
+  );
+}
+
 
 
 

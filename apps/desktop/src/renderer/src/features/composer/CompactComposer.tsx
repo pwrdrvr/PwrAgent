@@ -43,6 +43,7 @@ import {
   useComposerMentions,
   type ComposerMentionSources,
 } from "./useComposerMentions";
+import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import type { ComposerDraftStore } from "./useComposerDraftStore";
 
 export type CompactComposerAction = {
@@ -88,12 +89,21 @@ export type CompactComposerSettingsMenu = {
   onToggleFastMode?: (enabled: boolean) => void;
 };
 
+/** A queued message the host took back so the operator can edit it. */
+export type CompactComposerDraftRestore = {
+  id: number;
+  draft: string;
+  imageAttachments: NavigationLaunchpadImageAttachment[];
+  fileAttachments: NavigationLaunchpadFileAttachment[];
+};
+
 export type CompactComposerProps = {
   busy?: boolean;
   /**
-   * Whether a send during a live turn can reach the backend at all. False
-   * disables the primary button while busy rather than letting the operator
-   * fire a send that is guaranteed to bounce.
+   * Whether a steer can reach the running turn at all. False turns the steer
+   * chord off (and drops it from Queue's tooltip) rather than letting the
+   * operator fire a steer that is guaranteed to bounce. Queue does not
+   * depend on it.
    */
   canSteer?: boolean;
   canAttachLocalFiles?: boolean;
@@ -101,6 +111,14 @@ export type CompactComposerProps = {
   /** Shared draft store for a failed submission displaced by newer text. */
   draftStore?: ComposerDraftStore;
   draftScopeKey?: string;
+  /**
+   * Loads a message into the field, after anything already typed there, so
+   * taking a queued message back never costs the operator a draft. Applied
+   * once per `id`; the host clears it in `onDraftRestoreApplied`, so a
+   * remount does not load it a second time.
+   */
+  draftRestore?: CompactComposerDraftRestore;
+  onDraftRestoreApplied?: (id: number) => void;
   executionMode?: ThreadExecutionMode;
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
@@ -131,6 +149,17 @@ export type CompactComposerProps = {
    * reached the backend must not cost the operator what they typed.
    */
   onSend: (
+    text: string,
+    images?: NavigationLaunchpadImageAttachment[],
+    files?: NavigationLaunchpadFileAttachment[],
+  ) => void | boolean | Promise<boolean | void>;
+  /**
+   * Delivers into the running turn instead of behind it. While busy, a host
+   * that supplies this gets the main composer's steer chord (⌘Enter on
+   * macOS, Ctrl+Enter elsewhere), named in Queue's tooltip; `onSend` stays
+   * the primary path and queues. Same `false` contract as `onSend`.
+   */
+  onSteer?: (
     text: string,
     images?: NavigationLaunchpadImageAttachment[],
     files?: NavigationLaunchpadFileAttachment[],
@@ -202,7 +231,8 @@ export function CompactComposer(props: CompactComposerProps) {
     NavigationLaunchpadFileAttachment[]
   >([]);
   const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
-  const [sending, setSending] = useState(false);
+  // Which delivery is in flight, so the button names the one under way.
+  const [sending, setSending] = useState<false | "send" | "steer">(false);
   const sendingRef = useRef(false);
   const normalizingImages = normalizingImageBatches > 0;
   const hasAttachments =
@@ -243,8 +273,12 @@ export function CompactComposer(props: CompactComposerProps) {
     normalizeImageForUpload,
     onAttachmentError,
     onSend,
+    onSteer,
     pastedImageMaxPatches,
   } = props;
+  const steerAvailable = Boolean(props.busy && onSteer);
+  const canSteerNow = steerAvailable && props.canSteer !== false;
+  const queueTooltip = useQueueSteerTooltip(canSteerNow);
   const imagesSupported = props.imagesSupported !== false;
   const imagesUnsupportedMessage = `${
     props.imagesUnsupportedLabel ?? "This mode"
@@ -291,8 +325,13 @@ export function CompactComposer(props: CompactComposerProps) {
     Boolean(segment),
   );
 
-  const send = useCallback(async (commandText?: string) => {
+  const send = useCallback(async (
+    commandText?: string,
+    delivery: "send" | "steer" = "send",
+  ) => {
     if (sendingRef.current || props.disabled) return;
+    const steerWith = delivery === "steer" ? onSteer : undefined;
+    const deliver = steerWith ?? onSend;
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
     const text = (commandText ?? mentions.text).trim();
@@ -310,7 +349,7 @@ export function CompactComposer(props: CompactComposerProps) {
     const previousImages = imageAttachments;
     const previousFiles = fileAttachments;
     sendingRef.current = true;
-    setSending(true);
+    setSending(steerWith ? "steer" : "send");
     mentions.clear();
     setImageAttachments([]);
     setFileAttachments([]);
@@ -320,8 +359,8 @@ export function CompactComposer(props: CompactComposerProps) {
     try {
       const delivered = await (
         previousImages.length > 0 || previousFiles.length > 0
-          ? onSend(text, previousImages, previousFiles)
-          : onSend(text)
+          ? deliver(text, previousImages, previousFiles)
+          : deliver(text)
       );
       if (delivered === false) {
         const currentMentionSnapshot = latestMentionSnapshotRef.current;
@@ -364,10 +403,45 @@ export function CompactComposer(props: CompactComposerProps) {
     normalizingImages,
     onAttachmentError,
     onSend,
+    onSteer,
     props.disabled,
     props.draftScopeKey,
     props.draftStore,
   ]);
+
+  const appliedDraftRestoreIdRef = useRef<number | undefined>(undefined);
+  const { draftRestore, onDraftRestoreApplied } = props;
+  useEffect(() => {
+    if (!draftRestore || appliedDraftRestoreIdRef.current === draftRestore.id) {
+      return;
+    }
+    appliedDraftRestoreIdRef.current = draftRestore.id;
+    const current = latestMentionSnapshotRef.current;
+    const keepCurrent = current.draft.trim().length > 0;
+    const next = {
+      draft: keepCurrent
+        ? `${current.draft.trimEnd()}\n\n${draftRestore.draft}`
+        : draftRestore.draft,
+      skillTokens: keepCurrent ? current.skillTokens : [],
+    };
+    const images = [
+      ...latestImageAttachmentsRef.current,
+      ...draftRestore.imageAttachments,
+    ];
+    const files = [
+      ...latestFileAttachmentsRef.current,
+      ...draftRestore.fileAttachments,
+    ];
+    mentions.clear();
+    mentions.restore(next);
+    setImageAttachments(images);
+    setFileAttachments(files);
+    latestMentionSnapshotRef.current = next;
+    latestImageAttachmentsRef.current = images;
+    latestFileAttachmentsRef.current = files;
+    onDraftRestoreApplied?.(draftRestore.id);
+    requestAnimationFrame(() => mentions.inputRef.current?.focus());
+  }, [draftRestore, mentions, onDraftRestoreApplied]);
 
   useEffect(() => {
     if (!imagesSupported && imageAttachments.length > 0) {
@@ -582,7 +656,11 @@ export function CompactComposer(props: CompactComposerProps) {
       // An open mention popover claims the arrows, Enter, Tab, and Escape
       // before the send path sees them.
       if (mentions.handleKeyDown(event)) return;
-      if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+      if (event.key !== "Enter") return;
+      const steerChord = isSteerShortcut(event);
+      // Any other modified Enter (Ctrl on macOS, the Windows key elsewhere)
+      // stays inert rather than reading as a plain send.
+      if ((event.metaKey || event.ctrlKey) && !steerChord) return;
       // The button checks this too. A disabled `<textarea>` used to swallow
       // the keydown for us; the editor only stops taking new text, and still
       // forwards Enter from a field that was focused before it was disabled.
@@ -592,9 +670,16 @@ export function CompactComposer(props: CompactComposerProps) {
       }
       if (props.disabled) return;
       event.preventDefault();
+      // The chord steers, as in the main composer. With no running turn to
+      // steer into it is an ordinary send; with one that cannot take a
+      // steer it does nothing rather than quietly queueing instead.
+      if (steerChord && steerAvailable) {
+        if (canSteerNow) void send(undefined, "steer");
+        return;
+      }
       void send();
     },
-    [mentions, props.disabled, send],
+    [canSteerNow, mentions, props.disabled, send, steerAvailable],
   );
 
   const toggleMenu = useCallback(() => {
@@ -612,6 +697,17 @@ export function CompactComposer(props: CompactComposerProps) {
     },
     [closeMenu],
   );
+
+  const sendDisabled =
+    props.disabled
+    || sending !== false
+    || normalizingImages
+    || (!imagesSupported && imageAttachments.length > 0)
+    || (
+      mentions.text.trim().length === 0
+      && imageAttachments.length === 0
+      && fileAttachments.length === 0
+    );
 
   const actions = props.secondaryActions ?? [];
   // A section renders only when its mutation callback exists. The option
@@ -1056,28 +1152,25 @@ export function CompactComposer(props: CompactComposerProps) {
           </button>
         ) : null}
         {/* A live turn used to leave Stop as the only control, which read as
-            "you cannot say anything until this finishes". Sending stays
-            available and becomes a steer; the host reports back whether the
-            backend took it into the running turn or held it for the next. */}
+            "you cannot say anything until this finishes". The primary
+            action queues behind the running turn, as the main composer's
+            does; the steer chord, named in its tooltip, delivers into it. */}
         <button
+          {...queueTooltip.buttonProps}
           className="compact-composer__send"
-          disabled={
-            props.disabled
-            || sending
-            || normalizingImages
-            || (!imagesSupported && imageAttachments.length > 0)
-            || (
-              mentions.text.trim().length === 0
-              && imageAttachments.length === 0
-              && fileAttachments.length === 0
-            )
-            || (props.busy && props.canSteer === false)
-          }
+          disabled={sendDisabled}
           onClick={() => void send()}
           type="button"
         >
-          {sending ? "Sending…" : props.busy ? "Steer" : "Send"}
+          {sending === "steer"
+            ? "Steering…"
+            : sending === "send"
+              ? "Sending…"
+              : props.busy
+                ? "Queue"
+                : "Send"}
         </button>
+        {queueTooltip.tooltipNode}
       </div>
     </div>
   );

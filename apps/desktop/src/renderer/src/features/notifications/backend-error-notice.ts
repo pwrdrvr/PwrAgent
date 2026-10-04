@@ -6,6 +6,8 @@ import type {
 } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import { turnFailureNoticeId } from "./turn-failure-acknowledgements";
+import { createElement } from "react";
+import { CodexInstallGuideLink, isCodexLaunchFailureReason } from "./CodexLaunchNotice";
 
 /**
  * A backend failure signal worth surfacing as a sticky toast. Either a
@@ -31,6 +33,7 @@ export type BackendErrorSignal = (
       kind: "turn-failed";
       onDismiss?: () => void;
       onCodexLogin?: () => void;
+      onOpenCodexSettings?: () => void;
       backend: AppServerBackendKind;
       threadId: string;
       turnId: string;
@@ -154,6 +157,13 @@ export function resolveBackendErrorNotice(
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
         ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
+        : {}),
+      ...(signal.backend === "codex" && !signal.instanceId
+        && signal.onOpenCodexSettings && isCodexLaunchFailureReason(signal.errorMessage)
+        ? {
+            actions: [{ label: "Open Codex settings", onClick: signal.onOpenCodexSettings }],
+            body: createElement(CodexInstallGuideLink, { showRefreshHint: true }),
+          }
         : {}),
       message: signal.errorMessage,
       detail: signal.threadLabel,

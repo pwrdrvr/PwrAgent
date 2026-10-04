@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyText, copyTextWithHtml, formatCopyTooltip } from "../copy-text";
+import { copyText, copyTextAsCodeBlock, copyTextWithHtml, formatCopyTooltip } from "../copy-text";
 
 describe("copyText", () => {
   afterEach(() => {
@@ -120,5 +120,29 @@ describe("copyTextWithHtml", () => {
     await copyTextWithHtml("**bold**", "<p><strong>bold</strong></p>");
 
     expect(bridgeCopy).toHaveBeenCalledWith("**bold**");
+  });
+
+  it("copies a literal code block alongside unchanged plain text", async () => {
+    const bridgeCopyRich = vi.fn(async () => undefined);
+    const text = "Thread title: <widget> & \"quotes\" `code`\n\nPath: /tmp/a&b";
+
+    await copyTextAsCodeBlock(text, { copyRichText: bridgeCopyRich });
+
+    expect(bridgeCopyRich).toHaveBeenCalledWith({
+      text,
+      html: "<pre><code>Thread title: &lt;widget&gt; &amp; \"quotes\" `code`\n\nPath: /tmp/a&amp;b</code></pre>",
+    });
+  });
+
+  it("falls back to the original diagnostic text when a rich write fails", async () => {
+    const bridgeCopy = vi.fn(async () => undefined);
+    const text = "Thread ID: fixture-thread\nPwrAgent profile: fixture";
+
+    await copyTextAsCodeBlock(text, {
+      copyRichText: vi.fn(async () => { throw new Error("Rich clipboard unavailable"); }),
+      copyText: bridgeCopy,
+    });
+
+    expect(bridgeCopy).toHaveBeenCalledWith(text);
   });
 });

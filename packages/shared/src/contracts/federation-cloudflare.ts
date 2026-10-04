@@ -59,6 +59,11 @@ export type CloudflareSignInStatus = {
   state: "signed-in" | "signed-out" | "sign-in-required";
   signedInAt?: string;
   accessExpiresAt?: string;
+  /**
+   * When this sign-in's grant ends and Access asks for another, known only
+   * when the gateway's setup file carried its grant lifetime.
+   */
+  signInExpiresAt?: string;
   lastError?: string;
 };
 

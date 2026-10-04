@@ -5,6 +5,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { usageAccountKey } from "../usage-account-identity";
 import {
   createTempStateDb,
   openInMemoryStateDb,
@@ -34,6 +35,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     options: {
       codexClient?: Record<string, unknown>;
       runningTurnShutdownStopTimeoutMs?: number;
+      resolveUsageAccountGroups?: () => Record<string, string>;
     } = {},
   ) => {
     const registry = new DesktopBackendRegistry({
@@ -49,6 +51,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       runtimeInstanceId: "runtime-self",
       resolveLiveProfileRuntimeInstanceIds: () => liveRuntimeInstanceIds,
       runningTurnShutdownStopTimeoutMs: options.runningTurnShutdownStopTimeoutMs,
+      resolveUsageAccountGroups: options.resolveUsageAccountGroups,
     });
     registries.push(registry);
     return registry;
@@ -59,6 +62,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     };
     emit(event: AgentEvent): Promise<void>;
     flushLiveThreadUsageLines(): Promise<void>;
+    refreshCodexQuotas(): Promise<void>;
     startTurnNow(entry: unknown): Promise<unknown>;
     threadTurnQueue: {
       submit(entry: Record<string, unknown>): Promise<{ status: string }>;
@@ -112,6 +116,153 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     if (tempDir) {
       removeTempStateDbDir(tempDir);
     }
+  });
+
+  it.each(["account", "configuration"])("records usage as unknown when %s identity lookup fails", async (failure) => {
+    const registry = createRegistry([], {
+      codexClient: { readAccount: async () => {
+        if (failure === "account") throw new Error("Account unavailable");
+        return { type: "chatgpt", accountId: "current" };
+      } },
+      resolveUsageAccountGroups: () => {
+        if (failure === "configuration") throw new Error("Configuration unavailable");
+        return {};
+      },
+    });
+    await runTurn(registry, "codex", "turn-1");
+    const { lines } = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(lines).toHaveLength(1);
+    expect(lines[0].accountKey).toBeUndefined();
+    expect(lines[0].totalTokens).toBe(1_020);
+  });
+
+  it("records identity without limits and retains the start account through a login switch", async () => {
+    let account = { type: "chatgpt" as const, accountId: "account-a", email: "same@example.test" };
+    const readAccount = vi.fn(async () => ({ ...account }));
+    const registry = createRegistry([], { codexClient: { readAccount } });
+    await internals(registry).emit(started("codex", "turn-a"));
+    account = { ...account, accountId: "account-b" };
+    await internals(registry).emit(usage("codex", "turn-a"));
+    await internals(registry).flushLiveThreadUsageLines();
+    await runTurn(registry, "codex", "turn-b");
+    const rows = (await store.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 })).rows;
+    expect(rows.find((row) => row.line.turnId === "turn-a")?.accountKey)
+      .toBe(usageAccountKey({ ...account, accountId: "account-a" }));
+    expect(rows.find((row) => row.line.turnId === "turn-b")?.accountKey).toBe(usageAccountKey(account));
+    expect(readAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("snapshots explicit groups for ACP requests and leaves uncaptured historical turns unknown", async () => {
+    let group = "team-account";
+    const registry = createRegistry([], { resolveUsageAccountGroups: () => ({ "acp:grok": group }) });
+    await internals(registry).emit(started("acp:grok", "turn-a"));
+    group = "other-account";
+    await internals(registry).emit(usage("acp:grok", "turn-a"));
+    await internals(registry).flushLiveThreadUsageLines();
+    await runTurn(registry, "acp:grok", "turn-b");
+    const { lines } = await store.readThreadPricing({ backend: "acp:grok", threadId: "thread-1" });
+    expect(lines.find((line) => line.turnId === "turn-a")?.accountKey).toBe(usageAccountKey(undefined, "team-account"));
+    expect(lines.find((line) => line.turnId === "turn-b")?.accountKey).toBe(usageAccountKey(undefined, "other-account"));
+    await internals(registry).emit(usage("acp:grok", "historical-without-start"));
+    await internals(registry).flushLiveThreadUsageLines();
+    expect((await store.readThreadPricing({ backend: "acp:grok", threadId: "thread-1" })).lines
+      .find((line) => line.turnId === "historical-without-start")?.accountKey).toBeUndefined();
+  });
+
+  it("does not relabel a cached limit reading after the explicit account group changes", async () => {
+    let group = "original-account";
+    const readRateLimits = vi.fn(async () => [{ name: "5h limit", usedPercent: 10, windowMinutes: 300 }]);
+    const registry = createRegistry([], {
+      codexClient: { readRateLimits }, resolveUsageAccountGroups: () => ({ codex: group }),
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      rateLimits: [], account: { type: "apiKey" } } });
+    const window = { from: Date.now() - 60_000, to: Date.now() + 60_000 };
+    await internals(registry).refreshCodexQuotas();
+    expect((await registry.readUsageActivity(window)).limitObservation?.accountKey)
+      .toBe(usageAccountKey(undefined, group));
+    group = "new-account";
+    await internals(registry).refreshCodexQuotas();
+    expect((await registry.readUsageActivity(window)).limitObservation?.accountKey)
+      .toBe(usageAccountKey(undefined, "original-account"));
+    expect(readRateLimits).toHaveBeenCalledTimes(1);
+    await runTurn(registry, "codex", "new-account-turn");
+    await internals(registry).emit({ backend: "codex", notification: { method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "new-account-turn", status: "completed" } } } } as AgentEvent);
+    const snapshot = await store.readUsageActivity(window);
+    expect(snapshot.rows[0].accountKey).toBe(usageAccountKey(undefined, group));
+    expect(snapshot.limitHistory).toEqual([]);
+  });
+
+  it("attributes refreshed quotas to the account read used for metadata recovery", async () => {
+    const previous = { type: "chatgpt" as const, accountId: "previous", email: "same@example.test" };
+    const current = { ...previous, accountId: "current" };
+    const readAccount = vi.fn(async () => current);
+    const registry = createRegistry([], {
+      codexClient: { readAccount, readRateLimits: async () => [{ name: "5h limit", usedPercent: 22 }] },
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      account: previous, rateLimits: [{ name: "5h limit", usedPercent: 54 }] } });
+    await internals(registry).refreshCodexQuotas();
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(readAccount).toHaveBeenCalledTimes(1);
+    expect((await registry.listBackends()).backends[0].account).toEqual(current);
+    expect(snapshot.limitObservation?.accountKey).toBe(usageAccountKey(current));
+    expect(snapshot.limitObservation?.limits[0].usedPercent).toBe(22);
+  });
+
+  it("retains the requested account group when Settings changes during the account read", async () => {
+    let group = "original-account";
+    const registry = createRegistry([], {
+      codexClient: {
+        readAccount: async () => {
+          group = "new-account";
+          return { type: "chatgpt", accountId: "current" };
+        },
+        readRateLimits: async () => [{ name: "5h limit", usedPercent: 22 }],
+      },
+      resolveUsageAccountGroups: () => ({ codex: group }),
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true, rateLimits: [] } });
+    await internals(registry).refreshCodexQuotas();
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(group).toBe("new-account");
+    expect(snapshot.limitObservation?.accountKey).toBe(usageAccountKey(undefined, "original-account"));
+  });
+
+  it.each(["account", "configuration"])("refreshes quotas with unknown attribution when %s lookup fails", async (failure) => {
+    const account = { type: "chatgpt" as const, accountId: "previous", email: "user@example.test" };
+    const readAccount = vi.fn(async () => {
+      if (failure === "account") throw new Error("Account unavailable");
+      return account;
+    });
+    const registry = createRegistry([], {
+      codexClient: { readAccount, readRateLimits: async () => [{ name: "5h limit", usedPercent: 22 }] },
+      resolveUsageAccountGroups: () => {
+        if (failure === "configuration") throw new Error("Configuration unavailable");
+        return {};
+      },
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      account, rateLimits: [{ name: "5h limit", usedPercent: 54 }] } });
+    await internals(registry).refreshCodexQuotas();
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(readAccount).toHaveBeenCalledTimes(1);
+    expect((await registry.listBackends()).backends[0].account).toEqual(account);
+    expect(snapshot.limitObservation?.accountKey).toBeUndefined();
+    expect(snapshot.limitObservation?.limits[0].usedPercent).toBe(22);
+  });
+
+  it("clears stale quotas when only the refreshed account ID changes", async () => {
+    const previous = { type: "chatgpt" as const, accountId: "previous", email: "same@example.test" };
+    const current = { ...previous, accountId: "current" };
+    const registry = createRegistry([], {
+      codexClient: { readAccount: async () => current, readRateLimits: async () => { throw new Error("Quota unavailable"); } },
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      account: previous, rateLimits: [{ name: "5h limit", usedPercent: 54 }] } });
+    await internals(registry).refreshCodexQuotas();
+    expect((await registry.listBackends()).backends[0]).toMatchObject({ account: current, rateLimits: [] });
   });
 
   it("records an operator-interrupted Codex turn's end from its interrupted completion", async () => {

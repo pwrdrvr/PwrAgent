@@ -60,6 +60,31 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it.each([
+    ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
+  ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {
+    const source = snapshot([thread("match", { linkedDirectories: [
+      { id: "repo", kind: "local", label: "Project", path: `/repos/${name}` },
+    ] }), thread("unrelated")]);
+    source.directories = [{ ...source.directories[0]!, label: name, path: `/repos/${name}`, threadKeys: ["codex:match"] }];
+    const threads = projectNavigationQuery({ index: source, request: request({ kind: "search", text }) });
+    expect(threads.entries.map(({ row }) => row.id)).toEqual(["match"]);
+    const projects = projectNavigationQuery({ index: source, request: request({ kind: "directory-index", filter: text }) });
+    expect(projects.directories.map((directory) => directory.label)).toEqual([name]);
+  });
+
+  it("scopes owner search to @project mentions", () => {
+    const busy = Array.from({ length: 10 }, (_, index) => thread(`busy-${index}`, { title: `MCP gateway ${index}`,
+      updatedAt: 100 + index, linkedDirectories: [{ id: "busy", kind: "local", label: "media-services", path: "/repos/media-services" }] }));
+    const quiet = thread("quiet", { title: "MCP config", updatedAt: 1,
+      linkedDirectories: [{ id: "quiet", kind: "local", label: "pinecone-api", path: "/repos/pinecone-api" }] });
+    const source = snapshot([...busy, quiet]);
+    const page = (text: string) => projectNavigationQuery({ index: source, request: request({ kind: "search", text }) })
+      .entries.map(({ row }) => row.id);
+    expect(page("@pinecone-api mcp")).toEqual(["quiet"]);
+    expect(page("in:@Pinecone")).toEqual(["quiet"]);
+  });
+
   it("counts worker-only parents once and includes them in Attention without changing turn status", () => {
     const source = snapshot([
       thread("worker-only", { threadStatus: "idle", hasActiveSubAgent: true }),
@@ -118,13 +143,40 @@ describe("navigation query projection", () => {
     expect(attention.entries.find(({ row }) => row.id === "child")?.row.parentThreadInstanceId).toBe("peer");
   });
 
-  it("waits for owner coverage before declaring an Attention parent outside the collection", () => {
-    const source = snapshot([thread("child", { parentThreadId: "parent", inbox: { inInbox: true } })]);
+  it.each(["checking", "degraded", "complete"] as const)("keeps counted Attention children visible during %s discovery", (state) => {
+    const source = snapshot([
+      thread("active-1", { threadStatus: "active" }),
+      thread("active-2", { threadStatus: "active" }),
+      thread("active-3", { threadStatus: "active" }),
+      thread("parent", { threadStatus: "idle", subthreadsCollapsed: true }),
+      thread("child", { parentThreadId: "parent", threadStatus: "active" }),
+      thread("orphan", { parentThreadId: "undiscovered-parent", inbox: { inInbox: true } }),
+    ]);
+    const index = { ...source, coverage: { state } };
+    const attention = projectNavigationQuery({ index, request: request({ kind: "lens", lens: "attention" }) });
+    const population = projectNavigationQuery({ index, request: request({ kind: "directory-index" }) });
+
+    expect(population.counts).toMatchObject({ active: 4, review: 1 });
+    expect(attention.counts).toMatchObject({ active: 4, review: 1 });
+    expect(attention.entries).toHaveLength(5);
+    expect(attention.entries.every((entry) => entry.placement.kind === "root")).toBe(true);
+    expect(attention.entries.find(({ row }) => row.id === "child")?.row.parentThreadId).toBe("parent");
+    expect(attention.entries.find(({ row }) => row.id === "orphan")?.row.parentThreadId).toBe("undiscovered-parent");
+  });
+
+  it.each(["checking", "degraded", "complete"] as const)("regroups an Attention child when its parent qualifies during %s discovery", (state) => {
+    const child = thread("child", { parentThreadId: "parent", threadStatus: "active", updatedAt: 2 });
     const query = request({ kind: "lens", lens: "attention" });
-    const checking = projectNavigationQuery({ index: { ...source, coverage: { state: "checking" } }, request: query });
-    expect(checking.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
-    const complete = projectNavigationQuery({ index: { ...source, coverage: { state: "complete" } }, request: query });
-    expect(complete.entries[0]?.placement).toEqual({ kind: "root" });
+    const coverage = { state };
+    const project = (threads: NavigationThreadSummary[]) => projectNavigationQuery({ index: { ...snapshot(threads), coverage }, request: query });
+
+    expect(project([child]).entries[0]?.placement).toEqual({ kind: "root" });
+    // A qualifying parent can sort after its child. Discovery coverage must
+    // not change that grouping, and a later idle parent promotes it again.
+    const grouped = project([child, thread("parent", { inbox: { inInbox: true } })]);
+    expect(grouped.entries.map(({ row }) => row.id)).toEqual(["child", "parent"]);
+    expect(grouped.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
+    expect(project([child, thread("parent")]).entries[0]?.placement).toEqual({ kind: "root" });
   });
 
   it("cold_navigation_fetches_only_visible_membership", () => {

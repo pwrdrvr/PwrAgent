@@ -24,7 +24,7 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   grok: {
     liveWorkspaceHandoff: false,
     managedReview: true,
-    steerTurn: true,
+    steerTurn: false,
   },
   qwen: {
     liveWorkspaceHandoff: false,
@@ -39,4 +39,8 @@ export function acpAgentCapabilitiesForRegistryId(
   return (
     ACP_AGENT_CAPABILITY_CATALOG[registryId] ?? DEFAULT_ACP_AGENT_CAPABILITIES
   );
+}
+
+export function isPwrAgentGrokBuildVersion(version: string | undefined): boolean {
+  return /^\d+\.\d+\.\d+-pwragent\.\d+(?:[.+-].*)?$/.test(version ?? "");
 }

@@ -57,21 +57,22 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
-  it("pages visible Attention children without loading their idle parents or the whole inventory", async () => {
+  it.each(["checking", "degraded", "complete"] as const)("pages visible Attention children without loading their idle parents or the whole inventory during %s discovery", async (state) => {
     const children = Array.from({ length: 23 }, (_, index) => ({ ...thread(`child-${index}`),
       createdAt: index + 1, updatedAt: index + 1,
       parentThreadId: "idle-parent", parentThreadBackend: "codex" as const,
       inbox: { inInbox: true }, threadStatus: index === 22 ? "active" as const : "idle" as const,
     }));
-    const loadIndex = vi.fn(async () => snapshot([
+    const loadIndex = vi.fn(async () => ({ ...snapshot([
       ...Array.from({ length: 1000 }, (_, index) => thread(`idle-${index}`)),
       { ...thread("idle-parent"), subthreadsCollapsed: true }, ...children,
-    ]));
+    ]), coverage: { state } }));
     const store = new NavigationQueryStore();
     const view = request({ query: { kind: "lens", lens: "attention" }, pageSize: 10,
       attentionView: { id: "attention-children", promoteOnTurnEnd: true } });
     const read = (cursor?: string) => store.readPage({ scopeKey: "viewer", loadIndex, request: { ...view, cursor } });
     const first = await read();
+    expect(first.coverage).toEqual({ state });
     expect(first.entries).toHaveLength(10);
     expect(first.entries.every(({ placement }) => placement.kind === "root")).toBe(true);
     expect(first.counts).toMatchObject({ active: 1, unread: 23, review: 22 });
@@ -90,11 +91,11 @@ describe("NavigationQueryStore", () => {
     }
   });
 
-  it("does not treat an Attention parent on a later page as outside the lens", async () => {
+  it.each(["checking", "degraded", "complete"] as const)("does not treat an Attention parent on a later page as outside the lens during %s discovery", async (state) => {
     const store = new NavigationQueryStore();
     const parent = { ...thread("parent"), inbox: { inInbox: true }, updatedAt: 1 };
     const child = { ...thread("child"), parentThreadId: parent.id, inbox: { inInbox: true }, updatedAt: 2 };
-    const loadIndex = vi.fn(async () => snapshot([parent, child]));
+    const loadIndex = vi.fn(async () => ({ ...snapshot([parent, child]), coverage: { state } }));
     const view = request({ query: { kind: "lens", lens: "attention" }, pageSize: 1,
       attentionView: { id: "grouped-attention", promoteOnTurnEnd: true } });
     const first = await store.readPage({ scopeKey: "viewer", loadIndex, request: view });
@@ -867,4 +868,45 @@ it("admits fresh queries and refresh generations under cursor pressure", async (
   await expect(store.readPage({ scopeKey: "window-0", request: request({ pageSize: 10, cursor: first!.nextCursor }), loadIndex }))
     .rejects.toMatchObject({ code: "navigation_cursor_expired" });
   await expect(store.readPage({ scopeKey: "window-0", request: request({ pageSize: 10 }), loadIndex })).resolves.toMatchObject({ protocol: 2 });
+});
+
+it.each([
+  ["pinned", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, pinnedRank: "1024" }; }],
+  ["child", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, parentThreadId: "0", parentThreadBackend: "codex" }; }],
+  ["not-indexed", (threads: NavigationThreadSummary[]) => { threads.splice(1, 1); }],
+  ["other-owner", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, federation: { instanceLabel: "Peer",
+    ref: { backend: "codex", threadId: "1", target: { scope: "remote", instanceId: "peer" } } } }; }],
+  ["other-directory", (_threads: NavigationThreadSummary[], keys: string[]) => { keys.splice(1, 1); }],
+  // An archived row still indexed and listed stays a member; what moved it is named instead.
+  ["pinned", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, archivedAt: 5, pinnedRank: "1024" }; }],
+] as const)("names why a directory anchor left its query: %s", async (reason, change) => {
+  const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
+  const keys = threads.map((row) => `codex:${row.id}`);
+  change(threads, keys);
+  const loadIndex = async () => ({ ...snapshot(threads),
+    directories: [{ key: "repo", kind: "directory" as const, label: "Repo", threadKeys: keys, needsAttentionCount: 0 }] });
+  const anchored = request({ pageSize: 10, query: { kind: "directory", directoryKey: "repo", roots: "unpinned" },
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "1" } } });
+  const refused = new NavigationQueryStore().readPage({ scopeKey: "window", loadIndex, request: anchored });
+  await expect(refused).rejects.toMatchObject({ code: "navigation_anchor_missing" });
+  // Electron keeps only the message, so the reason has to live there.
+  await expect(refused).rejects.toThrow(`(reason: ${reason})`);
+  await expect(refused).rejects.not.toThrow(/Thread 1|codex:1/);
+});
+
+it("names an archived anchor that a Star Map query filters out", async () => {
+  const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
+  threads[1] = { ...threads[1]!, archivedAt: 5 };
+  const anchored = request({ pageSize: 10, query: { kind: "star-map", filters: {} },
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "1" } } });
+  await expect(new NavigationQueryStore().readPage({ scopeKey: "window", loadIndex: async () => snapshot(threads), request: anchored }))
+    .rejects.toThrow("(reason: archived)");
+});
+
+it("names a local anchor spelled with this owner's instance ID as a ref mismatch", async () => {
+  const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
+  const anchored = request({ pageSize: 10, anchor: { kind: "thread", ref: { backend: "codex", threadId: "1", ownerInstanceId: "self" } } });
+  await expect(new NavigationQueryStore().readPage({ scopeKey: "window",
+    loadIndex: async () => ({ ...snapshot(threads), localInstanceId: "self" }), request: anchored }))
+    .rejects.toThrow("(reason: ref-mismatch)");
 });

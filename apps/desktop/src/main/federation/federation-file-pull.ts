@@ -3,6 +3,7 @@ import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   isAppServerBackendKind,
+  isFilePreviewPath,
   type AppServerThreadSummary,
   type ReadMarkdownFileResponse,
 } from "@pwragent/shared";
@@ -58,8 +59,8 @@ export class FederationFilePullReader {
     if (!permissions.filePull) throw new Error("File pull is disabled on the owning machine. Enable Allow file pull in its Federation settings.");
     const request = input as { path?: unknown; thread?: { backend?: unknown; threadId?: unknown } } | null;
     if (!request || typeof request.path !== "string" || !path.isAbsolute(request.path)
-      || request.path.includes("\0") || !/\.(md|markdown)$/i.test(request.path)) {
-      throw new Error("Select an absolute Markdown file path.");
+      || request.path.includes("\0") || !isFilePreviewPath(request.path)) {
+      throw new Error("Select an absolute path to a file type that can be previewed.");
     }
     const identity = request.thread;
     if (!identity || typeof identity.backend !== "string" || !isAppServerBackendKind(identity.backend)
@@ -69,6 +70,10 @@ export class FederationFilePullReader {
     const thread = await this.options.resolveThread(identity.backend, identity.threadId);
     if (!thread) throw new Error("File pull thread was not found on the owning machine.");
     const target = await realpath(request.path);
+    // A previewable name can be a symlink to a file that must stay out.
+    if (!isFilePreviewPath(target)) {
+      throw new Error("Select an absolute path to a file type that can be previewed.");
+    }
     if (!permissions.filePullOutsideThreadDirectories) {
       const directories = thread.linkedDirectories.flatMap((directory) =>
         [directory.path, directory.worktreePath]);
@@ -86,7 +91,7 @@ export class FederationFilePullReader {
     try {
       const before = await file.stat();
       if (!before.isFile()) throw new Error("File pull requires a regular file.");
-      if (before.size > FILE_PULL_MAX_BYTES) throw new Error("Markdown file is too large to preview (maximum 2 MiB).");
+      if (before.size > FILE_PULL_MAX_BYTES) throw new Error("File is too large to preview (maximum 2 MiB).");
       const buffer = Buffer.alloc(FILE_PULL_MAX_BYTES + 1);
       let size = 0;
       while (size < buffer.length) {

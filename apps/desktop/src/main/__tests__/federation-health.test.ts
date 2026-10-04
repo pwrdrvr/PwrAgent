@@ -71,6 +71,30 @@ describe("federation health", () => {
     expect(health.publicUrl).toBeUndefined();
   });
 
+  it.each([true, false, undefined])("preserves receiver permissions in health when file push is %s", (filePush) => {
+    const receiverPermissions = filePush === undefined ? undefined : {
+      remoteShells: false,
+      filePush,
+      filePull: true,
+      filePullOutsideThreadDirectories: false,
+    };
+    const peer: FederationPeerSummary = {
+      id: "receiver_one",
+      label: "Receiver",
+      role: "client",
+      status: "connected",
+      capabilities: ["thread_handoff", "turn_control", "environment_actions", "file_push"],
+      receiverPermissions,
+    };
+    const health = buildFederationHealthStatus({
+      config: { mode: "gateway", publicUrl: "" },
+      peers: [peer],
+    });
+
+    expect(publicPeerSummary(peer).receiverPermissions).toEqual(receiverPermissions);
+    expect(health.peers[0].receiverPermissions).toEqual(receiverPermissions);
+  });
+
   it("preserves short names for health reads without advertising them in the peer directory", () => {
     const peers: FederationPeerSummary[] = [
       {

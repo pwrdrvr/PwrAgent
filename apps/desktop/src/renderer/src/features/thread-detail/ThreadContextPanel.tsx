@@ -22,11 +22,13 @@ import type {
   CodexEnvironmentActionRun,
   ThreadCompactionRecord,
   ThreadPricingSummary,
+  ThreadTodo,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
+import { operatorTodoItemKey } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
@@ -39,14 +41,18 @@ import {
   ServerIcon,
   SubAgentsIcon,
   TerminalIcon,
+  TodoIcon,
   ToolCallsIcon,
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
+import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
+import type { ThreadTodosView } from "../thread-todos/thread-todos-view";
 import { PrActivityPanel } from "./context-panels/PrActivityPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
@@ -81,6 +87,7 @@ type ContextTab = {
 
 const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
+  { id: "todos", label: "To-dos", Icon: TodoIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
@@ -94,6 +101,14 @@ const CONTEXT_TABS: ContextTab[] = [
 ];
 
 type ThreadContextPanelProps = {
+  /** The To-dos tab. Absent in a window that fronts a peer. */
+  todos?: {
+    view: ThreadTodosView;
+    threadKey: string;
+    projectKey?: string;
+    onStartReview: (todo: ThreadTodo) => void;
+    onDoHere?: (todo: ThreadTodo) => void;
+  };
   activeTurnId?: string;
   backendError?: string;
   backends: BackendSummary[];
@@ -137,7 +152,7 @@ type ThreadContextPanelProps = {
   threadPricingSummaryEnabled?: boolean;
   threadToolAccountingEnabled?: boolean;
   /** Absent on the new-thread launchpad, where only provider context applies. */
-  thread?: NavigationThreadSummary;
+  thread?: NavigationPresentedThread;
   worktreeArchiveError?: string;
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
@@ -255,6 +270,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? "info"
       : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
         ? "info"
+      : props.activeTab === "todos" && !props.todos
+        ? "info"
       : props.activeTab;
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
@@ -267,6 +284,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     props.thread
       ? (tab.id !== "pricing" || threadPricingSummaryEnabled)
         && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
+        && (tab.id !== "todos" || props.todos !== undefined)
       : tab.id === "providers",
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
@@ -662,9 +680,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const isActive = tab.id === activeTab;
     const TabIcon = tab.Icon;
     const commandCount = tab.id === "actions" ? props.backgroundTerminals?.terminals?.length ?? 0 : 0;
+    const todoBadge = tab.id === "todos" && props.todos
+      ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
+      : undefined;
     const label = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
-      : tab.label;
+      : todoBadge?.unread
+        ? `${tab.label} · ${todoBadge.count} unread`
+        : todoBadge
+          ? `${tab.label} · ${todoBadge.count} open for this thread`
+          : tab.label;
     return (
       <button
         key={tab.id}
@@ -681,6 +706,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       >
         <TabIcon size={18} aria-hidden="true" />
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
+        {todoBadge ? (
+          <span
+            className={`context-rail__activity context-rail__activity--todos${
+              todoBadge.unread ? "" : " context-rail__activity--quiet"
+            }`}
+            aria-hidden="true"
+          >
+            {todoBadge.count > 9 ? "9+" : todoBadge.count}
+          </span>
+        ) : null}
       </button>
     );
   }
@@ -742,6 +777,17 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             initialLoadDurationMs={props.initialLoadDurationMs}
           />
         );
+      case "todos":
+        if (!props.thread || !props.todos) return null;
+        return (
+          <ThreadTodosPanel
+            view={props.todos.view}
+            threadKey={props.todos.threadKey}
+            projectKey={props.todos.projectKey}
+            onStartReview={props.todos.onStartReview}
+            onDoHere={props.todos.onDoHere}
+          />
+        );
       case "edits":
         if (!props.thread) return null;
         return (
@@ -770,6 +816,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             desktopApi={props.desktopApi}
             backends={props.backends}
             thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
+            subThreadCount={props.thread.ordinaryChildCount}
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
             display={displayResource.data?.pricingPage}
@@ -888,4 +935,27 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }
 
 
+}
+
+/**
+ * The To-dos tab's badge. Filled, it counts what the operator has not seen
+ * in any thread, since a question raised elsewhere is the case it exists
+ * for. With nothing unread it falls back to this thread's open items,
+ * outlined.
+ */
+function readTodoTabBadge(
+  view: ThreadTodosView,
+  threadKey: string,
+): { count: number; unread: boolean } | undefined {
+  let unread = 0;
+  for (const wait of view.waits) {
+    if (!view.seenKeys.has(wait.key)) unread += 1;
+  }
+  for (const todo of view.open) {
+    if (!view.seenKeys.has(operatorTodoItemKey(todo.id))) unread += 1;
+  }
+  if (unread > 0) return { count: unread, unread: true };
+  const open = (view.openByThreadKey.get(threadKey)?.length ?? 0)
+    + (view.waitsByThreadKey.get(threadKey)?.length ?? 0);
+  return open > 0 ? { count: open, unread: false } : undefined;
 }

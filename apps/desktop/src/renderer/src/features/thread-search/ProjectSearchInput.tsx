@@ -21,6 +21,21 @@ export function projectMentionAtCursor(value: string, cursor: number) {
   return undefined;
 }
 
+/** Replace the mention at the caret with a chosen project; returns the new caret. */
+export function insertProjectMention(
+  value: string,
+  mention: NonNullable<ReturnType<typeof projectMentionAtCursor>>,
+  directory: { label: string; path?: string },
+): { value: string; cursor: number } {
+  const label = directory.label || directory.path!;
+  const name = /[\s"@]/.test(label) ? `"${label.replaceAll('"', "")}"` : label;
+  const insertion = `${mention.prefix}${name} `;
+  return {
+    value: value.slice(0, mention.start) + insertion + value.slice(mention.end).replace(/^ /, ""),
+    cursor: mention.start + insertion.length,
+  };
+}
+
 export function ProjectSearchInput(props: {
   value: string;
   onChange: (value: string) => void;
@@ -78,12 +93,9 @@ export function ProjectSearchInput(props: {
 
   const choose = (directory: NavigationDirectoryRow) => {
     if (!mention) return;
-    const label = directory.label || directory.path!;
-    const name = /[\s"@]/.test(label) ? `"${label.replaceAll('"', "")}"` : label;
-    const insertion = `${mention.prefix}${name} `;
-    const value = props.value.slice(0, mention.start) + insertion + props.value.slice(mention.end).replace(/^ /, "");
-    pendingCursor.current = mention.start + insertion.length;
-    setCursor(pendingCursor.current);
+    const { value, cursor: nextCursor } = insertProjectMention(props.value, mention, directory);
+    pendingCursor.current = nextCursor;
+    setCursor(nextCursor);
     setDismissed(true);
     props.onChange(value);
     inputRef.current?.focus();

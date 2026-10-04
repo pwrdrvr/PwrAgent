@@ -11,6 +11,9 @@ export function formatBackendAccountText(
   if (account.type === "chatgpt" && account.email?.trim()) {
     return account.email.trim();
   }
+  if (account.type === "chatgpt") {
+    return "ChatGPT account";
+  }
   if (account.type === "apiKey") {
     return "API key";
   }

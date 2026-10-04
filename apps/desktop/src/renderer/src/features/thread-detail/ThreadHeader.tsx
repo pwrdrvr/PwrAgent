@@ -22,6 +22,14 @@ import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { FixedMachineChip, type MachineChipValue } from "../composer/LaunchpadMachineChip";
+import {
+  ThreadHeaderProjectCrumb,
+  type ThreadHeaderProject,
+} from "./ThreadHeaderProjectCrumb";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { InlineRenameInput } from "../navigation/InlineRenameInput";
+import { threadSupportsRename } from "../navigation/thread-action-hotkeys";
 
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
@@ -55,7 +63,17 @@ type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
   hasApprovalRequest?: boolean;
   projectLabel?: string;
+  /**
+   * Makes the breadcrumb's project label a link to the project, with a caret
+   * for starting a thread there. Only for a project the thread list shows.
+   */
+  project?: ThreadHeaderProject;
   thread: NavigationThreadSummary;
+  /**
+   * The machine the thread runs on, shown wherever the launchpad showed its
+   * machine chip, so starting a thread leaves the machine where it was.
+   */
+  machine?: MachineChipValue;
   backends?: BackendSummary[];
   /** Forwarded to MessagingStatusBar - opens Messaging Activity. */
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
@@ -99,6 +117,18 @@ type ThreadHeaderProps = {
     disabledReason?: string;
     onOpen: () => void;
   };
+  /**
+   * Rename the thread in place from its title: double-click it, or the Rename
+   * shortcut while the sidebar is hidden. The app owns `active`, so the
+   * shortcut can start it.
+   */
+  titleRename?: ThreadTitleRenameControls;
+};
+
+export type ThreadTitleRenameControls = {
+  active: boolean;
+  onStart: () => void;
+  onEnd: (thread: NavigationThreadSummary, name: string | null) => void;
 };
 
 /**
@@ -117,6 +147,13 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // toggle, whose state (running dot, per-thread disabled reason) is
   // thread-scoped and would drag thread state up into a global strip.
   const hasAppTitleBar = paintsAppTitleBar();
+  const canRenameTitle = Boolean(props.titleRename)
+    && threadSupportsRename(
+      props.thread,
+      props.backends ?? [],
+      readRendererFederationTarget() !== undefined,
+    );
+  const titleRenaming = canRenameTitle && props.titleRename?.active === true;
   // When the sidebar is hidden, its wordmark + action buttons relocate
   // here (macOS only — the strip platforms keep them in the title bar).
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
@@ -171,20 +208,41 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <div className="thread-header__breadcrumb">
               {projectLabel ? (
                 <>
-                  <span className="thread-header__eyebrow" title={projectLabel}>
-                    {projectLabel}
-                  </span>
+                  {props.project ? (
+                    <ThreadHeaderProjectCrumb
+                      // A new project closes a menu opened for the old one,
+                      // even one with the same label.
+                      key={props.project.directoryKey}
+                      label={projectLabel}
+                      project={props.project}
+                    />
+                  ) : (
+                    <span className="thread-header__eyebrow" title={projectLabel}>
+                      {projectLabel}
+                    </span>
+                  )}
                   <span aria-hidden="true" className="thread-header__separator">
                     ›
                   </span>
                 </>
               ) : null}
               <h2
-                aria-label={props.thread.title}
+                aria-label={titleRenaming ? undefined : props.thread.title}
                 className="thread-header__compact-title"
-                title={props.thread.title}
+                data-renamable={canRenameTitle ? "true" : undefined}
+                title={titleRenaming ? undefined : props.thread.title}
+                onDoubleClick={canRenameTitle ? props.titleRename?.onStart : undefined}
               >
-                {props.onRevealSelectedThreadInList ? (
+                {titleRenaming ? (
+                  <InlineRenameInput
+                    // A new thread under the open field starts a new edit.
+                    key={props.thread.id}
+                    ariaLabel="Thread name"
+                    className="thread-header__rename-input"
+                    initialValue={props.thread.title}
+                    onCommit={(name) => props.titleRename?.onEnd(props.thread, name)}
+                  />
+                ) : props.onRevealSelectedThreadInList ? (
                   <button
                     aria-label="Show selected thread in thread list"
                     className="thread-header__title-button"
@@ -203,6 +261,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 )}
               </h2>
             </div>
+            {props.machine ? (
+              <span className="thread-header__machine">
+                <FixedMachineChip machine={props.machine} />
+              </span>
+            ) : null}
             <span className="chip chip--backend">
               {formatBackendLabel(props.thread.source)}
             </span>

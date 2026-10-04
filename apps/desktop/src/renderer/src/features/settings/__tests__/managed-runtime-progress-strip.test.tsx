@@ -145,10 +145,12 @@ describe("ToggleField locked", () => {
     expect(toggle).toHaveAccessibleDescription(/Token Miser needs this build\./);
   });
 
-  it("switches normally when it carries no reason", () => {
+  it("switches normally when it carries no reason", async () => {
     const onChange = vi.fn(async () => undefined);
     render(<ToggleField checked={false} label="PwrAgent build" onChange={onChange} />);
-    fireEvent.click(screen.getByRole("switch", { name: "PwrAgent build" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "PwrAgent build" }));
+    });
     expect(onChange).toHaveBeenCalledWith(true);
   });
 });

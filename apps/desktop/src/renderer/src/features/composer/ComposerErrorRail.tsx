@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import { summarizeComposerError } from "./composer-error-message";
@@ -29,41 +29,25 @@ export function ComposerErrorRail(props: {
   entries: readonly ComposerErrorEntry[];
   failureScope?: string;
 }): ReactNode {
-  const [dismissed, setDismissed] = useState<ReadonlyMap<string, string>>(new Map());
-
-  useEffect(() => {
-    setDismissed((current) => {
-      const next = new Map(current);
-      for (const [id, message] of current) {
-        const entry = props.entries.find((candidate) => candidate.id === id);
-        if (!entry || dismissalKey(entry) !== message) {
-          next.delete(id);
-        }
-      }
-      return next.size === current.size ? current : next;
-    });
-  }, [props.entries]);
-
   const visible = props.entries.filter(
     (entry): entry is ComposerErrorEntry & { message: string } =>
-      Boolean(entry.message) && dismissed.get(entry.id) !== dismissalKey(entry),
+      Boolean(entry.message),
   );
   if (visible.length === 0) return null;
 
   return (
     <div className="composer-error-rail">
       {visible.map((entry) => (
+        // A new thread, message, or occurrence owns fresh dismissal state.
+        // Clearing a source unmounts its row without an effect-driven update.
         <ComposerErrorRow
-          key={entry.id}
+          key={JSON.stringify([props.failureScope, entry.id, dismissalKey(entry)])}
           desktopApi={props.desktopApi}
           failureScope={props.failureScope}
           label={entry.label}
           message={entry.message}
           retry={entry.retry}
           dismissible={entry.dismissible}
-          onDismiss={() => {
-            setDismissed((current) => new Map(current).set(entry.id, dismissalKey(entry)));
-          }}
         />
       ))}
     </div>
@@ -81,12 +65,12 @@ function ComposerErrorRow(props: {
   message: string;
   retry?: ComposerErrorEntry["retry"];
   dismissible?: boolean;
-  onDismiss: () => void;
 }) {
+  const [dismissed, setDismissed] = useState(false);
   const [open, setOpen] = useState(false);
   const failureDismissed = useTurnFailureDismissed(props.failureScope, props.message);
   const { summary, detail } = summarizeComposerError(props.message);
-  if (failureDismissed) return null;
+  if (dismissed || failureDismissed) return null;
   const toggleContent = (
     <>
       <span
@@ -147,7 +131,7 @@ function ComposerErrorRow(props: {
               type="button"
               onClick={() => {
                 turnFailureAcknowledgements.dismissMatching(props.failureScope, props.message);
-                props.onDismiss();
+                setDismissed(true);
               }}
             >
               Dismiss

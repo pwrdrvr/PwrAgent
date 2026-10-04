@@ -332,7 +332,7 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
     // The active option carries the *popover* highlight — the accent
     // tint shared with `.project-picker__row`, `.branch-picker__option`,
     // and `.reference-picker__row`. The thread-row selection language
-    // (accent outline + --bg-row-active fill + a 3px ::before bar) marks
+    // (accent outline + --bg-row-active fill + a 2px inset accent edge) marks
     // a persistent selection you navigated to, and is deliberately not
     // lent to a transient "Enter lands here" cue. See "The two selection
     // languages are not interchangeable" in docs/UI-THEME.md.
@@ -349,7 +349,7 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
     });
     await expect(firstActiveOption).toHaveCSS("background-color", accentSoft);
     await expect(firstActiveOption).toHaveCSS("color", "rgb(255, 179, 92)");
-    // No accent outline and no selection bar: the tint is the whole cue.
+    // No accent outline and no selection marker: the tint is the whole cue.
     await expect(firstActiveOption).toHaveCSS(
       "border-top-color",
       "rgba(0, 0, 0, 0)",

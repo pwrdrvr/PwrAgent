@@ -44,6 +44,8 @@ export const FEDERATION_CAPABILITIES = [
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
 export const FEDERATION_SHUTDOWN_CHANGED_METHOD = "federation/shutdown/changed";
+/** Local health changed without a peer transition, e.g. Access refused sign-in before dialing. */
+export const FEDERATION_HEALTH_CHANGED_METHOD = "federation/health/changed";
 
 export type FederationShutdownNotice = {
   shutdownId: string;
@@ -401,6 +403,12 @@ export function parseFederationGatewayEndpoint(
     ? hostPort.slice(0, hostPort.indexOf("]") + 1)
     : hostPort.split(":")[0];
   if (host.length === 0) return undefined;
+  // URL accepts empty DNS labels, but the resolver cannot dial them. A single
+  // trailing root dot is valid; a leading dot or consecutive dots are not.
+  if (
+    !host.startsWith("[")
+    && (host.startsWith(".") || host.includes(".."))
+  ) return undefined;
   return {
     scheme: scheme as FederationEndpointScheme,
     host,
@@ -477,6 +485,16 @@ export type FederationActiveConnection = {
 
 export type FederationHealthStatus = {
   shutdownNotices?: FederationPeerShutdown[];
+  /**
+   * This client's Cloudflare OAuth grant needs an interactive sign-in.
+   * `pending` is main's one browser sign-in, so every window can show it.
+   */
+  cloudflareSignInRequired?: { endpoint: string; pending?: boolean };
+  /**
+   * This client's Cloudflare grant ends soon (`expiresAt`, ISO). Signing in
+   * again before then starts a new grant without a disconnected gap.
+   */
+  cloudflareSignInExpiring?: { endpoint: string; expiresAt: string; pending?: boolean };
   enabled: boolean;
   role: FederationInstanceRole;
   status: FederationConnectionState;

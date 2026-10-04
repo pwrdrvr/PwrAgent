@@ -79,6 +79,42 @@ describe("McpAccessPanel", () => {
     expect(screen.getByText("Login required")).toBeTruthy();
   });
 
+  it.each([{ connectionIds: [] }, { connectionIds: ["pwrgit"] }])(
+    "lets a signed-in unreachable connection be selected without authorizing again (%s)",
+    async ({ connectionIds }) => {
+      const onSelectionChange = vi.fn(async () => undefined);
+      render(
+        <McpAccessPanel
+          backend="codex"
+          desktopApi={{
+            listMcpConnections: async () => ({
+              connections: [connection({
+                id: "pwrgit",
+                displayName: "PwrGit",
+                state: "temporarily_unavailable",
+                detail: "PwrGit is not running.",
+              })],
+            }),
+          }}
+          selection={{ connectionIds, providerServersEnabled: true }}
+          onDismiss={vi.fn()}
+          onOpenSettings={vi.fn()}
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+
+      const toggle = await screen.findByRole("switch", { name: "Use PwrGit in this thread" });
+      expect(toggle.getAttribute("aria-checked")).toBe(String(connectionIds.length > 0));
+      expect(screen.queryByRole("button", { name: "Authorize" })).toBeNull();
+      expect(screen.getByText("PwrGit is not running.")).toBeTruthy();
+      fireEvent.click(toggle);
+      await waitFor(() => expect(onSelectionChange).toHaveBeenCalledWith({
+        connectionIds: connectionIds.length > 0 ? [] : ["pwrgit"],
+        providerServersEnabled: true,
+      }));
+    },
+  );
+
   it("reports connections that are turned off profile-wide", async () => {
     render(
       <McpAccessPanel

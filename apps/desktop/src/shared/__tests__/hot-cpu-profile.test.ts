@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { buildHotCpuProfileHandoffMessage } from "../hot-cpu-profile";
+import {
+  buildHotCpuProfileHandoffMessage,
+  type HotCpuProfileCapturedEvent,
+} from "../hot-cpu-profile";
+
+const capturedEvent: HotCpuProfileCapturedEvent = {
+  capturedAt: "2026-10-06T14:48:39.892Z",
+  profileFilename: "renderer-hot-0001.cpuprofile",
+  profilePath: "/tmp/hot-cpu/renderer-hot-0001.cpuprofile",
+  sessionDirectory: "/tmp/hot-cpu",
+  sessionDirectoryName: "hot-cpu",
+  triggerConsecutiveSamples: 1,
+  triggerCpuPercent: 87.3,
+  triggerMode: "spike",
+  triggerThresholdPercent: 50,
+};
 
 describe("hot CPU profile handoff message", () => {
   it("identifies main-process captures", () => {
     const message = buildHotCpuProfileHandoffMessage({
       target: "main",
       sourceHostname: "fixture-m5.local",
+      appBuildMetadata: {
+        applicationVersion: "2.3.4",
+        buildIdentity: { kind: "packaged" },
+      },
       capturedAt: "2026-09-05T23:00:00.000Z",
       profileFilename: "main-hot-0001.cpuprofile",
       profilePath: "/tmp/hot-cpu/main-hot-0001.cpuprofile",
@@ -19,6 +38,53 @@ describe("hot CPU profile handoff message", () => {
     expect(message).toContain("PwrAgent captured a main CPU profile.");
     expect(message).toContain("Source: Local app on fixture-m5.local");
     expect(message).toContain("Captured at: 2026-09-05T23:00:00.000Z");
+    expect(message).toContain("PwrAgent version: 2.3.4\nPwrAgent build: Packaged");
+    expect(message).not.toContain("development branch");
+  });
+
+  it.each(["main", "renderer"] as const)(
+    "includes the startup checkout identity for %s captures",
+    (target) => {
+      const message = buildHotCpuProfileHandoffMessage({
+        ...capturedEvent,
+        target,
+        appBuildMetadata: {
+          applicationVersion: "2.3.4-dev",
+          buildIdentity: {
+            kind: "development",
+            appPath: "/repo/apps/desktop",
+            checkoutPath: "/repo",
+            branch: "fix/cpu-profile-build-diagnostics",
+            commitSha: "1234567890abcdef1234567890abcdef12345678",
+          },
+        },
+      });
+      expect(message).toContain([
+        "PwrAgent version: 2.3.4-dev",
+        "PwrAgent build: Development",
+        "PwrAgent development app path: /repo/apps/desktop",
+        "PwrAgent development checkout path: /repo",
+        "PwrAgent development branch (startup): fix/cpu-profile-build-diagnostics",
+        "PwrAgent development commit SHA (startup): 1234567890abcdef1234567890abcdef12345678",
+      ].join("\n"));
+    },
+  );
+
+  it("identifies a detached startup checkout and unavailable Git details", () => {
+    const message = buildHotCpuProfileHandoffMessage({
+      ...capturedEvent,
+      appBuildMetadata: {
+        applicationVersion: "2.3.4-dev",
+        buildIdentity: {
+          kind: "development",
+          appPath: "/repo/apps/desktop",
+          detachedHead: true,
+        },
+      },
+    });
+    expect(message).toContain("PwrAgent development branch (startup): Detached HEAD");
+    expect(message).toContain("PwrAgent development checkout path: Unavailable");
+    expect(message).toContain("PwrAgent development commit SHA (startup): Unavailable");
   });
 
   it("includes copyable basenames and absolute paths", () => {
@@ -41,6 +107,8 @@ describe("hot CPU profile handoff message", () => {
         "PwrAgent captured a renderer CPU profile.",
         "Source: Local app",
         "Captured at: 2026-06-10T12:00:00.000Z",
+        "PwrAgent version: Unavailable",
+        "PwrAgent build: Unavailable",
         "Trigger: Slowburn (2 consecutive samples >= 15%; trigger sample 24.3%)",
         "Session basename: 20260610T120000Z",
         "Session directory path: /Users/test/.pwragent/profiles/dev/diagnostics/hot-cpu/20260610T120000Z",
@@ -81,6 +149,8 @@ describe("hot CPU profile handoff message", () => {
         "PwrAgent captured a renderer CPU profile.",
         "Source: Local app",
         "Captured at: 2026-06-10T12:00:00.000Z",
+        "PwrAgent version: Unavailable",
+        "PwrAgent build: Unavailable",
         "Trigger: Spike (1 sample >= 50%; trigger sample 80%)",
         "Session basename: hot-cpu",
         "Session directory path: /tmp/hot-cpu",

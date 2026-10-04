@@ -24,6 +24,7 @@ import {
   MANAGED_CODEX_UPDATE_SIGNATURE_NAME,
   selectManagedCodexRelease,
   selectManagedCodexReleaseFromFeed,
+  selectManagedCodexReleaseSlots,
 } from "../codex-managed-runtime";
 import {
   readManagedRuntimeProgress,
@@ -58,7 +59,7 @@ describe("managed Codex release selection", () => {
         asset("pwragent-codex-0.200.0-pwragent.1-macos-aarch64.tar.gz"),
         ...publicationAssets(),
       ]),
-    ], "macos-aarch64");
+    ], "macos-aarch64", "latest");
 
     expect(selected).toMatchObject({
       tag: "pwragent-v0.200.0-pwragent.1",
@@ -87,10 +88,89 @@ describe("managed Codex release selection", () => {
     expect(managedCodexAssetPlatform("win32", "arm64")).toBeUndefined();
   });
 
+  it("keeps a build published for testing off the Latest track", () => {
+    const releases = [
+      release("pwragent-v0.201.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-codex-0.201.0-pwragent.1-linux-x86_64.tar.gz"),
+        ...publicationAssets(),
+      ], { prerelease: true }),
+      release("pwragent-v0.200.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz"),
+        ...publicationAssets(),
+      ]),
+    ];
+
+    expect(selectManagedCodexReleaseSlots(releases, "linux-x86_64")).toMatchObject({
+      latest: { tag: "pwragent-v0.200.0-pwragent.1" },
+      prerelease: { tag: "pwragent-v0.201.0-pwragent.1" },
+    });
+  });
+
+  it("gives both tracks the same build once the newest one is promoted", () => {
+    // Nothing is under test right now, so the tracks agree — and Prerelease
+    // has to stay selectable anyway, or an operator cannot be on it when the
+    // next test build lands.
+    const releases = [
+      release("pwragent-v0.201.0-pwragent.2", [
+        asset("SHA256SUMS"),
+        asset("pwragent-codex-0.201.0-pwragent.2-linux-x86_64.tar.gz"),
+        ...publicationAssets(),
+      ]),
+      release("pwragent-v0.201.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-codex-0.201.0-pwragent.1-linux-x86_64.tar.gz"),
+        ...publicationAssets(),
+      ], { prerelease: true }),
+    ];
+
+    const slots = selectManagedCodexReleaseSlots(releases, "linux-x86_64");
+    expect(slots.latest?.tag).toBe("pwragent-v0.201.0-pwragent.2");
+    expect(slots.prerelease?.tag).toBe("pwragent-v0.201.0-pwragent.2");
+  });
+
+  it("orders by precedence, not by the order GitHub returned", () => {
+    // A promotion is published against a release that already existed, so the
+    // newest entry in the response is not the newest build.
+    const releases = [
+      release("pwragent-v0.200.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz"),
+        ...publicationAssets(),
+      ]),
+      release("pwragent-v0.210.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-codex-0.210.0-pwragent.1-linux-x86_64.tar.gz"),
+        ...publicationAssets(),
+      ]),
+    ];
+
+    expect(
+      selectManagedCodexRelease(releases, "linux-x86_64", "latest")?.tag,
+    ).toBe("pwragent-v0.210.0-pwragent.1");
+  });
+
+  it("refuses to serve the Latest track from the unlabeled Atom feed", () => {
+    // The feed carries tags, not release records, so it cannot tell a promoted
+    // build from one published for testing. Answering the Latest track from it
+    // would hand over exactly the build the operator opted out of.
+    const feed =
+      '<link href="https://github.com/pwrdrvr/codex/releases/tag/pwragent-v0.200.0-pwragent.1"/>'
+      + '<link href="https://github.com/pwrdrvr/codex/releases/tag/pwragent-v0.210.0-pwragent.1"/>';
+    expect(
+      selectManagedCodexReleaseFromFeed(feed, "linux-x86_64", "latest"),
+    ).toBeUndefined();
+    expect(
+      selectManagedCodexReleaseFromFeed(feed, "linux-x86_64", "prerelease"),
+    ).toMatchObject({ tag: "pwragent-v0.210.0-pwragent.1" });
+  });
+
   it("derives immutable asset URLs from the public Atom feed", () => {
     const selected = selectManagedCodexReleaseFromFeed(
       '<link href="https://github.com/pwrdrvr/codex/releases/tag/pwragent-v0.200.0-pwragent.1"/>',
       "windows-x86_64",
+      "prerelease",
     );
 
     expect(selected).toMatchObject({
@@ -453,6 +533,230 @@ describe("ensureManagedCodexRuntime", () => {
     expect(runtime.metadata.tag).toBe(tag);
   });
 
+  it("installs the Latest build and records what both tracks resolved to", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("promoted codex archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const testBuild = "pwragent-v0.201.0-pwragent.1";
+
+    const runtime = await ensureManagedCodexRuntime({
+      arch: "x64",
+      // No channel: Latest is the default, so nobody inherits a test build.
+      checkMode: "force",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir, "linux");
+      },
+      fetch: releaseFetch({
+        archive,
+        archiveName,
+        digest,
+        otherReleases: [release(testBuild, [
+          asset("SHA256SUMS"),
+          asset("pwragent-codex-0.201.0-pwragent.1-linux-x86_64.tar.gz"),
+          ...publicationAssets(),
+        ], { prerelease: true })],
+        tag,
+      }) as typeof globalThis.fetch,
+      platform: "linux",
+      probeVersion: versionProbe(version),
+      rootDir,
+    });
+
+    expect(runtime.metadata).toMatchObject({
+      channel: "latest",
+      latestTag: tag,
+      prereleaseTag: testBuild,
+      tag,
+    });
+    // Both tracks are on disk, so the next launch's Settings can name them.
+    expect(JSON.parse(
+      await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
+    )).toMatchObject({
+      channel: "latest",
+      latestTag: tag,
+      prereleaseTag: testBuild,
+    });
+  });
+
+  it("re-checks when the fresh cache was installed for the other track", async () => {
+    // The managed root is machine-wide. A profile on Prerelease rewrites the
+    // record a profile on Latest reads next, and the fresh `checkedAt` alone
+    // would hand Latest the build it exists to avoid.
+    const rootDir = await temporaryRoot();
+    const cachedTag = "pwragent-v0.201.0-pwragent.1";
+    const cachedVersion = "0.201.0-pwragent.1";
+    await writeManagedCache(rootDir, {
+      channel: "prerelease",
+      tag: cachedTag,
+      version: cachedVersion,
+    });
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("promoted codex archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+
+    const runtime = await ensureManagedCodexRuntime({
+      arch: "x64",
+      channel: "latest",
+      // A TTL check against a record written moments ago: the short-circuit
+      // this test exists to defeat.
+      checkMode: "ttl",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir, "linux");
+      },
+      fetch: releaseFetch({
+        archive,
+        archiveName,
+        digest,
+        otherReleases: [release(cachedTag, [
+          asset("SHA256SUMS"),
+          asset(`pwragent-codex-${cachedVersion}-linux-x86_64.tar.gz`),
+          ...publicationAssets(),
+        ], { prerelease: true })],
+        tag,
+      }) as typeof globalThis.fetch,
+      now: () => 200,
+      platform: "linux",
+      probeVersion: versionByTag({ [cachedTag]: cachedVersion }, version),
+      rootDir,
+      waitForUpdate: true,
+    });
+
+    expect(runtime.metadata).toMatchObject({
+      channel: "latest",
+      prereleaseTag: cachedTag,
+      tag,
+    });
+  });
+
+  it("checks the new track after an in-flight check for the other one", async () => {
+    // A track switch can land while the old track's check is still running.
+    // Joining that check would hand the switch the build the operator left.
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.201.0-pwragent.1";
+    const version = "0.201.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("prerelease codex archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const installable = releaseFetch({ archive, archiveName, digest, tag });
+    let finishLatestCheck!: () => void;
+    const latestCheckGate = new Promise<void>((resolve) => {
+      finishLatestCheck = resolve;
+    });
+    let firstReleaseCheck = true;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === MANAGED_CODEX_RELEASES_URL && firstReleaseCheck) {
+        firstReleaseCheck = false;
+        await latestCheckGate;
+        return new Response("offline", { status: 503 });
+      }
+      return await installable(input);
+    });
+    const common = {
+      arch: "x64" as const,
+      checkMode: "force" as const,
+      extractArchive: async (_archivePath: string, targetDir: string) => {
+        await writeFakeBundle(targetDir, "linux");
+      },
+      fetch: fetchMock as typeof globalThis.fetch,
+      platform: "linux" as const,
+      probeVersion: versionProbe(version),
+      rootDir,
+    };
+
+    const latest = ensureManagedCodexRuntime({ ...common, channel: "latest" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const prerelease = ensureManagedCodexRuntime({
+      ...common,
+      channel: "prerelease",
+    });
+    finishLatestCheck();
+
+    await expect(latest).rejects.toThrow("HTTP 503");
+    await expect(prerelease).resolves.toMatchObject({
+      metadata: { channel: "prerelease", tag },
+    });
+  });
+
+  it("serves an other-track cache at startup while its re-check runs", async () => {
+    // Startup never waits on a download, for a stale cache or a mistracked
+    // one. The re-check starts now instead of when the TTL runs out.
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.201.0-pwragent.1";
+    const version = "0.201.0-pwragent.1";
+    await writeManagedCache(rootDir, { channel: "prerelease", tag, version });
+    const controller = new AbortController();
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason);
+          }, { once: true });
+        }),
+    );
+
+    try {
+      const runtime = await ensureManagedCodexRuntime({
+        arch: "x64",
+        channel: "latest",
+        checkMode: "ttl",
+        fetch: fetchMock as typeof globalThis.fetch,
+        now: () => 101,
+        platform: "linux",
+        probeVersion: versionProbe(version),
+        rootDir,
+        signal: controller.signal,
+      });
+
+      expect(runtime.metadata.tag).toBe(tag);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    } finally {
+      controller.abort();
+    }
+  });
+
+  it("keeps the cached build on Latest when only the feed answers", async () => {
+    // The feed cannot say which builds are promoted, so the Latest track has
+    // no usable answer this cycle. Installing the newest tag anyway would put
+    // an untested build on the track that exists to avoid them.
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    await writeManagedCache(rootDir, { tag, version });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === MANAGED_CODEX_RELEASES_URL) {
+        return new Response("limited", { status: 403 });
+      }
+      if (url === MANAGED_CODEX_RELEASES_FEED_URL) {
+        return new Response(
+          '<link href="https://github.com/pwrdrvr/codex/releases/tag/pwragent-v0.201.0-pwragent.1"/>',
+        );
+      }
+      return new Response("missing", { status: 404 });
+    });
+
+    const runtime = await ensureManagedCodexRuntime({
+      arch: "x64",
+      channel: "latest",
+      checkMode: "force",
+      fetch: fetchMock as typeof globalThis.fetch,
+      platform: "linux",
+      probeVersion: versionProbe(version),
+      rootDir,
+    });
+
+    expect(runtime.metadata.tag).toBe(tag);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("pwragent-v0.201.0-pwragent.1"),
+      expect.anything(),
+    );
+  });
+
   it("serves a stale verified cache while its update check runs", async () => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v0.149.0-pwragent.2";
@@ -655,6 +959,8 @@ describe("ensureManagedCodexRuntime", () => {
 
     const runtime = await ensureManagedCodexRuntime({
       arch: "x64",
+      // The feed serves the Prerelease track only; see the Latest case below.
+      channel: "prerelease",
       checkMode: "force",
       extractArchive: async (_archivePath, targetDir) => {
         await writeFakeBundle(targetDir, "linux");
@@ -666,6 +972,7 @@ describe("ensureManagedCodexRuntime", () => {
     });
 
     expect(runtime.metadata.tag).toBe(tag);
+    expect(runtime.metadata.channel).toBe("prerelease");
     if (cachedLimit) {
       expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).hostname === "api.github.com"))
         .toHaveLength(0);
@@ -778,19 +1085,31 @@ function publicationAssets() {
   ];
 }
 
-function release(tag: string, assets: ReturnType<typeof asset>[]) {
-  return { assets, draft: false, published_at: "2026-08-28", tag_name: tag };
+function release(
+  tag: string,
+  assets: ReturnType<typeof asset>[],
+  options: { prerelease?: boolean } = {},
+) {
+  return {
+    assets,
+    draft: false,
+    prerelease: options.prerelease === true,
+    published_at: "2026-08-28",
+    tag_name: tag,
+  };
 }
 
 function releaseFetch(params: {
   archive: Buffer;
   archiveName: string;
   digest: string;
+  /** Listed ahead of the installable release, as a newer build would be. */
+  otherReleases?: ReturnType<typeof release>[];
   tag: string;
   unselectedArtifactSize?: number;
 }) {
   const publication = publicationFixture(params);
-  const payload = [release(params.tag, [
+  const payload = [...(params.otherReleases ?? []), release(params.tag, [
     asset("SHA256SUMS"),
     asset(params.archiveName, params.digest, params.archive.length),
     ...publicationAssets(),
@@ -936,6 +1255,19 @@ function versionProbe(version: string) {
   };
 }
 
+/** A probe for a root holding more than one version: keyed by the tag directory. */
+function versionByTag(
+  versions: Record<string, string>,
+  fallback: string,
+) {
+  return async (command: string): Promise<string> => {
+    const tag = Object.keys(versions).find((candidate) =>
+      command.split(path.sep).includes(candidate)
+    );
+    return await versionProbe(tag ? versions[tag] : fallback)(command);
+  };
+}
+
 async function temporaryRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "pwragent-managed-codex-"));
   cleanupPaths.push(root);
@@ -968,7 +1300,7 @@ async function writeFakeBundle(
 
 async function writeManagedCache(
   rootDir: string,
-  params: { tag: string; version: string },
+  params: { channel?: "latest" | "prerelease"; tag: string; version: string },
 ): Promise<void> {
   const versionRoot = path.join(rootDir, "versions", params.tag);
   await writeFakeBundle(versionRoot, "linux");
@@ -976,6 +1308,7 @@ async function writeManagedCache(
     path.join(rootDir, "managed-release.json"),
     `${JSON.stringify({
       asset: `pwragent-codex-${params.version}-linux-x86_64.tar.gz`,
+      ...(params.channel ? { channel: params.channel } : {}),
       checkedAt: 100,
       installedAt: 100,
       repository: "pwrdrvr/codex",

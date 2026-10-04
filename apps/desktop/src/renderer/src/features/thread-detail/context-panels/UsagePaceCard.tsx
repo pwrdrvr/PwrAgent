@@ -12,7 +12,7 @@ import {
   usagePercent,
   usageWhen,
 } from "../../federation-activity/usage-activity-presentation";
-import { useLocalUsagePace, usagePaceRefreshKey } from "../../federation-activity/useLocalUsagePace";
+import { useLocalUsagePace, usagePaceAccountKey, usagePaceRefreshKey } from "../../federation-activity/useLocalUsagePace";
 
 type UsagePaceCardProps = {
   desktopApi?: Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
@@ -34,7 +34,7 @@ export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends 
   const verdictId = useId();
   const open = desktopApi?.openUsageActivity;
   // Nothing renders without a way to open the window, so nothing is read.
-  const pace = useLocalUsagePace(open ? desktopApi?.readUsageActivity : undefined, usagePaceRefreshKey(backends));
+  const pace = useLocalUsagePace(open ? desktopApi?.readUsageActivity : undefined, usagePaceRefreshKey(backends), usagePaceAccountKey(backends));
   if (!open) return null;
   const series = sinceResetSeries(pace?.account);
   if (!pace || !series) {

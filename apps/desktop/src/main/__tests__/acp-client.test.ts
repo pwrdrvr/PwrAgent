@@ -163,6 +163,26 @@ describe("AcpAgentClient", () => {
       await client.dispose();
     },
   );
+  it("rejects unsupported Grok steering before sending the extension RPC", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "_x.ai/session/steer": { result: { delivery: "currentTurn" } },
+    });
+    const client = new AcpAgentClient({ backendId: "acp:grok", store, transport });
+    await client.initialize();
+    const session = await client.startSession({ executionMode: "default", mcpServers: "none" });
+    try {
+      await expect(client.steerSession({
+        sessionId: session.sessionId,
+        text: "Add berries",
+        content: [{ type: "text", text: "Add berries" }],
+        interjectionId: "steer-unsupported",
+      })).rejects.toThrow("does not support turn steering over ACP");
+      expect(transport.requests.map((request) => request.method)).not.toContain("_x.ai/session/steer");
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("sends Grok steering and workflow-budget extension payloads", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": { sessionId: "grok-session" },
@@ -175,6 +195,7 @@ describe("AcpAgentClient", () => {
     });
     const client = new AcpAgentClient({
       backendId: "acp:grok",
+      supportsTurnSteering: true,
       store,
       transport,
     });
@@ -4015,7 +4036,7 @@ describe("AcpAgentClient", () => {
     });
     const errorMessage =
       "Kimi Code CLI ended the turn without a response. Kimi Code CLI 1.46.0 may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.";
-    expect((errors[0]?.error as Error).message).toBe(errorMessage);
+    expect((errors[0]!.error as Error).message).toBe(errorMessage);
     expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
       lastError: errorMessage,
       status: "idle",
@@ -4275,7 +4296,7 @@ describe("AcpAgentClient", () => {
       turnId: "pending:session-1",
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
-    expect((errors[0]?.error as Error).message).toBe(quotaError);
+    expect((errors[0]!.error as Error).message).toBe(quotaError);
     expect(sessionUpdateKinds).not.toContain("turn_finished");
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       hasConversationHistory: true,

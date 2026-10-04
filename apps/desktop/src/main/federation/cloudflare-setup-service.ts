@@ -16,6 +16,7 @@ import {
   isExactIdentityPolicy,
   isDedicatedApplication,
   isExpectedOAuthConfiguration,
+  oauthGrantLifetimeMs,
   parseCloudflareDuration,
   type AccessApplication,
   type CloudflareGate,
@@ -639,15 +640,31 @@ export class CloudflareSetupService {
   }
 
   /**
-   * The audit gate every client hand-off passes. Under `oauth` it is the whole
-   * of issuing: the file carries an endpoint and an invite, and the person
-   * brings their own identity.
+   * Sign-in hand-offs use the saved published endpoint and a local invite;
+   * they neither issue credentials nor change Cloudflare admission. Only
+   * credential issuance needs a fresh policy audit and an administration token.
    */
   async assertShareable(): Promise<CloudflareSetupState> {
     const state = await this.state();
+    if (cloudflareSetupGate(state) === "oauth"
+      && (!state.dnsId || !state.applicationId || !state.identityPolicyId || !state.tunnelId || !state.tunnelToken)) {
+      throw new Error("Complete endpoint creation before sharing a client setup.");
+    }
     this.deps.verifyListener(state.listenPort);
+    if (cloudflareSetupGate(state) === "oauth") return state;
     if ((await this.audit()).some((check) => !check.passed)) throw new Error("Resolve the policy audit before sharing a client setup.");
     return state;
+  }
+
+  /**
+   * How long a sign-in to this `oauth` endpoint lasts, read live from its
+   * Access application, so a setup file states the grant the client will get.
+   */
+  async signInLifetimeMs(): Promise<number | undefined> {
+    const state = await this.state();
+    if (cloudflareSetupGate(state) !== "oauth" || !state.applicationId) return undefined;
+    const app = await this.apiClient().request<AccessApplication>(`/accounts/${state.accountId}/access/apps/${state.applicationId}`);
+    return oauthGrantLifetimeMs(app.oauth_configuration);
   }
 
   async issue(label: string): Promise<Client> {

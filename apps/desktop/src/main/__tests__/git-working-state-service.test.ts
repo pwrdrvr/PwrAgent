@@ -199,6 +199,55 @@ describe("probeWorktreeWorkingState", () => {
     }
   }, 20_000);
 
+  it("uses a published PR head with stale remote refs and no branch tracker", async () => {
+    const root = await mkdtemp(makeTempPrefix());
+    const primary = path.join(root, "primary");
+    const remote = path.join(root, "remote.git");
+    const worktree = path.join(root, "feature-worktree");
+    const publisher = path.join(root, "publisher");
+
+    try {
+      await mkdir(primary);
+      await git(root, "init", "--bare", remote);
+      await git(primary, "init", "-b", "main");
+      await git(primary, "config", "user.email", "test@example.com");
+      await git(primary, "config", "user.name", "PwrAgent Test");
+      await git(primary, "commit", "--allow-empty", "-m", "base");
+      await git(primary, "remote", "add", "origin", remote);
+      await git(primary, "push", "origin", "main");
+      await git(primary, "worktree", "add", "-b", "feature", worktree, "main");
+      await git(worktree, "push", "origin", "feature");
+      const staleRemoteHead = (await git(worktree, "rev-parse", "origin/feature")).trim();
+      await git(worktree, "commit", "--allow-empty", "-m", "published feature");
+      const publishedHead = (await git(worktree, "rev-parse", "HEAD")).trim();
+      // Publish from a separate clone, matching an agent that pushes outside
+      // this checkout's remote. No push updates another repository's refs, so
+      // origin/feature stays stale. Since Git 2.56, a push from this checkout
+      // to a URL that matches origin's advances it.
+      await git(root, "clone", primary, publisher);
+      await git(publisher, "push", remote, `${publishedHead}:refs/heads/feature`);
+      expect((await git(worktree, "ls-remote", remote, "refs/heads/feature"))
+        .split(/\s+/)[0]).toBe(publishedHead);
+      expect((await git(worktree, "rev-parse", "origin/feature")).trim()).toBe(staleRemoteHead);
+      expect(await git(worktree, "for-each-ref", "--format=%(upstream)", "refs/heads/feature")).toBe("\n");
+      expect((await probeWorktreeWorkingState(worktree))?.unpushedCommits).toBe(1);
+
+      const options = { acceptedPushedCommitShas: [publishedHead] };
+      const service = new GitWorkingStateService();
+      expect((await probeWorktreeWorkingState(worktree, options))?.unpushedCommits).toBe(0);
+      expect((await service.listUnpublishedCommits(worktree, options)).totalCommits).toBe(0);
+
+      await git(worktree, "commit", "--allow-empty", "-m", "local follow-up");
+      const localHead = (await git(worktree, "rev-parse", "HEAD")).trim();
+      expect((await probeWorktreeWorkingState(worktree, options))?.unpushedCommits).toBe(1);
+      const unpublished = await service.listUnpublishedCommits(worktree, options);
+      expect(unpublished.totalCommits).toBe(1);
+      expect(unpublished.commits.map((commit) => commit.sha)).toEqual([localHead]);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  }, 20_000);
+
   it("falls back to the raw local count when PR exclusion input fails", async () => {
     const mergedPrHeadSha = "a".repeat(40);
     const { runGit, calls } = fakeGit((args) => {

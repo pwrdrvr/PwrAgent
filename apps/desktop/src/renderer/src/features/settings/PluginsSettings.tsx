@@ -11,6 +11,7 @@ import type {
   DesktopSettingsSnapshot,
   McpConnectionSetupState,
   McpConnectionStatus,
+  McpConnectionToolApproval,
   ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
@@ -23,6 +24,7 @@ import {
   summarizeMcpConnectionReadiness,
 } from "@pwragent/shared";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
+import { Select, type SelectOption } from "../../components/Select";
 import {
   ChipContextMenu,
   type ChipContextMenuPosition,
@@ -73,9 +75,18 @@ type ConnectionPendingAction = {
     | "newThreadDefault"
     | "probe"
     | "remove"
+    | "toolApproval"
     | "update";
   connectionId?: string;
 };
+
+// What each mode does, said the way the gateway decides it. `auto` is
+// Codex's own rule, so the first line is the one a Codex user already knows.
+const TOOL_APPROVAL_OPTIONS: SelectOption<McpConnectionToolApproval>[] = [
+  { value: "auto", label: "Ask before changes", description: "Read-only tools run without asking." },
+  { value: "prompt", label: "Ask for every tool", description: "Read-only tools ask too." },
+  { value: "approve", label: "Allow all tools", description: "No tool asks, including ones that make changes." },
+];
 
 /** An in-place edit of a stored connection's name and endpoint. */
 type ConnectionEditDraft = {
@@ -1078,6 +1089,42 @@ export function PluginsSettings(props: {
     }
   };
 
+  const setConnectionToolApproval = async (
+    connection: McpConnectionStatus,
+    toolApproval: McpConnectionToolApproval,
+  ) => {
+    if (
+      connectionPending
+      || !props.desktopApi?.setMcpConnectionToolApproval
+    ) return;
+    setConnectionPending({
+      kind: "toolApproval",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.setMcpConnectionToolApproval({
+        connectionId: connection.id,
+        toolApproval,
+      });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: toolApproval === "approve"
+          ? `${connection.displayName} runs every tool without asking.`
+          : toolApproval === "prompt"
+            ? `${connection.displayName} asks before every tool.`
+            : `${connection.displayName} asks before tools that make changes.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const removeConnection = async () => {
     const connection = connectionRemoveCandidate;
     if (
@@ -1219,6 +1266,12 @@ export function PluginsSettings(props: {
                             connection,
                             selectForNewThreads,
                           )
+                      : undefined
+                  }
+                  onToolApprovalChange={
+                    props.desktopApi?.setMcpConnectionToolApproval
+                      ? (toolApproval) =>
+                          void setConnectionToolApproval(connection, toolApproval)
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -1800,6 +1853,7 @@ function ManagedMcpConnectionRow(props: {
   onCancelAuthorization: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
+  onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -1808,7 +1862,10 @@ function ManagedMcpConnectionRow(props: {
 }) {
   const connection = props.connection;
   const drawerId = useId();
+  const toolApprovalLabelId = useId();
+  const toolApprovalHintId = useId();
   const [expanded, setExpanded] = useState(false);
+  const toolApproval = connection.toolApproval ?? "auto";
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
     : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
@@ -2111,6 +2168,34 @@ function ManagedMcpConnectionRow(props: {
                     : seedable
                       ? "New threads start with it selected. Existing threads keep theirs."
                       : "New threads skip it until it is signed in again."}
+                </span>
+              </span>
+            </div>
+          ) : null}
+          {/*
+            * A choice of three, not a switch: each mode is a different
+            * question about every tool, and its line under the field says
+            * which. Not tied to Offer: the mode can be set before the
+            * connection is offered, and nothing reads it until it is.
+            */}
+          {props.onToolApprovalChange ? (
+            <div className="settings-mcp-row__policy-item settings-mcp-row__policy-item--choice">
+              <span className="settings-mcp-row__policy-text">
+                <span className="settings-mcp-row__policy-label" id={toolApprovalLabelId}>
+                  Tool approval
+                </span>
+                <Select
+                  aria-describedby={toolApprovalHintId}
+                  aria-labelledby={toolApprovalLabelId}
+                  className="settings-select settings-select--chip"
+                  disabled={disabled || !props.gatewayEnabled}
+                  options={TOOL_APPROVAL_OPTIONS}
+                  value={toolApproval}
+                  onChange={props.onToolApprovalChange}
+                />
+                <span className="settings-mcp-row__policy-hint" id={toolApprovalHintId}>
+                  {TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
+                  {" "}Full Access threads never ask.
                 </span>
               </span>
             </div>

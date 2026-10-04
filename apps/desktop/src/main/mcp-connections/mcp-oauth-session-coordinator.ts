@@ -437,6 +437,10 @@ export class McpOAuthSessionCoordinator {
     try {
       response = await this.fetchWithToken(url, init, accessToken);
     } catch (error) {
+      // Closing a Streamable HTTP client aborts its notification GET. A
+      // cancelled session or tool request says nothing about server health,
+      // and must not overwrite a failure reported by another request either.
+      if (init?.signal?.aborted) throw error;
       const detail = errorMessage(error);
       this.setState("temporarily_unavailable", detail);
       throw new Error(detail, { cause: error });

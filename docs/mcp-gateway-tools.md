@@ -30,8 +30,9 @@ still apply to every call. No permission is cached for the generic wrapper.
 
 Default and Auto access request once-only confirmation showing the original
 connection, tool and complete arguments. Codex's App Server does not expose an
-API for submitting host-owned dynamic calls to its Auto reviewer. Until that
-integration exists, Auto gateway calls still require human confirmation.
+API for submitting host-owned dynamic calls to its Auto reviewer. Auto gateway
+calls require human confirmation; PwrAgent does not use a model to choose MCP
+consent or its persistence scope.
 Headless calls without Full Access or an automation MCP grant decline because
 they cannot obtain it.
 Native invocation remains available under the backend's own policy; inherited
@@ -40,6 +41,14 @@ provider MCP servers are not exposed through this gateway.
 Only the gateway's host-created invocation approval follows this policy.
 Upstream MCP forms, including empty forms, and URL flows remain interactive:
 their shape alone does not distinguish tool approval from a question or login.
+For an identified MCP tool approval with an empty form, the desktop offers
+the persistence scopes advertised in `_meta.persist`. **Allow this conversation**
+returns `_meta: { persist: "session" }`; **Always allow** returns
+`_meta: { persist: "always" }`. Browser origin approvals use the same advertised
+scopes. The server owns the grant's scope and storage; PwrAgent does not cache
+an allowance for every tool on that server. Questions and login requests do not
+receive persistent grants. Gateway invocation confirmations do not advertise
+persistence and remain governed by the policy above.
 
 ### Automation MCP grants
 
@@ -62,8 +71,13 @@ Grants are revoked on failed startup, turn completion, and shutdown. Unknown or
 ambiguous saved server names fail explicitly without creating a transport-less
 Codex configuration entry.
 
-This authorization applies to invocation approvals. Upstream MCP questions and
-URL/login flows still need interaction and are cancelled in headless runs.
+This authorization also answers native Codex MCP tool consent when the request
+identifies an approval, has an empty form, and matches the run's approved server
+and tool. The registry rechecks the Agent's selection and the active run before
+responding. It returns the advertised conversation scope (`persist: "session"`)
+when available; otherwise it accepts that request once. An unattended run never
+creates an `always` grant. Upstream MCP questions and URL/login flows still need
+interaction and are cancelled in headless runs.
 
 Arguments are validated before requesting approval. After approval, the owner
 broker lists the tools again, compares the revision, validates the arguments and

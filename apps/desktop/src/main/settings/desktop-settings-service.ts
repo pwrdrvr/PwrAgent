@@ -1,4 +1,7 @@
-import { normalizeThreadArchivePolicy } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
+  normalizeThreadArchivePolicy,
+} from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { getAppStateDb } from "../state/app-state";
@@ -10,6 +13,8 @@ import {
 import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
   DesktopSpendAlertPolicy,
@@ -20,6 +25,8 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopHelperModelSettings,
+  DesktopDecisionModelSettings,
+  DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
   DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
@@ -49,6 +56,7 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
+  ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
@@ -65,6 +73,8 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
@@ -78,6 +88,7 @@ import {
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   resolveDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
+  MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
   MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -295,6 +306,7 @@ type DesktopSettingsServiceOptions = {
   defaultManagedGrokBuilds?: boolean;
   retainCachedCodexCommand?: (command: string) => Promise<void>;
   ensureManagedCodexRuntime?: (options: {
+    channel: DesktopUpdateChannel;
     checkMode: ManagedCodexCheckMode;
     signal?: AbortSignal;
     waitForUpdate?: boolean;
@@ -319,6 +331,8 @@ type DesktopSettingsServiceOptions = {
    */
   onAppearanceChange?: (appearance: {
     theme: DesktopAppearanceTheme;
+    darkTheme: DesktopDarkTheme;
+    lightTheme: DesktopLightTheme;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -377,6 +391,21 @@ function isManagedCodexWanted(
   managedBuilds: boolean,
 ): boolean {
   return tokenMiserEnabled || managedBuilds;
+}
+
+/** What each track resolved to at the last release check, for the track control. */
+function managedCodexTrackTags(runtime: ManagedCodexRuntime): {
+  latestTag?: string;
+  prereleaseTag?: string;
+} {
+  return {
+    ...(runtime.metadata.latestTag
+      ? { latestTag: runtime.metadata.latestTag }
+      : {}),
+    ...(runtime.metadata.prereleaseTag
+      ? { prereleaseTag: runtime.metadata.prereleaseTag }
+      : {}),
+  };
 }
 
 function codexDiscoveryFromProvider(
@@ -774,6 +803,16 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    const decisionLocalApiKey = await this.readSecretState(
+      "decisionLocalApiKey",
+      undefined,
+      secretStorage.available,
+    );
+    const typesafeJevApiKey = await this.readSecretState(
+      "typesafeJevApiKey",
+      undefined,
+      secretStorage.available,
+    );
     const managedCodexRuntime = this.managedCodexRuntime;
     const managedCodexError = this.managedCodexError;
     const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
@@ -859,48 +898,28 @@ export class DesktopSettingsService {
       configPath: this.configPath,
       configError: error,
       runtime: {
-        tokenMiser: tokenMiserActivation
-          ? {
-              activation: tokenMiserActivation,
-              ...(managedCodexRuntime
-                ? {
-                    managedCodex: {
-                      state: this.managedCodexRuntimeSwitchPending
-                        ? "pending-switch" as const
-                        : "ready" as const,
-                      version: managedCodexRuntime.metadata.version,
-                      checkedAt: managedCodexRuntime.metadata.checkedAt,
-                    },
-                  }
-                : managedCodexError
-                  ? {
-                      managedCodex: {
-                        state: "unavailable" as const,
-                        reason: managedCodexError,
-                      },
-                    }
-                  : {}),
-            }
-          : {
-              ...(managedCodexRuntime
-                ? {
-                    managedCodex: {
-                      state: this.managedCodexRuntimeSwitchPending
-                        ? "pending-switch" as const
-                        : "ready" as const,
-                      version: managedCodexRuntime.metadata.version,
-                      checkedAt: managedCodexRuntime.metadata.checkedAt,
-                    },
-                  }
-                : managedCodexError
-                  ? {
-                      managedCodex: {
-                        state: "unavailable" as const,
-                        reason: managedCodexError,
-                      },
-                    }
-                  : {}),
-            },
+        tokenMiser: {
+          ...(tokenMiserActivation ? { activation: tokenMiserActivation } : {}),
+          ...(managedCodexRuntime
+            ? {
+                managedCodex: {
+                  state: this.managedCodexRuntimeSwitchPending
+                    ? "pending-switch" as const
+                    : "ready" as const,
+                  version: managedCodexRuntime.metadata.version,
+                  checkedAt: managedCodexRuntime.metadata.checkedAt,
+                  ...managedCodexTrackTags(managedCodexRuntime),
+                },
+              }
+            : managedCodexError
+              ? {
+                  managedCodex: {
+                    state: "unavailable" as const,
+                    reason: managedCodexError,
+                  },
+                }
+              : {}),
+        },
         tokenMiserDiagnosticsDirectory: path.join(
           this.tokenMiserStateDir(),
           TOKEN_MISER_DIAGNOSTICS_DIRNAME,
@@ -928,6 +947,17 @@ export class DesktopSettingsService {
         attentionPromoteOnTurnEnd: this.resolveConfigBoolean(
           config.general?.attentionPromoteOnTurnEnd,
           true,
+        ),
+        // Default off for both: an SVG's scripts are untrusted code, so the
+        // lightbox shows the static preview and asks before running them
+        // until the operator says otherwise.
+        interactiveSvgSkipNotice: this.resolveConfigBoolean(
+          config.general?.interactiveSvgSkipNotice,
+          false,
+        ),
+        interactiveSvgAutoOpen: this.resolveConfigBoolean(
+          config.general?.interactiveSvgAutoOpen,
+          false,
         ),
         // Default on: the gateway only does work for connections the
         // operator explicitly added and authorized, so an empty registry
@@ -1025,6 +1055,20 @@ export class DesktopSettingsService {
           theme: this.resolveAppearanceTheme(
             config.general?.appearance?.theme,
           ),
+          darkTheme: this.resolveDarkTheme(
+            config.general?.appearance?.darkTheme,
+          ),
+          lightTheme: this.resolveLightTheme(
+            config.general?.appearance?.lightTheme,
+          ),
+          themedDockIcon: this.resolveConfigBoolean(
+            config.general?.appearance?.themedDockIcon,
+            true,
+          ),
+          terminalMinimumContrast: this.resolveConfigBoolean(
+            config.general?.appearance?.terminalMinimumContrast,
+            false,
+          ),
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
           ),
@@ -1111,6 +1155,12 @@ export class DesktopSettingsService {
           config.experimental?.codexSkillQuestionsWarningDismissed,
           false,
         ),
+        codexConfigWarningsDismissed: {
+          value: config.experimental?.codexConfigWarningsDismissed ?? [],
+          source: config.experimental?.codexConfigWarningsDismissed === undefined
+            ? "default"
+            : "config",
+        },
         managedReview: this.resolveConfigBoolean(
           config.experimental?.managedReview,
           false,
@@ -1503,10 +1553,14 @@ export class DesktopSettingsService {
         },
       },
       models: {
+        usageAccountGroups: config.models?.usageAccountGroups ?? {},
+        usageAccountNames: config.models?.usageAccountNames ?? {},
         providerDefaults: config.models?.providerDefaults ?? {},
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
+        decisionModels: config.models?.decisionModels ?? {},
+        decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -1526,6 +1580,13 @@ export class DesktopSettingsService {
             config.models?.codex?.managedBuilds,
             false,
           ),
+          managedBuildChannel: {
+            value: config.models?.codex?.managedBuildChannel
+              ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
+            source: config.models?.codex?.managedBuildChannel === undefined
+              ? "default"
+              : "config",
+          },
           ...(this.options.ensureManagedCodexRuntime
             && this.resolveTokenMiserEnabled()
             ? { managedBuildsRequiredBy: "token-miser" as const }
@@ -1625,6 +1686,9 @@ export class DesktopSettingsService {
         pausePrAutoDispatchWhenBudgetEmpty: this.resolveConfigBoolean(
           config.git?.pausePrAutoDispatchWhenBudgetEmpty,
           DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+        ),
+        defaultMergeMethod: this.resolveDefaultMergeMethodValue(
+          config.git?.defaultMergeMethod,
         ),
       },
       worktrees: {
@@ -2021,6 +2085,12 @@ export class DesktopSettingsService {
     );
   }
 
+  /** Which pwrdrvr/codex track the managed runtime follows. */
+  resolveManagedCodexBuildChannel(): DesktopUpdateChannel {
+    return this.configStore.read("models").codex?.managedBuildChannel
+      ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT;
+  }
+
   resolveTokenMiserFocusedSummariesEnabled(): boolean {
     return this.configStore.read("experimental").tokenMiserFocusedSummariesEnabled
       ?? false;
@@ -2064,6 +2134,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readExperimentalConfig().managedReview,
       false,
+    ).value;
+  }
+
+  /** What a to-do card's merge button does when its project has no pick. */
+  resolveDefaultMergeMethod(): ThreadTodoMergeMethod {
+    return this.resolveDefaultMergeMethodValue(
+      this.configStore.read("git")?.defaultMergeMethod,
     ).value;
   }
 
@@ -2133,6 +2210,14 @@ export class DesktopSettingsService {
     const managedCodexPatched =
       patch.experimental?.tokenMiserEnabled !== undefined
       || patch.models?.codex?.managedBuilds !== undefined;
+    // A new track while the build stays on: install that track's build now,
+    // even when it is a step back from what is running. Moving from
+    // Prerelease to Latest is a downgrade on purpose. Enabling installs the
+    // saved track before the write lands, so it does not need a second check.
+    const switchingManagedCodexTrack =
+      patch.models?.codex?.managedBuildChannel !== undefined
+      && managedCodexAfter
+      && !enablingManagedCodex;
     // The switch is a transaction from the operator's perspective: acquire a
     // usable managed Codex first, then persist availability. A failed first
     // install leaves the feature off instead of selecting an arbitrary Codex.
@@ -2141,7 +2226,11 @@ export class DesktopSettingsService {
         "settings-user-action",
         "setup-user-action",
       ]);
-      await this.ensureManagedCodexRuntime("force");
+      // Install the track this write saves, not the one it replaces.
+      await this.ensureManagedCodexRuntime("force", {
+        channel: patch.models?.codex?.managedBuildChannel
+          ?? this.resolveManagedCodexBuildChannel(),
+      });
     }
     if (disablingManagedCodex) {
       this.abortManagedCodexUpdate();
@@ -2163,6 +2252,8 @@ export class DesktopSettingsService {
     if (
       appearancePatch
       && (appearancePatch.theme !== undefined
+        || appearancePatch.darkTheme !== undefined
+        || appearancePatch.lightTheme !== undefined
         || appearancePatch.density !== undefined
         || appearancePatch.sidebarTextSize !== undefined
         || appearancePatch.transcriptTextSize !== undefined)
@@ -2170,6 +2261,8 @@ export class DesktopSettingsService {
       const next = update.values.general?.appearance;
       this.options.onAppearanceChange?.({
         theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+        darkTheme: next?.darkTheme ?? DESKTOP_DARK_THEME_DEFAULT,
+        lightTheme: next?.lightTheme ?? DESKTOP_LIGHT_THEME_DEFAULT,
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
         sidebarTextSize:
           next?.sidebarTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
@@ -2192,7 +2285,11 @@ export class DesktopSettingsService {
     }
     if (
       discoveryPermit
-      && (patch.models?.codex?.path !== undefined || disablingManagedCodex)
+      && (
+        patch.models?.codex?.path !== undefined
+        || disablingManagedCodex
+        || switchingManagedCodexTrack
+      )
     ) {
       // Saving a path (including auto discovery) changes the executable.
       // Validate and publish its selection before returning the write snapshot,
@@ -2949,6 +3046,20 @@ export class DesktopSettingsService {
     return this.readModelsConfig().helperModels ?? { helpers: {} };
   }
 
+  resolveUsageAccountGroups(): Record<string, string> {
+    return this.readModelsConfig().usageAccountGroups ?? {};
+  }
+
+  resolveDecisionModelSettings(): DesktopDecisionModelSettings {
+    return this.readModelsConfig().decisionModels ?? {};
+  }
+
+  async resolveDecisionApiKey(provider: DecisionProviderId): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret(
+      provider === "local" ? "decisionLocalApiKey" : "typesafeJevApiKey",
+    );
+  }
+
   resolveCodexConfigOverrides(): string[] {
     const status = this.configStore.fileStatus();
     if (status.kind === "invalid" && status.serving === "defaults") {
@@ -3153,6 +3264,8 @@ export class DesktopSettingsService {
       return undefined;
     }
     return await this.ensureManagedCodexRuntime(checkMode, {
+      channel: config.models?.codex?.managedBuildChannel
+        ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
       signal: options.signal ?? this.resolveManagedCodexUpdateSignal(),
       ...(options.waitForUpdate !== undefined
         ? { waitForUpdate: options.waitForUpdate }
@@ -3163,14 +3276,16 @@ export class DesktopSettingsService {
   private async ensureManagedCodexRuntime(
     checkMode: ManagedCodexCheckMode,
     options: {
+      channel: DesktopUpdateChannel;
       signal?: AbortSignal;
       waitForUpdate?: boolean;
-    } = {},
+    },
   ): Promise<ManagedCodexRuntime> {
     if (!this.options.ensureManagedCodexRuntime) {
       throw new Error("Managed Codex installation is unavailable.");
     }
     const runtime = await this.options.ensureManagedCodexRuntime({
+      channel: options.channel,
       checkMode,
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.waitForUpdate !== undefined
@@ -3497,6 +3612,24 @@ export class DesktopSettingsService {
     };
   }
 
+  private resolveDarkTheme(
+    configValue: DesktopDarkTheme | undefined,
+  ): DesktopSettingsValue<DesktopDarkTheme> {
+    return {
+      value: configValue ?? DESKTOP_DARK_THEME_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveLightTheme(
+    configValue: DesktopLightTheme | undefined,
+  ): DesktopSettingsValue<DesktopLightTheme> {
+    return {
+      value: configValue ?? DESKTOP_LIGHT_THEME_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
   private resolveAppearanceDensity(
     configValue: DesktopAppearanceDensity | undefined,
   ): DesktopSettingsValue<DesktopAppearanceDensity> {
@@ -3653,6 +3786,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs> {
     return {
       value: configValue ?? DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveDefaultMergeMethodValue(
+    configValue: ThreadTodoMergeMethod | undefined,
+  ): DesktopSettingsValue<ThreadTodoMergeMethod> {
+    return {
+      value: configValue ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
       source: configValue === undefined ? "default" : "config",
     };
   }
@@ -4175,6 +4317,8 @@ function secretEnvironmentKey(
     case "federationCloudflareAccessClientSecret":
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
+    case "decisionLocalApiKey":
+    case "typesafeJevApiKey":
       return undefined;
   }
 }

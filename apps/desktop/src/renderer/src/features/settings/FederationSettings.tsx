@@ -461,7 +461,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     ].find((endpoint) => !isFederationGatewayEndpointUrl(endpoint));
     if (invalidEndpoint) {
       setActionError(
-        `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
+        `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL with a valid hostname and no embedded password.`,
       );
       return false;
     }

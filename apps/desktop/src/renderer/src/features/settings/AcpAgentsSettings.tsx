@@ -24,7 +24,8 @@ import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
   acpRelativeTime,
   acpStatusLabel,
-  managedGrokBuildVersion,
+  MANAGED_BUILD_TRACK_SUB,
+  managedBuildTrackOptions,
 } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
@@ -525,14 +526,11 @@ function AcpAgentSection(props: {
           && props.onManagedGrokBuildChannelChange ? (
           <SegmentedField
             label="Build track"
-            sub="Latest installs promoted builds only. Prerelease installs the newest build whether or not it has been promoted — and stays selectable while both tracks name the same version, which is where a build sits between publication and promotion."
+            sub={MANAGED_BUILD_TRACK_SUB}
             disabled={
               props.saving || pathUpdating || props.refreshing || !enabled
             }
-            options={MANAGED_BUILD_CHANNEL_OPTIONS.map((option) => ({
-              ...option,
-              meta: managedBuildTrackVersion(managedBuild, option.value),
-            }))}
+            options={managedBuildTrackOptions(managedBuild)}
             // Same wait as the toggle: the config write, then the rescan that
             // installs and activates the track's build.
             pendingLabel="Saving and rescanning…"
@@ -750,37 +748,11 @@ function AcpAgentSection(props: {
   );
 }
 
-const MANAGED_BUILD_CHANNEL_OPTIONS: Array<{
-  label: string;
-  value: DesktopUpdateChannel;
-}> = [
-  { label: "Latest", value: "latest" },
-  { label: "Prerelease", value: "prerelease" },
-];
-
-/**
- * The version a track resolves to, as of the last release check.
- *
- * "Unavailable" is not "there is no such build": a check that fell back to the
- * public Atom feed can only speak for one track, and no check has run at all
- * before the first install.
- */
-function managedBuildTrackVersion(
-  managedBuild: AcpManagedBuildStatus,
-  channel: DesktopUpdateChannel,
-): string {
-  const tag =
-    channel === "latest"
-      ? managedBuild.latestTag
-      : managedBuild.prereleaseTag;
-  return tag ? managedGrokBuildVersion(tag) : "Unavailable";
-}
-
 /**
  * The PwrAgent build channel, reported as a channel rather than as a switch.
  *
- * Four facts in the order an operator asks for them: which tag is installed,
- * whether it is the one running, when PwrAgent last checked, and what to press.
+ * Four facts in the order an operator asks for them: which tag is in use,
+ * what the last check installed, when PwrAgent last checked, and what to press.
  * There is deliberately no "install" verb in the common case — on this channel
  * PwrAgent has already downloaded, verified and installed the newest build, so
  * asking the operator to install it would be asking for work already done. The
@@ -826,28 +798,36 @@ function ManagedBuildStatus(props: {
   const { managedBuild } = props;
   const pinned = managedBuild.pinnedBehind === true;
   const checkedAt = managedBuild.checkedAt;
-  // Three states, because "installed" and "running" are different facts. An
-  // operator whose manual path points at a vendor install has the newest
-  // verified build on disk and is not running any of it; saying only
-  // "installed · newest verified build" would read as "this is what my threads
-  // use".
+  // The machine-wide install record can be rewritten by another instance or
+  // track while this instance still selects a different runtime. Lead with
+  // that active tag, as the provider panel and detected path do, and keep the
+  // last check's install separate. A mismatch alone does not imply a pin.
   const inUse = managedBuild.activeTag !== undefined;
+  const displayTag = managedBuild.activeTag ?? managedBuild.installedTag;
+  const installedTag = managedBuild.installedTag;
+  const state = inUse
+    ? [
+        "in use",
+        ...(pinned ? ["manual path override"] : []),
+        ...(installedTag
+          ? [installedTag === managedBuild.activeTag
+              ? "installed and verified"
+              : `last check installed ${installedTag}`]
+          : []),
+      ].join(" · ")
+    : "installed and verified · not in use, another Grok install is active";
   return (
     <div className="acp-build">
       <p className="acp-build__line">
-        {managedBuild.installedTag ? (
+        {displayTag ? (
           <>
             <span
               className={`status-dot${inUse && !pinned ? " status-dot--ok" : " status-dot--warning"}`}
               aria-hidden="true"
             />
-            <span className="acp-build__tag">{managedBuild.installedTag}</span>
+            <span className="acp-build__tag">{displayTag}</span>
             <span className="acp-build__state">
-              {pinned
-                ? `installed and verified · not in use, a manual path pins ${managedBuild.activeTag}`
-                : inUse
-                  ? "installed · newest verified build"
-                  : "installed and verified · not in use, another Grok install is active"}
+              {state}
               {checkedAt !== undefined
                 ? ` · checked ${acpRelativeTime(checkedAt)}`
                 : ""}
@@ -881,12 +861,12 @@ function ManagedBuildStatus(props: {
         >
           {props.refreshing ? "Checking…" : "Check for updates"}
         </button>
-        {managedBuild.installedTag ? (
+        {displayTag ? (
           <a
             className="button button--ghost"
             href={managedGrokReleaseUrl(
               managedBuild.repository,
-              managedBuild.installedTag,
+              displayTag,
             )}
             target="_blank"
             rel="noreferrer"

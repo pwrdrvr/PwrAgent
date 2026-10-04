@@ -1,0 +1,27 @@
+name: Verified distribution asset
+description: Restore immutable release bytes by exact version/name/SHA256 identity
+inputs:
+  key:
+    description: Exact key resolved from published asset metadata
+    required: true
+  index:
+    description: Asset index in distribution/plan.json
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      id: restore
+      with:
+        path: .local/distribution-assets/${{ inputs.key }}
+        key: ${{ inputs.key }}
+    - name: Download on miss and verify restored bytes
+      shell: bash
+      env:
+        ASSET_INDEX: ${{ inputs.index }}
+      run: node scripts/package-manager-release-plan.mjs asset distribution "$ASSET_INDEX"
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      if: steps.restore.outputs.cache-hit != 'true'
+      with:
+        path: .local/distribution-assets/${{ inputs.key }}
+        key: ${{ inputs.key }}

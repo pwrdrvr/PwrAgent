@@ -89,12 +89,18 @@ describe("desktop settings contracts", () => {
         },
         appearance: {
           theme: { value: "system", source: "default" },
+          darkTheme: { value: "tangerine-dark", source: "default" },
+          lightTheme: { value: "tangerine-light", source: "default" },
+          themedDockIcon: { value: true, source: "default" },
+          terminalMinimumContrast: { value: false, source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },
         },
         codexProfileModel: { value: "shared", source: "default" },
         messagingAcknowledgment: { value: null, source: "default" },
+        interactiveSvgSkipNotice: { value: false, source: "default" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },
@@ -429,6 +435,7 @@ describe("desktop settings contracts", () => {
           value: true,
           source: "default",
         },
+        defaultMergeMethod: { value: "squash", source: "default" },
       },
       applications: {
         editors: [],

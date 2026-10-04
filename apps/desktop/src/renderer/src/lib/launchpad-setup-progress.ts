@@ -10,6 +10,8 @@ export type LaunchpadEnvironmentSetupProgress = {
   error?: string;
   exitCode?: number;
   output: string;
+  /** Renderer clock when the `started` event arrived; drives the elapsed counter. */
+  startedAt?: number;
   status: "starting" | "running" | "completed" | "failed";
 };
 
@@ -29,6 +31,7 @@ export function applyLaunchpadEnvironmentSetupProgress(
           environmentId: event.environmentId,
           environmentName: event.environmentName,
           output: "",
+          startedAt: Date.now(),
           status: "starting" as const,
         };
 
