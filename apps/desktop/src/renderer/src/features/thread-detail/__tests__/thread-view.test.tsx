@@ -2664,6 +2664,51 @@ describe("ThreadView", () => {
     expect(screen.queryByLabelText("Environment error")).not.toBeInTheDocument();
   });
 
+  it("retires a failed setup row once the thread moves to another environment", () => {
+    let setupProgress: Parameters<NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>>[0] = () => undefined;
+    const desktopApi: Partial<DesktopApi> = {
+      onCodexEnvironmentSetupProgress: (callback) => { setupProgress = callback; return () => undefined; },
+    };
+    const threadWithEnvironment = (environmentId?: string): NavigationThreadSummary => ({
+      ...buildTimestampTargetThread("existing", "Existing thread"),
+      codexEnvironmentRuntime: environmentId
+        ? { environmentId, environmentName: environmentId, executionTarget: "local" }
+        : undefined,
+    });
+    const view = (thread: NavigationThreadSummary) => (
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={desktopApi}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={thread}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />
+    );
+    const { rerender } = render(view(threadWithEnvironment("previous")));
+    const event = {
+      directoryKey: "thread:codex:existing", environmentId: "failing", environmentName: "failing",
+      command: "pnpm install", cwd: "/fixture", at: 1,
+    };
+    act(() => setupProgress({ ...event, phase: "started" }));
+    act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "install failed" }));
+    // The failed selection's own runtime update names the same environment.
+    rerender(view(threadWithEnvironment("failing")));
+    expect(screen.getByLabelText("Env setup failed")).toHaveTextContent("failing");
+
+    // Choosing an environment with no setup script emits no progress; the
+    // failure no longer describes this thread, and Retry would re-select it.
+    rerender(view(threadWithEnvironment("no-setup")));
+    expect(screen.queryByLabelText("Env setup failed")).not.toBeInTheDocument();
+  });
+
   it("shows pending environment setup while a forked worktree is preparing", async () => {
     let setupProgress: Parameters<
       NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>

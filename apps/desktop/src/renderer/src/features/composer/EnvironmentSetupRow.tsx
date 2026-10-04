@@ -51,15 +51,21 @@ function lastOutputLine(output: string): string | undefined {
   return undefined;
 }
 
-function useRunningClock(running: boolean): number {
+/**
+ * Wall clock for the elapsed counter while a run is live. Re-read when a run
+ * starts: the launchpad row mounts before its first progress event, so its
+ * `startedAt` lands after the mount-time reading.
+ */
+function useRunningClock(running: boolean, startedAt: number | undefined): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!running) {
       return;
     }
+    setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [running]);
+  }, [running, startedAt]);
   return now;
 }
 
@@ -81,7 +87,7 @@ export function EnvironmentSetupRow(props: {
   const [open, setOpen] = useState(false);
   const outputRef = useRef<HTMLPreElement>(null);
   const running = model.status === "running";
-  const now = useRunningClock(running);
+  const now = useRunningClock(running, model.startedAt);
   const output = `${model.output?.trimEnd() ?? ""}${
     model.error ? `${model.output?.trim() ? "\n" : ""}${model.error}` : ""
   }`;
@@ -101,7 +107,7 @@ export function EnvironmentSetupRow(props: {
   const meta: string[] = [];
   if (model.environmentName) meta.push(model.environmentName);
   if (running && typeof model.startedAt === "number") {
-    meta.push(formatRunningDurationMs(now - model.startedAt));
+    meta.push(formatRunningDurationMs(Math.max(0, now - model.startedAt)));
   }
   if (!running && typeof model.exitCode === "number") {
     meta.push(`exit ${model.exitCode}`);
@@ -149,7 +155,12 @@ export function EnvironmentSetupRow(props: {
             />
           ) : null}
           <span className="composer__queued-env-action-summary-text">
-            <span className="composer__queued-label">{label}</span>
+            {/* Polite live region: an existing thread's run keeps one row
+                from running to failed, and a role added to a mounted node is
+                not reliably announced. */}
+            <span className="composer__queued-label" aria-live="polite">
+              {label}
+            </span>
             <span className="composer__queued-text">
               {meta.join(" · ")}
               {tail ? (

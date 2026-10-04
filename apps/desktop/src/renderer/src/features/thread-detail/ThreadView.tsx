@@ -217,15 +217,23 @@ function describeSetupProgressRowStatus(
   if (!progress) {
     return undefined;
   }
-  if (progress.status === "starting" || progress.status === "running") {
-    return "running";
-  }
-  if (progress.status === "failed") {
-    return "failed";
-  }
-  return progress.exitCode !== undefined && progress.exitCode !== 0
-    ? "failed"
-    : undefined;
+  const { tone } = formatSetupStatus(progress);
+  return tone === "success" ? undefined : tone;
+}
+
+/** The fields a setup row reads straight off a progress stream. */
+function setupRowFieldsFromProgress(progress: LaunchpadEnvironmentSetupProgress) {
+  return {
+    environmentId: progress.environmentId,
+    environmentName: progress.environmentName,
+    command: progress.command,
+    cwd: progress.cwd,
+    output: progress.output,
+    error: progress.error,
+    exitCode: progress.exitCode,
+    durationMs: progress.durationMs,
+    startedAt: progress.startedAt,
+  } satisfies Partial<EnvironmentSetupRowModel>;
 }
 
 function LaunchpadEnvironmentSetupPending(props: {
@@ -2029,6 +2037,26 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadSetupProgressStatus = describeSetupProgressRowStatus(
     selectedThreadSetupProgress,
   );
+  // A failed run belongs to the environment it ran for. Choosing another
+  // environment (or none) emits no progress when it has no setup script, so
+  // nothing would replace the failure: the row would keep describing — and
+  // Retry would re-select — an environment the operator has left. The runtime
+  // update for the failed selection itself names the same environment and
+  // arrives after the `failed` event, so it keeps the row.
+  const selectedThreadProgressKey = selectedThread
+    ? `thread:${selectedThread.source}:${selectedThread.id}`
+    : undefined;
+  const selectedThreadEnvironmentId =
+    selectedThread?.codexEnvironmentRuntime?.environmentId;
+  useEffect(() => {
+    setLaunchpadSetupProgress((current) =>
+      current
+      && current.directoryKey === selectedThreadProgressKey
+      && describeSetupProgressRowStatus(current) !== "running"
+      && current.environmentId !== selectedThreadEnvironmentId
+        ? undefined
+        : current);
+  }, [selectedThreadEnvironmentId, selectedThreadProgressKey]);
   const cleanupAfterSetupFailure = useEventCallback(() => {
     if (!selectedThread || !props.onArchiveThread) {
       return;
@@ -2054,13 +2082,7 @@ export function ThreadView(props: ThreadViewProps) {
         key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
         phase: "setup",
         status: "running",
-        environmentId: progress.environmentId,
-        environmentName: progress.environmentName,
-        command: progress.command,
-        cwd: progress.cwd,
-        output: progress.output,
-        error: progress.error,
-        startedAt: progress.startedAt,
+        ...setupRowFieldsFromProgress(progress),
       };
     }
     if (showSetupFailureChoice && selectedThreadKey) {
@@ -2105,14 +2127,7 @@ export function ThreadView(props: ThreadViewProps) {
         key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
         phase: "setup",
         status: "failed",
-        environmentId: progress.environmentId,
-        environmentName: progress.environmentName,
-        command: progress.command,
-        cwd: progress.cwd,
-        output: progress.output,
-        error: progress.error,
-        exitCode: progress.exitCode,
-        durationMs: progress.durationMs,
+        ...setupRowFieldsFromProgress(progress),
         onDismiss: dismissSelectedThreadSetupProgress,
       };
     }
@@ -2133,6 +2148,48 @@ export function ThreadView(props: ThreadViewProps) {
     setupFailureContinueError,
     setupFailureContinuing,
     showSetupFailureChoice,
+  ]);
+
+  // The launchpad's setup command rides in its composer's band, collapsed,
+  // while the transcript slot keeps the short placeholder. A failure here has
+  // no actions: the thread it creates opens next, and its own row carries the
+  // keep-or-close decision. Memoized for the same reason as the thread's row.
+  const launchpadEnvironmentSetup = useMemo<
+    EnvironmentSetupRowModel | undefined
+  >(() => {
+    if (!selectedLaunchpad || !launchpadMaterializing || launchpadMaterializeError) {
+      return undefined;
+    }
+    const environment = selectedLaunchpad.codexEnvironmentOptions?.find(
+      (option) => option.id === selectedLaunchpad.codexEnvironmentId,
+    );
+    if (!environment?.setupScript) {
+      return undefined;
+    }
+    const status = launchpadSetupProgress
+      ? describeSetupProgressRowStatus(launchpadSetupProgress)
+      : "running";
+    if (!status) {
+      return undefined;
+    }
+    const fields = launchpadSetupProgress
+      ? setupRowFieldsFromProgress(launchpadSetupProgress)
+      : undefined;
+    return {
+      key: `launchpad:${selectedLaunchpad.directoryKey}`,
+      phase: "setup",
+      status,
+      ...fields,
+      environmentId: fields?.environmentId ?? environment.id,
+      environmentName: fields?.environmentName ?? environment.name,
+      command: fields?.command ?? environment.setupScript,
+      cwd: fields?.cwd ?? selectedLaunchpad.directoryPath,
+    };
+  }, [
+    launchpadMaterializeError,
+    launchpadMaterializing,
+    launchpadSetupProgress,
+    selectedLaunchpad,
   ]);
 
   const branchDriftRetentionKey = (
@@ -3555,42 +3612,6 @@ export function ThreadView(props: ThreadViewProps) {
     const launchpadRunningCodexEnvironmentSetup = Boolean(
       selectedLaunchpadCodexEnvironment?.setupScript,
     );
-    // The setup command's progress rides in the launchpad composer's band,
-    // collapsed, while the transcript slot keeps the short placeholder. A
-    // failure here has no actions: the thread it creates opens next, and its
-    // own row carries the keep-or-close decision.
-    const launchpadSetupRowStatus =
-      launchpadMaterializing
-      && launchpadRunningCodexEnvironmentSetup
-      && !launchpadMaterializeError
-        ? launchpadSetupProgress
-          ? describeSetupProgressRowStatus(launchpadSetupProgress)
-          : "running"
-        : undefined;
-    const launchpadEnvironmentSetup: EnvironmentSetupRowModel | undefined =
-      launchpadSetupRowStatus
-        ? {
-            key: `launchpad:${selectedLaunchpad.directoryKey}`,
-            phase: "setup",
-            status: launchpadSetupRowStatus,
-            environmentId:
-              launchpadSetupProgress?.environmentId
-              ?? selectedLaunchpadCodexEnvironment?.id,
-            environmentName:
-              launchpadSetupProgress?.environmentName
-              ?? selectedLaunchpadCodexEnvironment?.name,
-            command:
-              launchpadSetupProgress?.command
-              ?? selectedLaunchpadCodexEnvironment?.setupScript,
-            cwd: launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath,
-            output: launchpadSetupProgress?.output,
-            error: launchpadSetupProgress?.error,
-            exitCode: launchpadSetupProgress?.exitCode,
-            durationMs: launchpadSetupProgress?.durationMs,
-            startedAt: launchpadSetupProgress?.startedAt,
-          }
-        : undefined;
-
     return (
       <section
         className="thread-view thread-view--launchpad"

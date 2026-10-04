@@ -3073,7 +3073,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
   }, []);
   const [agentThreadError, setAgentThreadError] = useState<string>();
-  const [environmentError, setEnvironmentError] = useState<string>();
+  // `selectedEnvironmentId` marks a failed environment selection, so the
+  // setup row can claim the one failure it already reports.
+  const [environmentError, setEnvironmentError] = useState<{
+    message: string;
+    selectedEnvironmentId?: string;
+  }>();
   const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
@@ -3139,6 +3144,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   useEffect(() => {
     setAgentThreadError(undefined);
     setEnvironmentError(undefined);
+    setEnvironmentSetupRetrying(false);
     setAgentThreadSaving(false);
   }, [composerScopeKey]);
 
@@ -9609,7 +9615,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (!actionStarted) {
         clearThreadEnvActionStarting(startingKey);
       }
-      setEnvironmentError(error instanceof Error ? error.message : String(error));
+      setEnvironmentError({
+        message: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       props.onPendingStatusChange?.(undefined);
     }
@@ -9640,7 +9648,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         actionId,
       });
     } catch (error) {
-      setEnvironmentError(error instanceof Error ? error.message : String(error));
+      setEnvironmentError({
+        message: error instanceof Error ? error.message : String(error),
+        selectedEnvironmentId: environmentId,
+      });
     } finally {
       props.onPendingStatusChange?.(undefined);
     }
@@ -10989,7 +11000,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ...environmentSetup,
         onDismiss: environmentSetup.onDismiss
           ? () => {
-              if (environmentError?.includes("CodexEnvironmentStartupError")) {
+              if (
+                environmentError?.selectedEnvironmentId
+                === environmentSetup.environmentId
+              ) {
                 setEnvironmentError(undefined);
               }
               environmentSetup.onDismiss?.();
@@ -11034,17 +11048,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     {
       id: "environment",
       label: "Environment error",
-      // A failed setup command rejects `setCodexThreadEnvironment` with a
-      // CodexEnvironmentStartupError, and the setup row already shows that
-      // failure with its full output: one surface per error. The row clears
-      // this error when it is dismissed, so it cannot reappear here. With no
-      // row (no progress stream reached this window), the error row is the
-      // only report and stays.
+      // A failed setup command rejects `setCodexThreadEnvironment`, and the
+      // setup row already shows that failure with its full output: one
+      // surface per error. Only a failure for the same environment is
+      // claimed, so a different selection's error still reports here. The
+      // row clears this error when it is dismissed, so it cannot reappear.
+      // With no row (no progress stream reached this window), the error row
+      // is the only report and stays.
       message:
-        props.environmentSetup
-        && environmentError?.includes("CodexEnvironmentStartupError")
+        environmentSetup?.status === "failed"
+        && environmentError?.selectedEnvironmentId !== undefined
+        && environmentError.selectedEnvironmentId === environmentSetup.environmentId
           ? undefined
-          : environmentError,
+          : environmentError?.message,
     },
     { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
     {
