@@ -76,6 +76,7 @@ function Notices({ api }: { api: NativeVoiceApi }) {
 
 const noticeCard = (id: string) => document.querySelector(`[data-notice-id="${id}"]`);
 const directorPanel = () => screen.queryByRole("region", { name: "Director voice" });
+const state = () => within(directorPanel()!).getByRole("status", { name: "Voice status" });
 
 async function openTranscript() {
   fireEvent.click(await screen.findByRole("button", { name: "Transcript" }));
@@ -304,8 +305,8 @@ it("keeps director voice through navigation and shows what its tools did", async
   expect(feed).toHaveTextContent("send_message_to_threadSample second threadqueued");
   expect(feed).toHaveTextContent("stop_threadfailed");
 
-  // The panel's close button ends the session, and says so.
-  fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
+  // Closing a live panel ends the session too.
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
   await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
   await waitFor(() => expect(directorPanel()).toBeNull());
 });
@@ -338,23 +339,50 @@ it("keeps the director transcript after a muted session ends, until closed or st
 
   const panel = directorPanel();
   expect(panel).toHaveTextContent("Ended after the reply");
-  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("Voice: Two sample PRs are green.");
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("Director: Two sample PRs are green.");
   expect(screen.getByRole("timer")).toHaveAccessibleName(/^Voice was open for /);
-  expect(screen.queryByRole("textbox", { name: "Message voice" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Message director" })).toBeNull();
   // What "this" means only matters while the voice can hear it.
   expect(panel).not.toHaveTextContent("Looking at:");
   // The panel says how it ended; no second notice repeats it.
   expect(noticeCard("native-voice-ended")).toBeNull();
 
   // Starting again replaces the old transcript with the new session's.
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start director voice" })); });
+  // Start again sits where End was, on the state row.
+  const startAgain = within(directorPanel()!).getByRole("button", { name: "Start again" });
+  expect(startAgain.closest("[role=status]")).toBe(state());
+  await act(async () => { fireEvent.click(startAgain); });
   await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
   expect(f.api.startNativeVoice).toHaveBeenCalledTimes(2);
   expect(directorPanel()).toHaveTextContent("Microphone live");
   expect(screen.queryByRole("log", { name: "Voice transcript" })).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "End director voice" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
   await waitFor(() => expect(directorPanel()).toBeNull());
+});
+
+// Mute, End, Close: End stops the session and keeps the conversation.
+it("ends director voice from End without closing the panel", async () => {
+  const f = voiceFixture();
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
+  f.emit({ sessionId, type: "transcript", role: "user", text: "Pause the sample thread.", done: true });
+  f.emit({ sessionId, type: "transcript", role: "assistant", text: "Paused.", done: true });
+  expect(within(directorPanel()!).getByRole("textbox", { name: "Message director" })).toBeInTheDocument();
+  expect(within(directorPanel()!).getByRole("button", { name: "Send" })).toBeInTheDocument();
+  const end = within(directorPanel()!).getByRole("button", { name: "End director voice" });
+  expect(end).toHaveTextContent("End");
+  expect(end.closest("header")).toBeNull();
+  fireEvent.click(end);
+  await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
+  await waitFor(() => expect(state()).toHaveTextContent("Voice ended"));
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("You: Pause the sample thread.Director: Paused.");
+  // Nothing to mute or film once the session is over.
+  expect(within(directorPanel()!).queryByRole("button", { name: /microphone|camera cues/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
+  expect(directorPanel()).toBeNull();
 });
 
 it("keeps an ended director panel until the operator closes it", async () => {
@@ -370,7 +398,7 @@ it("keeps an ended director panel until the operator closes it", async () => {
   f.emit({ sessionId, type: "closed" });
   await waitFor(() => expect(f.owner.getView().status).not.toBe("listening"));
   await waitFor(() => expect(directorPanel()).toHaveTextContent("Voice ended"));
-  expect(directorPanel()).toHaveTextContent("Voice: Sample answer.");
+  expect(directorPanel()).toHaveTextContent("Director: Sample answer.");
   fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
   expect(directorPanel()).toBeNull();
 });

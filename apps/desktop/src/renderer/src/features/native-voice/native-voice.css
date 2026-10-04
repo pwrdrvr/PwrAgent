@@ -263,6 +263,30 @@
   flex: none;
   color: var(--border-strong);
 }
+/* End while live, Start again once ended: the session's own control, on the
+   row that describes the session. Pushed to the row's end; never yields. */
+.director-voice-panel__session {
+  display: inline-flex;
+  flex: none;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 0 10px;
+  border-color: var(--border-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+.director-voice-panel__session-stop {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--danger-base);
+}
+.director-voice-panel__session--start {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
 .director-voice-panel__state-detail {
   min-width: 0;
   overflow: hidden;
@@ -300,9 +324,11 @@
   margin: 0;
   color: var(--danger-text);
 }
+/* Basis 0: the feed takes only the height left over, so a short panel gives
+   up transcript first, then the camera dock, and never the message field. */
 .director-voice-panel__feed {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   flex-direction: column;
   overflow-y: auto;
@@ -314,6 +340,10 @@
   max-height: none;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
+}
+/* The director's lines carry the accent, so the conversation reads at a glance. */
+.director-voice-panel .native-voice-feed__say--assistant strong {
+  color: var(--accent-bright);
 }
 .director-voice-panel .native-voice__text {
   flex: none;
@@ -406,31 +436,374 @@
   white-space: nowrap;
 }
 
-/* Full-width camera preview follows the transcript inside the voice panel. */
-.voice-camera__panel {
-  padding: 8px 0;
+/* The camera dock: fixed between the transcript and the message field, a
+   sibling of the feed so it never scrolls. It spans the panel's width on
+   the panel's own surface, so it reads as one band. It shrinks, clipped,
+   only once the transcript has no height left to give. */
+.voice-camera-dock {
+  container-type: inline-size;
+  display: flex;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -12px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.voice-camera-dock__bar {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+}
+.voice-camera-dock__eyebrow {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.voice-camera-dock__tag {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-camera-dock__stats {
   display: flex;
   flex: none;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border-subtle);
-  font-size: 12px;
-  white-space: normal;
+  align-items: baseline;
+  gap: 10px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.voice-camera__preview { width: 100%; aspect-ratio: 4 / 3; max-height: 240px; object-fit: contain; border-radius: 6px; transform: scaleX(-1); background: var(--bg-panel-elevated); }
-.voice-camera__status { color: var(--text-primary); }
-.voice-camera__hint { color: var(--text-muted); }
-.voice-camera__debug { font-size: 11px; }
-.voice-camera__debug summary { cursor: pointer; padding: 6px 0; list-style: none; color: var(--text-primary); }
-.voice-camera__debug summary::-webkit-details-marker { display: none; }
-.voice-camera__debug summary::before { content: "›"; display: inline-block; width: 12px; }
-.voice-camera__debug[open] summary::before { content: "⌄"; }
-.voice-camera__debug dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; }
-.voice-camera__debug dt { color: var(--text-muted); }
-.voice-camera__debug dd { margin: 0; overflow-wrap: anywhere; }
-.voice-camera__debug table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.voice-camera__debug th, .voice-camera__debug td { padding: 3px 0; text-align: left; border-bottom: 1px solid var(--border-subtle); }
-.voice-camera__debug th:last-child, .voice-camera__debug td:last-child { text-align: right; }
-.voice-camera__debug p { margin: 8px 0 0; color: var(--text-muted); }
-.voice-camera__debug .voice-camera__debug-error { color: var(--danger-text); }
+.voice-camera-dock__stats b {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.voice-camera-dock__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.voice-camera-dock__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger-text);
+}
+.voice-camera-dock__error .button {
+  flex: none;
+  min-height: 24px;
+  margin-left: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.voice-camera-dock__body {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 12px;
+}
+.voice-camera-dock--expanded .voice-camera-dock__body {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.voice-camera-dock__video {
+  position: relative;
+  height: 111px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+.voice-camera-dock--expanded .voice-camera-dock__video {
+  height: 200px;
+}
+.voice-camera-dock__video video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .voice-camera-dock__video--warming::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, var(--accent-soft), transparent);
+    animation: voice-camera-sweep 1.6s ease-in-out infinite;
+  }
+}
+@keyframes voice-camera-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+.voice-camera-dock__live {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 999px;
+  background: var(--media-overlay-scrim);
+  color: var(--media-overlay-text);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+.voice-camera-dock__live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.voice-camera-dock__caption {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  overflow: hidden;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--media-overlay-scrim);
+  color: var(--media-overlay-text);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-camera-dock__reads {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.voice-camera-dock__read {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  grid-template-rows: auto 3px;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+.voice-camera-dock__question {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.voice-camera-dock__pick {
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-camera-dock__read--idle .voice-camera-dock__pick {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.voice-camera-dock__read--sent .voice-camera-dock__pick,
+.voice-camera-dock__pick--sent {
+  color: var(--accent-bright);
+}
+.voice-camera-dock__percent {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.voice-camera-dock__sent {
+  padding: 0 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+.voice-camera-dock__skeleton {
+  display: block;
+  width: 70%;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--surface-overlay-soft);
+}
+.voice-camera-dock__bar-track {
+  grid-column: 1 / -1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--surface-overlay-soft);
+}
+.voice-camera-dock__bar-track i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .voice-camera-dock__bar-track i { transition: width 240ms ease; }
+}
+.voice-camera-dock__read--idle .voice-camera-dock__bar-track i,
+.voice-camera-dock__option:not(.voice-camera-dock__option--selected) .voice-camera-dock__bar-track i {
+  background: var(--text-muted);
+}
+/* Narrow panels: each pick drops under its question, so "talking" fits
+   beside a smaller tile instead of ellipsizing. */
+@container (max-width: 340px) {
+  .voice-camera-dock__body {
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .voice-camera-dock__video {
+    height: auto;
+    min-height: 96px;
+  }
+  .voice-camera-dock__reads {
+    gap: 6px;
+  }
+  .voice-camera-dock__read {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto 3px;
+    gap: 1px 8px;
+  }
+  .voice-camera-dock__read .voice-camera-dock__question {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .voice-camera-dock__read .voice-camera-dock__percent,
+  .voice-camera-dock__read .voice-camera-dock__sent {
+    grid-row: 1;
+    grid-column: 2;
+  }
+  .voice-camera-dock__read .voice-camera-dock__pick,
+  .voice-camera-dock__read .voice-camera-dock__skeleton {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+}
+.voice-camera-dock__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.voice-camera-dock__card {
+  min-width: 0;
+  padding: 8px 10px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+.voice-camera-dock__card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.voice-camera-dock__type {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.voice-camera-dock__card .voice-camera-dock__pick {
+  margin: 2px 0 6px;
+  font-size: 18px;
+}
+.voice-camera-dock__option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-rows: auto 3px;
+  gap: 2px 6px;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.voice-camera-dock__option span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-camera-dock__option span:nth-child(2) {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.voice-camera-dock__option--selected {
+  color: var(--text-primary);
+}
+.voice-camera-dock__filter {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A sent camera cue, in order with the speech: a one-line receipt. */
+.native-voice-feed__cue {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.native-voice-feed__cue svg {
+  flex: none;
+  color: var(--accent);
+}
+.native-voice-feed__cue-kind {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.native-voice-feed__cue-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent-bright);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-voice-feed__cue-outcome {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.native-voice-feed__cue--failed .native-voice-feed__cue-outcome {
+  color: var(--danger-text);
+}

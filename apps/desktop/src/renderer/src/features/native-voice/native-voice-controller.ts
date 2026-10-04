@@ -24,6 +24,8 @@ export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "st
 /** `seq` orders transcript rows and action receipts against each other. */
 export type VoiceTranscriptRow = { role: string; text: string; seq: number };
 export type VoiceActionRow = NativeVoiceAction & { seq: number };
+/** A camera cue handed to the voice, in order with what was said. */
+export type VoiceCameraCueRow = { cue: CameraCue; seq: number; delivery: "pending" | "acknowledged" | "failed" };
 export type VoiceView = {
   status: VoiceStatus;
   error?: string;
@@ -44,6 +46,7 @@ export type VoiceView = {
   endedAfterReply?: boolean;
   transcript: VoiceTranscriptRow[];
   actions: VoiceActionRow[];
+  cameraCues?: VoiceCameraCueRow[];
 };
 type Meter = { read: () => number; close: () => void };
 type Resources = {
@@ -175,7 +178,7 @@ export class NativeVoiceController {
   /** Show a failure that happened before a session existed, such as resolving its thread. */
   reportError(message: string, mode: NativeVoiceMode): void {
     if (this.resources) return;
-    this.publish({ status: "error", error: message, mode, threadId: undefined, muted: false, transcript: [], actions: [] });
+    this.publish({ status: "error", error: message, mode, threadId: undefined, muted: false, transcript: [], actions: [], cameraCues: [] });
   }
 
   /**
@@ -234,7 +237,7 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraDiagnostics: undefined, transcript: [], actions: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraDiagnostics: undefined, transcript: [], actions: [], cameraCues: [],
     });
     this.watchTurns(resources, threadId);
     try {
@@ -502,15 +505,26 @@ export class NativeVoiceController {
               return;
             }
             if (decision.cue) {
-              this.publish({ cameraCue: decision.cue });
+              const seq = ++this.seq;
+              const delivered = (delivery: VoiceCameraCueRow["delivery"]) => {
+                this.publish({ cameraCues: (this.view.cameraCues ?? []).map((row) => row.seq === seq ? { ...row, delivery } : row) });
+              };
+              this.publish({
+                cameraCue: decision.cue,
+                cameraCues: [...(this.view.cameraCues ?? []), { cue: decision.cue, seq, delivery: "pending" as const }].slice(-MAX_ACTION_ROWS),
+              });
               debug({ lastCue: decision.cue, delivery: "pending" });
               // Do not reset muted-idle timers: a camera cue is not user activity.
               try {
                 await this.api.sendNativeVoiceCameraCue!({ sessionId: resources.id, cue: decision.cue });
                 if (!current()) return;
+                delivered("acknowledged");
                 debug({ delivery: "acknowledged", acknowledgedAt: Date.now(), cuesAcknowledged: diagnostics.cuesAcknowledged + 1 });
               } catch (error) {
-                if (current()) debug({ delivery: "failed" });
+                if (current()) {
+                  delivered("failed");
+                  debug({ delivery: "failed" });
+                }
                 throw error;
               }
             }

@@ -96,15 +96,25 @@ and under the notice stack.
 
 The panel shows:
 
-- a header with the title, the session clock, the microphone toggle, copy, and
-  **End director voice**, which ends the session and closes the panel;
+- a header with the title, the session clock, the microphone toggle, the camera
+  toggle, copy, and **Close director voice**, which ends a live session and
+  closes the panel;
 - the state on its own row: **Microphone live** with the level meter, **Muted ·
-  ends 30s after the reply**, or the connecting, ending, and ended states;
+  ends 30s after the reply**, or the connecting, ending, and ended states, with
+  **End** at the row's end. End stops the session and keeps the panel and its
+  transcript;
 - what the window is looking at, which is what "this" means to the voice:
   **Looking at: Sample thread**, or **Looking at: new thread in Sample
   project** on a launchpad. It follows the window live, so it is hidden once
   the session ends;
-- the transcript with its receipts, and **Message voice**.
+- the transcript, with the director's lines labeled **Director**, tool
+  receipts, and a one-line receipt for each camera cue sent to the voice;
+- the camera dock while camera cues are on;
+- **Message director**.
+
+Mute, End, and Close are three intents: mute stops the director hearing the
+room, End stops the session and keeps the conversation, and Close ends a live
+session and closes the panel.
 
 The header holds only items whose width does not change with the state, so it
 fits the panel's 300px minimum width in every state. The state labels differ
@@ -114,9 +124,9 @@ yields, by ellipsis.
 
 The panel outlives a session that ends on its own: muted after its reply, closed
 by the service, or failed. It keeps the transcript and stops the clock at the
-session's length. The state reads **Ended after the reply** or **Voice ended**.
-The mic button becomes **Start director voice**, and the close button becomes
-**Close director voice**. Starting again clears the old transcript.
+session's length. The state reads **Ended after the reply** or **Voice ended**,
+and End becomes **Start again** in the same place. The microphone and camera
+toggles leave the header. Starting again clears the old transcript.
 
 The panel also shows any question that the Voice manager's turn is waiting on.
 A tool can ask the operator something on the thread it runs in, and nobody
@@ -351,11 +361,26 @@ external experimental App Server integration.
 
 During a listening director session, the camera button beside the microphone
 in the Director voice panel can opt into local camera cues. Capture belongs to the window's voice controller
-and ends on camera opt-out, voice stop, navigation teardown, or failure. The
-larger preview sits below the transcript, inside the panel. Expand Camera
-diagnostics to inspect all presence/reaction scores, completed-decision rate,
-model latency, frame age, stale-result count, filter status, and the owning
-thread/session. Received results and acknowledged context are counted separately.
+and ends on camera opt-out, voice stop, navigation teardown, or failure.
+
+The camera dock sits between the transcript and **Message director**, as a
+sibling of the transcript rather than inside it, so the preview holds one place
+while the transcript scrolls. Its bar shows model latency and completed
+decisions per second. Collapsed, it shows the mirrored preview beside each
+question's top pick (gesture, vibe, present) with its confidence; an idle
+`none` or `neutral` pick stays in the secondary color, so the accent appears
+only when the camera sees something. The row whose cue was just delivered shows
+**sent** for four seconds. The chevron expands the dock to every option's score
+for all three questions and the filter status, and the choice is remembered per
+viewer. Expanded, **Copy camera diagnostics** copies what the dock leaves
+off-screen: frame age, stale-result count, acknowledgment counts, and the
+owning thread and session. Received results and acknowledged context are
+counted separately.
+
+Each cue sent to the voice is also a transcript row (camera · **stop** · sent),
+in order with the speech, so reading back answers whether the voice was told.
+The row reads **sending…** until the context RPC acknowledges and **not
+delivered** if it fails.
 An appendText RPC acknowledgment confirms delivery to Codex, not whether the
 realtime model incorporated the observation into its next answer.
 
@@ -364,7 +389,7 @@ at `127.0.0.1:8787`, with short demo-style questions for gestures, boolean
 presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
 thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
 frustrated, yelling and talking. All 15 returned scores
-are available in Camera diagnostics. The state is the demo’s compact
+are shown in the expanded camera dock. The state is the demo’s compact
 “A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
 runs at a time, at up to two frames per second. Camera permissions and frame
 requests require the owning, established voice session and a separate camera

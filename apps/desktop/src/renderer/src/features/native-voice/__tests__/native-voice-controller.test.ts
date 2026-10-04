@@ -210,11 +210,14 @@ describe("voice camera ownership", () => {
       threadId: "fixture-thread", sessionId: "fixture-session", observations: 4, rateHz: 2,
       delivery: "pending", lastCue: "neutral", cuesAcknowledged: 0,
     });
+    // The transcript's receipt says "sending" until the RPC answers.
+    expect(f.controller.getView().cameraCues).toEqual([expect.objectContaining({ cue: "neutral", delivery: "pending" })]);
     await vi.advanceTimersByTimeAsync(5000);
     expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(4);
     pending.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(f.controller.getView().cameraDiagnostics).toMatchObject({ delivery: "acknowledged", cuesAcknowledged: 1 });
+    expect(f.controller.getView().cameraCues).toEqual([expect.objectContaining({ cue: "neutral", delivery: "acknowledged" })]);
     await vi.advanceTimersByTimeAsync(500);
     expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
     expect(f.controller.getView().cameraDiagnostics?.filter).toBe("Repeated cue suppressed");
@@ -230,6 +233,10 @@ describe("voice camera ownership", () => {
     expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledExactlyOnceWith({ sessionId: "fixture-session", cue: "stop" });
     expect(f.api.sendNativeVoiceText).not.toHaveBeenCalled();
     expect(f.controller.getView().cameraDiagnostics).toMatchObject({ lastCue: "stop", delivery: "acknowledged", cuesAcknowledged: 1 });
+    // The cue takes a place in the conversation's order, after what was already said.
+    const { cameraCues, transcript } = f.controller.getView();
+    expect(cameraCues).toEqual([expect.objectContaining({ cue: "stop", delivery: "acknowledged" })]);
+    expect(transcript.every((row) => row.seq < cameraCues![0].seq)).toBe(true);
     await vi.advanceTimersByTimeAsync(2000);
     expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
     expect(f.controller.getView().status).toBe("listening");

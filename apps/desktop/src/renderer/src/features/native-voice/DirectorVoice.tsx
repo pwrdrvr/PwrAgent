@@ -1,5 +1,5 @@
-import { VoiceCameraButton, VoiceCameraPanel } from "./VoiceCameraButton";
-import { useEffect, useRef, useState } from "react";
+import { VoiceCameraButton, VoiceCameraDock } from "./VoiceCameraButton";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isRemoteFederationTarget,
   type AgentEvent,
@@ -410,8 +410,9 @@ type DirectorVoicePanelProps = {
  * The panel outlives the session. When voice ends on its own (muted after a
  * reply, or a failure, which also arrives as an ordinary notice through
  * `useNativeVoiceNotices`), the transcript stays with the clock stopped
- * until the operator closes it or starts again. Closing a live panel ends
- * voice and closes it.
+ * until the operator closes it or starts again. Three controls, three
+ * intents: mute stops the director hearing the room, End stops the session
+ * and keeps the transcript, and Close ends a live session and closes it.
  *
  * Mounted for the window's life; its geometry, tooltips and request watch
  * exist only while the panel is open.
@@ -452,6 +453,9 @@ export function DirectorVoicePanel(props: DirectorVoicePanelProps) {
         closing.current = true;
         if (view.status !== "stopping") void controller.stop();
       }}
+      onEnd={() => {
+        if (view.status !== "stopping") void controller.stop();
+      }}
       threadId={shown.view.threadId}
       view={shown.endedAt === undefined ? shown.view : { ...shown.view, status: "idle", muted: false }}
     />
@@ -468,7 +472,9 @@ const MUTED_IDLE_END_SECONDS = Math.round(MUTED_IDLE_END_MS / 1000);
  * and, at narrow widths, pushed the controls off the panel. Here only the
  * muted consequence yields, by ellipsis.
  */
-function DirectorVoiceState({ controller, ended, view }: {
+function DirectorVoiceState({ action, controller, ended, view }: {
+  /** End while live, Start again once ended: it acts on the session this row describes. */
+  action?: ReactNode;
   controller: NativeVoiceController;
   ended: boolean;
   view: VoiceView;
@@ -493,6 +499,7 @@ function DirectorVoiceState({ controller, ended, view }: {
           <span className="director-voice-panel__state-detail">ends {MUTED_IDLE_END_SECONDS}s after the reply</span>
         </>
       ) : null}
+      {action}
     </p>
   );
 }
@@ -501,11 +508,13 @@ function DirectorVoiceState({ controller, ended, view }: {
 const PANEL_TOOLTIP_CLASS = "viewport-tooltip director-voice-panel__tooltip";
 
 function OpenDirectorVoicePanel({
-  api, controller, desktopApi, endedAt, focus, launchpad, onClose, onOpenThread, otherVoiceActive, threadId, view,
+  api, controller, desktopApi, endedAt, focus, launchpad, onClose, onEnd, onOpenThread, otherVoiceActive, threadId, view,
 }: DirectorVoicePanelProps & {
   controller: NativeVoiceController;
   endedAt?: number;
   onClose: () => void;
+  /** Ends the session and keeps the panel, with its transcript. */
+  onEnd: () => void;
   otherVoiceActive: boolean;
   threadId: string;
   view: VoiceView;
@@ -524,7 +533,6 @@ function OpenDirectorVoicePanel({
     },
   });
   const ended = endedAt !== undefined;
-  const closeLabel = ended ? "Close director voice" : "End director voice";
   const listening = view.status === "listening";
   // What "this" means to the voice, so it describes the window, never an
   // action. It follows the window live, so it goes when the session ends.
@@ -532,7 +540,7 @@ function OpenDirectorVoicePanel({
     ? `Looking at: ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}`
     : launchpad ? `Looking at: new thread in ${launchpad.directoryLabel}` : "Looking at: no thread";
   const transcript = [...view.transcript]
-    .map((row) => `${row.role === "user" ? "You" : "Voice"}: ${row.text}`)
+    .map((row) => `${row.role === "user" ? "You" : "Director"}: ${row.text}`)
     .join("\n");
   return (
     <section
@@ -544,22 +552,7 @@ function OpenDirectorVoicePanel({
         <p className="director-voice-panel__title">Director voice</p>
         <VoiceElapsed since={view.liveSince} until={endedAt} />
         <div className="director-voice-panel__actions">
-          {ended ? (
-            otherVoiceActive ? null : (
-              <button
-                className="sidebar__icon-button"
-                type="button"
-                aria-label="Start director voice"
-                {...tooltipHandlers(tooltip, "Start director voice again")}
-                onClick={() => {
-                  tooltip.hide();
-                  void toggleDirectorVoice(api, controller);
-                }}
-              >
-                <MicIcon size={16} aria-hidden="true" />
-              </button>
-            )
-          ) : <VoiceMicToggle controller={controller} tooltipClassName={PANEL_TOOLTIP_CLASS} view={view} />}
+          {!ended ? <VoiceMicToggle controller={controller} tooltipClassName={PANEL_TOOLTIP_CLASS} view={view} /> : null}
           {!ended ? <VoiceCameraButton controller={controller} view={view} /> : null}
           <button
             className="app-notice-toast__icon-button"
@@ -575,8 +568,8 @@ function OpenDirectorVoicePanel({
           <button
             className="app-notice-toast__icon-button"
             type="button"
-            aria-label={closeLabel}
-            {...tooltipHandlers(tooltip, closeLabel)}
+            aria-label="Close director voice"
+            {...tooltipHandlers(tooltip, ended ? "Close director voice" : "Close. Ends director voice.")}
             onClick={() => {
               tooltip.hide();
               onClose();
@@ -586,7 +579,38 @@ function OpenDirectorVoicePanel({
           </button>
         </div>
       </header>
-      <DirectorVoiceState controller={controller} ended={ended} view={view} />
+      <DirectorVoiceState
+        action={ended ? (
+          otherVoiceActive ? null : (
+            <button
+              className="button button--ghost director-voice-panel__session director-voice-panel__session--start"
+              type="button"
+              onClick={() => { void toggleDirectorVoice(api, controller); }}
+            >
+              <MicIcon size={13} aria-hidden="true" />
+              Start again
+            </button>
+          )
+        ) : (
+          <button
+            className="button button--ghost director-voice-panel__session"
+            type="button"
+            aria-label="End director voice"
+            disabled={view.status === "stopping"}
+            {...tooltipHandlers(tooltip, "End the session. The transcript stays.")}
+            onClick={() => {
+              tooltip.hide();
+              onEnd();
+            }}
+          >
+            <span className="director-voice-panel__session-stop" aria-hidden="true" />
+            End
+          </button>
+        )}
+        controller={controller}
+        ended={ended}
+        view={view}
+      />
       {looking ? <p className="director-voice-panel__focus">{looking}</p> : null}
       {request ? (
         <VoiceManagerRequestCard
@@ -598,10 +622,12 @@ function OpenDirectorVoicePanel({
         />
       ) : null}
       <div className="director-voice-panel__feed">
-        <VoiceFeed view={view} scrollParent />
-        <VoiceCameraPanel controller={controller} view={view} />
+        <VoiceFeed view={view} scrollParent assistant="Director" />
       </div>
-      {listening ? <VoiceTextInput controller={controller} /> : null}
+      {/* A sibling of the feed, never inside it: the camera holds one place
+          while the transcript scrolls above it. */}
+      <VoiceCameraDock controller={controller} view={view} onCopyDiagnostics={(text) => { void copyText(text, desktopApi); }} />
+      {listening ? <VoiceTextInput controller={controller} recipient="director" sendLabel="Send" /> : null}
       <button
         className="director-voice-panel__grip"
         type="button"
