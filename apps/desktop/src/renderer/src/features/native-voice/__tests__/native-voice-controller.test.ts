@@ -210,14 +210,13 @@ describe("voice camera ownership", () => {
       threadId: "fixture-thread", sessionId: "fixture-session", observations: 4, rateHz: 2,
       delivery: "pending", lastCue: "neutral", cuesAcknowledged: 0,
     });
-    // The transcript's receipt says "sending" until the RPC answers.
-    expect(f.controller.getView().cameraCues).toEqual([expect.objectContaining({ cue: "neutral", delivery: "pending" })]);
+    // A vibe reaches the voice but is ambient: no transcript row.
+    expect(f.controller.getView().cameraCues).toEqual([]);
     await vi.advanceTimersByTimeAsync(5000);
     expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(4);
     pending.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(f.controller.getView().cameraDiagnostics).toMatchObject({ delivery: "acknowledged", cuesAcknowledged: 1 });
-    expect(f.controller.getView().cameraCues).toEqual([expect.objectContaining({ cue: "neutral", delivery: "acknowledged" })]);
     await vi.advanceTimersByTimeAsync(500);
     expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
     expect(f.controller.getView().cameraDiagnostics?.filter).toBe("Repeated cue suppressed");

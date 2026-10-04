@@ -366,19 +366,24 @@ and ends on camera opt-out, voice stop, navigation teardown, or failure.
 The camera dock sits between the transcript and **Message director**, as a
 sibling of the transcript rather than inside it, so the preview holds one place
 while the transcript scrolls. Its bar shows model latency and completed
-decisions per second. Collapsed, it shows the mirrored preview beside each
-question's top pick (gesture, vibe, present) with its confidence; an idle
-`none` or `neutral` pick stays in the secondary color, so the accent appears
-only when the camera sees something. The row whose cue was just delivered shows
-**sent** for four seconds. The chevron expands the dock to every option's score
-for all three questions and the filter status, and the choice is remembered per
-viewer. Expanded, **Copy camera diagnostics** copies what the dock leaves
-off-screen: frame age, stale-result count, acknowledgment counts, and the
-owning thread and session. Received results and acknowledged context are
-counted separately.
+decisions per second. An idle `none` or `neutral` pick stays in the secondary
+color, so the accent appears only when the camera sees something. The row whose
+cue was just delivered shows **sent** for four seconds.
 
-Each cue sent to the voice is also a transcript row (camera · **stop** · sent),
-in order with the speech, so reading back answers whether the voice was told.
+The panel's size picks the layout, through a container query. At
+the default width the mirrored preview sits beside each question's top pick
+(gesture, vibe, present) with its confidence. Dragged to about 470px wide and
+800px tall, the video spans the dock with every option's meter for all three
+questions below it, plus the filter status. The height floor keeps the
+transcript readable; the panel is a size container, so both dimensions count. Both readouts stay mounted, so a resize never restarts the video.
+**Copy camera diagnostics** copies what the dock leaves off-screen: frame age,
+stale-result count, acknowledgment counts, and the owning thread and session.
+Received results and acknowledged context are counted separately.
+
+Each gesture or presence cue sent to the voice is also a transcript row
+(camera · **stop** · sent), in order with the speech, so reading back answers
+whether the voice was told. Vibe cues reach the voice too but are ambient, so
+they appear only in the dock.
 The row reads **sending…** until the context RPC acknowledges and **not
 delivered** if it fails.
 An appendText RPC acknowledgment confirms delivery to Codex, not whether the
@@ -389,7 +394,7 @@ at `127.0.0.1:8787`, with short demo-style questions for gestures, boolean
 presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
 thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
 frustrated, yelling and talking. All 15 returned scores
-are shown in the expanded camera dock. The state is the demo’s compact
+are shown in the camera dock at wide panel widths. The state is the demo’s compact
 “A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
 runs at a time, at up to two frames per second. Camera permissions and frame
 requests require the owning, established voice session and a separate camera

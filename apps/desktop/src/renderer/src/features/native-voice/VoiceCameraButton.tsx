@@ -6,7 +6,7 @@ import {
   type CameraGesture,
   type VoiceCameraObservation,
 } from "../../../../shared/native-voice-camera";
-import { ChevronDownIcon, ChevronUpIcon, CopyIcon } from "../../icons";
+import { CopyIcon } from "../../icons";
 import type { NativeVoiceController, VoiceCameraDiagnostics, VoiceView } from "./native-voice-controller";
 
 type CameraProps = { controller: NativeVoiceController; view: VoiceView };
@@ -154,31 +154,24 @@ export function cameraDiagnosticsText(debug: VoiceCameraDiagnostics, now = Date.
   ].join("\n");
 }
 
-const EXPANDED_KEY = "pwragent:voice-camera-expanded";
-
-function readExpanded(): boolean {
-  try { return window.localStorage.getItem(EXPANDED_KEY) === "1"; } catch { return false; }
-}
-
-function writeExpanded(expanded: boolean): void {
-  try { window.localStorage.setItem(EXPANDED_KEY, expanded ? "1" : "0"); } catch { /* per-viewer convenience only */ }
-}
-
 /**
  * The camera, fixed between the transcript and the message field. The
  * video, the classifier's live reading, and the model's speed are state,
  * so they hold one place for the whole session; the cues it sends are
- * moments, and those go in the transcript. Collapsed, each question shows
- * its top pick; expanded, every option's score. The accent marks a real
- * pick, so an idle "none" or "neutral" stays quiet and a gesture reads in
- * a recording without narration.
+ * moments, and those go in the transcript. The accent marks a real pick,
+ * so an idle "none" or "neutral" stays quiet and a gesture reads in a
+ * recording without narration.
+ *
+ * The panel's width picks the layout, through a container query: at the
+ * default width the tile sits beside each question's top pick; dragged
+ * wider, the video spans the dock with every option's meter below it. Both
+ * readouts render and CSS shows one, so a resize never remounts the video.
  */
 export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraProps & {
   onCopyDiagnostics?: (text: string) => void;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const [now, setNow] = useState(Date.now);
-  const [expanded, setExpanded] = useState(readExpanded);
   const active = Boolean(view.camera) && view.status === "listening";
   useEffect(() => {
     if (!active) return;
@@ -210,11 +203,10 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraP
         : stale ? "Camera cues waiting for a fresh frame"
           : "Camera cues receiving observations";
   const live = active && view.camera === "on" && !view.cameraWarming && observation !== undefined;
-  const caption = view.cameraWarming ? "first load can take a few minutes"
-    : expanded ? "no text generation · one forward pass · on-device" : "one forward pass · on-device";
+  const placeholders = (["gesture", "vibe", "present"] as const);
 
   return (
-    <section className={expanded ? "voice-camera-dock voice-camera-dock--expanded" : "voice-camera-dock"} aria-label="Camera cues">
+    <section className="voice-camera-dock" aria-label="Camera cues">
       <div className="voice-camera-dock__bar">
         <span className="voice-camera-dock__eyebrow">Camera cues</span>
         <span className="voice-camera-dock__tag">clef · local</span>
@@ -226,7 +218,7 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraP
             </>
           ) : active ? <span>{view.camera === "starting" ? "starting" : view.cameraWarming ? "warming up" : "waiting"}</span> : null}
         </span>
-        {expanded && debug && onCopyDiagnostics ? (
+        {debug && onCopyDiagnostics ? (
           <button
             className="app-notice-toast__icon-button"
             type="button"
@@ -235,18 +227,6 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraP
             onClick={() => onCopyDiagnostics(cameraDiagnosticsText(debug, now))}
           >
             <CopyIcon size={13} aria-hidden="true" />
-          </button>
-        ) : null}
-        {active ? (
-          <button
-            className="app-notice-toast__icon-button"
-            type="button"
-            aria-expanded={expanded}
-            aria-label={expanded ? "Show top camera picks" : "Show all camera scores"}
-            title={expanded ? "Show top camera picks" : "Show all camera scores"}
-            onClick={() => { setExpanded(!expanded); writeExpanded(!expanded); }}
-          >
-            {expanded ? <ChevronDownIcon size={13} aria-hidden="true" /> : <ChevronUpIcon size={13} aria-hidden="true" />}
           </button>
         ) : null}
       </div>
@@ -262,47 +242,48 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraP
           <div className={view.cameraWarming || view.camera === "starting" ? "voice-camera-dock__video voice-camera-dock__video--warming" : "voice-camera-dock__video"}>
             {view.camera === "on" ? <video ref={video} muted playsInline autoPlay aria-label="Camera preview" /> : null}
             {live ? <span className="voice-camera-dock__live"><i aria-hidden="true" />LIVE</span> : null}
-            <span className="voice-camera-dock__caption">{view.camera === "starting" ? "starting camera…" : caption}</span>
+            <span className="voice-camera-dock__caption">
+              {view.camera === "starting" ? "starting camera…"
+                : view.cameraWarming ? "first load can take a few minutes"
+                  : <><span className="voice-camera-dock__caption-wide">no text generation · </span>one forward pass · on-device</>}
+            </span>
           </div>
-          {expanded ? (
-            <div className="voice-camera-dock__cards">
-              {(observation ? scoreCards(observation) : (["gesture", "vibe", "present"] as const).map((question) => ({ question, type: question === "present" ? "noul" as const : "choice" as const, pick: "—", options: [] }))).map((card) => (
-                <div key={card.question} className="voice-camera-dock__card">
-                  <div className="voice-camera-dock__card-head">
-                    <span className="voice-camera-dock__question">{card.question}</span>
-                    <span className="voice-camera-dock__type">{card.type}</span>
+          <div className="voice-camera-dock__reads">
+            {(observation ? readings(observation) : placeholders.map((question) => ({ question, pick: "", idle: true, confidence: undefined }))).map((reading) => (
+              <div
+                key={reading.question}
+                className={`voice-camera-dock__read${reading.idle ? " voice-camera-dock__read--idle" : ""}${sent === reading.question ? " voice-camera-dock__read--sent" : ""}`}
+              >
+                <span className="voice-camera-dock__question">{reading.question}</span>
+                {observation ? <span className="voice-camera-dock__pick">{reading.pick}</span> : <span className="voice-camera-dock__skeleton" aria-hidden="true" />}
+                {sent === reading.question
+                  ? <span className="voice-camera-dock__sent">sent</span>
+                  : <span className="voice-camera-dock__percent">{percent(reading.confidence)}</span>}
+                <span className="voice-camera-dock__bar-track"><i style={{ width: barWidth(reading.confidence) }} /></span>
+              </div>
+            ))}
+          </div>
+          <div className="voice-camera-dock__cards">
+            {(observation ? scoreCards(observation) : placeholders.map((question) => ({ question, type: question === "present" ? "noul" as const : "choice" as const, pick: "—", options: [] }))).map((card) => (
+              <div key={card.question} className="voice-camera-dock__card">
+                <div className="voice-camera-dock__card-head">
+                  <span className="voice-camera-dock__question">{card.question}</span>
+                  <span className="voice-camera-dock__type">{card.type}</span>
+                </div>
+                <div className={sent === card.question ? "voice-camera-dock__pick voice-camera-dock__pick--sent" : "voice-camera-dock__pick"}>{card.pick}</div>
+                {card.options.map((option) => (
+                  <div key={option.label} className={option.selected ? "voice-camera-dock__option voice-camera-dock__option--selected" : "voice-camera-dock__option"}>
+                    <span>{option.label}</span>
+                    <span>{percent(option.score)}</span>
+                    <span className="voice-camera-dock__bar-track"><i style={{ width: barWidth(option.score) }} /></span>
                   </div>
-                  <div className={sent === card.question ? "voice-camera-dock__pick voice-camera-dock__pick--sent" : "voice-camera-dock__pick"}>{card.pick}</div>
-                  {card.options.map((option) => (
-                    <div key={option.label} className={option.selected ? "voice-camera-dock__option voice-camera-dock__option--selected" : "voice-camera-dock__option"}>
-                      <span>{option.label}</span>
-                      <span>{percent(option.score)}</span>
-                      <span className="voice-camera-dock__bar-track"><i style={{ width: barWidth(option.score) }} /></span>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="voice-camera-dock__reads">
-              {(observation ? readings(observation) : (["gesture", "vibe", "present"] as const).map((question) => ({ question, pick: "", idle: true, confidence: undefined }))).map((reading) => (
-                <div
-                  key={reading.question}
-                  className={`voice-camera-dock__read${reading.idle ? " voice-camera-dock__read--idle" : ""}${sent === reading.question ? " voice-camera-dock__read--sent" : ""}`}
-                >
-                  <span className="voice-camera-dock__question">{reading.question}</span>
-                  {observation ? <span className="voice-camera-dock__pick">{reading.pick}</span> : <span className="voice-camera-dock__skeleton" aria-hidden="true" />}
-                  {sent === reading.question
-                    ? <span className="voice-camera-dock__sent">sent</span>
-                    : <span className="voice-camera-dock__percent">{percent(reading.confidence)}</span>}
-                  <span className="voice-camera-dock__bar-track"><i style={{ width: barWidth(reading.confidence) }} /></span>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            ))}
+          </div>
+          {debug ? <p className="voice-camera-dock__filter">{debug.filter}</p> : null}
         </div>
       ) : null}
-      {expanded && active && debug ? <p className="voice-camera-dock__filter">{debug.filter}</p> : null}
     </section>
   );
 }

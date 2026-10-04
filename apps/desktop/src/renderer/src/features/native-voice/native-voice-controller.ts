@@ -1,6 +1,6 @@
 import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
-import type { CameraCue, VoiceCameraObservation } from "../../../../shared/native-voice-camera";
+import { CAMERA_GESTURES, type CameraCue, type VoiceCameraObservation } from "../../../../shared/native-voice-camera";
 
 export type VoiceCameraDiagnostics = {
   sessionId: string;
@@ -24,6 +24,11 @@ export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "st
 /** `seq` orders transcript rows and action receipts against each other. */
 export type VoiceTranscriptRow = { role: string; text: string; seq: number };
 export type VoiceActionRow = NativeVoiceAction & { seq: number };
+/** Gestures and presence go in the transcript; vibes stay in the dock. */
+export function isTranscriptCue(cue: CameraCue): boolean {
+  return cue === "away" || CAMERA_GESTURES.some((gesture) => gesture === cue);
+}
+
 /** A camera cue handed to the voice, in order with what was said. */
 export type VoiceCameraCueRow = { cue: CameraCue; seq: number; delivery: "pending" | "acknowledged" | "failed" };
 export type VoiceView = {
@@ -505,13 +510,20 @@ export class NativeVoiceController {
               return;
             }
             if (decision.cue) {
-              const seq = ++this.seq;
+              // A gesture or a change in presence is something the operator
+              // did, so it earns a transcript row; a vibe is ambient and is
+              // only shown live, in the dock.
+              const receipt = isTranscriptCue(decision.cue);
+              const seq = receipt ? ++this.seq : undefined;
               const delivered = (delivery: VoiceCameraCueRow["delivery"]) => {
+                if (seq === undefined) return;
                 this.publish({ cameraCues: (this.view.cameraCues ?? []).map((row) => row.seq === seq ? { ...row, delivery } : row) });
               };
               this.publish({
                 cameraCue: decision.cue,
-                cameraCues: [...(this.view.cameraCues ?? []), { cue: decision.cue, seq, delivery: "pending" as const }].slice(-MAX_ACTION_ROWS),
+                ...(seq === undefined ? {} : {
+                  cameraCues: [...(this.view.cameraCues ?? []), { cue: decision.cue, seq, delivery: "pending" as const }].slice(-MAX_ACTION_ROWS),
+                }),
               });
               debug({ lastCue: decision.cue, delivery: "pending" });
               // Do not reset muted-idle timers: a camera cue is not user activity.

@@ -178,6 +178,9 @@
    notice stack (140), so a notice is never hidden behind it. The surface
    tokens are the notice card's, so the two read as one family. */
 .director-voice-panel {
+  /* Its size is set inline by the operator's drag, never by content, so it
+     can be a size container: the camera dock asks it for room. */
+  container: director-voice / size;
   position: fixed;
   z-index: 135;
   display: flex;
@@ -525,10 +528,6 @@
   grid-template-columns: 148px minmax(0, 1fr);
   gap: 12px;
 }
-.voice-camera-dock--expanded .voice-camera-dock__body {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-}
 .voice-camera-dock__video {
   position: relative;
   height: 111px;
@@ -536,9 +535,6 @@
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
-}
-.voice-camera-dock--expanded .voice-camera-dock__video {
-  height: 200px;
 }
 .voice-camera-dock__video video {
   display: block;
@@ -712,10 +708,36 @@
     grid-column: 1 / -1;
   }
 }
-.voice-camera-dock__cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 8px;
+/* Dragged wider (and tall enough that the transcript keeps room), the dock
+   trades the side-by-side readout for the Clef layout: the video across the
+   dock, every option's meter below it. */
+.voice-camera-dock__cards,
+.voice-camera-dock__caption-wide,
+.voice-camera-dock__filter {
+  display: none;
+}
+@container director-voice (min-width: 440px) and (min-height: 780px) {
+  .voice-camera-dock__body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .voice-camera-dock__video {
+    height: 180px;
+  }
+  .voice-camera-dock__reads {
+    display: none;
+  }
+  .voice-camera-dock__cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .voice-camera-dock__caption-wide {
+    display: inline;
+  }
+  .voice-camera-dock__filter {
+    display: block;
+  }
 }
 .voice-camera-dock__card {
   min-width: 0;

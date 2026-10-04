@@ -26,7 +26,6 @@ function diagnostics(change: Partial<VoiceCameraDiagnostics> = {}): VoiceCameraD
 beforeEach(() => {
   view = { status: "listening", muted: false, transcript: [], actions: [] };
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
-  window.localStorage.clear();
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); });
 
@@ -72,11 +71,13 @@ describe("camera voice control", () => {
     expect(gesture).toHaveTextContent("gesturestopsent");
   });
 
-  it("expands to every option's score, remembers it, and copies the diagnostics it leaves off-screen", () => {
+  it("renders the wide layout's every-option meters beside the compact picks, and copies the diagnostics", () => {
     const onCopy = vi.fn();
-    const result = render(<VoiceCameraDock controller={controller} onCopyDiagnostics={onCopy} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics() }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Show all camera scores" }));
+    render(<VoiceCameraDock controller={controller} onCopyDiagnostics={onCopy} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics() }} />);
+    // A container query shows one or the other by width; both are always mounted
+    // so dragging the panel wider never remounts the video.
     const dock = screen.getByRole("region", { name: "Camera cues" });
+    expect(dock.querySelectorAll(".voice-camera-dock__read")).toHaveLength(3);
     const cards = dock.querySelectorAll(".voice-camera-dock__card");
     expect(cards).toHaveLength(3);
     expect(within(cards[1] as HTMLElement).getByText("talking", { selector: ".voice-camera-dock__option span" }).parentElement)
@@ -84,12 +85,9 @@ describe("camera voice control", () => {
     expect(cards[1]).toHaveTextContent("neutral16%");
     expect(cards[0]).toHaveTextContent("two thumbs up1%");
     expect(dock).toHaveTextContent("Collecting consecutive frames");
+    expect(dock.querySelectorAll("video")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Copy camera diagnostics" }));
     expect(onCopy.mock.calls[0][0]).toContain("Session: sample-session");
-    // A later session opens the way the operator left it.
-    result.unmount();
-    render(<VoiceCameraDock controller={controller} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics() }} />);
-    expect(screen.getByRole("button", { name: "Show top camera picks" })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("leaves with the camera, but keeps a failure visible and dismissible", () => {
