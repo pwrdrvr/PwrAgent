@@ -7,7 +7,7 @@ import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navi
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
-import { useRecoverableState, useRendererRecoveryState } from "./RendererRecoveryState";
+import { useRecoverableRef, useRecoverableState } from "./RendererRecoveryState";
 import { buildStartingLaunchpadComposerScopeKey } from "../features/composer/launchpad-composer-scope";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
@@ -3103,10 +3103,15 @@ export function useThreadNavigation(
   const rendererFederationTarget = useMemo(readRendererFederationTarget, []);
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const threadViewVisible = options.threadViewVisible ?? true;
-  const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
-  const recoveryState = useRendererRecoveryState();
-  const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>("navigation.selection", undefined);
-  const initialSelectionEstablishedRef = useRef(recoveryState?.values.has("navigation.selection") ?? false);
+  const [browseMode, setBrowseMode] = useRecoverableState<BrowseMode>("navigation.browseMode", readBridgedBrowseMode);
+  const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>(
+    "navigation.selection", undefined,
+    // Materialization remains main-owned, but its old hook's pending row and
+    // completion callback cannot be rebound to the recovered subtree. Return
+    // to the ordinary empty selection instead of retaining an unresolved key.
+    (saved) => isStartingLaunchpadSelectionKey(saved) ? undefined : saved,
+  );
+  const initialSelectionEstablishedRef = useRecoverableRef("navigation.initialSelectionEstablished", false);
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
@@ -3297,8 +3302,8 @@ export function useThreadNavigation(
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const selectedItemKeyRef = useRef<string | undefined>(undefined);
-  const manuallySelectedThreadKeysRef = useRef(new Set<string>());
-  const submittedSeenUpdatedAtByThreadKeyRef = useRef(new Map<string, number | undefined>());
+  const manuallySelectedThreadKeysRef = useRecoverableRef("navigation.manualSelections", () => new Set<string>());
+  const submittedSeenUpdatedAtByThreadKeyRef = useRecoverableRef("navigation.submittedSeenUpdates", () => new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const actionAbortControllerRef = useRef(new AbortController());

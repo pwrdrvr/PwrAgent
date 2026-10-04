@@ -42,10 +42,14 @@ export function useRecoverableComposerDraftStore(desktopApi?: DesktopApi): Compo
 export function useRecoverableState<T>(
   key: string,
   initial: T | (() => T),
+  restore?: (saved: T) => T,
 ): [T, Dispatch<SetStateAction<T>>] {
   const retained = useRendererRecoveryState();
   const [value, setValue] = useState<T>(() => {
-    if (retained?.values.has(key)) return retained.values.get(key) as T;
+    if (retained?.values.has(key)) {
+      const saved = retained.values.get(key) as T;
+      return restore ? restore(saved) : saved;
+    }
     return typeof initial === "function" ? (initial as () => T)() : initial;
   });
   // Checkpoint only committed state, never a render that might be discarded.
@@ -53,4 +57,18 @@ export function useRecoverableState<T>(
     retained?.values.set(key, value);
   }, [key, retained, value]);
   return [value, setValue];
+}
+
+export function useRecoverableRef<T>(key: string, initial: T | (() => T)): { current: T } {
+  const retained = useRendererRecoveryState();
+  const [ref] = useState(() => {
+    if (retained?.values.has(key)) return retained.values.get(key) as { current: T };
+    return { current: typeof initial === "function" ? (initial as () => T)() : initial };
+  });
+  // Retain the committed container, including changes made by event handlers
+  // and effects. Key presence cannot substitute for the flag's actual value.
+  useLayoutEffect(() => {
+    retained?.values.set(key, ref);
+  }, [key, ref, retained]);
+  return ref;
 }

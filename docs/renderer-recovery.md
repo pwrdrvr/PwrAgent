@@ -65,11 +65,23 @@ latest snapshot into that surviving store. Hydration and the existing five-secon
 save interval continue during the fallback; recovery does not dispatch drafts.
 The provider hydrates only routes with composers.
 
-Only committed navigation state is checkpointed: selection, shell view, local
-launchpad metadata, the active federated launchpad, and Back/Forward stacks.
-The restored UI refreshes main-owned projections and subscriptions. Failed
-renders are not checkpointed. Each window has its own provider; drafts never
-become federated or cross-window shared state.
+Only committed navigation state is checkpointed: selection, active browsing
+lens, shell view, local launchpad metadata, the active federated launchpad, and
+Back/Forward stacks. Committed ref containers also retain actual startup-selection
+readiness, manual-focus markers, and submitted seen-update versions. Recovery
+before the initial read still establishes startup selection when rows arrive;
+a settled empty selection stays empty. Focus keeps clearing subsequent unread
+updates outside Attention, without repeating already submitted seen writes when
+the recovered read returns stale rows. The restored UI refreshes main-owned
+projections and subscriptions. Failed renders are not checkpointed. Each window
+has its own provider; drafts never become federated or cross-window shared state.
+
+An in-flight local launchpad's temporary `starting-launchpad:*` selection cannot
+resolve after its pending UI row is unmounted. Recovery clears that temporary
+key and displays the normal **Select a thread** view. The main-owned creation
+continues once, and recovery does not automatically follow its eventual result.
+The operator can select the resulting thread after navigation refreshes. This
+does not cancel or resubmit the launch.
 
 A native renderer death or full page reload destroys these in-memory checkpoints.
 Saved composer drafts remain available through the existing durable recovery
@@ -92,6 +104,10 @@ loop is not reproduced or claimed fixed by recovery.
   cancellation on unmount.
 - Provider tests cover Strict Mode remounts, exact rich draft snapshots, parked
   drafts, main-owned queue identities, committed selection, and window isolation.
+- Navigation remount tests cover the active lens, recovery before startup reads
+  settle, settled empty selection, manual-focus unread clearing and Attention's
+  exemption, seen-write deduplication, and an in-flight launchpad finishing once
+  after its temporary selection is cleared.
 - Main tests cover termination evidence before reload, lifetime limits, native
   fallback, close/clean-exit handling, and an actual `ThreadTurnQueue` completing
   its running entry and admitting its queued successor after recovery.
