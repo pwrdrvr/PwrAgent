@@ -774,12 +774,15 @@ its backend from electron-builder's `resources/package-type`. Release selection
 requires the running architecture's Linux channel file and installed package
 format. Downloads run on startup and hourly; installation happens only after
 an explicit Restart action, with package-manager administrator authorization.
-Ordinary quit does not install a Linux update. Failed checks show a copyable
-terminal command for the selected release (or explicitly the latest stable
+Authorization precedes committing quit permission and federation shutdown; a
+failed or canceled authorization resumes automation dispatch and allows retry.
+RPM switch-backs use downgrade-capable package-manager commands.
+Ordinary quit does not install a Linux update. Failed checks and downloads show
+a copyable terminal command for the selected release (or explicitly the latest stable
 release if the feed could not be read).
 
-Portable tar.gz builds still require replacing the extracted directory. An
-AppImage launched with `APPIMAGE` set can use electron-updater's AppImage
+Portable tar.gz builds retain release discovery and release-note links, but
+still require replacing the extracted directory. An AppImage launched with `APPIMAGE` set can use electron-updater's AppImage
 backend, but this workflow does not yet build or publish AppImages; see the
 runtime distribution requirements above.
 

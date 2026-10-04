@@ -60,10 +60,11 @@ export function createPwrAgentAppManagementHandler(
         const status = readAppUpdateStatus();
         if (status.status === "downloaded") {
           const install = await installDownloadedAppUpdate({
-            requestQuit: async (performQuit) =>
+            requestQuit: async (performQuit, beforeQuit) =>
               await requestQuit({
                 performQuit: () => defer(performQuit),
                 source: "update-install",
+                beforeQuit,
               }),
           });
           if (install.status === "error") {

@@ -1591,8 +1591,8 @@ export function bootstrapApp(): void {
     registerAppMetadataIpcHandlers();
     registerClipboardIpcHandlers();
     registerAppUpdateIpcHandlers({
-      requestQuit: async (performQuit) =>
-        await requestQuit({ performQuit, source: "update-install" }),
+      requestQuit: async (performQuit, beforeQuit) =>
+        await requestQuit({ performQuit, beforeQuit, source: "update-install" }),
     });
     registerComposerDraftIpcHandlers();
     registerDiagnosticsIpcHandlers();

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
-const { autoUpdater } = electronUpdater;
+import { authorizeLinuxPackageUpdate, createLinuxPackageUpdater } from "./linux-package-updater";
+const autoUpdater = createLinuxPackageUpdater(electronUpdater.autoUpdater);
 import {
   APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
@@ -84,6 +85,7 @@ const canceledReleaseVersions = new Set<string>();
  */
 type ActiveUpdateDownload = {
   version: string;
+  releaseTag?: string;
   cancel: () => void;
   /** Set by `cancelAppUpdateDownload`, read wherever the download can stop. */
   canceled: boolean;
@@ -91,6 +93,9 @@ type ActiveUpdateDownload = {
 };
 
 let activeDownload: ActiveUpdateDownload | undefined;
+// Error events may follow the rejected download promise. Keep its release
+// until a new download takes ownership of updater events.
+let lastDownloadReleaseTag: string | undefined;
 
 function releaseActiveDownload(download: ActiveUpdateDownload): void {
   if (activeDownload === download) {
@@ -146,7 +151,7 @@ type GitHubReleaseAsset = {
 const MAC_UPDATE_CHANNEL_FILE = "latest-mac.yml";
 
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
-  nextStatus = withLinuxUpdateHelp(nextStatus);
+  nextStatus = withLinuxUpdateHelp(nextStatus, activeDownload?.releaseTag ?? lastDownloadReleaseTag);
   updateStatus = nextStatus;
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) {
@@ -884,10 +889,12 @@ async function runAppUpdateCheck(
       // fetching by the time it resolves.
       const download: ActiveUpdateDownload = {
         version: selectedVersion,
+        releaseTag: release.tag_name,
         cancel: () => {},
         canceled: false,
       };
       activeDownload = download;
+      lastDownloadReleaseTag = download.releaseTag;
       let result: Awaited<ReturnType<typeof autoUpdater.checkForUpdates>>;
       try {
         result = await autoUpdater.checkForUpdates();
@@ -1011,8 +1018,12 @@ function adoptUpdateDownload(
         }
         return;
       }
-      // The `error` event already carried this to the status; the log line is
-      // what ties the failure to the version it was fetching.
+      // Preserve the selected release even if the error event arrived after
+      // this promise settled, or the updater did not emit one.
+      setUpdateStatusUnlessDownloaded(withLinuxUpdateHelp({
+        status: "error" as const,
+        message: summarizeUpdateError(err instanceof Error ? err : new Error(String(err))),
+      }, download.releaseTag));
       log.warn("update download failed", {
         message: err instanceof Error ? err.message : String(err),
         version: download.version,
@@ -1311,11 +1322,11 @@ export function selectAppUpdateReleases(
   releases: GitHubRelease[],
 ): SelectedUpdateReleases {
   if (process.platform === "linux") {
-    const format = linuxUpdateFormat();
+    const updateFormat = linuxUpdateFormat();
+    const format = updateFormat ?? "tar.gz";
     const channelFile = process.arch === "x64" ? "latest-linux.yml" : `latest-linux-${process.arch}.yml`;
     return selectChannelReleases(releases.filter((release) =>
-      format !== undefined
-      && hasUploadedReleaseAsset(release, (name) => name === channelFile)
+      (updateFormat === undefined || hasUploadedReleaseAsset(release, (name) => name === channelFile))
       && hasUploadedReleaseAsset(release, (name) => name.endsWith(linuxUpdateArtifactSuffix(format))),
     ));
   }
@@ -1702,7 +1713,7 @@ export function initAutoUpdater(): void {
 }
 
 export async function installDownloadedAppUpdate(options?: {
-  requestQuit?: (performQuit: () => void) => Promise<boolean>;
+  requestQuit?: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean>;
 }): Promise<AppUpdateInstallResult> {
   const eligibleDownload = downloadedUpdateMatchesChannel(
     currentUpdateSelectionKey(),
@@ -1732,29 +1743,27 @@ export async function installDownloadedAppUpdate(options?: {
     log.info("installing downloaded update", { version });
     let updateHandoffPromise: Promise<void> | undefined;
     let installFailure: Extract<AppUpdateInstallResult, { status: "error" }> | undefined;
-    const performQuit = (): void => {
-      const linuxUpdater = linuxPackageUpdater();
-      if (linuxUpdater) {
-        // Linux authorization can fail or be canceled. BaseUpdater installs
-        // synchronously and schedules app.quit() with setImmediate only on
-        // success. Ask BEFORE teardown so a declined prompt leaves a running
-        // app; latch below before its scheduled quit can reach before-quit.
-        let installError: Error | undefined;
-        const captureError = (error: Error): void => { installError = error; };
-        linuxUpdater.once("error", captureError);
-        try {
-          linuxUpdater.quitAndInstall();
-        } finally {
-          linuxUpdater.removeListener("error", captureError);
-        }
-        if (installError) {
-          installFailure = withLinuxUpdateHelp({
-            status: "error" as const,
-            message: `Installation failed or authorization was canceled: ${summarizeUpdateError(installError)}`,
-          }, `v${version}`);
-          return;
-        }
+    const linuxUpdater = linuxPackageUpdater();
+    const beforeQuit = (): boolean => {
+      if (!linuxUpdater) return true;
+      let installError: Error | undefined;
+      const captureError = (error: Error): void => { installError = error; };
+      linuxUpdater.once("error", captureError);
+      let installed: boolean;
+      try {
+        installed = authorizeLinuxPackageUpdate(linuxUpdater, eligibleDownload.direction === "downgrade");
+      } finally {
+        linuxUpdater.removeListener("error", captureError);
       }
+      if (!installed) {
+        installFailure = withLinuxUpdateHelp({
+          status: "error" as const,
+          message: `Installation failed or authorization was canceled: ${installError ? summarizeUpdateError(installError) : "Package installation did not complete."}`,
+        }, `v${version}`);
+      }
+      return installed;
+    };
+    const performQuit = (): void => {
       // The accepted update is now irreversible. Latch immediately so a user
       // closing the last window while teardown runs cannot start another quit.
       markUpdateInstallInProgress();
@@ -1772,8 +1781,9 @@ export async function installDownloadedAppUpdate(options?: {
           // latch immediately before the synchronous native handoff.
           markUpdateInstallUpdaterQuitReady();
           if (linuxUpdater) {
-            // The package is installed and its relaunch is armed. Its first
-            // quit may have been held by before-quit while preparation ran.
+            // Authorization and installation succeeded before quit state was
+            // committed. Arm relaunch only after teardown is complete.
+            app.relaunch();
             app.quit();
           } else {
             autoUpdater.quitAndInstall();
@@ -1781,14 +1791,15 @@ export async function installDownloadedAppUpdate(options?: {
         });
     };
     if (options?.requestQuit) {
-      const quitAccepted = await options.requestQuit(performQuit);
+      const quitAccepted = await options.requestQuit(performQuit, beforeQuit);
       if (!quitAccepted) {
+        if (installFailure) return installFailure;
         return {
           status: "error",
           message: "Update restart cancelled.",
         };
       }
-    } else {
+    } else if (beforeQuit()) {
       performQuit();
     }
     return installFailure ?? { status: "restarting" };
@@ -1801,7 +1812,7 @@ export async function installDownloadedAppUpdate(options?: {
 }
 
 export function registerAppUpdateIpcHandlers(options?: {
-  requestQuit?: (performQuit: () => void) => Promise<boolean>;
+  requestQuit?: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean>;
 }): void {
   ipcMain.removeHandler(APP_UPDATE_CHECK_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_STATUS_READ_CHANNEL);

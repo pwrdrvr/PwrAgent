@@ -12,7 +12,7 @@
 // `updates.channel`); a tile click writes both in one patch, which is what
 // tells main the pair is a pin rather than an inference.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { releaseNotesUrl } from "@pwragent/shared";
 import type {
   DesktopSettingsSnapshot,
@@ -86,6 +86,9 @@ export function UpdatesSettings(props: {
     train: DesktopUpdateTrain;
   }) => Promise<void>;
 }) {
+  const terminalUpdateStatus = useRef<
+    Extract<AppUpdateStatus, { status: "error" | "skipped" }> | undefined
+  >(undefined);
   const [releaseVersions, setReleaseVersions] = useState<
     AppUpdateReleaseVersions | undefined
   >();
@@ -171,6 +174,10 @@ export function UpdatesSettings(props: {
     const unsubscribe = props.desktopApi?.onAppUpdateStatus?.((status) => {
       receivedEvent = true;
       setUpdateStatus(status);
+      if (status.status === "error" || status.status === "skipped") {
+        terminalUpdateStatus.current = status;
+        setUpdateResult(status);
+      }
       if (status.status === "downloaded") {
         setUpdateRestartError(undefined);
         setUpdateRestarting(false);
@@ -179,6 +186,7 @@ export function UpdatesSettings(props: {
     void props.desktopApi?.readAppUpdateStatus?.().then((status) => {
       if (!canceled && !receivedEvent) {
         setUpdateStatus(status);
+        if (status.status === "error" || status.status === "skipped") setUpdateResult(status);
       }
     });
     return () => {
@@ -207,11 +215,15 @@ export function UpdatesSettings(props: {
       return;
     }
     setUpdateChecking(true);
+    terminalUpdateStatus.current = undefined;
     setUpdateResult(undefined);
     try {
       const result = await checkForUpdates();
-      setUpdateResult(result);
-      setUpdateStatus(result);
+      // A terminal download event can race the check's available result.
+      // Keep the failure and its selected-release instructions in that case.
+      const displayedResult = terminalUpdateStatus.current ?? result;
+      setUpdateResult(displayedResult);
+      setUpdateStatus(displayedResult);
       // The check refreshed the main-process release cache, so this read is
       // served from memory and clears any stale Unavailable slot labels. It is
       // cosmetic: failing it must not overwrite the check result above.

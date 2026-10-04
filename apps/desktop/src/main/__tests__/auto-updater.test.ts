@@ -50,6 +50,13 @@ class AppImageUpdaterMock {}
 
 let installErrorListener: ((error: Error) => void) | undefined;
 const appQuitMock = vi.fn();
+const appRelaunchMock = vi.fn();
+const authorizeInstallMock = vi.fn<(...args: unknown[]) => boolean>(() => true);
+
+vi.mock("../linux-package-updater", () => ({
+  createLinuxPackageUpdater: (updater: unknown) => updater,
+  authorizeLinuxPackageUpdate: (...args: unknown[]) => authorizeInstallMock(...args),
+}));
 
 const autoUpdaterMock = {
   allowDowngrade: false,
@@ -74,7 +81,7 @@ const autoUpdaterMock = {
 const appVersionMock = vi.fn(() => "1.0.0-beta.7");
 
 vi.mock("electron", () => ({
-  app: { getVersion: () => appVersionMock(), isPackaged: false, quit: appQuitMock },
+  app: { getVersion: () => appVersionMock(), isPackaged: false, quit: appQuitMock, relaunch: appRelaunchMock },
   BrowserWindow: {
     getAllWindows: vi.fn(() => [
       {
@@ -160,11 +167,13 @@ function githubRelease(
     assets?: Array<{ name?: string; state?: string }>;
     draft?: boolean;
     prerelease?: boolean;
+    htmlUrl?: string;
   } = {},
 ) {
   const version = tagName.replace(/^v/i, "");
   return {
     tag_name: tagName,
+    ...(options.htmlUrl ? { html_url: options.htmlUrl } : {}),
     draft: options.draft ?? false,
     prerelease: options.prerelease ?? false,
     assets: options.assets ?? macUpdateAssets(version),
@@ -295,6 +304,9 @@ describe("auto updater", () => {
     autoUpdaterMock.quitAndInstall.mockReset();
     installErrorListener = undefined;
     appQuitMock.mockReset();
+    appRelaunchMock.mockReset();
+    authorizeInstallMock.mockReset();
+    authorizeInstallMock.mockReturnValue(true);
     markUpdateInstallInProgressMock.mockReset();
     markUpdateInstallUpdaterQuitReadyMock.mockReset();
     prepareForUpdateInstallMock.mockReset();
@@ -1376,6 +1388,31 @@ describe("auto updater", () => {
     );
   });
 
+  it.each(["x64", "arm64"] as const)("discovers all portable %s Linux release slots without enabling installation", async (arch) => {
+    setPlatform("linux");
+    const originalArch = process.arch;
+    Object.defineProperty(process, "arch", { configurable: true, value: arch });
+    try {
+      const releases = ["v1.0.1", "v1.0.2", "v1.1.0-beta.2", "v1.1.0-alpha.3"].map((tag, index) => githubRelease(tag, {
+        assets: [{ name: `PwrAgent-${tag.slice(1)}-linux-${arch}.tar.gz`, state: "uploaded" }],
+        prerelease: index !== 0,
+        htmlUrl: `https://github.com/pwrdrvr/PwrAgent/releases/tag/${tag}`,
+      }));
+      releases.push(githubRelease("v9.0.0", { assets: [{ name: `PwrAgent-9.0.0-linux-${arch === "x64" ? "arm64" : "x64"}.tar.gz`, state: "uploaded" }] }));
+      mockGitHubReleases(releases);
+      const updater = await importAutoUpdater();
+      const info = (version: string) => ({ version, url: expect.stringContaining(version) });
+      expect(await updater.readAppUpdateReleaseVersions()).toMatchObject({
+        stable: { latest: info("v1.0.1"), prerelease: info("v1.0.2") },
+        beta: { latest: info("v1.1.0-beta.2"), prerelease: info("v1.1.0-beta.2") },
+      });
+      expect((await updater.checkForAppUpdatesNow("manual")).status).toBe("skipped");
+      expect(checkForUpdatesMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
+    }
+  });
+
   describe("native Linux updates", () => {
     function useLinuxPackage(format: "deb" | "rpm" | "pacman", arch: "x64" | "arm64" = "x64") {
       setPlatform("linux");
@@ -1441,6 +1478,32 @@ describe("auto updater", () => {
       }
     });
 
+    it.each(["error-first", "promise-first"])("preserves a beta release on an asynchronous download failure (%s)", async (order) => {
+      const fixture = useLinuxPackage("deb");
+      resolveUpdateTrainMock.mockReturnValue("beta");
+      resolveUpdateChannelMock.mockReturnValue("prerelease");
+      mockGitHubReleases([githubRelease("v1.1.0-beta.2", { assets: fixture.assets, prerelease: true }), githubRelease("v1.0.1", { assets: fixture.assets })]);
+      const download = createDeferred<string[]>();
+      checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.1.0-beta.2" }, downloadPromise: download.promise });
+      try {
+        const updater = await importAutoUpdater();
+        updater.initAutoUpdater();
+        await vi.waitFor(() => expect(checkForUpdatesMock).toHaveBeenCalledOnce());
+        expect((await updater.checkForAppUpdatesNow("manual")).status).toBe("available");
+        const error = new Error("download interrupted");
+        const emitError = () => (updateEventHandlers.get("error") as unknown as (error: Error) => void)(error);
+        if (order === "error-first") emitError();
+        download.reject(error);
+        await Promise.resolve();
+        if (order === "promise-first") emitError();
+        expect(updater.readAppUpdateStatus()).toMatchObject({ status: "error", manualUpdate: {
+          command: expect.stringContaining("/download/v1.1.0-beta.2/PwrAgent-1.1.0-beta.2-linux-amd64.deb"),
+        } });
+      } finally {
+        fixture.restore();
+      }
+    });
+
     it("labels a latest-stable DEB fallback when the release feed cannot be read", async () => {
       const fixture = useLinuxPackage("deb", "arm64");
       fetchMock.mockRejectedValue(new Error("offline"));
@@ -1463,13 +1526,43 @@ describe("auto updater", () => {
         updater.initAutoUpdater();
         await vi.waitFor(() => expect(checkForUpdatesMock).toHaveBeenCalledOnce());
         updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
-        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => installErrorListener?.(new Error("Not authorized")));
+        authorizeInstallMock.mockImplementationOnce(() => {
+          installErrorListener?.(new Error("Not authorized"));
+          return false;
+        });
         const result = await updater.installDownloadedAppUpdate();
         expect(result).toMatchObject({ status: "error", manualUpdate: { command: expect.stringContaining("sudo apt install") } });
         expect(prepareForUpdateInstallMock).not.toHaveBeenCalled();
         expect(markUpdateInstallInProgressMock).not.toHaveBeenCalled();
         expect(appQuitMock).not.toHaveBeenCalled();
         expect(await updater.installDownloadedAppUpdate()).toEqual({ status: "restarting" });
+      } finally {
+        fixture.restore();
+      }
+    });
+
+    it("passes authorization separately from a deferred quit and preserves failures", async () => {
+      const fixture = useLinuxPackage("deb");
+      try {
+        const updater = await importAutoUpdater();
+        updater.initAutoUpdater();
+        await vi.waitFor(() => expect(checkForUpdatesMock).toHaveBeenCalledOnce());
+        updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+        authorizeInstallMock.mockReturnValueOnce(false);
+        let deferredQuit: (() => void) | undefined;
+        const requestQuit = vi.fn(async (performQuit: () => void, beforeQuit?: () => boolean) => {
+          if (beforeQuit && !beforeQuit()) return false;
+          deferredQuit = performQuit;
+          return true;
+        });
+        expect(await updater.installDownloadedAppUpdate({ requestQuit })).toMatchObject({ status: "error", manualUpdate: expect.any(Object) });
+        expect(deferredQuit).toBeUndefined();
+        expect(prepareForUpdateInstallMock).not.toHaveBeenCalled();
+        expect(await updater.installDownloadedAppUpdate({ requestQuit })).toEqual({ status: "restarting" });
+        expect(appQuitMock).not.toHaveBeenCalled();
+        expect(appRelaunchMock).not.toHaveBeenCalled();
+        deferredQuit?.();
+        await vi.waitFor(() => expect(appQuitMock).toHaveBeenCalledOnce());
       } finally {
         fixture.restore();
       }
@@ -1483,10 +1576,12 @@ describe("auto updater", () => {
         await vi.waitFor(() => expect(checkForUpdatesMock).toHaveBeenCalledOnce());
         updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
         expect(await updater.installDownloadedAppUpdate()).toEqual({ status: "restarting" });
-        expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledWith();
+        expect(authorizeInstallMock).toHaveBeenCalledWith(autoUpdaterMock, false);
+        expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(appQuitMock).toHaveBeenCalledOnce());
         expect(prepareForUpdateInstallMock).toHaveBeenCalledOnce();
-        expect(autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]).toBeLessThan(prepareForUpdateInstallMock.mock.invocationCallOrder[0]);
+        expect(appRelaunchMock).toHaveBeenCalledOnce();
+        expect(authorizeInstallMock.mock.invocationCallOrder[0]).toBeLessThan(prepareForUpdateInstallMock.mock.invocationCallOrder[0]);
       } finally {
         fixture.restore();
       }
