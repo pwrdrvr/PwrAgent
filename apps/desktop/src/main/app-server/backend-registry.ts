@@ -33790,10 +33790,10 @@ export class DesktopBackendRegistry {
       this.logTokenMiserReplaySkip("no-active-gates", threadId);
       return;
     }
-    const totalUsage = readTaskMonitorTokenUsageRecords(
+    const requestUsage = readTaskMonitorTokenUsageRecords(
       event.notification.params.tokenUsage,
-    )?.totalUsage;
-    const cumulativeInputTokens = totalUsage?.inputTokens;
+    );
+    const cumulativeInputTokens = requestUsage?.totalUsage?.inputTokens;
     if (typeof cumulativeInputTokens !== "number") {
       this.logTokenMiserReplaySkip("no-cumulative-input", threadId);
       return;
@@ -33819,6 +33819,11 @@ export class DesktopBackendRegistry {
         // gates accept the new lower sequence while other live threads retain
         // their own monotonic request histories.
         this.tokenMiserRequestEpochByCursor.set(cursorKey, randomUUID());
+        this.tokenMiserStore.recordParentRequestUsage({
+          threadId,
+          cumulativeInputTokens,
+          requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey)!,
+        });
         this.logTokenMiserReplaySkip("session-reset", threadId);
         return;
       }
@@ -33826,6 +33831,13 @@ export class DesktopBackendRegistry {
       return;
     }
     this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+    this.tokenMiserStore.recordParentRequestUsage({
+      threadId,
+      cumulativeInputTokens,
+      cachedInputTokens: requestUsage?.latestUsage?.cachedInputTokens,
+      requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey)
+        ?? this.tokenMiserRequestEpoch,
+    });
     const observed = [...entries.entries()];
     const updated = await Promise.all(
       observed.map(([objectId]) =>

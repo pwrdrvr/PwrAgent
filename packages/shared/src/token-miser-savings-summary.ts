@@ -48,7 +48,7 @@ export type TokenMiserSavingsTerms = {
   withoutGateCostMicros: number;
   /** 2 — what the helper actually charged. */
   gateCostMicros: number;
-  /** 3 — summaries and retrievals the parent did receive, and their replays. */
+  /** 3 — summaries, retrievals and replays, plus full cached prompts on retrieval requests. */
   revealedCostMicros: number;
   /** 1 − 2 − 3. Negative when the gate cost more than it saved. */
   savingsMicros: number;

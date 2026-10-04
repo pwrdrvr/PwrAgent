@@ -1,4 +1,5 @@
 import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
+import { buildTokenMiserSavingsSummary, estimateTokenUsageCost } from "@pwragent/shared";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { randomUUID } from "node:crypto";
@@ -827,6 +828,67 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(replayAccounting?.cachedReplayCount).toBe(1);
     expect(replayAccounting?.savingsMicros)
       .toBeGreaterThan(initialAccounting?.savingsMicros ?? 0);
+  });
+
+  it.each(["source", "summary"] as const)("charges the requesting round's entire cached prompt once for a %s retrieval", async (kind) => {
+    const { objectId, tokenMiserStore } = await startLiveReplayGate();
+    const entry = (await tokenMiserStore.readMetadata(objectId))!;
+    const internals = registry as unknown as {
+      withTokenMiserAccounting(params: { backend: "codex"; threadId: string; accounting: ThreadToolAccounting }): Promise<ThreadToolAccounting>;
+      buildTokenMiserLedgerArtifact(params: { entry: TokenMiserObjectMetadata; pricingLines: ThreadUsageLineRecord[] }): { subAgent: ThreadSubAgentSummary };
+    };
+    const readAccounting = async () => (await internals.withTokenMiserAccounting({
+      backend: "codex", threadId: entry.threadId,
+      accounting: await store.readThreadToolAccounting({ backend: "codex", threadId: entry.threadId }),
+    })).tokenMiser!;
+    await registry.publishLocalEvent(parentUsageEvent(2_000));
+    await registry.publishLocalEvent(parentUsageEvent(3_000));
+    const requestingRound = parentContextUsageEvent({
+      cumulativeInputTokens: 203_000, cachedInputTokens: 199_000,
+      inputTokens: 200_000, outputTokens: 100,
+    });
+    await registry.publishLocalEvent(requestingRound);
+    const before = await readAccounting();
+    const delivery = await tokenMiserStore.prepareRetrievalDelivery({
+      objectId, threadId: entry.threadId, visibleText: "xxxx", kind,
+    });
+    // Preparing or privately inspecting a result does not charge the round.
+    await tokenMiserStore.readSelectionSource({ objectId, threadId: entry.threadId });
+    expect((await readAccounting()).savings).toEqual(before.savings);
+    await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: entry.threadId, output: delivery!.text });
+    const after = await readAccounting();
+    const overhead = estimateTokenUsageCost({
+      model: entry.parentModel!, serviceTier: entry.parentServiceTier, at: entry.createdAt,
+      cachedInputTokens: 199_000, uncachedInputTokens: 1, outputTokens: 0,
+    })!.totalCostMicros;
+    expect(before.savings!.savingsMicros - after.savings!.savingsMicros).toBe(overhead);
+    expect(after.savings!.revealedCostMicros - before.savings!.revealedCostMicros).toBe(overhead);
+    expect(after.cachedRevealedTokens! - before.cachedRevealedTokens!).toBe(199_000);
+
+    // Repeated usage notifications and other gates in the same request cannot
+    // bill that entire prompt again. Catalog transport is never a source read.
+    await registry.publishLocalEvent(requestingRound);
+    const second = await tokenMiserStore.store({
+      ...entry, objectId: randomUUID(), toolUseId: "second-gate", output: "xxxx",
+    });
+    const catalog = await tokenMiserStore.prepareToolDefinitionDelivery({ threadId: entry.threadId, turnId: entry.turnId, visibleText: "schemas" });
+    await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: entry.threadId, output: catalog!.text });
+    const another = await tokenMiserStore.prepareRetrievalDelivery({ objectId: second.objectId, threadId: entry.threadId, visibleText: "xxxx" });
+    await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: entry.threadId, output: another!.text });
+    expect((await tokenMiserStore.readMetadata(second.objectId))?.retrievalRequestCachedTokens ?? 0).toBe(0);
+    const updated = (await tokenMiserStore.readMetadata(objectId))!;
+    expect(updated.retrievalRequestCachedTokens).toBe(199_000);
+    const gate = internals.buildTokenMiserLedgerArtifact({ entry: updated, pricingLines: [] }).subAgent.tokenMiserAccounting;
+    expect(buildTokenMiserSavingsSummary({ gateAccountings: [gate] })?.terms?.savingsMicros).toBe(after.savings!.savingsMicros);
+    expect((await new TokenMiserStore(path.join(directory, "token-miser-objects")).readMetadata(objectId))?.retrievalRequestCachedTokens).toBe(199_000);
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cumulativeInputTokens: 403_000, cachedInputTokens: 198_000,
+      inputTokens: 200_000, outputTokens: 100,
+    }));
+    const next = await tokenMiserStore.prepareRetrievalDelivery({ objectId, threadId: entry.threadId, visibleText: "xxxx" });
+    await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: entry.threadId, output: next!.text });
+    expect((await tokenMiserStore.readMetadata(objectId))?.retrievalRequestCachedTokens).toBe(397_000);
   });
 
   it("stops baseline and revealed replay accounting at ContextCompaction", async () => {

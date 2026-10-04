@@ -259,6 +259,12 @@ export class TokenMiserStore {
   private readonly pendingRetrievalDeliveries =
     new Map<string, { createdAt: number; threadId: string; turnId: string }>();
   private readonly replayUpdates = new Map<string, PendingReplayUpdate>();
+  private readonly parentRequestUsage = new Map<string, {
+    requestEpoch: string;
+    cumulativeInputTokens: number;
+    cachedInputTokens?: number;
+    charged: boolean;
+  }>();
   private readonly outputGenerations = new Map<string, string>();
   private readonly currentTurns = new Map<string, string>();
   private readonly outputTurns = new Map<string, { threadId: string; turnId: string }>();
@@ -272,6 +278,7 @@ export class TokenMiserStore {
   /** Release only this thread's previous originals; duplicate starts are harmless. */
   startTurn(threadId: string, turnId: string): void {
     if (this.currentTurns.get(threadId) === turnId) return;
+    this.parentRequestUsage.delete(threadId);
     this.currentTurns.set(threadId, turnId);
     for (const [id, owner] of this.outputTurns) {
       if (owner.threadId !== threadId || owner.turnId === turnId) continue;
@@ -1053,6 +1060,7 @@ export class TokenMiserStore {
   }
 
   async archiveThread(threadId: string): Promise<void> {
+    this.parentRequestUsage.delete(threadId);
     const key = this.threadKey(threadId);
     this.archivedThreads.add(threadId);
     for (const [objectId, owner] of this.owners) {
@@ -1203,8 +1211,35 @@ export class TokenMiserStore {
     await this.updateMetadata(objectId, (metadata) => {
       metadata.retrievedCharacters += characters;
       if (kind === "summary") metadata.focusedSummaryCharacters = (metadata.focusedSummaryCharacters ?? 0) + characters;
+      const request = this.parentRequestUsage.get(metadata.threadId);
+      if (request && !request.charged) {
+        // One requesting round can deliver several saved results. Charge its
+        // whole cached prompt to the first confirmed delivery, once across
+        // all gates, alongside the existing retrieval write. Internal reads
+        // and catalog receipts never reach this path.
+        const tokens = request.cachedInputTokens ?? 0;
+        metadata.retrievalRequestCachedTokens = (metadata.retrievalRequestCachedTokens ?? 0) + tokens;
+        metadata.cachedRevealedTokens = (metadata.cachedRevealedTokens ?? 0) + tokens;
+        request.charged = true;
+      }
       return true;
     });
+  }
+
+  /** Usage of the request that selected the tools now being executed.
+   * The registry calls this only after accepting a thread request boundary.
+   * Unknown cache usage replaces the old snapshot rather than charging stale
+   * usage. No snapshot is reconstructed after restart. */
+  recordParentRequestUsage(params: {
+    threadId: string;
+    requestEpoch: string;
+    cumulativeInputTokens: number;
+    cachedInputTokens?: number;
+  }): void {
+    const previous = this.parentRequestUsage.get(params.threadId);
+    if (previous?.requestEpoch === params.requestEpoch
+      && params.cumulativeInputTokens <= previous.cumulativeInputTokens) return;
+    this.parentRequestUsage.set(params.threadId, { ...params, charged: false });
   }
 
   async recordParentModelRequest(params: {
@@ -1372,7 +1407,7 @@ function safeTokenUsage(value: unknown, depth = 0): unknown {
 function safeMetadata(value: TokenMiserObjectMetadata): TokenMiserObjectMetadata {
   const result = {} as TokenMiserObjectMetadata;
   // Deliberate allowlist: legacy JSON and helper objects may have extra content.
-  const keys = ["version", "objectId", "threadId", "turnId", "toolUseId", "toolName", "createdAt", "originalCharacters", "baselineParentTokens", "replacementCharacters", "retrievedCharacters", "focusedSummaryCharacters", "replayTrackingVersion", "parentRequestsObservedAfterGate", "lastParentCumulativeInputTokens", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens", "replayTrackingStoppedAt", "parentRequestEpoch", "disposition", "groupId", "parentModel", "parentServiceTier"] as const;
+  const keys = ["version", "objectId", "threadId", "turnId", "toolUseId", "toolName", "createdAt", "originalCharacters", "baselineParentTokens", "replacementCharacters", "retrievedCharacters", "focusedSummaryCharacters", "replayTrackingVersion", "parentRequestsObservedAfterGate", "lastParentCumulativeInputTokens", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens", "retrievalRequestCachedTokens", "replayTrackingStoppedAt", "parentRequestEpoch", "disposition", "groupId", "parentModel", "parentServiceTier"] as const;
   for (const key of keys) {
     Object.assign(result, { [key]: value[key] });
   }
