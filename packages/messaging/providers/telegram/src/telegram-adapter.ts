@@ -45,7 +45,6 @@ import {
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
-  renderTelegramHtml,
   richMessageForTelegramIntent,
   richMessageForTelegramText,
   splitTelegramHtml,
@@ -223,6 +222,7 @@ export type TelegramSendMessageRequest = {
 
 export type TelegramEditMessageTextRequest = TelegramSendMessageRequest & {
   message_id: number;
+  rich_message?: TelegramInputRichMessage;
 };
 
 export type TelegramDeleteMessageRequest = {
@@ -235,6 +235,7 @@ export type TelegramSendRichMessageRequest = {
   disable_notification?: boolean;
   message_thread_id?: number;
   reply_parameters?: { message_id: number };
+  reply_markup?: TelegramInlineKeyboardMarkup;
   rich_message: TelegramInputRichMessage;
 };
 
@@ -386,8 +387,8 @@ export type TelegramGrammyBotLike = {
     editMessageText(
       chatId: number | string,
       messageId: number,
-      text: string,
-      other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text">,
+      text: string | TelegramInputRichMessage,
+      other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text" | "rich_message">,
     ): Promise<TelegramSentMessage | boolean>;
     // Telegram's `User` allows `username` to be absent (non-bot users
     // can omit it). Grammy returns `UserFromGetMe` which always has
@@ -581,7 +582,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   // final chunk lands.
   private streamSurfaces = new Map<
     string,
-    Array<TelegramDeliveryTarget & { text: string }>
+    Array<TelegramDeliveryTarget & { text: string; richHtml?: string }>
   >();
   /**
    * Per-process cache of forum topic names, keyed by
@@ -982,7 +983,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} images=${images.length} files=${files.length} preview="${compactPreview(text)}"`,
     );
 
-    if (
+    const richSentMessage = await this.tryDeliverRichMessage(
+      richMessageForTelegramIntent(intent),
+      intent.delivery?.mode === "update" ? target : { ...target, messageId: undefined },
+      text,
+      replyMarkup ?? (intent.delivery?.replaceMarkup ? { inline_keyboard: [] } : undefined),
+    );
+    if (richSentMessage) {
+      sentMessages.push(richSentMessage);
+      outcome = intent.delivery?.mode === "update" && target.messageId ? "updated" : "presented";
+    } else if (
       intent.delivery?.mode === "update" &&
       target.messageId &&
       images.length === 0 &&
@@ -1100,9 +1110,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     const lastMessage = sentMessages.at(-1);
-    if (lastMessage && intent.delivery?.mode !== "update") {
-      await this.sendRichSupplement(richMessageForTelegramIntent(intent), target, lastMessage.message_id);
-    }
     if (intent.delivery?.pin && lastMessage) {
       try {
         await this.bot.api.pinChatMessage({
@@ -1117,7 +1124,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     this.options.logger?.debug(
-      `telegram deliver done kind=${intent.kind} outcome=${outcome} target=${this.compactTypingTarget(target)} messages=${sentMessages.length} lastMessage=${lastMessage?.message_id ?? "none"}`,
+      `telegram deliver done kind=${intent.kind} outcome=${outcome} format=${richSentMessage ? "rich" : "regular"} target=${this.compactTypingTarget(target)} messages=${sentMessages.length} lastMessage=${lastMessage?.message_id ?? "none"}`,
     );
 
     return {
@@ -1162,8 +1169,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     // response rolls onto extra messages. Previously an oversized update was
     // discarded, which left a stale partial and duplicated the head once the
     // controller fell back to the (split) message path.
-    const chunks = splitTelegramHtml(
-      renderTelegramHtml(intent.text, intent.markdown ?? "plain") || " ",
+    let chunks = splitTelegramHtml(
+      textForTelegramIntent(intent) || " ",
     );
     // Seed anchor 0 from a caller-supplied surface (restart-safety).
     const anchors =
@@ -1196,11 +1203,42 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     evictStaleStreamAnchors(this.streamSurfaces);
     let firstOutcome: "presented" | "updated" | undefined;
     try {
-      for (let index = 0; index < chunks.length; index += 1) {
+      const rich = intent.stream.isFinal
+        ? richMessageForTelegramText(intent.text, intent.markdown, intent.attribution)
+        : undefined;
+      const headAnchor = anchors[0];
+      let richDelivered = Boolean(rich && headAnchor?.richHtml === rich.html);
+      if (rich && !richDelivered) {
+        const message = await this.tryDeliverRichMessage(
+          rich,
+          { ...target, messageId: headAnchor?.messageId },
+          textForTelegramIntent(intent),
+        );
+        if (message) {
+          anchors[0] = {
+            chatId: target.chatId,
+            messageId: message.message_id,
+            messageThreadId: target.messageThreadId,
+            text: "",
+            richHtml: rich.html,
+          };
+          richDelivered = true;
+          firstOutcome = headAnchor ? "updated" : "presented";
+        } else {
+          // A rejected rich call still consumes a request slot. Respect a
+          // hard budget before attempting the regular fallback.
+          const fallbackLimit = this.evaluateStreamRateLimit(target, true);
+          if (!fallbackLimit.allowed && fallbackLimit.hard) await this.sleep(fallbackLimit.waitMs);
+        }
+      }
+      // A final rich edit replaces the partial response in place. Reconcile
+      // any extra partial chunks against that single durable message.
+      if (richDelivered) chunks = [rich!.html];
+      for (let index = 0; !richDelivered && index < chunks.length; index += 1) {
         const chunkText = chunks[index] ?? " ";
         const anchor = anchors[index];
         if (anchor?.messageId !== undefined) {
-          if (anchor.text === chunkText) {
+          if (!anchor.richHtml && anchor.text === chunkText) {
             firstOutcome ??= "updated";
             continue;
           }
@@ -1221,6 +1259,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
             }
           }
           anchor.text = chunkText;
+          delete anchor.richHtml;
           firstOutcome ??= "updated";
           // Record every real API call (edit, including a "not modified" no-op
           // Telegram still processed) so the per-chat rate limiter doesn't
@@ -1300,19 +1339,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         messageThreadId: head.messageThreadId,
       };
       if (intent.stream.isFinal) {
-        // The regular update may have used the last slot in a group budget.
-        // Optional rich content must not force a wait or exceed that budget.
-        if (this.evaluateStreamRateLimit(target, true).allowed) {
-          await this.sendRichSupplement(
-            richMessageForTelegramText(intent.text, intent.markdown),
-            target,
-            anchors[chunks.length - 1]!.messageId!,
-          );
-        }
         this.streamSurfaces.delete(intent.stream.key);
       }
       this.options.logger?.debug(
-        `telegram stream update final=${intent.stream.isFinal} sequence=${intent.stream.sequence} chunks=${chunks.length} target=${this.compactTypingTarget(surfaceTarget)} stream=${intent.stream.key}`,
+        `telegram stream update final=${intent.stream.isFinal} sequence=${intent.stream.sequence} format=${richDelivered ? "rich" : "regular"} chunks=${chunks.length} target=${this.compactTypingTarget(surfaceTarget)} stream=${intent.stream.key}`,
       );
       return {
         channel: this.channel,
@@ -1357,31 +1387,44 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
   }
 
-  private async sendRichSupplement(
+  private async tryDeliverRichMessage(
     richMessage: TelegramInputRichMessage | undefined,
     target: TelegramDeliveryTarget,
-    fallbackMessageId: number,
-  ): Promise<void> {
-    if (!richMessage || !this.bot.api.sendRichMessage) return;
+    fallbackText: string,
+    replyMarkup?: TelegramInlineKeyboardMarkup,
+  ): Promise<TelegramSentMessage | undefined> {
+    if (!richMessage || !this.bot.api.sendRichMessage) return undefined;
     try {
-      // Always persist readable regular content first. Old clients display an
-      // update placeholder for rich messages and expose no capability bit.
-      // Keep the regular message as the surface used for updates and pinning.
-      await this.bot.api.sendRichMessage({
+      if (target.messageId !== undefined) {
+        return await this.bot.api.editMessageText({
+          chat_id: target.chatId,
+          message_id: target.messageId,
+          message_thread_id: target.messageThreadId,
+          reply_markup: replyMarkup,
+          rich_message: richMessage,
+          text: fallbackText,
+        });
+      }
+      return await this.bot.api.sendRichMessage({
         chat_id: target.chatId,
-        disable_notification: true,
         message_thread_id: target.messageThreadId,
-        reply_parameters: { message_id: fallbackMessageId },
+        reply_markup: replyMarkup,
         rich_message: richMessage,
       });
     } catch (error) {
-      // An older Bot API server or a rejected optional rich payload must not
-      // turn a successful regular delivery into a failure and duplicate it.
-      const rateLimit = this.emitRateLimitFromError(error, target, { retryable: false });
-      if (rateLimit?.retryAfterMs !== undefined) {
-        this.blockStreamRateLimitTarget(target, rateLimit.retryAfterMs);
+      if (target.messageId !== undefined && isTelegramMessageNotModifiedError(error)) {
+        return { chat: { id: Number(target.chatId), type: "private" }, message_id: target.messageId };
       }
-      this.options.logger?.warn?.(`telegram rich supplement failed error=${errorMessage(error)}`);
+      const retryAfterMs = telegramRetryAfterMs(error);
+      if (retryAfterMs !== undefined) {
+        this.blockStreamRateLimitTarget(target, retryAfterMs);
+        throw error;
+      }
+      // Only a definite API rejection permits regular fallback. A timeout may
+      // have delivered remotely, and flooding errors require backpressure.
+      if (!isTelegramRichMessageRejected(error)) throw error;
+      this.options.logger?.warn?.(`telegram rich message rejected; using regular fallback error=${errorMessage(error)}`);
+      return undefined;
     } finally {
       this.recordStreamRateLimitDelivery(target);
     }
@@ -3110,9 +3153,9 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
       getChatMember: async (chatId, userId) =>
         await bot.api.getChatMember(chatId, userId),
       editMessageText: async (request) => {
-        const { chat_id, message_id, text, ...other } = request;
+        const { chat_id, message_id, text, rich_message, ...other } = request;
         return coerceTelegramSentMessage(
-          await bot.api.editMessageText(chat_id, message_id, text, other),
+          await bot.api.editMessageText(chat_id, message_id, rich_message ?? text, other),
           request,
         );
       },
@@ -3355,6 +3398,12 @@ function errorMessage(error: unknown): string {
 
 function isTelegramMessageNotModifiedError(error: unknown): boolean {
   return telegramErrorIncludes(error, "message is not modified");
+}
+
+function isTelegramRichMessageRejected(error: unknown): boolean {
+  const code = readNumberProperty(error, "error_code")
+    ?? readNumberProperty(readErrorProperty(error), "error_code");
+  return code === 400 || code === 404 || code === 501;
 }
 
 function telegramErrorIncludes(error: unknown, description: string): boolean {

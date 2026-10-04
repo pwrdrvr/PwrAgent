@@ -85,6 +85,7 @@ Asset groups
 
 Keep the interpretation caveats as a normal paragraph. Do not paste the
 script's Markdown pipe tables or use a fixed-width alignment grid in a Telegram
-response. Native rich tables may supplement the readable list; older clients
-can display an update placeholder for rich messages, so keep regular-message
-content that stands on its own.
+response. Native rich tables may be used for structured detail. The adapter
+attempts rich delivery first and generates readable regular content if the API
+rejects the payload. Do not send a duplicate list alongside the native table.
+Older clients can display an update placeholder for rich messages.

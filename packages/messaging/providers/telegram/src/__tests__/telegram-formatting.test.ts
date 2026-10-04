@@ -48,6 +48,32 @@ describe("telegram formatting", () => {
     );
   });
 
+  it("labels regular and rich responses with the bound identity as escaped text", () => {
+    const attribution = { label: "Agent: Breakfast <helper> & friends", hint: "  From\nDM  " };
+    const intent = {
+      id: "attributed", kind: "message" as const, createdAt: 1, attribution,
+      parts: [{ type: "text" as const, text: "# Options", markdown: "markdown" as const }],
+    };
+    const label = "<i>Agent: Breakfast &lt;helper&gt; &amp; friends · From DM</i>";
+    expect(textForTelegramIntent(intent)).toBe(`<b>Options</b>\n\n${label}`);
+    expect(richMessageForTelegramIntent(intent)?.html).toBe(`<h1>Options</h1>\n<p>${label}</p>`);
+    expect(textForTelegramIntent({
+      id: "stream", kind: "stream_update", createdAt: 1, attribution,
+      text: "# Options", markdown: "markdown",
+      stream: { key: "options", sequence: 2, isFinal: true },
+    })).toBe(`<b>Options</b>\n\n${label}`);
+    expect(richMessageForTelegramText("# Options", "markdown", attribution)?.html)
+      .toBe(`<h1>Options</h1>\n<p>${label}</p>`);
+  });
+
+  it("does not turn an empty response into an attribution-only message", () => {
+    expect(splitTelegramHtml(textForTelegramIntent({
+      id: "empty", kind: "message", createdAt: 1,
+      attribution: { label: "Bound thread: Options" },
+      parts: [{ type: "text", text: " \n\t" }],
+    }))).toEqual([]);
+  });
+
   it("splits long responses under Telegram message limits", () => {
     const chunks = splitTelegramHtml(
       `${"A".repeat(TELEGRAM_MESSAGE_TEXT_LIMIT - 10)}\n${"B".repeat(100)}`,
@@ -169,6 +195,11 @@ describe("telegram formatting", () => {
     expect(richMessageForTelegramText(`# Large\n\n${"x".repeat(32768)}`, "markdown")).toBeUndefined();
     expect(richMessageForTelegramText(Array.from({ length: 500 }, () => "# Heading").join("\n\n"), "markdown")).toBeDefined();
     expect(richMessageForTelegramText(Array.from({ length: 501 }, () => "# Heading").join("\n\n"), "markdown")).toBeUndefined();
+    expect(richMessageForTelegramText(
+      Array.from({ length: 500 }, () => "# Heading").join("\n\n"),
+      "markdown", { label: "Agent: Options" },
+    )).toBeUndefined();
+    expect(richMessageForTelegramText("# Heading", "markdown", { label: "x".repeat(32768) })).toBeUndefined();
     expect(richMessageForTelegramText(Array.from({ length: 20 }, (_, index) => `${"  ".repeat(index)}- [ ] nested`).join("\n"), "markdown")).toBeUndefined();
     const table = (columns: number) => [
       Array.from({ length: columns }, () => "Cell").join(" | "),

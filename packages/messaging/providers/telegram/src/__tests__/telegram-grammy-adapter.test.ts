@@ -73,6 +73,12 @@ describe("adaptGrammyBot", () => {
       parse_mode: "HTML",
       text: "Binding active",
     });
+    await bot.api.editMessageText({
+      chat_id: 42,
+      message_id: 7,
+      text: "Readable API fallback",
+      rich_message: { html: "<h1>Stats</h1>" },
+    });
     await bot.api.editForumTopic({
       chat_id: 42,
       message_thread_id: 9,
@@ -170,6 +176,7 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.answerCallbackQuery).toHaveBeenCalledWith("callback-1", {
       text: "Done",
     });
+    expect(grammyBot.api.editMessageText).toHaveBeenCalledWith(42, 7, { html: "<h1>Stats</h1>" }, {});
     expect(grammyBot.api.pinChatMessage).toHaveBeenCalledWith(42, 7, {
       disable_notification: true,
     });
@@ -213,46 +220,66 @@ describe("TelegramAdapter rich messages", () => {
     return { api, adapter, send, edit, rich };
   }
 
-  it("persists a readable regular fallback before the rich message in the same topic", async () => {
-    const { adapter, send, rich } = harness();
-    const result = await adapter.deliver(intent);
-    expect(result.outcome).toBe("presented");
-    expect(result.surface?.id).toBe("200");
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({
-      chat_id: -100123, message_thread_id: 77, parse_mode: "HTML",
-      text: "<b>Downloads</b>\n\n• ZIP\n  Count: <b>177</b>\n\n☑ Reported",
-    }));
+  it("sends one rich message directly in the same topic and pins its surface", async () => {
+    const { api, adapter, send, rich } = harness();
+    const pin = vi.spyOn(api, "pinChatMessage");
+    const result = await adapter.deliver({ ...intent, delivery: { pin: true } });
+    expect(result.outcome).toBe("pinned");
+    expect(result.surface?.id).toBe("300");
+    expect(send).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledTimes(1);
     expect(rich).toHaveBeenCalledWith(expect.objectContaining({
-      chat_id: -100123, message_thread_id: 77, disable_notification: true,
-      reply_parameters: { message_id: 200 },
+      chat_id: -100123, message_thread_id: 77,
       rich_message: { html: expect.stringContaining("<table bordered striped compact>") },
     }));
-    expect(send.mock.invocationCallOrder[0]).toBeLessThan(rich.mock.invocationCallOrder[0]!);
+    expect(rich.mock.calls[0]?.[0]).not.toHaveProperty("reply_parameters");
+    expect(rich.mock.calls[0]?.[0]).not.toHaveProperty("disable_notification");
+    expect(pin).toHaveBeenCalledWith(expect.objectContaining({ message_id: 300 }));
   });
 
-  it("keeps successful fallback delivery when the rich endpoint rejects a payload", async () => {
+  it.each([400, 404, 501])("sends readable text only after rich API rejection %s", async (errorCode) => {
     const { adapter, send, rich } = harness();
-    rich.mockRejectedValue(new Error("400: unsupported rich message"));
-    const result = await adapter.deliver(intent);
+    rich.mockRejectedValue({ error_code: errorCode, description: "Unsupported rich message" });
+    const result = await adapter.deliver({ ...intent, attribution: { label: "Agent: Downloads" } });
     expect(result.outcome).toBe("presented");
     expect(result.surface?.id).toBe("200");
     expect(send).toHaveBeenCalledTimes(1);
     expect(rich).toHaveBeenCalledTimes(1);
+    expect(rich.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]!);
+    expect(send.mock.calls[0]?.[0].text).toBe("<b>Downloads</b>\n\n• ZIP\n  Count: <b>177</b>\n\n☑ Reported\n\n<i>Agent: Downloads</i>");
   });
 
-  it("does not send rich-only content if regular fallback delivery fails", async () => {
+  it("includes bound Agent attribution in a single rich DM response", async () => {
+    const { adapter, send, rich } = harness();
+    await adapter.deliver({
+      ...intent, attribution: { label: "Agent: Messaging helper" },
+      audit: {
+        ...intent.audit,
+        channel: { channel: "telegram", conversation: { id: "42", kind: "dm" } },
+      },
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 42, message_thread_id: undefined,
+      rich_message: { html: expect.stringContaining("<p><i>Agent: Messaging helper</i></p>") },
+    }));
+  });
+
+  it("reports failure when both rich and regular fallback delivery fail", async () => {
     const { adapter, send, rich } = harness();
     send.mockRejectedValue(new Error("fallback failed"));
+    rich.mockRejectedValue({ error_code: 400, description: "Unsupported rich message" });
     expect((await adapter.deliver(intent)).outcome).toBe("failed");
-    expect(rich).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the fallback delivered and honours retry_after on a rejected rich supplement", async () => {
+  it("honours rich retry_after without immediately sending a second request", async () => {
     const { adapter, send, rich } = harness(() => 1000);
     const onRateLimit = vi.fn();
     adapter.onRateLimit(onRateLimit);
     rich.mockRejectedValue({ error_code: 429, parameters: { retry_after: 2 } });
-    expect((await adapter.deliver(intent)).outcome).toBe("presented");
+    expect((await adapter.deliver(intent)).outcome).toBe("failed");
     expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: false }));
     const update = await adapter.deliver({
       id: "next-stream", kind: "stream_update", createdAt: 1,
@@ -260,7 +287,15 @@ describe("TelegramAdapter rich messages", () => {
       stream: { key: "next-stream", sequence: 1, isFinal: false },
     });
     expect(update.outcome).toBe("discarded");
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not duplicate an ambiguously delivered rich message after a timeout", async () => {
+    const { adapter, send, rich } = harness();
+    rich.mockRejectedValue(new Error("Request timed out after sending"));
+    expect((await adapter.deliver(intent)).outcome).toBe("failed");
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("supports injected older APIs without the rich endpoint", async () => {
@@ -293,15 +328,18 @@ describe("TelegramAdapter rich messages", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("updates the readable surface without appending another rich supplement", async () => {
+  it("updates the rich surface without sending another bubble", async () => {
     const { adapter, edit, rich } = harness();
     const result = await adapter.deliver(intent);
     await adapter.deliver({ ...intent, targetSurface: result.surface, delivery: { mode: "update" } });
-    expect(edit).toHaveBeenCalledWith(expect.objectContaining({ message_id: 200, parse_mode: "HTML" }));
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      message_id: 300,
+      rich_message: { html: expect.stringContaining("<table bordered striped compact>") },
+    }));
     expect(rich).toHaveBeenCalledTimes(1);
   });
 
-  it("adds rich content only after the final persistent stream update", async () => {
+  it("replaces the partial stream with final rich content in the same bubble", async () => {
     const { adapter, send, edit, rich } = harness();
     const stream = {
       id: "stream", kind: "stream_update" as const, createdAt: 1,
@@ -311,15 +349,22 @@ describe("TelegramAdapter rich messages", () => {
     await adapter.deliver(stream);
     expect(send).toHaveBeenCalledTimes(1);
     expect(rich).not.toHaveBeenCalled();
-    const result = await adapter.deliver({ ...stream, text: `${markdown}\n\nComplete.`, stream: { ...stream.stream, sequence: 2, isFinal: true } });
+    const result = await adapter.deliver({
+      ...stream, text: `${markdown}\n\nComplete.`,
+      attribution: { label: "Bound thread: Downloads" },
+      stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
     expect(result.surface?.id).toBe("200");
     expect(edit).toHaveBeenCalledTimes(1);
-    expect(rich).toHaveBeenCalledTimes(1);
-    expect(edit.mock.invocationCallOrder[0]).toBeLessThan(rich.mock.invocationCallOrder[0]!);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
     expect(edit.mock.calls[0]?.[0].text).not.toContain("|");
+    expect(edit.mock.calls[0]?.[0].text).toContain("<i>Bound thread: Downloads</i>");
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<p><i>Bound thread: Downloads</i></p>");
   });
 
-  it("keeps the final fallback when it uses the last slot in the group stream budget", async () => {
+  it("uses one request for rich final content in the last group stream budget slot", async () => {
     const { adapter, send, rich } = harness(() => 1000);
     for (let index = 0; index < 20; index += 1) {
       const result = await adapter.deliver({
@@ -329,7 +374,104 @@ describe("TelegramAdapter rich messages", () => {
       });
       expect(result.outcome).toBe("presented");
     }
-    expect(send).toHaveBeenCalledTimes(20);
+    expect(send).toHaveBeenCalledTimes(19);
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends final rich content directly when no partial stream was delivered", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const result = await adapter.deliver({
+      id: "final-only", kind: "stream_update", createdAt: 1,
+      audit: intent.audit, text: markdown, markdown: "markdown",
+      stream: { key: "final-only", sequence: 1, isFinal: true },
+    });
+    expect(result.surface?.id).toBe("300");
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it("waits for the hard group budget before regular fallback after a rejected rich call", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    try {
+      const { adapter, send, rich } = harness(() => Date.now());
+      rich.mockRejectedValue({ error_code: 400, description: "Unsupported rich message" });
+      for (let index = 0; index < 19; index += 1) {
+        await adapter.deliver({
+          id: `budget-${index}`, kind: "stream_update", createdAt: 1,
+          audit: intent.audit, text: "Complete.", markdown: "markdown",
+          stream: { key: `budget-${index}`, sequence: 1, isFinal: true },
+        });
+      }
+      const pending = adapter.deliver({
+        id: "budget-fallback", kind: "stream_update", createdAt: 1,
+        audit: intent.audit, text: markdown, markdown: "markdown",
+        stream: { key: "budget-fallback", sequence: 1, isFinal: true },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rich).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(19);
+      await vi.advanceTimersToNextTimerAsync();
+      expect((await pending).outcome).toBe("presented");
+      expect(send).toHaveBeenCalledTimes(20);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the same partial bubble when a final rich edit needs regular fallback", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const stream = {
+      id: "fallback-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "Working", markdown: "plain" as const,
+      stream: { key: "fallback-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    edit.mockRejectedValueOnce({ error_code: 400, description: "Unsupported rich message" });
+    const result = await adapter.deliver({
+      ...stream, text: markdown, markdown: "markdown",
+      stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(edit).toHaveBeenCalledTimes(2);
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
+    expect(edit.mock.calls[1]?.[0]).toMatchObject({ message_id: 200, parse_mode: "HTML" });
+    expect(edit.mock.calls[1]?.[0]).not.toHaveProperty("rich_message");
+    expect(edit.mock.calls[1]?.[0].text).not.toContain("|");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("reconciles extra partial chunks after a rich edit and retries failed cleanup without resending", async () => {
+    let now = 1000;
+    const { api, adapter, send, edit, rich } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "rich-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: `# Downloads\n\n${"x".repeat(4200)}`, markdown: "markdown" as const,
+      stream: { key: "rich-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    now += 5000;
+    const final = { ...stream, stream: { ...stream.stream, sequence: 2, isFinal: true } };
+    expect((await adapter.deliver(final)).outcome).toBe("failed");
+    const result = await adapter.deliver(final);
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<h1>Downloads</h1>");
     expect(rich).not.toHaveBeenCalled();
   });
 
@@ -1145,7 +1287,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         async (
           chatId: number | string,
           messageId: number,
-          _text: string,
+          _text: string | NonNullable<TelegramEditMessageTextRequest["rich_message"]>,
           _other?: Omit<
             TelegramEditMessageTextRequest,
             "chat_id" | "message_id" | "text"

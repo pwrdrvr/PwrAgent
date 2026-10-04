@@ -3,6 +3,7 @@ import type {
   MessagingCapabilityProfile,
   MessagingContentPart,
   MessagingMarkdownPolicy,
+  MessagingResponseAttribution,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -92,22 +93,29 @@ function hasVisibleTelegramHtml(text: string): boolean {
   }).trim().length > 0;
 }
 
-/** Rich content is supplementary: clients have no capability handshake. */
+/** Structured content uses the rich endpoint; regular HTML remains the API fallback. */
 export function richMessageForTelegramText(
   text: string,
   policy: MessagingMarkdownPolicy = "plain",
+  attribution?: MessagingResponseAttribution,
 ): TelegramInputRichMessage | undefined {
   if (policy === "plain" || Buffer.byteLength(text, "utf8") > TELEGRAM_RICH_MESSAGE_TEXT_LIMIT) {
     return undefined;
   }
-  return richMessageFromTokens(Lexer.lex(text, { gfm: true }));
+  return richMessageFromTokens(Lexer.lex(text, { gfm: true }), attribution);
 }
 
-function richMessageFromTokens(tokens: Token[]): TelegramInputRichMessage | undefined {
+function richMessageFromTokens(
+  tokens: Token[],
+  attribution?: MessagingResponseAttribution,
+): TelegramInputRichMessage | undefined {
   const stats = { blocks: 0, structured: false, valid: true };
   inspectRichTokens(tokens, stats);
+  const attributionHtml = telegramAttributionHtml(attribution);
+  if (attributionHtml) stats.blocks += 1;
   if (!stats.structured || !stats.valid || stats.blocks > 500) return undefined;
-  const html = renderBlocks(tokens, "rich");
+  const html = [renderBlocks(tokens, "rich"), attributionHtml ? `<p>${attributionHtml}</p>` : ""]
+    .filter(Boolean).join("\n");
   // Counting source bytes (including tags) is deliberately conservative.
   return Buffer.byteLength(html, "utf8") <= TELEGRAM_RICH_MESSAGE_TEXT_LIMIT
     ? { html }
@@ -132,7 +140,21 @@ export function richMessageForTelegramIntent(
           tokens: [{ type: "text", raw: part.text, text: part.text }],
         }];
   });
-  return richMessageFromTokens(tokens);
+  return richMessageFromTokens(tokens, intent.attribution);
+}
+
+function telegramAttributionHtml(attribution: MessagingResponseAttribution | undefined): string {
+  const label = [attribution?.label, attribution?.hint]
+    .map((value) => value?.replace(/\s+/g, " ").trim())
+    .filter(Boolean).join(" · ");
+  return label ? `<i>${escapeTelegramHtml(label)}</i>` : "";
+}
+
+function withTelegramAttribution(text: string, attribution: MessagingResponseAttribution | undefined): string {
+  const attributionHtml = telegramAttributionHtml(attribution);
+  return attributionHtml && hasVisibleTelegramHtml(text)
+    ? `${text}\n\n${attributionHtml}`
+    : text;
 }
 
 export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
@@ -140,9 +162,15 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
     case "activity":
       return "";
     case "message":
-      return intent.parts.map(renderContentPart).filter(Boolean).join("\n\n");
+      return withTelegramAttribution(
+        intent.parts.map(renderContentPart).filter(Boolean).join("\n\n"),
+        intent.attribution,
+      );
     case "stream_update":
-      return renderTelegramHtml(intent.text, intent.markdown ?? "plain");
+      return withTelegramAttribution(
+        renderTelegramHtml(intent.text, intent.markdown ?? "plain"),
+        intent.attribution,
+      );
     case "working_card":
       return renderTelegramHtml(intent.fallbackText ?? "Working update", "plain");
     case "status":
