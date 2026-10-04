@@ -5,8 +5,8 @@
 This runbook covers cutting v1.x desktop releases. macOS releases ship as
 Apple Silicon (arm64) and universal Apple Silicon + Intel binaries; distribution is outside the Mac App
 Store via signed/notarized DMG with auto-update through `electron-updater`
-against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship as manual
-Debian packages for x64/amd64 and arm64.
+against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship DEB, RPM, pacman, and tar.gz artifacts for x64 and arm64.
+Native packages use `electron-updater`; portable tar.gz builds are updated manually.
 
 ---
 
@@ -769,10 +769,22 @@ older selected release as a **switch back** rather than "no update":
 Phase 2 distribution channel migration removes the token requirement entirely.
 See [desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md).
 
-Linux builds intentionally skip `electron-updater`. Operators upgrade by
-installing the newer DEB, RPM, or pacman package, or replacing the
-extracted tar.gz from GitHub Releases; the in-app update status
-reports that Linux packages are updated manually.
+Linux DEB, RPM, and pacman installations use `electron-updater`, which detects
+its backend from electron-builder's `resources/package-type`. Release selection
+requires the running architecture's Linux channel file and installed package
+format. Downloads run on startup and hourly; installation happens only after
+an explicit Restart action, with package-manager administrator authorization.
+Authorization precedes committing quit permission and federation shutdown; a
+failed or canceled authorization resumes automation dispatch and allows retry.
+RPM switch-backs use downgrade-capable package-manager commands.
+Ordinary quit does not install a Linux update. Failed checks and downloads show
+a copyable terminal command for the selected release (or explicitly the latest stable
+release if the feed could not be read).
+
+Portable tar.gz builds retain release discovery and release-note links, but
+still require replacing the extracted directory. An AppImage launched with `APPIMAGE` set can use electron-updater's AppImage
+backend, but this workflow does not yet build or publish AppImages; see the
+runtime distribution requirements above.
 
 ---
 

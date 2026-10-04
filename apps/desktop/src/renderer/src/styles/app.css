@@ -11144,6 +11144,23 @@ a.button {
   color: var(--text-secondary);
 }
 
+.settings-update-channel__manual {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+}
+
+.settings-update-channel__manual code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.settings-update-channel__manual .button {
+  justify-self: start;
+}
+
 .settings-update-channel__result--error {
   color: var(--danger-text);
 }

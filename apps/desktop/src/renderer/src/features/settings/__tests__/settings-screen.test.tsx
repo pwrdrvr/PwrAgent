@@ -713,6 +713,68 @@ function messagingRoutesHeader(): Element | null {
 }
 
 describe("SettingsScreen", () => {
+  it("shows and copies a runnable Linux update fallback after a failed check", async () => {
+    const manualUpdate = {
+      description: "Close PwrAgent and run this command in a terminal.",
+      command: "curl -fL -o PwrAgent.deb https://example.test/PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "error" as const, message: "offline", manualUpdate })),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(
+      <SettingsScreen
+        initialSection="updates"
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    const copy = await screen.findByRole("button", { name: "Copy update command" });
+    expect(screen.getByText(manualUpdate.description)).toBeInTheDocument();
+    expect(screen.getByText(manualUpdate.command)).toBeInTheDocument();
+    fireEvent.click(copy);
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
+  it("shows the selected-release fallback when downloading fails after an available check", async () => {
+    let receiveStatus: ((status: import("../../../../../shared/app-metadata").AppUpdateStatus) => void) | undefined;
+    const manualUpdate = {
+      description: "Install v1.1.0-beta.2 from a terminal.",
+      command: "curl -fL https://example.test/v1.1.0-beta.2.deb -o PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "available" as const, version: "1.1.0-beta.2" })),
+      onAppUpdateStatus: vi.fn((listener: NonNullable<typeof receiveStatus>) => { receiveStatus = listener; return () => undefined; }),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(<SettingsScreen initialSection="updates" desktopApi={desktopApi} settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await screen.findByText(/Update available: v1.1.0-beta.2/);
+    act(() => receiveStatus?.({ status: "error", message: "download interrupted", manualUpdate }));
+    expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy update command" }));
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
+  it("keeps terminal fallback instructions when the error event precedes the check result", async () => {
+    let receiveStatus: ((status: import("../../../../../shared/app-metadata").AppUpdateStatus) => void) | undefined;
+    let resolveCheck: ((result: { status: "available"; version: string }) => void) | undefined;
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(() => new Promise<{ status: "available"; version: string }>((resolve) => { resolveCheck = resolve; })),
+      onAppUpdateStatus: (listener: NonNullable<typeof receiveStatus>) => { receiveStatus = listener; return () => undefined; },
+    };
+    render(<SettingsScreen initialSection="updates" desktopApi={desktopApi} settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await act(async () => {
+      receiveStatus?.({ status: "error", message: "download interrupted", manualUpdate: { description: "Install the selected beta.", command: "sudo apt install ./beta.deb" } });
+      resolveCheck?.({ status: "available", version: "1.1.0-beta.2" });
+    });
+    expect(screen.getByText("sudo apt install ./beta.deb")).toBeInTheDocument();
+    expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+  });
+
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
