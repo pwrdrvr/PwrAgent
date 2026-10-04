@@ -37021,7 +37021,7 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
-  it("exposes in-progress handoffs and creates one child for a repeated call id", async () => {
+  it.each(["terminal", "idle"] as const)("keeps one child for a repeated call id until the %s boundary ends the turn", async (boundary) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-pending-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "worktree");
@@ -37269,17 +37269,54 @@ script = "printf setup"
     );
     expect(changedArgumentsPayload).toMatchObject({ code: "invalid_arguments" });
 
-    await registry.publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "turn/completed",
-        params: {
-          threadId: "ordinary-thread",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed", output: [] },
+    const internals = registry as unknown as {
+      acceptedDynamicToolCalls: Map<string, unknown>;
+      acceptedHandoffTaskRequests: Map<string, unknown>;
+      flushLiveThreadUsageLines: () => Promise<void>;
+    };
+    expect(internals.acceptedDynamicToolCalls.size).toBeGreaterThan(0);
+    expect(internals.acceptedHandoffTaskRequests.size).toBe(1);
+    if (boundary === "terminal") {
+      const cleanupStarted = createDeferred<void>();
+      const cleanupRelease = createDeferred<void>();
+      const flush = vi.spyOn(internals, "flushLiveThreadUsageLines")
+        .mockImplementationOnce(async () => {
+          cleanupStarted.resolve();
+          await cleanupRelease.promise;
+        });
+      const terminal = registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [] },
+          },
         },
-      },
-    });
+      });
+      try {
+        await cleanupStarted.promise;
+        // Terminal persistence still yields while the live-turn marker is set.
+        // A redelivery in that interval must reuse the original child.
+        await expect(codexClient.emitRequest(handoffCall)).resolves.toEqual(handoffResponse);
+        expect(commandRunner).toHaveBeenCalledTimes(1);
+      } finally {
+        cleanupRelease.resolve();
+        await terminal;
+        flush.mockRestore();
+      }
+    } else {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId: "ordinary-thread", status: { type: "idle" } },
+        },
+      });
+    }
+    expect(internals.acceptedDynamicToolCalls.size).toBe(0);
+    expect(internals.acceptedHandoffTaskRequests.size).toBe(0);
     const staleResponse = await codexClient.emitRequest(handoffCall);
     expect(staleResponse).toMatchObject({ success: false });
     const stalePayload = JSON.parse(
@@ -37287,6 +37324,8 @@ script = "printf setup"
     );
     expect(stalePayload).toMatchObject({ code: "forbidden" });
     expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(internals.acceptedDynamicToolCalls.size).toBe(0);
+    expect(internals.acceptedHandoffTaskRequests.size).toBe(0);
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
