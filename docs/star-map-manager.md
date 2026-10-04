@@ -167,11 +167,17 @@ is design and debugging work with better tools already available to it.
 
 ## Moving, archiving, restoring, pinning and marking read
 
-These are `mutate_thread` fields, not new tools: `projectPath`, `archive`,
+Individual thread actions use `mutate_thread` fields: `projectPath`, `archive`,
 `pinned` and `unread`. That tool already resolves a thread locally or on the
 owning peer, supports `dryRun`, and is gated for messaging per field. A field
 whose permission is missing fails to compile, so the new fields could not
 ship ungated.
+
+To mark a whole project read, use `mark_project_read` once with its exact
+`projectKey` from `list_instance_projects` and its owning `instanceId`. This
+uses complete owner membership, covers all backends, and writes the watermarks
+in one transaction. It shares `thread.control.organize` with the single-thread
+read mutation. It does not archive threads or stop turns.
 
 - **`projectPath`** is the status card's *Move to Project*: a `to-project`
   workspace handoff that relinks the thread to another checkout without

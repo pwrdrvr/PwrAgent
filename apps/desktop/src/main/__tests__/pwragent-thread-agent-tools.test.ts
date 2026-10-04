@@ -3,6 +3,23 @@ import { describe, expect, it, vi } from "vitest";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
 
 describe("PwrAgent thread agent tools", () => {
+  it("advertises the same project mark-read contract through dynamic tools and MCP", async () => {
+    const projectRead = { projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140 };
+    const handler = vi.fn(async () => ({ ok: true as const, data: { projectRead } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    const namespace = router.buildDynamicToolSpecs()[0];
+    if (!namespace || namespace.type !== "namespace") throw new Error("Expected a namespace");
+    const dynamic = namespace.tools.find((tool) => tool.name === "mark_project_read");
+    const mcp = router.buildMcpTools().find((tool) => tool.name === "mark_project_read");
+    expect(mcp?.inputSchema).toEqual(dynamic?.inputSchema);
+    expect(mcp?.inputSchema).toMatchObject({ required: ["projectKey"], additionalProperties: false });
+    const result = await router.handleMcpToolCall({ backend: "codex", threadId: "manager", tool: "mark_project_read",
+      args: { projectKey: "directory:/repo" } });
+    expect(result.structuredContent).toEqual({ projectRead });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "mark_project_read",
+      context: { backend: "codex", threadId: "manager" }, args: { projectKey: "directory:/repo" } });
+  });
+
   it("projects thread tools and dispatches with Agent thread context", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,
@@ -35,6 +52,11 @@ describe("PwrAgent thread agent tools", () => {
         expect.objectContaining({
           type: "function",
           name: "mutate_thread",
+        }),
+        expect.objectContaining({
+          type: "function",
+          name: "mark_project_read",
+          inputSchema: expect.objectContaining({ required: ["projectKey"] }),
         }),
         ]),
       }),

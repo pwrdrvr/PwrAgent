@@ -56,6 +56,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "check_thread_pull_request_status",
   "watch_thread_pull_request",
   "mutate_thread",
+  "mark_project_read",
 ] as const;
 
 export type PwrAgentThreadInspectionOperationName =
@@ -167,6 +168,20 @@ export type ReadThreadToolArgs = {
    * Implementations clamp this to a bounded product limit.
    */
   maxCharsPerEntry?: number;
+};
+
+export type MarkProjectReadToolArgs = {
+  /** Exact directory key from list_instance_projects; directory:<absolute path> for a checkout. */
+  projectKey: string;
+  /** Omit for this instance. No implicit cross-instance project matching. */
+  instanceId?: FederationInstanceId;
+};
+
+export type MarkProjectReadResult = {
+  projectKey: string;
+  instanceId: FederationInstanceId;
+  isLocal: boolean;
+  changedCount: number;
 };
 
 export type MutateThreadToolArgs = {
@@ -623,6 +638,7 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   check_thread_pull_request_status: CheckThreadPullRequestStatusToolArgs;
   watch_thread_pull_request: WatchThreadPullRequestToolArgs;
   mutate_thread: MutateThreadToolArgs;
+  mark_project_read: MarkProjectReadToolArgs;
 };
 
 export type PwrAgentThreadInspectionToolArgs<
@@ -677,6 +693,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             mutation: ThreadMutationResult;
+          }
+        | {
+            projectRead: MarkProjectReadResult;
           };
     }
   | {

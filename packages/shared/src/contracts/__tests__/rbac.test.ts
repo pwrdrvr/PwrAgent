@@ -332,7 +332,12 @@ describe("action → permission lookup tables", () => {
     expect(permissionForDynamicTool("thread_inspection", "read_thread")).toBe(
       "tools.thread_inspection",
     );
-    // The two writes shipped in that catalog are re-homed.
+    expect(permissionForDynamicTool("thread_inspection", "mark_project_read")).toBe(
+      "thread.control.organize",
+    );
+    expect(toolArgsTargetRemoteInstance({ projectKey: "directory:/repo", instanceId: "peer" })).toBe(true);
+    expect(toolArgsTargetRemoteInstance({ projectKey: "directory:/repo" })).toBe(false);
+    // Writes shipped in that catalog are re-homed.
     expect(
       permissionForDynamicTool("thread_inspection", "mutate_thread"),
     ).toBeUndefined(); // gated per-field instead
