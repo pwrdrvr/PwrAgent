@@ -3,14 +3,20 @@
  * probability for every allowed answer instead of generating text. PwrAgent
  * knows two providers: a local one (Cloudflare's Clef, served on this Mac,
  * for example by PwrSuiteLab's Clef runtime) and TypeSafe's hosted Jev.
+ * Both speak TypeSafe's System One API, so they differ only in where requests
+ * go, which key they carry, and which model they name.
  */
 export type DecisionProviderId = "local" | "jev";
 export type DecisionModelChoice = DecisionProviderId | "off";
 
 export const DECISION_PROVIDER_IDS = ["local", "jev"] as const satisfies readonly DecisionProviderId[];
 
+/** Appended to a provider's base URL, as TypeSafe's SDK does. */
+export const DECISION_SYSTEM_ONE_PATH = "/v1/systemone";
 export const DECISION_LOCAL_DEFAULT_ENDPOINT = "http://127.0.0.1:8787";
-export const DECISION_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+/** PwrSuiteLab's Clef runtime accepts this model id and rejects any other. */
+export const DECISION_LOCAL_DEFAULT_MODEL = "clef-flash";
+export const DECISION_JEV_ENDPOINT = "https://api.typesafe.ai";
 export const DECISION_JEV_DEFAULT_MODEL = "jev-latest";
 
 /** Where to try each provider, for the Settings rows that suggest them. */
@@ -29,6 +35,8 @@ export type DesktopDecisionModelSettings = {
   local?: {
     /** Base URL of the local server. Absent = {@link DECISION_LOCAL_DEFAULT_ENDPOINT}. */
     endpoint?: string;
+    /** Absent = {@link DECISION_LOCAL_DEFAULT_MODEL}. */
+    model?: string;
   };
   jev?: {
     /** Absent = {@link DECISION_JEV_DEFAULT_MODEL}. */
@@ -39,6 +47,7 @@ export type DesktopDecisionModelSettings = {
 export type DecisionModelResolution = {
   model: DecisionModelChoice;
   localEndpoint: string;
+  localModel: string;
   jevModel: string;
   cameraCues: boolean;
 };
@@ -49,6 +58,7 @@ export function resolveDecisionModelSettings(
   return {
     model: settings?.model ?? "local",
     localEndpoint: settings?.local?.endpoint ?? DECISION_LOCAL_DEFAULT_ENDPOINT,
+    localModel: settings?.local?.model ?? DECISION_LOCAL_DEFAULT_MODEL,
     jevModel: settings?.jev?.model ?? DECISION_JEV_DEFAULT_MODEL,
     cameraCues: settings?.cameraCues ?? true,
   };
@@ -97,7 +107,7 @@ export function normalizeDecisionLocalEndpoint(endpoint: string): string | undef
 }
 
 export type DecisionCameraCueAvailability =
-  | { available: true; endpoint: string }
+  | { available: true; endpoint: string; model: string }
   | { available: false; reason: string };
 
 /** Camera frames never leave this Mac: cues need the local decision model. */
@@ -111,7 +121,7 @@ export function decisionCameraCueAvailability(
   if (resolved.model !== "local") {
     return { available: false, reason: "Camera cues need the local decision model, so frames stay on this Mac." };
   }
-  return { available: true, endpoint: resolved.localEndpoint };
+  return { available: true, endpoint: resolved.localEndpoint, model: resolved.localModel };
 }
 
 /** Result of a Settings "Check" on a decision provider. */
@@ -119,28 +129,35 @@ export type DecisionProviderCheck =
   | { ok: true; detail: string }
   | { ok: false; detail: string };
 
+/** A model id: trimmed, non-blank, at most 200 characters. */
+function modelId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length <= 200 ? value.trim() || undefined : undefined;
+}
+
 /**
  * Drops what this build cannot use: an unknown model choice, a local endpoint
- * that is not on this Mac, a blank Jev model. Returns undefined when nothing
+ * that is not on this Mac, a blank model id. Returns undefined when nothing
  * is left, so an all-default section is not written.
  */
 export function normalizeDecisionModelSettings(value: {
   model?: unknown;
   cameraCues?: unknown;
   localEndpoint?: unknown;
+  localModel?: unknown;
   jevModel?: unknown;
 }): DesktopDecisionModelSettings | undefined {
   const model = value.model === "local" || value.model === "jev" || value.model === "off" ? value.model : undefined;
   const cameraCues = typeof value.cameraCues === "boolean" ? value.cameraCues : undefined;
   const endpoint = typeof value.localEndpoint === "string" ? normalizeDecisionLocalEndpoint(value.localEndpoint) : undefined;
-  const jevModel = typeof value.jevModel === "string" && value.jevModel.trim().length <= 200
-    ? value.jevModel.trim() || undefined
-    : undefined;
-  if (model === undefined && cameraCues === undefined && endpoint === undefined && jevModel === undefined) return undefined;
+  const localModel = modelId(value.localModel);
+  const jevModel = modelId(value.jevModel);
+  if (model === undefined && cameraCues === undefined && endpoint === undefined && localModel === undefined && jevModel === undefined) {
+    return undefined;
+  }
   return {
     ...(model ? { model } : {}),
     ...(cameraCues === undefined ? {} : { cameraCues }),
-    ...(endpoint ? { local: { endpoint } } : {}),
+    ...(endpoint || localModel ? { local: { ...(endpoint ? { endpoint } : {}), ...(localModel ? { model: localModel } : {}) } } : {}),
     ...(jevModel ? { jev: { model: jevModel } } : {}),
   };
 }

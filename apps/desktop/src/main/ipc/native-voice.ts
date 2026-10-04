@@ -4,7 +4,8 @@ import {
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraSkipped,
 } from "../../shared/native-voice-camera";
 import { getMainLogger } from "../log";
-import { classifyVoiceCamera, clefRequestsInFlight, type ClefTarget } from "../native-voice/clef-camera";
+import { classifyVoiceCamera, clefRequestsInFlight } from "../native-voice/clef-camera";
+import { SystemOneRejected, type SystemOneTarget } from "../decision/system-one";
 import { decisionCameraCueAvailability } from "@pwragent/shared";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { ipcMain, session, type WebContents } from "electron";
@@ -153,7 +154,11 @@ export function registerNativeVoiceIpcHandlers(): void {
     // model, stops frames from going anywhere.
     const availability = cameraCueAvailability();
     if (!availability.available) throw new Error(availability.reason);
-    const target: ClefTarget = { endpoint: availability.endpoint, apiKey: cameraApiKeys.get(event.sender.id) };
+    const target: SystemOneTarget = {
+      endpoint: availability.endpoint,
+      model: availability.model,
+      apiKey: cameraApiKeys.get(event.sender.id),
+    };
     const abort = new AbortController();
     const pending = { sessionId: request.sessionId, abort };
     cameraRequests.set(event.sender.id, pending);
@@ -186,6 +191,13 @@ export function registerNativeVoiceIpcHandlers(): void {
         return undefined;
       }
       cameraLog.warn("camera analysis failed", { sessionId: request.sessionId, warming, timedOut, elapsedMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
+      // A refused request fails the same way every time, so stop rather than retry.
+      if (error instanceof SystemOneRejected) {
+        const reason = error.status === 401 || error.status === 403
+          ? "the local decision model refused its API key"
+          : `the local decision model rejected the request${error.detail ? ` (${error.detail})` : ""}`;
+        throw new Error(`Camera cues stopped: ${reason}. Check it in Settings → AI Providers.`, { cause: error });
+      }
       // Once Clef has answered, a failure skips this frame, not the camera. A
       // warm model that answers slowly is usually busy with another client
       // (it serializes requests); one that refuses may be restarting.

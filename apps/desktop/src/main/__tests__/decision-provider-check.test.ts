@@ -5,19 +5,29 @@ const reply = (status: number, body: unknown = {}) =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body, body: { cancel: async () => {} } }) as unknown as Response;
 
 describe("decision provider check", () => {
-  it("reads the local server's health, with its load, and never runs a decision", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => reply(200, { status: "ready", requests_processing: 1, completed_decisions: 4500 }));
+  const models = reply(200, { models: [{ name: "clef-flash", description: "Sample", release_date: "2026-10-01" }] });
+
+  it("confirms the local server offers the model, reads its load, and never runs a decision", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(models)
+      .mockResolvedValueOnce(reply(200, { status: "ready", requests_processing: 1, completed_decisions: 4500 }));
     await expect(checkDecisionProvider("local", { settings: { local: { endpoint: "http://localhost:9911" } }, apiKey: "sample-key", fetch }))
-      .resolves.toEqual({ ok: true, detail: "Ready · 4500 decisions served · 1 in flight." });
-    expect(fetch).toHaveBeenCalledExactlyOnceWith("http://localhost:9911/health", expect.objectContaining({
+      .resolves.toEqual({ ok: true, detail: "Ready with clef-flash · 4500 decisions served · 1 in flight." });
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(["http://localhost:9911/v1/models", "http://localhost:9911/health"]);
+    expect(fetch).toHaveBeenCalledWith("http://localhost:9911/v1/models", expect.objectContaining({
       headers: { Authorization: "Bearer sample-key" }, redirect: "error",
     }));
+    // A System One server need not report its load.
+    await expect(checkDecisionProvider("local", { settings: {}, fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(models).mockResolvedValueOnce(reply(404)) }))
+      .resolves.toEqual({ ok: true, detail: "Ready with clef-flash." });
   });
 
-  it("tells a server without /health, a refused key, and nothing listening apart", async () => {
+  it("names a missing model, a server without System One, a refused key, and nothing listening", async () => {
     const settings = {};
+    await expect(checkDecisionProvider("local", { settings: { local: { model: "clef-pro" } }, fetch: vi.fn(async () => models) }))
+      .resolves.toEqual({ ok: false, detail: "The server does not offer clef-pro. It offers clef-flash." });
     await expect(checkDecisionProvider("local", { settings, fetch: vi.fn(async () => reply(404)) }))
-      .resolves.toMatchObject({ ok: true, detail: expect.stringContaining("no health route") });
+      .resolves.toMatchObject({ ok: false, detail: expect.stringContaining("no System One API") });
     await expect(checkDecisionProvider("local", { settings, fetch: vi.fn(async () => reply(401)) }))
       .resolves.toEqual({ ok: false, detail: "The server refused the API key." });
     await expect(checkDecisionProvider("local", { settings, fetch: vi.fn(async () => { throw new TypeError("fetch failed"); }) }))
@@ -41,6 +51,8 @@ describe("decision provider check", () => {
     const status = async (code: number) => (await checkDecisionProvider("jev", { settings: {}, apiKey: "sample-key", fetch: vi.fn(async () => reply(code)) })).detail;
     await expect(status(401)).resolves.toBe("TypeSafe rejected the API key.");
     await expect(status(422)).resolves.toContain("jev-latest");
+    const refused = await checkDecisionProvider("jev", { settings: {}, apiKey: "sample-key", fetch: vi.fn(async () => reply(422, { detail: "unknown model" })) });
+    expect(refused.detail).toBe("TypeSafe rejected the request: unknown model. Check the model id (jev-latest).");
     await expect(status(529)).resolves.toContain("overloaded");
     await expect(status(500)).resolves.toBe("TypeSafe returned HTTP 500.");
   });

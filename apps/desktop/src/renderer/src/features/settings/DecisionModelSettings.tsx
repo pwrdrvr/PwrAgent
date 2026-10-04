@@ -3,6 +3,7 @@ import {
   DECISION_JEV_DEFAULT_MODEL,
   DECISION_JEV_ENDPOINT,
   DECISION_LOCAL_DEFAULT_ENDPOINT,
+  DECISION_LOCAL_DEFAULT_MODEL,
   DECISION_PROVIDER_LINKS,
   decisionLocalEndpointProblem,
   normalizeDecisionLocalEndpoint,
@@ -84,7 +85,7 @@ export function DecisionModelDefaults(props: {
   const secrets = decisionSecrets(props.snapshot);
   const save = (change: Partial<DesktopDecisionModelSettings>) => props.onSave({ ...settings, ...change });
   const modelHelp =
-    resolved.model === "local" ? <>Runs on {resolved.localEndpoint}.</>
+    resolved.model === "local" ? <>Runs {resolved.localModel} at {resolved.localEndpoint}.</>
       : resolved.model === "jev" ? secrets.jevApiKey.configured
         ? <>Runs {resolved.jevModel} on TypeSafe.</>
         : <>Runs {resolved.jevModel} on TypeSafe once it has an API key, under Providers → {DECISION_PROVIDER_NAMES.jev}.</>
@@ -94,7 +95,7 @@ export function DecisionModelDefaults(props: {
       eyebrow="Defaults"
       title="Decisions"
       sectionId="decision-model"
-      description="A decision model answers typed questions with a probability for every answer, in one pass and without writing text. Live voice uses it to read camera cues."
+      description="A decision model answers typed questions with a probability for every answer, in one pass and without writing text. Both providers speak TypeSafe's System One API. Live voice uses the local one to read camera cues."
     >
       <div className="settings-fields">
         <SettingsField
@@ -128,6 +129,19 @@ export function DecisionModelDefaults(props: {
       </div>
     </SettingsSection>
   );
+}
+
+function modelIdProblem(value: string): string | undefined {
+  return value.length > 200 ? "Use a model id of 200 characters or fewer." : undefined;
+}
+
+/** The local section without blank keys, or undefined when nothing is left. */
+function localSettings(local: { endpoint?: string; model?: string }): DesktopDecisionModelSettings["local"] {
+  const kept = {
+    ...(local.endpoint ? { endpoint: local.endpoint } : {}),
+    ...(local.model ? { model: local.model } : {}),
+  };
+  return Object.keys(kept).length ? kept : undefined;
 }
 
 /** A text setting saved on Enter or on leaving the box, checked first. */
@@ -210,7 +224,7 @@ export function DecisionProviderScreen(props: {
         <SettingsPanelHead
           eyebrow="AI Providers"
           title={name}
-          help="A decision model served on this Mac, such as Cloudflare's Clef run by PwrSuiteLab. Live voice sends it camera frames for cues."
+          help="A System One server on this Mac, such as Cloudflare's Clef run by PwrSuiteLab. Live voice sends it camera frames for cues."
         />
         <SettingsSection
           title="Connection"
@@ -229,15 +243,24 @@ export function DecisionProviderScreen(props: {
             />
             <DraftTextField
               label="Endpoint"
-              sub="The server's address on this Mac. PwrAgent posts frames to /decide and reads /health to see how busy it is."
+              sub="The server's address on this Mac. PwrAgent posts decisions to /v1/systemone and reads /health to see how busy it is."
               value={settings.local?.endpoint ?? ""}
               placeholder={DECISION_LOCAL_DEFAULT_ENDPOINT}
               disabled={props.saving}
               validate={decisionLocalEndpointProblem}
               onSave={async (endpoint) => await props.onSave({
                 ...settings,
-                local: endpoint ? { endpoint: normalizeDecisionLocalEndpoint(endpoint) } : undefined,
+                local: localSettings({ ...settings.local, endpoint: endpoint ? normalizeDecisionLocalEndpoint(endpoint) : undefined }),
               })}
+            />
+            <DraftTextField
+              label="Model"
+              sub="The model id the server expects. PwrSuiteLab's Clef runtime accepts only clef-flash."
+              value={settings.local?.model ?? ""}
+              placeholder={DECISION_LOCAL_DEFAULT_MODEL}
+              disabled={props.saving}
+              validate={modelIdProblem}
+              onSave={async (model) => await props.onSave({ ...settings, local: localSettings({ ...settings.local, model }) })}
             />
             <SecretField
               label="API key"
@@ -250,14 +273,14 @@ export function DecisionProviderScreen(props: {
             />
             <SettingsField
               label="Connection test"
-              sub="Reads the server's health, including how many decisions it is running. Runs no decision."
+              sub={`Confirms the server offers ${resolved.localModel} and reads how many decisions it is running. Runs no decision.`}
               control={
                 <SettingsTestBlock
                   kind="decision-local"
                   desktopApi={props.desktopApi}
                   icon={<span aria-hidden="true">D</span>}
                   defaultName={resolved.localEndpoint}
-                  defaultSub="GET /health"
+                  defaultSub="GET /v1/models"
                 />
               }
             />
@@ -303,7 +326,7 @@ export function DecisionProviderScreen(props: {
             value={settings.jev?.model ?? ""}
             placeholder={DECISION_JEV_DEFAULT_MODEL}
             disabled={props.saving}
-            validate={(value) => value.length > 200 ? "Use a model id of 200 characters or fewer." : undefined}
+            validate={modelIdProblem}
             onSave={async (model) => await props.onSave({ ...settings, jev: model ? { model } : undefined })}
           />
           <SettingsField

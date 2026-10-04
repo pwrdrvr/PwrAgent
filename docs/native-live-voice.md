@@ -397,13 +397,16 @@ realtime model incorporated the observation into its next answer.
 
 Settings → AI Providers configures the decision model. **Defaults →
 Decisions** picks it (the local decision model, TypeSafe Jev, or Off) and holds
-the **Camera cues in live voice** switch. The Providers index lists both
-providers, each with its own screen:
+the **Camera cues in live voice** switch. Both providers speak TypeSafe's
+[System One API](https://docs.typesafe.ai/api): `POST <base URL>/v1/systemone`
+with `model`, `state` and typed `questions`. The Providers index lists both,
+each with its own screen:
 
 - **Local decision model**: the endpoint (default `http://127.0.0.1:8787`,
-  PwrSuiteLab's Clef runtime), an optional API key sent as a bearer token, a
-  connection test that reads `/health`, and links to Cloudflare's Clef as the
-  suggested model.
+  PwrSuiteLab's Clef runtime), the model id (default `clef-flash`, the only id
+  that runtime accepts), an optional API key sent as a bearer token, a
+  connection test that confirms `GET /v1/models` lists the model and reads
+  `/health` for load, and links to Cloudflare's Clef as the suggested model.
 - **TypeSafe Jev**: the API key, the model id (default `jev-latest`), a
   connection test that asks one yes/no question, and links to the TypeSafe
   console and docs.
@@ -416,18 +419,25 @@ setting before every frame, so turning cues off mid-session stops the next
 frame; the local API key is read once, when the camera turns on.
 
 The keys are stored in `[models.decision]` (`model`, `camera_cues`,
-`local_endpoint`, `jev_model`); the API keys are secrets, never config.
+`local_endpoint`, `local_model`, `jev_model`); the API keys are secrets, never
+config.
 
 ### Frames and questions
 
-Main sends 336-pixel JPEG frames to the local decision model's `/decide`
-endpoint, with short demo-style questions for gestures, boolean
+Main sends 336-pixel JPEG frames to the local decision model's
+`/v1/systemone`, as a data URL in `images`: Clef's extension to the System One
+request, which takes up to four inline images. The questions are short
+demo-style ones for gestures, boolean
 presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
 thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
 frustrated, yelling and talking. All 15 returned scores
 are shown in the camera dock at wide panel widths. The state is the demo’s compact
 “A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
-runs at a time, at up to two frames per second. Camera permissions and frame
+runs at a time, at up to two frames per second. System One responses carry no
+timing, so the latency the dock shows is main's round trip. A request the
+server refuses (HTTP 4xx other than 408 or 429, such as a model id it does not
+serve) stops camera cues with the server's reason, since every later frame
+would be refused the same way. Camera permissions and frame
 requests require the owning, established voice session and a separate camera
 opt-in. Frames and decisions remain in memory; this integration adds no
 PwrAgent SQLite writes or image files.

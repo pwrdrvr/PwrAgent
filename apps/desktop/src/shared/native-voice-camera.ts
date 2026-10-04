@@ -37,7 +37,7 @@ export type VoiceCameraObservation = {
   gestureScores?: Record<CameraGesture, number>;
 };
 
-// Match clef-webcam's /decide schema. Frames and decisions are memory-only.
+// System One questions (TypeSafe's schema). Frames and decisions are memory-only.
 export const VOICE_CAMERA_QUESTIONS = {
   gesture: {
     type: "choice",

@@ -27,7 +27,7 @@ describe("Defaults → Decisions", () => {
     render(<DecisionModelDefaults snapshot={snapshot({ cameraCues: true })} saving={false} onSave={onSave} />);
     const picker = screen.getByRole("combobox", { name: "Decision model" });
     expect(selectOptionLabels(picker)).toEqual(["Local decision model", "TypeSafe Jev", "Off"]);
-    expect(screen.getByText(/Runs on http:\/\/127\.0\.0\.1:8787/)).toBeInTheDocument();
+    expect(screen.getByText(/Runs clef-flash at http:\/\/127\.0\.0\.1:8787/)).toBeInTheDocument();
     await chooseSelectOption(picker, "TypeSafe Jev");
     expect(onSave).toHaveBeenCalledWith({ cameraCues: true, model: "jev" });
   });
@@ -73,6 +73,22 @@ describe("decision provider screens", () => {
     fireEvent.keyDown(endpoint, { key: "Enter" });
     await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: "local", local: { endpoint: "http://localhost:9911" } }));
     expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
+  });
+
+  it("keeps the local endpoint when the model changes, and drops the section when both are cleared", async () => {
+    const onSave = vi.fn(async (_next: DesktopDecisionModelSettings) => undefined);
+    const props = { provider: "local" as const, saving: false, onSave, onClearSecret: vi.fn(async () => true), onReplaceSecret: vi.fn(async () => true) };
+    const result = render(<DecisionProviderScreen {...props} snapshot={snapshot({ local: { endpoint: "http://localhost:9911" } })} />);
+    const model = screen.getByRole("textbox", { name: "Model" });
+    expect(model).toHaveAttribute("placeholder", "clef-flash");
+    fireEvent.change(model, { target: { value: "clef-pro" } });
+    fireEvent.blur(model);
+    await vi.waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ local: { endpoint: "http://localhost:9911", model: "clef-pro" } }));
+    result.rerender(<DecisionProviderScreen {...props} snapshot={snapshot({ local: { model: "clef-pro" } })} />);
+    const cleared = screen.getByRole("textbox", { name: "Model" });
+    fireEvent.change(cleared, { target: { value: "" } });
+    fireEvent.blur(cleared);
+    await vi.waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ local: undefined }));
   });
 
   it("keeps Jev's key write-only and its model editable", async () => {

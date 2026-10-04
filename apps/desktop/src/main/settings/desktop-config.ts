@@ -1737,12 +1737,14 @@ export function desktopSettingsPatchToEdits(
       model: decision.model,
       cameraCues: decision.cameraCues,
       localEndpoint: decision.local?.endpoint,
+      localModel: decision.local?.model,
       jevModel: decision.jev?.model,
     });
     const keys: [string, string | boolean | undefined][] = [
       ["model", normalized?.model],
       ["camera_cues", normalized?.cameraCues],
       ["local_endpoint", normalized?.local?.endpoint],
+      ["local_model", normalized?.local?.model],
       ["jev_model", normalized?.jev?.model],
     ];
     for (const [key, value] of keys) {
@@ -2331,6 +2333,7 @@ function normalizeDesktopConfig(
         model: decision?.model,
         cameraCues: decision?.camera_cues,
         localEndpoint: decision?.local_endpoint,
+        localModel: decision?.local_model,
         jevModel: decision?.jev_model,
       }),
       codex: {

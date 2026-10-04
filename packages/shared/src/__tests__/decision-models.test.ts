@@ -9,7 +9,7 @@ import {
 describe("decision models", () => {
   it("defaults to the local model at PwrSuiteLab's Clef address, with camera cues on", () => {
     expect(resolveDecisionModelSettings(undefined)).toEqual({
-      model: "local", localEndpoint: "http://127.0.0.1:8787", jevModel: "jev-latest", cameraCues: true,
+      model: "local", localEndpoint: "http://127.0.0.1:8787", localModel: "clef-flash", jevModel: "jev-latest", cameraCues: true,
     });
   });
 
@@ -30,9 +30,9 @@ describe("decision models", () => {
   });
 
   it("offers camera cues only through the local model", () => {
-    expect(decisionCameraCueAvailability({})).toEqual({ available: true, endpoint: "http://127.0.0.1:8787" });
-    expect(decisionCameraCueAvailability({ local: { endpoint: "http://localhost:9911" } }))
-      .toEqual({ available: true, endpoint: "http://localhost:9911" });
+    expect(decisionCameraCueAvailability({})).toEqual({ available: true, endpoint: "http://127.0.0.1:8787", model: "clef-flash" });
+    expect(decisionCameraCueAvailability({ local: { endpoint: "http://localhost:9911", model: "clef-pro" } }))
+      .toEqual({ available: true, endpoint: "http://localhost:9911", model: "clef-pro" });
     expect(decisionCameraCueAvailability({ model: "jev" })).toMatchObject({ available: false, reason: expect.stringContaining("stay on this Mac") });
     expect(decisionCameraCueAvailability({ model: "off" })).toMatchObject({ available: false });
     expect(decisionCameraCueAvailability({ cameraCues: false })).toMatchObject({ available: false, reason: expect.stringContaining("off") });

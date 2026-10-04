@@ -1,4 +1,12 @@
 import { CAMERA_VIBES, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, type VoiceCameraObservation } from "../../shared/native-voice-camera";
+import {
+  isSystemOneRejection,
+  postSystemOne,
+  systemOneErrorDetail,
+  systemOneHeaders,
+  SystemOneRejected,
+  type SystemOneTarget,
+} from "../decision/system-one";
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Clef response.");
@@ -8,7 +16,8 @@ function probability(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new Error("Invalid Clef confidence.");
   return value;
 }
-export function parseClefObservation(value: unknown): VoiceCameraObservation {
+/** A System One answer to the camera questions. It carries no timing, so the caller measures `latencyMs`. */
+export function parseClefObservation(value: unknown, latencyMs: number): VoiceCameraObservation {
   const data = object(value);
   const answers = object(data.answers);
   const presence = object(answers.presence);
@@ -45,21 +54,11 @@ export function parseClefObservation(value: unknown): VoiceCameraObservation {
     reaction: reaction.choice as VoiceCameraObservation["reaction"], reactionScores,
     reactionConfidence: probability(reactionProbabilities[String(reaction.choice)]),
     ...(gesture && gestureScores ? { gesture, gestureScores, gestureConfidence: gestureScores[gesture] } : {}),
-    latencyMs: typeof data.latency_ms === "number" && Number.isFinite(data.latency_ms) ? data.latency_ms : 0,
+    latencyMs,
   };
 }
 
 const CLEF_HEALTH_TIMEOUT_MS = 1000;
-
-/** The local decision server from Settings: its origin and optional bearer key. */
-export type ClefTarget = { endpoint: string; apiKey?: string };
-
-function clefHeaders(target: ClefTarget, json = false): Record<string, string> {
-  return {
-    ...(json ? { "Content-Type": "application/json" } : {}),
-    ...(target.apiKey ? { Authorization: `Bearer ${target.apiKey}` } : {}),
-  };
-}
 
 /**
  * Decisions the PwrSuiteLab Clef runtime is running or holding, from its
@@ -67,10 +66,10 @@ function clefHeaders(target: ClefTarget, json = false): Record<string, string> {
  * count includes requests a client abandoned: Clef finishes those anyway.
  * Undefined when the server has no such route or does not answer promptly.
  */
-export async function clefRequestsInFlight(target: ClefTarget, signal: AbortSignal): Promise<number | undefined> {
+export async function clefRequestsInFlight(target: SystemOneTarget, signal: AbortSignal): Promise<number | undefined> {
   try {
     const response = await fetch(`${target.endpoint}/health`, {
-      headers: clefHeaders(target),
+      headers: systemOneHeaders(target.apiKey),
       signal: AbortSignal.any([signal, AbortSignal.timeout(CLEF_HEALTH_TIMEOUT_MS)]),
       redirect: "error",
     });
@@ -87,34 +86,42 @@ export async function clefRequestsInFlight(target: ClefTarget, signal: AbortSign
   }
 }
 
+/**
+ * Asks the local decision model about one frame, through the System One API
+ * with Clef's `images` extension. Throws {@link SystemOneRejected} when the
+ * server refuses the request itself (a wrong model id, a refused key).
+ */
 export async function classifyVoiceCamera(
-  target: ClefTarget,
+  target: SystemOneTarget,
   image: string,
   signal: AbortSignal,
   warming = false,
 ): Promise<VoiceCameraObservation> {
-  // clef-webcam warms the model before opening its API. Keep one request
-  // outstanding and tolerate temporary unavailability within the caller's
-  // deadline, while opt-out/teardown cancels both fetch and backoff.
+  // The server may still be loading or compiling the question schema. Keep
+  // one request outstanding and tolerate temporary unavailability within the
+  // caller's deadline, while opt-out/teardown cancels both fetch and backoff.
   while (true) {
     signal.throwIfAborted();
     let response: Response | undefined;
+    const started = performance.now();
     try {
-      response = await fetch(`${target.endpoint}/decide`, {
-        method: "POST",
-        headers: clefHeaders(target, true),
-        body: JSON.stringify({
-          image, questions: VOICE_CAMERA_QUESTIONS,
-          state: "A live webcam frame from a laptop.",
-        }),
-        signal,
-        redirect: "error",
-      });
+      response = await postSystemOne(target, {
+        state: "A live webcam frame from a laptop.",
+        questions: VOICE_CAMERA_QUESTIONS,
+        images: [image],
+      }, { signal });
     } catch (error) {
       if (signal.aborted || !warming) throw error;
     }
-    if (response?.ok) return parseClefObservation(await response.json());
+    if (response?.ok) {
+      const body: unknown = await response.json();
+      return parseClefObservation(body, performance.now() - started);
+    }
+    if (response && isSystemOneRejection(response.status)) {
+      throw new SystemOneRejected(response.status, await systemOneErrorDetail(response));
+    }
     if (response && (!warming || (response.status !== 429 && response.status < 500))) {
+      await response.body?.cancel();
       throw new Error(`Clef returned HTTP ${response.status}.`);
     }
     // Release the failed response before the next attempt.

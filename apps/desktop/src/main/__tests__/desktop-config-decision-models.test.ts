@@ -23,7 +23,7 @@ describe("desktop config decision models", () => {
     const written = save("", {
       model: "jev",
       cameraCues: false,
-      local: { endpoint: "http://localhost:9911/" },
+      local: { endpoint: "http://localhost:9911/", model: " clef-pro " },
       jev: { model: " jev-1.13.0 " },
     });
 
@@ -32,13 +32,14 @@ describe("desktop config decision models", () => {
       "model = \"jev\"",
       "camera_cues = false",
       "local_endpoint = \"http://localhost:9911\"",
+      "local_model = \"clef-pro\"",
       "jev_model = \"jev-1.13.0\"",
       "",
     ].join("\n"));
     expect(parseDesktopSettingsToml(written, "test.toml").models?.decisionModels).toEqual({
       model: "jev",
       cameraCues: false,
-      local: { endpoint: "http://localhost:9911" },
+      local: { endpoint: "http://localhost:9911", model: "clef-pro" },
       jev: { model: "jev-1.13.0" },
     });
   });
@@ -68,6 +69,7 @@ describe("desktop config decision models", () => {
       "camera_cues = true",
       // Frames go only to a server on this Mac.
       "local_endpoint = \"http://192.168.1.20:8787\"",
+      "local_model = \"  \"",
       "jev_model = \"\"",
       "",
     ].join("\n"), "test.toml");

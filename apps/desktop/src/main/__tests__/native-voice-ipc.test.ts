@@ -2,6 +2,7 @@ import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCameraObservation } from "../../shared/native-voice-camera";
 import type { DesktopDecisionModelSettings } from "@pwragent/shared";
+import { SystemOneRejected } from "../decision/system-one";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL,
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL,
@@ -13,8 +14,8 @@ const mocks = vi.hoisted(() => ({
   info: vi.fn(), warn: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
-  classify: vi.fn<(target: { endpoint: string; apiKey?: string }, image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
-  inFlight: vi.fn<(target: { endpoint: string; apiKey?: string }, signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
+  classify: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
+  inFlight: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
   decisionSettings: {} as DesktopDecisionModelSettings,
   decisionApiKey: vi.fn(async (): Promise<string | undefined> => undefined),
   disconnects: new Set<() => void>(),
@@ -141,7 +142,14 @@ describe("native voice IPC permission boundary", () => {
     expect(mocks.decisionApiKey).toHaveBeenCalledExactlyOnceWith("local");
     mocks.classify.mockResolvedValueOnce({ present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
-    expect(mocks.classify).toHaveBeenLastCalledWith({ endpoint: "http://localhost:9911", apiKey: "sample-key" }, frame.image, expect.any(AbortSignal), true);
+    expect(mocks.classify).toHaveBeenLastCalledWith(
+      { endpoint: "http://localhost:9911", model: "clef-flash", apiKey: "sample-key" },
+      frame.image, expect.any(AbortSignal), true,
+    );
+    // A refusal repeats on every frame, so it stops the camera with the server's reason.
+    mocks.classify.mockRejectedValueOnce(new SystemOneRejected(422, "model must be clef-flash"));
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame))
+      .rejects.toThrow("Camera cues stopped: the local decision model rejected the request (model must be clef-flash).");
     // Turning cues off mid-session stops the next frame before it is sent.
     const sent = mocks.classify.mock.calls.length;
     mocks.decisionSettings = { model: "local", cameraCues: false };
