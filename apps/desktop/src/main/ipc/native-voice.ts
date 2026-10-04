@@ -4,7 +4,9 @@ import {
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraSkipped,
 } from "../../shared/native-voice-camera";
 import { getMainLogger } from "../log";
-import { classifyVoiceCamera, clefRequestsInFlight } from "../native-voice/clef-camera";
+import { classifyVoiceCamera, clefRequestsInFlight, type ClefTarget } from "../native-voice/clef-camera";
+import { decisionCameraCueAvailability } from "@pwragent/shared";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { ipcMain, session, type WebContents } from "electron";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL,
@@ -30,10 +32,17 @@ const cameraRequests = new Map<number, { sessionId: string; abort: AbortControll
 const cameraReadySessions = new Map<number, string>();
 /** Owners whose last frame missed its deadline; their next frame asks Clef first. */
 const cameraContended = new Set<number>();
+/** The local decision server's key, read once when the owner turns the camera on. */
+const cameraApiKeys = new Map<number, string | undefined>();
+/** Settings decide where frames go; read per frame, since it is an in-memory lookup. */
+function cameraCueAvailability() {
+  return decisionCameraCueAvailability(getDesktopSettingsService().resolveDecisionModelSettings());
+}
 function abortCamera(owner: number, sessionId?: string): void {
   if (sessionId === undefined || cameraReadySessions.get(owner) === sessionId) {
     cameraReadySessions.delete(owner);
     cameraContended.delete(owner);
+    cameraApiKeys.delete(owner);
   }
   const request = cameraRequests.get(owner);
   if (!request || (sessionId !== undefined && request.sessionId !== sessionId)) return;
@@ -73,8 +82,10 @@ export function registerNativeVoiceIpcHandlers(): void {
       && (details.mediaTypes[0] === "audio" ? sessions.allowsMicrophone(contents.id) : details.mediaTypes[0] === "video" && sessions.allowsCamera(contents.id)));
   });
   ipcMain.handle(NATIVE_VOICE_CAPABILITY_CHANNEL, async () => {
-    try { return await getDesktopBackendRegistry().nativeVoiceCapability(); }
-    catch { return { available: false, reason: "Connect and sign in to Codex before starting voice." }; }
+    const availability = cameraCueAvailability();
+    const camera = availability.available ? { available: true } : { available: false, reason: availability.reason };
+    try { return { ...await getDesktopBackendRegistry().nativeVoiceCapability(), camera }; }
+    catch { return { available: false, reason: "Connect and sign in to Codex before starting voice.", camera }; }
   });
   ipcMain.handle(NATIVE_VOICE_START_CHANNEL, async (event, request: NativeVoiceStart) => {
     validTarget(request);
@@ -117,6 +128,11 @@ export function registerNativeVoiceIpcHandlers(): void {
   ipcMain.handle(NATIVE_VOICE_CAMERA_CHANNEL, async (event, request: VoiceCameraRequest) => {
     validTarget(request);
     if (typeof request.enabled !== "boolean") throw new Error("Invalid camera setting.");
+    if (request.enabled) {
+      const availability = cameraCueAvailability();
+      if (!availability.available) throw new Error(availability.reason);
+      cameraApiKeys.set(event.sender.id, await getDesktopSettingsService().resolveDecisionApiKey("local"));
+    }
     sessions.setCamera(event.sender.id, request.sessionId, request.enabled);
     if (!request.enabled) abortCamera(event.sender.id, request.sessionId);
   });
@@ -133,6 +149,11 @@ export function registerNativeVoiceIpcHandlers(): void {
     if (typeof request.image !== "string" || request.image.length > 300_000
       || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(request.image)) throw new Error("Invalid camera frame.");
     if (cameraRequests.has(event.sender.id)) throw new Error("A camera frame is already being analyzed.");
+    // Settings can change mid-session: turning cues off, or choosing a hosted
+    // model, stops frames from going anywhere.
+    const availability = cameraCueAvailability();
+    if (!availability.available) throw new Error(availability.reason);
+    const target: ClefTarget = { endpoint: availability.endpoint, apiKey: cameraApiKeys.get(event.sender.id) };
     const abort = new AbortController();
     const pending = { sessionId: request.sessionId, abort };
     cameraRequests.set(event.sender.id, pending);
@@ -145,12 +166,12 @@ export function registerNativeVoiceIpcHandlers(): void {
       // After a missed deadline, Clef is still running that abandoned request
       // (or another client's). Sending more only lengthens its queue.
       if (!warming && cameraContended.has(event.sender.id)) {
-        const inFlight = await clefRequestsInFlight(abort.signal);
+        const inFlight = await clefRequestsInFlight(target, abort.signal);
         if (inFlight !== undefined && inFlight > 0) {
           return { skipped: "busy", inFlight, retryAfterMs: CAMERA_HEALTH_RETRY_MS } satisfies VoiceCameraSkipped;
         }
       }
-      const observation = await classifyVoiceCamera(request.image, abort.signal, warming);
+      const observation = await classifyVoiceCamera(target, request.image, abort.signal, warming);
       cameraContended.delete(event.sender.id);
       if (abort.signal.aborted || !sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) return undefined;
       if (warming) cameraLog.info("camera first decision received", { sessionId: request.sessionId, elapsedMs: Date.now() - started, modelLatencyMs: observation.latencyMs });
@@ -174,7 +195,7 @@ export function registerNativeVoiceIpcHandlers(): void {
       }
       const message = timedOut
         ? "Clef did not respond within five minutes. Camera cues stopped; voice is still available."
-        : "Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.";
+        : `Camera cues unavailable. Check that the local decision model is running at ${availability.endpoint}.`;
       throw new Error(message, { cause: error });
     }
     finally {

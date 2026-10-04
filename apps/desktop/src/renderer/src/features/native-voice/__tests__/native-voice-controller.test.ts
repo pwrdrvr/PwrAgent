@@ -308,6 +308,19 @@ describe("voice camera ownership", () => {
     await f.controller.stop();
   });
 
+  it("carries Settings' reason for keeping camera cues off into the session", async () => {
+    const f = fixture();
+    vi.mocked(f.api.nativeVoiceCapability).mockResolvedValue({
+      available: true, camera: { available: false, reason: "Camera cues need the local decision model, so frames stay on this Mac." },
+    });
+    const start = f.controller.start("fixture-thread");
+    await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce());
+    f.connect();
+    await start;
+    expect(f.controller.getView().cameraUnavailable).toContain("local decision model");
+    await f.controller.stop();
+  });
+
   it("shows a camera failure without Electron's IPC wrapper", async () => {
     const f = await liveCamera();
     f.api.analyzeNativeVoiceCamera = vi.fn(async () => {

@@ -233,6 +233,15 @@
   gap: 2px;
   margin-left: auto;
 }
+/* Settings keeps camera cues off: still focusable so its tooltip can say
+   why, but it must not read as a control that will do something. */
+.sidebar__icon-button[aria-disabled="true"],
+.sidebar__icon-button[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.55;
+}
 .director-voice-panel__state {
   display: flex;
   flex: none;

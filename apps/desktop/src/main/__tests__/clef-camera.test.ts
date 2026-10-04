@@ -9,6 +9,7 @@ const response = {
   latency_ms: 410,
 };
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+const target = { endpoint: "http://127.0.0.1:8787" };
 describe("local Clef camera decisions", () => {
   it("parses the clef-webcam response and rejects malformed decisions", () => {
     expect(parseClefObservation(response)).toEqual({ present: true, presenceConfidence: 0.95, reaction: "enthusiastic", reactionConfidence: 0.8, latencyMs: 410, presenceScores: { present: 0.95, away: 0.05 }, reactionScores: { neutral: 0.1, exasperated: 0.05, enthusiastic: 0.8, bored: 0.05 } });
@@ -29,11 +30,11 @@ describe("local Clef camera decisions", () => {
     expect(() => parseClefObservation({ ...input, answers: { ...input.answers, gesture: { ...input.answers.gesture, probabilities: { ...scores, stop: NaN } } } })).toThrow();
     expect(() => parseClefObservation({ ...input, answers: { ...input.answers, gesture: undefined } })).toThrow();
   });
-  it("posts only to the fixed loopback endpoint and refuses redirects", async () => {
+  it("posts to the configured endpoint and refuses redirects", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => ({ ok: true, json: async () => response }) as Response);
     vi.stubGlobal("fetch", fetch);
     const signal = new AbortController().signal;
-    await classifyVoiceCamera("fixture-image", signal);
+    await classifyVoiceCamera(target, "fixture-image", signal);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/decide", expect.objectContaining({ signal, redirect: "error", method: "POST" }));
     const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
     expect(body.questions.presence).toMatchObject({ type: "noul", criteria: { true: "yes", false: "no" } });
@@ -44,6 +45,21 @@ describe("local Clef camera decisions", () => {
     expect(body.image).toBe("fixture-image");
   });
 
+  it("sends to the endpoint from Settings, with its key as a bearer token", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => ({ ok: true, json: async () => response }) as Response);
+    vi.stubGlobal("fetch", fetch);
+    const signal = new AbortController().signal;
+    const keyed = { endpoint: "http://localhost:9911", apiKey: "sample-key" };
+    await classifyVoiceCamera(keyed, "fixture-image", signal);
+    expect(fetch).toHaveBeenCalledWith("http://localhost:9911/decide", expect.objectContaining({
+      headers: { "Content-Type": "application/json", Authorization: "Bearer sample-key" },
+    }));
+    fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ requests_processing: 0 }) } as Response);
+    await clefRequestsInFlight(keyed, signal);
+    expect(fetch).toHaveBeenLastCalledWith("http://localhost:9911/health", expect.objectContaining({
+      headers: { Authorization: "Bearer sample-key" },
+    }));
+  });
   it("reads the runtime's in-flight count from /health, and reports nothing it cannot trust", async () => {
     const health = (status: number, body: unknown) => ({ ok: status === 200, status, json: async () => body, body: { cancel: async () => {} } }) as unknown as Response;
     const fetch = vi.fn<typeof globalThis.fetch>()
@@ -53,15 +69,15 @@ describe("local Clef camera decisions", () => {
       .mockRejectedValueOnce(new TypeError("fetch failed"));
     vi.stubGlobal("fetch", fetch);
     const signal = new AbortController().signal;
-    await expect(clefRequestsInFlight(signal)).resolves.toBe(2);
+    await expect(clefRequestsInFlight(target, signal)).resolves.toBe(2);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/health", expect.objectContaining({ redirect: "error" }));
     // A server without the route (the plain demo) and a bad count both fall back.
-    await expect(clefRequestsInFlight(signal)).resolves.toBeUndefined();
-    await expect(clefRequestsInFlight(signal)).resolves.toBeUndefined();
-    await expect(clefRequestsInFlight(signal)).resolves.toBeUndefined();
+    await expect(clefRequestsInFlight(target, signal)).resolves.toBeUndefined();
+    await expect(clefRequestsInFlight(target, signal)).resolves.toBeUndefined();
+    await expect(clefRequestsInFlight(target, signal)).resolves.toBeUndefined();
     const cancelled = new AbortController();
     fetch.mockImplementationOnce(async () => { cancelled.abort(); throw new DOMException("aborted", "AbortError"); });
-    await expect(clefRequestsInFlight(cancelled.signal)).rejects.toThrow();
+    await expect(clefRequestsInFlight(target, cancelled.signal)).rejects.toThrow();
   });
   it("waits for each warmup attempt and recovers from a connection failure and HTTP 503", async () => {
     vi.useFakeTimers();
@@ -71,7 +87,7 @@ describe("local Clef camera decisions", () => {
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     vi.stubGlobal("fetch", fetch);
-    const pending = classifyVoiceCamera("fixture-image", new AbortController().signal, true);
+    const pending = classifyVoiceCamera(target, "fixture-image", new AbortController().signal, true);
     await vi.advanceTimersByTimeAsync(2000);
     expect(fetch).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(70_000);
@@ -85,7 +101,7 @@ describe("local Clef camera decisions", () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new TypeError("Connection refused"));
     vi.stubGlobal("fetch", fetch);
     const abort = new AbortController();
-    const pending = classifyVoiceCamera("fixture-image", abort.signal, true);
+    const pending = classifyVoiceCamera(target, "fixture-image", abort.signal, true);
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await vi.advanceTimersByTimeAsync(0);
     abort.abort();
@@ -100,8 +116,8 @@ describe("local Clef camera decisions", () => {
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockResolvedValueOnce(new Response(null, { status: 400 }));
     vi.stubGlobal("fetch", fetch);
-    await expect(classifyVoiceCamera("fixture-image", new AbortController().signal)).rejects.toThrow("HTTP 503");
-    await expect(classifyVoiceCamera("fixture-image", new AbortController().signal, true)).rejects.toThrow("HTTP 400");
+    await expect(classifyVoiceCamera(target, "fixture-image", new AbortController().signal)).rejects.toThrow("HTTP 503");
+    await expect(classifyVoiceCamera(target, "fixture-image", new AbortController().signal, true)).rejects.toThrow("HTTP 400");
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

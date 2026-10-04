@@ -1513,6 +1513,11 @@ function SettingsSectionBody(props: {
           models: { helperModels },
         });
       }}
+      onSaveDecisionModels={async (decisionModels) => {
+        return await props.settings.writeConfig({
+          models: { decisionModels },
+        });
+      }}
       onSaveCodexFastAllowed={async (allowFast) => {
         return await props.settings.writeConfig({
           models: {

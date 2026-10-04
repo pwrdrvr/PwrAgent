@@ -1,7 +1,9 @@
 import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL } from "../../shared/native-voice-camera";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCameraObservation } from "../../shared/native-voice-camera";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared";
 import {
+  NATIVE_VOICE_CAPABILITY_CHANNEL,
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL,
   NATIVE_VOICE_START_CHANNEL,
   NATIVE_VOICE_STOP_CHANNEL,
@@ -11,14 +13,22 @@ const mocks = vi.hoisted(() => ({
   info: vi.fn(), warn: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
-  classify: vi.fn<(image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
-  inFlight: vi.fn<(signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
+  classify: vi.fn<(target: { endpoint: string; apiKey?: string }, image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
+  inFlight: vi.fn<(target: { endpoint: string; apiKey?: string }, signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
+  decisionSettings: {} as DesktopDecisionModelSettings,
+  decisionApiKey: vi.fn(async (): Promise<string | undefined> => undefined),
   disconnects: new Set<() => void>(),
   mainWindowIds: new Set<number>(), text: vi.fn(async () => {}),
   openManager: vi.fn(async () => ({ status: "ready", threadId: "sample-voice-manager", created: false })),
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: mocks.info, warn: mocks.warn }) }));
 vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify, clefRequestsInFlight: mocks.inFlight }));
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: () => ({
+    resolveDecisionModelSettings: () => mocks.decisionSettings,
+    resolveDecisionApiKey: mocks.decisionApiKey,
+  }),
+}));
 vi.mock("electron", () => ({
   ipcMain: { handle: (name: string, handler: (...args: unknown[]) => Promise<void>) => { mocks.handlers.set(name, handler); } },
   session: { defaultSession: { setPermissionCheckHandler: mocks.check, setPermissionRequestHandler: mocks.request } },
@@ -43,7 +53,7 @@ vi.mock("../window-channels", () => ({
 import { registerNativeVoiceIpcHandlers } from "../ipc/native-voice";
 import { readOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
 
-beforeEach(() => { vi.clearAllMocks(); mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.decisionSettings = {}; mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
 afterEach(() => vi.useRealTimers());
 
 describe("native voice IPC permission boundary", () => {
@@ -56,7 +66,7 @@ describe("native voice IPC permission boundary", () => {
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let finish!: (value: VoiceCameraObservation) => void;
     let signal!: AbortSignal;
-    mocks.classify.mockImplementationOnce((_image, abort, warming) => {
+    mocks.classify.mockImplementationOnce((_target, _image, abort, warming) => {
       expect(warming).toBe(true);
       signal = abort;
       return new Promise((resolve) => { finish = resolve; });
@@ -71,7 +81,7 @@ describe("native voice IPC permission boundary", () => {
     expect(mocks.info).toHaveBeenCalledWith("camera first decision received", { sessionId: target.sessionId, elapsedMs: 60_000, modelLatencyMs: 60_000 });
     expect(JSON.stringify(mocks.info.mock.calls)).not.toContain(frame.image);
 
-    mocks.classify.mockImplementationOnce((_image, abort, warming) => {
+    mocks.classify.mockImplementationOnce((_target, _image, abort, warming) => {
       expect(warming).toBe(false);
       signal = abort;
       return new Promise((_resolve, reject) => abort.addEventListener("abort", () => reject(abort.reason), { once: true }));
@@ -92,7 +102,7 @@ describe("native voice IPC permission boundary", () => {
       .resolves.toEqual({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 });
     expect(mocks.classify).toHaveBeenCalledTimes(classified);
     mocks.inFlight.mockResolvedValueOnce(0);
-    mocks.classify.mockImplementationOnce(async (_image, _abort, warming) => {
+    mocks.classify.mockImplementationOnce(async (_target, _image, _abort, warming) => {
       expect(warming).toBe(false);
       return { present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 };
     });
@@ -106,11 +116,37 @@ describe("native voice IPC permission boundary", () => {
     await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).resolves.toEqual({ skipped: "offline" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
-    mocks.classify.mockImplementationOnce(async (_image, _abort, warming) => {
+    mocks.classify.mockImplementationOnce(async (_target, _image, _abort, warming) => {
       expect(warming).toBe(true);
       return { present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 };
     });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
+  });
+
+  it("sends frames only where Settings allows, with the local key read once at camera opt-in", async () => {
+    const sender = { id: 279, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-settings-session" };
+    const frame = { ...target, image: "data:image/jpeg;base64,AA==" };
+    const capability = () => mocks.handlers.get(NATIVE_VOICE_CAPABILITY_CHANNEL)!() as unknown as Promise<{ camera?: { available: boolean; reason?: string } }>;
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-settings-thread", sdp: "v=0\r\nfixture" });
+    // A hosted decision model never receives camera frames.
+    mocks.decisionSettings = { model: "jev" };
+    await expect(capability()).resolves.toMatchObject({ camera: { available: false, reason: expect.stringContaining("frames stay on this Mac") } });
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true })).rejects.toThrow("local decision model");
+    mocks.decisionSettings = { model: "local", local: { endpoint: "http://localhost:9911" } };
+    mocks.decisionApiKey.mockResolvedValueOnce("sample-key");
+    await expect(capability()).resolves.toMatchObject({ camera: { available: true } });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    expect(mocks.decisionApiKey).toHaveBeenCalledExactlyOnceWith("local");
+    mocks.classify.mockResolvedValueOnce({ present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
+    expect(mocks.classify).toHaveBeenLastCalledWith({ endpoint: "http://localhost:9911", apiKey: "sample-key" }, frame.image, expect.any(AbortSignal), true);
+    // Turning cues off mid-session stops the next frame before it is sent.
+    const sent = mocks.classify.mock.calls.length;
+    mocks.decisionSettings = { model: "local", cameraCues: false };
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).rejects.toThrow("Camera cues are off");
+    expect(mocks.classify).toHaveBeenCalledTimes(sent);
     await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
   });
 
@@ -120,7 +156,7 @@ describe("native voice IPC permission boundary", () => {
     const target = { sessionId: "camera-warmup-timeout" };
     await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-timeout-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
-    mocks.classify.mockImplementationOnce((_image, abort) => new Promise((_resolve, reject) => {
+    mocks.classify.mockImplementationOnce((_target, _image, abort) => new Promise((_resolve, reject) => {
       abort.addEventListener("abort", () => reject(abort.reason), { once: true });
     }));
     const pending = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" });
@@ -180,7 +216,7 @@ describe("native voice IPC permission boundary", () => {
     await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-abort-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let signal!: AbortSignal;
-    mocks.classify.mockImplementationOnce(async (_image, abort) => {
+    mocks.classify.mockImplementationOnce(async (_target, _image, abort) => {
       signal = abort;
       return await new Promise<never>((_resolve, reject) => abort.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
     });
@@ -207,7 +243,7 @@ describe("native voice IPC permission boundary", () => {
     await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-end-thread", sdp: "v=0\r\nfixture" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     let signal!: AbortSignal;
-    mocks.classify.mockImplementationOnce(async (_image, abort) => {
+    mocks.classify.mockImplementationOnce(async (_target, _image, abort) => {
       signal = abort;
       return await new Promise<never>((_resolve, reject) => abort.addEventListener("abort", () => reject(new Error("Aborted")), { once: true }));
     });

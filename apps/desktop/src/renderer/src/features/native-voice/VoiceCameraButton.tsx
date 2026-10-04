@@ -33,6 +33,8 @@ export function VoiceCameraButton({ controller, tooltipClassName = "viewport-too
   const tooltip = useViewportTooltip({ className: tooltipClassName });
   if (view.status !== "listening") return null;
   const active = Boolean(view.camera);
+  // Settings keeps cues off: the button stays reachable so it can say why.
+  const unavailable = active ? undefined : view.cameraUnavailable;
   return (
     <>
       <button
@@ -40,9 +42,14 @@ export function VoiceCameraButton({ controller, tooltipClassName = "viewport-too
         className={`sidebar__icon-button${active ? " is-active" : ""}`}
         aria-label={active ? "Turn off camera cues" : "Turn on camera cues"}
         aria-pressed={active}
+        aria-disabled={unavailable ? true : undefined}
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
-        {...tooltipHandlers(tooltip, cameraHint(active))}
+        {...tooltipHandlers(tooltip, unavailable ?? cameraHint(active))}
         onClick={(event) => {
+          if (unavailable) {
+            tooltip.show(event.currentTarget, unavailable);
+            return;
+          }
           void controller.setCamera(!active);
           // The open hint describes the state just left; show the new one.
           tooltip.show(event.currentTarget, cameraHint(!active));

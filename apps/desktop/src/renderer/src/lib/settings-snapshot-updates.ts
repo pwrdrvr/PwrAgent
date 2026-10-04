@@ -133,6 +133,10 @@ function secretSnapshotPath(
       return ["federation", "cloudflareAccessClientId"];
     case "federationCloudflareAccessClientSecret":
       return ["federation", "cloudflareAccessClientSecret"];
+    case "decisionLocalApiKey":
+      return ["models", "decisionSecrets", "localApiKey"];
+    case "typesafeJevApiKey":
+      return ["models", "decisionSecrets", "jevApiKey"];
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
       return undefined;

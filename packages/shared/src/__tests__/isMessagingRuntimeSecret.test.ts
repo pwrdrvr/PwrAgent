@@ -38,6 +38,8 @@ describe("isMessagingRuntimeSecret", () => {
     // pairing PwrSnap or PwrGit must not restart the messaging runtime.
     { name: "pwrsnapMcpCredential", expected: false },
     { name: "pwrgitMcpCredential", expected: false },
+    { name: "decisionLocalApiKey", expected: false },
+    { name: "typesafeJevApiKey", expected: false },
   ];
 
   for (const { name, expected } of cases) {

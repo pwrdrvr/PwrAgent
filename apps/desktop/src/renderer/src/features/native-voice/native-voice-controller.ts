@@ -48,6 +48,8 @@ export type VoiceView = {
   cameraWarming?: boolean;
   cameraCue?: string;
   cameraError?: string;
+  /** Why Settings keeps camera cues off for this session, if it does. */
+  cameraUnavailable?: string;
   cameraDiagnostics?: VoiceCameraDiagnostics;
   endedAfterAway?: boolean;
   /** When the session went live, for the elapsed-time label. Billing runs from here. */
@@ -256,14 +258,17 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraDiagnostics: undefined, transcript: [], actions: [], cameraCues: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraUnavailable: undefined, cameraDiagnostics: undefined, transcript: [], actions: [], cameraCues: [],
     });
     this.watchTurns(resources, threadId);
     try {
       const capability = await this.api.nativeVoiceCapability();
       if (!this.current(resources)) return;
       if (!capability.available) throw new Error(capability.reason ?? "Live voice is unavailable.");
-      this.publish({ status: "connecting" });
+      this.publish({
+        status: "connecting",
+        cameraUnavailable: capability.camera?.available === false ? capability.camera.reason ?? "Camera cues are off." : undefined,
+      });
       const peer = this.platform.peer();
       resources.peer = peer;
       resources.audio = this.platform.audio();

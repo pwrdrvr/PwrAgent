@@ -393,8 +393,35 @@ delivered** if it fails.
 An appendText RPC acknowledgment confirms delivery to Codex, not whether the
 realtime model incorporated the observation into its next answer.
 
-Main sends 336-pixel JPEG frames to the fixed loopback Clef `/decide` endpoint
-at `127.0.0.1:8787`, with short demo-style questions for gestures, boolean
+### Decision model settings
+
+Settings → AI Providers configures the decision model. **Defaults →
+Decisions** picks it (the local decision model, TypeSafe Jev, or Off) and holds
+the **Camera cues in live voice** switch. The Providers index lists both
+providers, each with its own screen:
+
+- **Local decision model**: the endpoint (default `http://127.0.0.1:8787`,
+  PwrSuiteLab's Clef runtime), an optional API key sent as a bearer token, a
+  connection test that reads `/health`, and links to Cloudflare's Clef as the
+  suggested model.
+- **TypeSafe Jev**: the API key, the model id (default `jev-latest`), a
+  connection test that asks one yes/no question, and links to the TypeSafe
+  console and docs.
+
+Camera frames go only to the local decision model, and the endpoint must be an
+address on this Mac: `localhost`, `127.0.0.0/8` or `::1`, with no path. Jev
+takes text only, so choosing it, or turning the switch off, keeps the camera
+button reachable but inert, with the reason in its tooltip. Main re-reads the
+setting before every frame, so turning cues off mid-session stops the next
+frame; the local API key is read once, when the camera turns on.
+
+The keys are stored in `[models.decision]` (`model`, `camera_cues`,
+`local_endpoint`, `jev_model`); the API keys are secrets, never config.
+
+### Frames and questions
+
+Main sends 336-pixel JPEG frames to the local decision model's `/decide`
+endpoint, with short demo-style questions for gestures, boolean
 presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
 thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
 frustrated, yelling and talking. All 15 returned scores
@@ -454,6 +481,6 @@ The payload is explicitly labeled as uncertain camera context, never invented
 spoken user text. This context RPC does not guarantee immediate audio
 barge-in or cancellation of an already dispatched action. A camera cue cannot
 approve or cancel
-work. Clef failures stop camera capture and show a dismissible error while
-voice remains available. Facial-expression accuracy and the model's spoken
+work. Before the first decision, a Clef failure stops camera capture and shows
+a dismissible error while voice remains available. Facial-expression accuracy and the model's spoken
 adaptation still need live evaluation by the operator.
