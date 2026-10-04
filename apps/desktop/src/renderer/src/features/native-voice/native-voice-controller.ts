@@ -1,6 +1,9 @@
-import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
+import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture, type CameraGestureCue } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
-import { CAMERA_GESTURES, type CameraCue, type VoiceCameraObservation } from "../../../../shared/native-voice-camera";
+import {
+  CAMERA_GESTURES, VOICE_CAMERA_CONVERSATION_LIMITS,
+  type CameraCue, type VoiceCameraConversationLine, type VoiceCameraObservation,
+} from "../../../../shared/native-voice-camera";
 
 export type VoiceCameraDiagnostics = {
   sessionId: string;
@@ -22,20 +25,26 @@ export type VoiceCameraDiagnostics = {
   skippedFrames?: number;
   /** Decisions Clef reported running or waiting while it was busy. */
   inFlight?: number;
+  /** The latest conversation check before a repeated gesture; `movedOn` is absent when Clef could not answer. */
+  repeatCheck?: { cue: CameraCue; movedOn?: number; latencyMs: number };
   error?: string;
 };
 
 export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "stopping" | "stop-error" | "error";
-/** `seq` orders transcript rows and action receipts against each other. */
-export type VoiceTranscriptRow = { role: string; text: string; seq: number };
-export type VoiceActionRow = NativeVoiceAction & { seq: number };
+/**
+ * `seq` orders transcript rows and action receipts against each other. `at`
+ * is when the row began, for the camera's conversation excerpt.
+ */
+export type VoiceTranscriptRow = { role: string; text: string; seq: number; at: number };
+export type VoiceActionRow = NativeVoiceAction & { seq: number; at: number };
 /** Gestures and presence go in the transcript; vibes stay in the dock. */
 export function isTranscriptCue(cue: CameraCue): boolean {
   return cue === "away" || CAMERA_GESTURES.some((gesture) => gesture === cue);
 }
 
 /** A camera cue handed to the voice, in order with what was said. */
-export type VoiceCameraCueRow = { cue: CameraCue; seq: number; delivery: "pending" | "acknowledged" | "failed" };
+export type VoiceCameraCueRow = { cue: CameraCue; seq: number; at: number; delivery: "pending" | "acknowledged" | "failed" };
+const CONVERSATION_SPEAKERS: Record<string, VoiceCameraConversationLine["speaker"] | undefined> = { user: "operator", assistant: "voice" };
 export type VoiceView = {
   status: VoiceStatus;
   error?: string;
@@ -159,6 +168,12 @@ export class NativeVoiceController {
    */
   private openRows = new Map<string, number>();
   private seq = 0;
+  /**
+   * Lines the voice finished saying, ever. The camera sends a gesture again
+   * only after this has moved since it last sent it. Tool actions do not
+   * count: Clef does not read an action alone as the voice moving on.
+   */
+  private voiceActivity = 0;
   private readonly listeners = new Set<(view: VoiceView) => void>();
   constructor(
     private readonly api: NativeVoiceApi,
@@ -344,10 +359,13 @@ export class NativeVoiceController {
           transcript[index] = { ...row, text: event.done ? event.text : row.text + event.text };
         } else {
           const seq = ++this.seq;
-          transcript.push({ role: event.role, text: event.text, seq });
+          transcript.push({ role: event.role, text: event.text, seq, at: Date.now() });
           if (!event.done) this.openRows.set(event.role, seq);
         }
-        if (event.done) this.openRows.delete(event.role);
+        if (event.done) {
+          this.openRows.delete(event.role);
+          if (event.role === "assistant") this.voiceActivity++;
+        }
         // Voice text is memory-only, bounded and discarded on the next session.
         this.publish({ transcript: transcript.slice(-MAX_TRANSCRIPT_ROWS).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
         this.armMutedIdleEnd(resources);
@@ -355,7 +373,7 @@ export class NativeVoiceController {
       }
       case "action": {
         const { type: _type, sessionId: _sessionId, ...action } = event;
-        this.publish({ actions: [...this.view.actions, { ...action, seq: ++this.seq }].slice(-MAX_ACTION_ROWS) });
+        this.publish({ actions: [...this.view.actions, { ...action, seq: ++this.seq, at: Date.now() }].slice(-MAX_ACTION_ROWS) });
         this.armMutedIdleEnd(resources);
         break;
       }
@@ -442,6 +460,36 @@ export class NativeVoiceController {
 
   dismissCameraError(): void { this.publish({ cameraError: undefined }); }
 
+  /**
+   * The last minute and a half of what was said, done and cued, oldest first,
+   * for Clef's repeat check. Built on demand from the memory-only rows and
+   * never stored.
+   */
+  private cameraConversation(now: number): VoiceCameraConversationLine[] {
+    const { lines, seconds, chars } = VOICE_CAMERA_CONVERSATION_LIMITS;
+    const clip = (text: string) => {
+      const flat = text.replace(/\s+/g, " ").trim();
+      return flat.length > chars ? `${flat.slice(0, chars - 1)}…` : flat;
+    };
+    const rows: Array<{ seq: number; at: number; speaker: VoiceCameraConversationLine["speaker"]; text: string }> = [];
+    for (const row of this.view.transcript) {
+      const speaker = CONVERSATION_SPEAKERS[row.role];
+      if (speaker && row.text.trim()) rows.push({ seq: row.seq, at: row.at, speaker, text: row.text });
+    }
+    for (const action of this.view.actions) {
+      rows.push({ seq: action.seq, at: action.at, speaker: "action", text: `${action.tool} ${action.outcome ?? (action.ok ? "done" : "failed")}` });
+    }
+    for (const cue of this.view.cameraCues ?? []) {
+      // A cue that never reached the voice is not part of its conversation.
+      if (cue.delivery !== "failed") rows.push({ seq: cue.seq, at: cue.at, speaker: "cue", text: `${cue.cue} (${cue.delivery === "pending" ? "sending" : "delivered"})` });
+    }
+    return rows
+      .filter((row) => now - row.at <= seconds * 1000)
+      .sort((a, b) => a.seq - b.seq)
+      .slice(-lines)
+      .map((row) => ({ ago: Math.min(seconds, Math.max(0, Math.round((now - row.at) / 1000))), speaker: row.speaker, text: clip(row.text) }));
+  }
+
   cameraStream(): MediaStream | undefined { return this.resources?.camera?.capture?.stream; }
 
   private closeCamera(resources: Resources): void {
@@ -483,6 +531,27 @@ export class NativeVoiceController {
       debug({ error: cameraErrorText(error), filter: "Camera stopped after failure" });
       this.closeCamera(resources);
       this.publish({ cameraError: cameraErrorText(error) });
+    };
+    // A gesture already sent is back. Send it again only if Clef, reading the
+    // conversation since, says the voice did more than acknowledge it. When
+    // Clef cannot answer, hold the repeat: the noise is what this prevents.
+    // A refusal throws, and stops the camera like a refused frame.
+    // An unanswered check is not asked again on every frame while the
+    // gesture is held; it waits like a skipped frame.
+    let recheckAfter = 0;
+    const recheck = async (gesture: CameraGestureCue): Promise<CameraCue | undefined> => {
+      const asked = Date.now();
+      if (asked < recheckAfter) return;
+      const context = { voiceActivity: this.voiceActivity };
+      const verdict = await this.api.checkNativeVoiceCameraRepeat?.({ sessionId: resources.id, conversation: this.cameraConversation(asked) });
+      if (!current()) return;
+      const movedOn = verdict && "movedOn" in verdict ? verdict.movedOn : undefined;
+      debug({ repeatCheck: { cue: gesture, movedOn, latencyMs: Date.now() - asked } });
+      if (movedOn === undefined) {
+        recheckAfter = Date.now() + (verdict && "retryAfterMs" in verdict && verdict.retryAfterMs !== undefined ? verdict.retryAfterMs : CAMERA_SKIP_RETRY_MS);
+        return;
+      }
+      return filter.settleRecheck(gesture, movedOn >= 0.5, context, Date.now());
     };
     let skipStreak = 0;
     try {
@@ -538,7 +607,12 @@ export class NativeVoiceController {
               if (current()) camera.timer = setTimeout(() => { void sample(); }, 500);
               return;
             }
-            const decision = filter.observe(observation, now);
+            let decision = filter.observe(observation, now, { voiceActivity: this.voiceActivity });
+            if (decision.recheck) {
+              const cue = await recheck(decision.recheck);
+              if (!current()) return;
+              decision = cue ? { cue } : {};
+            }
             debug({ filter: observation.gesture ? `${filter.status}; gesture: ${filter.gestureStatus}` : filter.status });
             if (decision.end) {
               this.publish({ endedAfterAway: true });
@@ -558,7 +632,7 @@ export class NativeVoiceController {
               this.publish({
                 cameraCue: decision.cue,
                 ...(seq === undefined ? {} : {
-                  cameraCues: [...(this.view.cameraCues ?? []), { cue: decision.cue, seq, delivery: "pending" as const }].slice(-MAX_ACTION_ROWS),
+                  cameraCues: [...(this.view.cameraCues ?? []), { cue: decision.cue, seq, at: Date.now(), delivery: "pending" as const }].slice(-MAX_ACTION_ROWS),
                 }),
               });
               debug({ lastCue: decision.cue, delivery: "pending" });

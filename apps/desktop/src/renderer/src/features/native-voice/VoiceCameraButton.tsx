@@ -164,6 +164,9 @@ export function cameraDiagnosticsText(debug: VoiceCameraDiagnostics, now = Date.
     `Model / frame age: ${observation ? `${observation.latencyMs.toFixed(0)} / ${debug.frameAgeMs?.toFixed(0) ?? "—"} ms` : "—"}`,
     `Filter: ${debug.filter}`,
     `Voice context: ${debug.delivery ?? "none sent"}${debug.lastCue ? ` (${debug.lastCue})` : ""}, ${debug.cuesAcknowledged} acknowledged`,
+    `Repeat check: ${debug.repeatCheck
+      ? `${debug.repeatCheck.cue}, moved on ${percent(debug.repeatCheck.movedOn)} in ${debug.repeatCheck.latencyMs} ms`
+      : "none yet"}`,
     `Thread: ${debug.threadId}`,
     `Session: ${debug.sessionId}`,
     ...scores,

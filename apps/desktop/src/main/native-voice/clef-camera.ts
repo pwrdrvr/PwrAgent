@@ -1,12 +1,27 @@
-import { CAMERA_VIBES, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, type VoiceCameraObservation } from "../../shared/native-voice-camera";
+import {
+  CAMERA_VIBES, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, VOICE_CAMERA_REPEAT_QUESTIONS, cameraConversationState,
+  type VoiceCameraConversationLine, type VoiceCameraObservation, type VoiceCameraRepeatVerdict,
+} from "../../shared/native-voice-camera";
 import {
   isSystemOneRejection,
   postSystemOne,
   systemOneErrorDetail,
   systemOneHeaders,
   SystemOneRejected,
+  type SystemOneRequest,
   type SystemOneTarget,
 } from "../decision/system-one";
+
+/**
+ * Every camera decision request is built here. A frame is judged alone; the
+ * conversation is judged in its own text-only request, because a transcript
+ * in the frame's `state` biases the frame's own answers.
+ */
+export function cameraDecisionRequest(input: { image: string } | { conversation: VoiceCameraConversationLine[] }): SystemOneRequest {
+  return "image" in input
+    ? { state: "A live webcam frame from a laptop.", questions: VOICE_CAMERA_QUESTIONS, images: [input.image] }
+    : { state: cameraConversationState(input.conversation), questions: VOICE_CAMERA_REPEAT_QUESTIONS };
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Clef response.");
@@ -86,6 +101,12 @@ export async function clefRequestsInFlight(target: SystemOneTarget, signal: Abor
   }
 }
 
+export function parseClefRepeatVerdict(value: unknown): VoiceCameraRepeatVerdict {
+  const answer = object(object(object(value).answers).moved_on);
+  if (answer.type !== "noul") throw new Error("Invalid Clef repeat check.");
+  return { movedOn: probability(answer.noul) };
+}
+
 /**
  * Asks the local decision model about one frame, through the System One API
  * with Clef's `images` extension. Throws {@link SystemOneRejected} when the
@@ -97,6 +118,29 @@ export async function classifyVoiceCamera(
   signal: AbortSignal,
   warming = false,
 ): Promise<VoiceCameraObservation> {
+  const { body, latencyMs } = await decide(target, cameraDecisionRequest({ image }), signal, warming);
+  return parseClefObservation(body, latencyMs);
+}
+
+/**
+ * Asks whether the voice moved on since the latest camera cue. Text only:
+ * no frame goes with it. Throws {@link SystemOneRejected} like a frame.
+ */
+export async function judgeVoiceCameraRepeat(
+  target: SystemOneTarget,
+  conversation: VoiceCameraConversationLine[],
+  signal: AbortSignal,
+): Promise<VoiceCameraRepeatVerdict> {
+  const { body } = await decide(target, cameraDecisionRequest({ conversation }), signal, false);
+  return parseClefRepeatVerdict(body);
+}
+
+async function decide(
+  target: SystemOneTarget,
+  request: SystemOneRequest,
+  signal: AbortSignal,
+  warming: boolean,
+): Promise<{ body: unknown; latencyMs: number }> {
   // The server may still be loading or compiling the question schema. Keep
   // one request outstanding and tolerate temporary unavailability within the
   // caller's deadline, while opt-out/teardown cancels both fetch and backoff.
@@ -105,17 +149,13 @@ export async function classifyVoiceCamera(
     let response: Response | undefined;
     const started = performance.now();
     try {
-      response = await postSystemOne(target, {
-        state: "A live webcam frame from a laptop.",
-        questions: VOICE_CAMERA_QUESTIONS,
-        images: [image],
-      }, { signal });
+      response = await postSystemOne(target, request, { signal });
     } catch (error) {
       if (signal.aborted || !warming) throw error;
     }
     if (response?.ok) {
       const body: unknown = await response.json();
-      return parseClefObservation(body, performance.now() - started);
+      return { body, latencyMs: performance.now() - started };
     }
     if (response && isSystemOneRejection(response.status)) {
       throw new SystemOneRejected(response.status, await systemOneErrorDetail(response));

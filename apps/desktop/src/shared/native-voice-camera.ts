@@ -1,6 +1,7 @@
 export const NATIVE_VOICE_CAMERA_CHANNEL = "native-voice:camera";
 export const NATIVE_VOICE_CAMERA_CUE_CHANNEL = "native-voice:camera-cue";
 export const NATIVE_VOICE_CAMERA_FRAME_CHANNEL = "native-voice:camera-frame";
+export const NATIVE_VOICE_CAMERA_REPEAT_CHANNEL = "native-voice:camera-repeat";
 export type VoiceCameraRequest = { sessionId: string; enabled: boolean };
 export type VoiceCameraFrame = { sessionId: string; image: string };
 export const CAMERA_REACTIONS = ["neutral", "exasperated", "enthusiastic", "bored", "frustrated", "yelling", "talking"] as const;
@@ -14,6 +15,16 @@ export function isCameraCue(value: unknown): value is CameraCue {
     && (value === "away" || [...CAMERA_REACTIONS, ...CAMERA_GESTURES].some((cue) => cue === value));
 }
 export type VoiceCameraCue = { sessionId: string; cue: CameraCue };
+/**
+ * One line of the voice conversation, `ago` whole seconds before it was
+ * read. Built from the controller's memory-only rows and never persisted.
+ */
+export type VoiceCameraConversationLine = { ago: number; speaker: "operator" | "voice" | "cue" | "action"; text: string };
+export const VOICE_CAMERA_CONVERSATION_LIMITS = { lines: 12, seconds: 90, chars: 240 } as const;
+/** Before a gesture already sent is sent again: has the voice moved on since? */
+export type VoiceCameraRepeatCheck = { sessionId: string; conversation: VoiceCameraConversationLine[] };
+/** Probability that the voice said something substantive after the latest cue. */
+export type VoiceCameraRepeatVerdict = { movedOn: number };
 /** A frame Clef did not judge: too slow ("busy", usually another client
  * holds the model) or unreachable ("offline"). The camera keeps running and
  * retries. */
@@ -70,6 +81,42 @@ export const VOICE_CAMERA_QUESTIONS = {
     },
   },
 };
+
+// Asked of the conversation alone, in its own request. In one joint request
+// with the frame, the transcript shifted the frame's own answers: a photo with
+// nobody in it went from 0.21 to 0.50 "stop" and 0.42 to 0.71 "present" when
+// the conversation mentioned a stop cue. This wording separated all ten
+// probe conversations, sent text only (bare acknowledgments 0.03 to 0.33,
+// substantive replies 0.76 to 0.96); see "Camera context integration" in
+// docs/native-live-voice.md.
+export const VOICE_CAMERA_REPEAT_QUESTIONS = {
+  moved_on: {
+    type: "noul",
+    instructions: "Since the latest camera cue, has the voice said anything beyond acknowledging it?",
+    criteria: {
+      true: "yes: new information, a new plan, a change of course, or resumed work",
+      false: "no: silence, or only acknowledging, pausing, or asking what to do",
+    },
+  },
+};
+
+const CONVERSATION_SPEAKERS = { operator: "operator", voice: "voice", cue: "camera cue", action: "voice action" } as const;
+export function isCameraConversation(value: unknown): value is VoiceCameraConversationLine[] {
+  const limits = VOICE_CAMERA_CONVERSATION_LIMITS;
+  return Array.isArray(value) && value.length <= limits.lines && value.every((line: unknown) => {
+    if (!line || typeof line !== "object") return false;
+    const { ago, speaker, text } = line as Record<string, unknown>;
+    return typeof ago === "number" && Number.isInteger(ago) && ago >= 0 && ago <= limits.seconds
+      && typeof speaker === "string" && Object.hasOwn(CONVERSATION_SPEAKERS, speaker)
+      && typeof text === "string" && text.length <= limits.chars;
+  });
+}
+/** Clef's `state` for the repeat check: one line per row, oldest first. */
+export function cameraConversationState(lines: VoiceCameraConversationLine[]): string {
+  // Collapse whitespace so spoken text cannot start a line that reads as a cue.
+  const rows = lines.map(({ ago, speaker, text }) => `-${ago}s ${CONVERSATION_SPEAKERS[speaker]}: ${text.replace(/\s+/g, " ").trim()}`);
+  return ["Voice conversation, oldest first, in seconds before now:", ...rows].join("\n");
+}
 
 export function cameraCueText(cue: CameraCue): string {
   const text: Record<CameraCue, string> = {

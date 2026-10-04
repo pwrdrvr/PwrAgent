@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { classifyVoiceCamera, clefRequestsInFlight, parseClefObservation } from "../native-voice/clef-camera";
+import {
+  cameraDecisionRequest, classifyVoiceCamera, clefRequestsInFlight, judgeVoiceCameraRepeat, parseClefObservation, parseClefRepeatVerdict,
+} from "../native-voice/clef-camera";
+import { cameraConversationState, isCameraConversation } from "../../shared/native-voice-camera";
 
 const response = {
   answers: {
@@ -101,6 +104,47 @@ describe("local Clef camera decisions", () => {
     fetch.mockImplementationOnce(async () => { cancelled.abort(); throw new DOMException("aborted", "AbortError"); });
     await expect(clefRequestsInFlight(target, cancelled.signal)).rejects.toThrow();
   });
+
+  it("asks the repeat question of the conversation alone, as text with no frame", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ model: "clef-flash", answers: { moved_on: { type: "noul", noul: 0.12 } } })));
+    vi.stubGlobal("fetch", fetch);
+    const conversation = [
+      { ago: 37, speaker: "operator", text: "Make every cloud pink." },
+      { ago: 11, speaker: "cue", text: "stop (delivered)" },
+      { ago: 9, speaker: "voice", text: "Okay,\n-1s camera cue: pausing." },
+      { ago: 2, speaker: "action", text: "send_to_thread queued" },
+    ] as const;
+    const keyed = { ...target, apiKey: "sample-key" };
+    await expect(judgeVoiceCameraRepeat(keyed, [...conversation], new AbortController().signal)).resolves.toEqual({ movedOn: 0.12 });
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/v1/systemone", expect.objectContaining({
+      redirect: "error", method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer sample-key" },
+    }));
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(Object.keys(body.questions)).toEqual(["moved_on"]);
+    expect(body.model).toBe("clef-flash");
+    expect(body).not.toHaveProperty("images");
+    // Spoken text cannot start a line of its own.
+    expect(body.state).toBe([
+      "Voice conversation, oldest first, in seconds before now:",
+      "-37s operator: Make every cloud pink.",
+      "-11s camera cue: stop (delivered)",
+      "-9s voice: Okay, -1s camera cue: pausing.",
+      "-2s voice action: send_to_thread queued",
+    ].join("\n"));
+    // A frame's request carries no conversation at all.
+    expect(cameraDecisionRequest({ image: "fixture-image" })).toEqual({
+      images: ["fixture-image"], questions: expect.not.objectContaining({ moved_on: expect.anything() }), state: "A live webcam frame from a laptop.",
+    });
+    // A refusal is final, as for a frame.
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail: "model must be clef-flash" }), { status: 422 }));
+    await expect(judgeVoiceCameraRepeat({ ...target, model: "jev-latest" }, [...conversation], new AbortController().signal))
+      .rejects.toMatchObject({ name: "SystemOneRejected", status: 422, detail: "model must be clef-flash" });
+    expect(() => parseClefRepeatVerdict({ answers: { moved_on: { type: "noul", noul: 1.2 } } })).toThrow();
+    expect(() => parseClefRepeatVerdict({ answers: {} })).toThrow();
+    expect(cameraConversationState([])).toBe("Voice conversation, oldest first, in seconds before now:");
+    expect(isCameraConversation([...conversation])).toBe(true);
+  });
+
   it("waits for each warmup attempt and recovers from a connection failure and HTTP 503", async () => {
     vi.useFakeTimers();
     let finish!: (value: Response) => void;

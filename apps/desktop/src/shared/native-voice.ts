@@ -1,4 +1,7 @@
-import type { VoiceCameraRequest, VoiceCameraFrame, VoiceCameraObservation, VoiceCameraCue, VoiceCameraSkipped } from "./native-voice-camera";
+import type {
+  VoiceCameraRequest, VoiceCameraFrame, VoiceCameraObservation, VoiceCameraCue, VoiceCameraSkipped,
+  VoiceCameraRepeatCheck, VoiceCameraRepeatVerdict,
+} from "./native-voice-camera";
 import type { AgentEvent, OperatorFocusSnapshot } from "@pwragent/shared";
 
 /** Window-local voice ownership. No credentials or service URLs cross IPC. */
@@ -59,6 +62,8 @@ export type NativeVoiceApi = {
   sendNativeVoiceCameraCue?: (request: VoiceCameraCue) => Promise<void>;
   setNativeVoiceCamera?: (request: VoiceCameraRequest) => Promise<void>;
   analyzeNativeVoiceCamera?: (request: VoiceCameraFrame) => Promise<VoiceCameraObservation | VoiceCameraSkipped | undefined>;
+  /** Before a gesture already sent is sent again, ask Clef whether the voice has moved on since. */
+  checkNativeVoiceCameraRepeat?: (request: VoiceCameraRepeatCheck) => Promise<VoiceCameraRepeatVerdict | VoiceCameraSkipped | undefined>;
   openVoiceManager?: () => Promise<OpenVoiceManagerResponse>;
   publishOperatorFocus?: (focus: OperatorFocusSnapshot) => Promise<void>;
   /**
