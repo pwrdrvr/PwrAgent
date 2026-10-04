@@ -258,6 +258,49 @@ describe("voice camera ownership", () => {
     await f.controller.stop();
   });
 
+  it("keeps the camera through a busy or offline Clef, backing off without counting skipped frames as a gesture", async () => {
+    const f = await liveCamera();
+    const stop = { present: true, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.9,
+      gesture: "stop" as const, gestureConfidence: 0.93, latencyMs: 250 };
+    f.api.analyzeNativeVoiceCamera = vi.fn()
+      .mockResolvedValueOnce(stop)
+      .mockResolvedValueOnce({ skipped: "busy" })
+      .mockResolvedValueOnce({ skipped: "offline" })
+      .mockResolvedValue(stop);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.controller.getView()).toMatchObject({ camera: "on", cameraError: undefined });
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ skipped: "busy", skippedFrames: 1, filter: "Clef busy; retrying" });
+    // Backs off 2s, then 4s, instead of queueing more frames behind the busy model.
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(3);
+    expect(f.controller.getView()).toMatchObject({ camera: "on", cameraError: undefined });
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ skipped: "offline", filter: "Clef unavailable; retrying" });
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ skipped: undefined, skippedFrames: 2 });
+    // The stop before the busy frames does not pair with the one after them.
+    expect(f.api.sendNativeVoiceCameraCue).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledExactlyOnceWith({ sessionId: "fixture-session", cue: "stop" });
+    await f.controller.stop();
+  });
+
+  it("shows a camera failure without Electron's IPC wrapper", async () => {
+    const f = await liveCamera();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'native-voice:camera-frame': Error: Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.");
+    });
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.controller.getView()).toMatchObject({ camera: undefined, cameraError: "Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787." });
+    expect(f.controller.getView().status).toBe("listening");
+    await f.controller.stop();
+  });
+
   it("exposes a rejected cue route while releasing the camera and keeping voice live", async () => {
     const f = await liveCamera();
     f.api.sendNativeVoiceCameraCue = vi.fn(async () => { throw new Error("appendText rejected"); });

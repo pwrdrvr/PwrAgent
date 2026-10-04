@@ -75,13 +75,21 @@ describe("native voice IPC permission boundary", () => {
       signal = abort;
       return new Promise((_resolve, reject) => abort.addEventListener("abort", () => reject(abort.reason), { once: true }));
     });
+    // A warm model that misses the window is busy elsewhere: skip the frame,
+    // keep the camera, and free the slot for the next one.
     const normal = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
-    const rejected = expect(normal).rejects.toThrow("after eight seconds");
     const stops = mocks.stop.mock.calls.length;
     await vi.advanceTimersByTimeAsync(8000);
-    await rejected;
+    await expect(normal).resolves.toEqual({ skipped: "busy" });
     expect(signal.aborted).toBe(true);
     expect(mocks.stop).toHaveBeenCalledTimes(stops);
+    mocks.classify.mockImplementationOnce(async (_image, _abort, warming) => {
+      expect(warming).toBe(false);
+      return { present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 };
+    });
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).resolves.toMatchObject({ latencyMs: 400 });
+    mocks.classify.mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:8787"));
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).resolves.toEqual({ skipped: "offline" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     mocks.classify.mockImplementationOnce(async (_image, _abort, warming) => {

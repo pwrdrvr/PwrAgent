@@ -71,6 +71,20 @@ describe("camera voice control", () => {
     expect(gesture).toHaveTextContent("gesturestopsent");
   });
 
+  it("keeps the preview but does not pass the last reading off as live while the cue model skips frames", () => {
+    const result = render(<VoiceCameraDock controller={controller} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics({ skipped: "busy", skippedFrames: 1 }) }} />);
+    const dock = screen.getByRole("region", { name: "Camera cues" });
+    expect(screen.getByRole("status")).toHaveTextContent("the cue model is busy. Retrying.");
+    expect(dock).toHaveTextContent("cue model busy");
+    expect(dock).not.toHaveTextContent("570 ms");
+    expect(dock.querySelector(".voice-camera-dock__live")).toBeNull();
+    expect(screen.getByLabelText("Camera preview").tagName).toBe("VIDEO");
+    result.rerender(<VoiceCameraDock controller={controller} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics({ skipped: "offline", skippedFrames: 3 }) }} />);
+    expect(dock).toHaveTextContent("cue model offline");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(cameraDiagnosticsText(diagnostics({ skipped: "offline", skippedFrames: 3 }))).toContain("skipped: 3 (offline)");
+  });
+
   it("renders the wide layout's every-option meters beside the compact picks, and copies the diagnostics", () => {
     const onCopy = vi.fn();
     render(<VoiceCameraDock controller={controller} onCopyDiagnostics={onCopy} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics() }} />);

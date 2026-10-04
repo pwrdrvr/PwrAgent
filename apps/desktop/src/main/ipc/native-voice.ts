@@ -1,7 +1,7 @@
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL,
   NATIVE_VOICE_CAMERA_CUE_CHANNEL, isCameraCue,
-  type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue,
+  type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraSkipped,
 } from "../../shared/native-voice-camera";
 import { getMainLogger } from "../log";
 import { classifyVoiceCamera } from "../native-voice/clef-camera";
@@ -148,10 +148,12 @@ export function registerNativeVoiceIpcHandlers(): void {
         return undefined;
       }
       cameraLog.warn("camera analysis failed", { sessionId: request.sessionId, warming, timedOut, elapsedMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
+      // Once Clef has answered, a failure skips this frame, not the camera. A
+      // warm model that answers slowly is usually busy with another client
+      // (it serializes requests); one that refuses may be restarting.
+      if (!warming) return { skipped: timedOut ? "busy" : "offline" } satisfies VoiceCameraSkipped;
       const message = timedOut
-        ? warming
-          ? "Clef did not respond within five minutes. Camera cues stopped; voice is still available."
-          : "Clef analysis timed out after eight seconds. Camera cues stopped; voice is still available."
+        ? "Clef did not respond within five minutes. Camera cues stopped; voice is still available."
         : "Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.";
       throw new Error(message, { cause: error });
     }

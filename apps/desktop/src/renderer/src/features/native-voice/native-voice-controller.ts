@@ -17,6 +17,9 @@ export type VoiceCameraDiagnostics = {
   lastCue?: CameraCue;
   delivery?: "pending" | "acknowledged" | "failed";
   acknowledgedAt?: number;
+  /** Why Clef skipped the latest frame; cleared by the next result. */
+  skipped?: "busy" | "offline";
+  skippedFrames?: number;
   error?: string;
 };
 
@@ -130,6 +133,15 @@ const TURN_ENDED = new Set(["turn/completed", "turn/failed", "turn/cancelled"]);
 
 const MAX_TRANSCRIPT_ROWS = 40;
 const MAX_ACTION_ROWS = 20;
+// A busy Clef keeps serving whoever holds it, and an abandoned request still
+// runs to completion there, so back off instead of queueing more frames. An
+// offline one is retried on the same schedule and recovers on its own.
+const CAMERA_SKIP_RETRY_MS = 2000;
+const CAMERA_SKIP_RETRY_MAX_MS = 16_000;
+/** An IPC failure's own message, without Electron's "Error invoking remote method" wrapper. */
+const cameraErrorText = (error: unknown) => error instanceof Error
+  ? error.message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "") || "Camera cues failed."
+  : "Camera cues failed.";
 
 /** Owns every track, peer, audio element and listener for one window. */
 export class NativeVoiceController {
@@ -461,10 +473,11 @@ export class NativeVoiceController {
     this.publish({ camera: "starting", cameraError: undefined, cameraDiagnostics: diagnostics });
     const failed = (error: unknown) => {
       if (!current()) return;
-      debug({ error: error instanceof Error ? error.message : "Camera cues failed.", filter: "Camera stopped after failure" });
+      debug({ error: cameraErrorText(error), filter: "Camera stopped after failure" });
       this.closeCamera(resources);
-      this.publish({ cameraError: error instanceof Error ? error.message : "Camera cues failed." });
+      this.publish({ cameraError: cameraErrorText(error) });
     };
+    let skipStreak = 0;
     try {
       await this.api.setNativeVoiceCamera({ sessionId: resources.id, enabled: true });
       if (!current()) return;
@@ -485,6 +498,19 @@ export class NativeVoiceController {
               debug({ filter: "Analysis cancelled" });
               return;
             }
+            if ("skipped" in observation) {
+              // Skipped frames break continuity: they never count toward a
+              // gesture, and never as the operator being away.
+              skipStreak += 1;
+              filter.resetContinuity();
+              debug({
+                skipped: observation.skipped, skippedFrames: (diagnostics.skippedFrames ?? 0) + 1,
+                filter: observation.skipped === "busy" ? "Clef busy; retrying" : "Clef unavailable; retrying",
+              });
+              camera.timer = setTimeout(() => { void sample(); }, Math.min(CAMERA_SKIP_RETRY_MAX_MS, CAMERA_SKIP_RETRY_MS * 2 ** (skipStreak - 1)));
+              return;
+            }
+            skipStreak = 0;
             if (this.view.cameraWarming) this.publish({ cameraWarming: false });
             // A cold-model response describes the old captured frame. Waiting
             // never establishes absence or permits a stale expression cue.
@@ -493,7 +519,7 @@ export class NativeVoiceController {
             while (completed.length > 1 && now - completed[0] > 10_000) completed.shift();
             const interval = now - completed[0];
             debug({
-              observations: diagnostics.observations + 1, observation, lastObservedAt: now, frameAgeMs: now - started,
+              skipped: undefined, observations: diagnostics.observations + 1, observation, lastObservedAt: now, frameAgeMs: now - started,
               rateHz: interval > 0 ? (completed.length - 1) * 1000 / interval : 0,
             });
             if (now - started > CAMERA_SAMPLE_GAP_MS) {

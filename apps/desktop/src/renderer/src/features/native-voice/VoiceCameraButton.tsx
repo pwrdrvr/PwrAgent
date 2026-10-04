@@ -158,7 +158,7 @@ export function cameraDiagnosticsText(debug: VoiceCameraDiagnostics, now = Date.
     : [];
   return [
     "Camera diagnostics",
-    `Results: ${debug.observations} (${debug.rateHz.toFixed(2)}/s), stale discarded: ${debug.staleObservations}`,
+    `Results: ${debug.observations} (${debug.rateHz.toFixed(2)}/s), stale discarded: ${debug.staleObservations}, skipped: ${debug.skippedFrames ?? 0}${debug.skipped ? ` (${debug.skipped})` : ""}`,
     `Latest result: ${debug.lastObservedAt === undefined ? "waiting" : `${((now - debug.lastObservedAt) / 1000).toFixed(1)}s ago`}`,
     `Model / frame age: ${observation ? `${observation.latencyMs.toFixed(0)} / ${debug.frameAgeMs?.toFixed(0) ?? "—"} ms` : "—"}`,
     `Filter: ${debug.filter}`,
@@ -205,7 +205,10 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
   if (!active && !view.cameraError) return null;
 
   const debug = view.cameraDiagnostics;
-  const observation = active && !view.cameraWarming ? debug?.observation : undefined;
+  // While Clef skips frames the last result is not a live reading, so it is
+  // not shown as one; the preview stays up.
+  const skipped = active && view.camera === "on" && !view.cameraWarming ? debug?.skipped : undefined;
+  const observation = active && !view.cameraWarming && !skipped ? debug?.observation : undefined;
   const age = debug?.lastObservedAt === undefined ? undefined : Math.max(0, now - debug.lastObservedAt);
   const fresh = age !== undefined && age < 10_000;
   const stale = Boolean(debug?.filter.startsWith("Stale"));
@@ -217,8 +220,9 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
   const status = !active ? "Camera off"
     : view.camera === "starting" ? "Starting camera…"
       : view.cameraWarming ? "Camera cues warming up. Model loading can take a few minutes."
-        : stale ? "Camera cues waiting for a fresh frame"
-          : "Camera cues receiving observations";
+        : skipped ? `Camera cues paused: the cue model is ${skipped === "busy" ? "busy" : "unavailable"}. Retrying.`
+          : stale ? "Camera cues waiting for a fresh frame"
+            : "Camera cues receiving observations";
   const live = active && view.camera === "on" && !view.cameraWarming && observation !== undefined;
   const placeholders = (["gesture", "vibe", "present"] as const);
 
@@ -233,7 +237,7 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
               <span><b>{observation.latencyMs.toFixed(0)}</b> ms</span>
               <span><b>{rate.toFixed(1)}</b> /s</span>
             </>
-          ) : active ? <span>{view.camera === "starting" ? "starting" : view.cameraWarming ? "warming up" : "waiting"}</span> : null}
+          ) : active ? <span>{view.camera === "starting" ? "starting" : view.cameraWarming ? "warming up" : skipped ?? "waiting"}</span> : null}
         </span>
         {debug && onCopyDiagnostics ? (
           <button
@@ -263,7 +267,8 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
             <span className="voice-camera-dock__caption">
               {view.camera === "starting" ? "starting camera…"
                 : view.cameraWarming ? "first load can take a few minutes"
-                  : <><span className="voice-camera-dock__caption-wide">no text generation · </span>one forward pass · on-device</>}
+                  : skipped ? `cue model ${skipped}`
+                    : <><span className="voice-camera-dock__caption-wide">no text generation · </span>one forward pass · on-device</>}
             </span>
           </div>
           <div className="voice-camera-dock__reads">

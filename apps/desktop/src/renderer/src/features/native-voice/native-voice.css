@@ -742,6 +742,9 @@
 @container director-voice (width >= 760px) and (height >= 640px) {
   .voice-camera-dock__body {
     grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+    /* The taller video's extra height goes under the filter line, not
+       between it and the meters. */
+    grid-template-rows: auto 1fr;
     align-items: start;
     gap: 8px 12px;
   }

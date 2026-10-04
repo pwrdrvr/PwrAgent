@@ -413,8 +413,17 @@ request and retry pause immediately. Intentional cancellation resolves without
 a Clef-unavailable error. Main logs first-decision waiting/completion, real
 failures, cancellations, and context RPC acknowledgments; it never logs frames
 or raw Clef responses. After the first decision, ordinary
-inference retains its eight-second deadline and failures stop camera cues
-while voice continues. Responses to frames older than ten seconds are
+inference retains its eight-second deadline. After that, a Clef failure skips
+the frame, not the camera. Clef serializes requests, so a warm model that
+misses the deadline is usually serving another client, such as a benchmark
+(**cue model busy**); one that refuses the connection may be restarting
+(**cue model offline**). The preview stays up with that caption in place of
+the stale reading, the skipped frame resets continuity so it never completes a
+gesture or counts as absence, and the next frame waits 2s, doubling to 16s,
+because an abandoned request still runs to completion inside Clef. The first
+result after a skip resumes normal sampling. Clef exposes no load or status
+endpoint, so PwrAgent cannot ask whether the model is free before sending.
+Responses to frames older than ten seconds are
 discarded and reset continuity; model-loading time cannot count as absence.
 
 The filter requires presence confidence of at least 80% and reaction

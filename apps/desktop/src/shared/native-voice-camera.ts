@@ -14,6 +14,10 @@ export function isCameraCue(value: unknown): value is CameraCue {
     && (value === "away" || [...CAMERA_REACTIONS, ...CAMERA_GESTURES].some((cue) => cue === value));
 }
 export type VoiceCameraCue = { sessionId: string; cue: CameraCue };
+/** A frame Clef did not judge: too slow ("busy", usually another client
+ * holds the model) or unreachable ("offline"). The camera keeps running and
+ * retries. */
+export type VoiceCameraSkipped = { skipped: "busy" | "offline" };
 export type VoiceCameraObservation = {
   present: boolean;
   presenceConfidence: number;
