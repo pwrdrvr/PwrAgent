@@ -314,8 +314,8 @@ General → Appearance sets them.
 | Dark theme | Light theme | Origin |
 |---|---|---|
 | `tangerine-dark` (default) | `tangerine-light` (default) | PwrAgent. The bare `:root` / `:root[data-theme="light"]` blocks. |
-| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com), tuned to the lowest compliant contrast. |
-| `solarized-dark` | `solarized-light` | [Solarized](https://ethanschoonover.com/solarized/), canonical surfaces and terminal, text moved only as far as AA needs. |
+| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com) ([MIT](https://catppuccin.com/licensing/)), tuned to the lowest compliant contrast. |
+| `solarized-dark` | `solarized-light` | [Solarized](https://ethanschoonover.com/solarized/) ([MIT](https://github.com/altercation/solarized/blob/master/LICENSE)), canonical surfaces and terminal, text moved only as far as AA needs. |
 | `gray-dark` | `gray-light` | PwrAgent. Neutral charcoal or light-gray surfaces with the Tangerine accent. |
 | `blue-dark` | `blue-light` | PwrAgent. Navy or pale-blue surfaces with a blue accent. |
 

@@ -566,6 +566,10 @@
    lightness only, by the least that clears it. The dark accent is
    Solarized yellow; orange cannot clear AA as text on base03.
 
+   Catppuccin (https://catppuccin.com/licensing/) and Solarized are MIT
+   licensed. Their notices are in apps/desktop/resources/color-themes/ and
+   THIRD_PARTY_LICENSES.
+
    Gray and Blue are PwrAgent designs. Gray keeps the Tangerine accent on
    neutral charcoal or light-gray surfaces; Blue uses a blue accent on navy
    or pale-blue surfaces. Their terminals keep the Tangerine ANSI colors.
