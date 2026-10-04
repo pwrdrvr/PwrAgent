@@ -32,6 +32,43 @@ describe("monitor job suggestions", () => {
     expect(detector.observe(record(7, undefined, "turn-2"))).toBe(true);
   });
 
+  it("does not mistake CI repair and PR body verification for repeated polling", () => {
+    const detector = new MonitorJobSuggestionDetector();
+    const commands = [
+      [0, "gh pr view 2535 --repo pwrdrvr/PwrAgent --json headRefName,headRefOid,mergeable,statusCheckRollup"],
+      [13_000, "gh run view 37232691352 --repo pwrdrvr/PwrAgent --json status,conclusion,event,headSha,jobs"],
+      [19_000, "gh run view 37232691352 --repo pwrdrvr/PwrAgent --job 111525612179 --log-failed > .local/failed.log"],
+      [105_000, "gh pr view 2535 --repo pwrdrvr/PwrAgent --json body --jq .body > .local/pr-body.md"],
+      [148_000, "gh pr edit 2535 --repo pwrdrvr/PwrAgent --body-file .local/pr-body.md"],
+      [153_000, "gh pr view 2535 --repo pwrdrvr/PwrAgent --json url,headRefOid,body"],
+    ] as const;
+    expect(commands.map(([now, command], index) =>
+      detector.observe(record(index, command, "turn-1", now)),
+    )).toEqual(commands.map(() => false));
+  });
+
+  it.each([
+    "gh pr view 123 --repo owner/repo --json body --jq .body",
+    "gh pr view 123 --repo owner/repo --json url,headRefOid,body",
+  ])("ignores repeated metadata reads: %s", (command) => {
+    const detector = new MonitorJobSuggestionDetector();
+    expect([0, 1, 2].map((index) => detector.observe(record(index, command))))
+      .toEqual([false, false, false]);
+  });
+
+  it("counts repeated status queries separately for the same PR", () => {
+    const detector = new MonitorJobSuggestionDetector();
+    const commands = [
+      "gh pr view 123 --repo owner/repo --json statusCheckRollup",
+      "gh pr view 123 --repo owner/repo --json mergeable",
+      "gh pr view 123 --repo owner/repo --json state",
+    ];
+    expect(commands.map((command, index) => detector.observe(record(index, command))))
+      .toEqual([false, false, false]);
+    expect(detector.observe(record(3, commands[0]))).toBe(false);
+    expect(detector.observe(record(4, commands[0]))).toBe(true);
+  });
+
   it.each([1_000, 5_000, 9_000])("detects sustained polling every %i ms exactly once", (interval) => {
     const detector = new MonitorJobSuggestionDetector();
     const suggestions: number[] = [];
