@@ -20,6 +20,8 @@ export type VoiceCameraDiagnostics = {
   /** Why Clef skipped the latest frame; cleared by the next result. */
   skipped?: "busy" | "offline";
   skippedFrames?: number;
+  /** Decisions Clef reported running or waiting while it was busy. */
+  inFlight?: number;
   error?: string;
 };
 
@@ -501,13 +503,16 @@ export class NativeVoiceController {
             if ("skipped" in observation) {
               // Skipped frames break continuity: they never count toward a
               // gesture, and never as the operator being away.
-              skipStreak += 1;
+              // Main paces a skip that reached no model; otherwise back off.
+              if (observation.retryAfterMs === undefined) skipStreak += 1;
               filter.resetContinuity();
               debug({
-                skipped: observation.skipped, skippedFrames: (diagnostics.skippedFrames ?? 0) + 1,
+                skipped: observation.skipped, skippedFrames: (diagnostics.skippedFrames ?? 0) + 1, inFlight: observation.inFlight,
                 filter: observation.skipped === "busy" ? "Clef busy; retrying" : "Clef unavailable; retrying",
               });
-              camera.timer = setTimeout(() => { void sample(); }, Math.min(CAMERA_SKIP_RETRY_MAX_MS, CAMERA_SKIP_RETRY_MS * 2 ** (skipStreak - 1)));
+              const retryMs = observation.retryAfterMs
+                ?? Math.min(CAMERA_SKIP_RETRY_MAX_MS, CAMERA_SKIP_RETRY_MS * 2 ** (skipStreak - 1));
+              camera.timer = setTimeout(() => { void sample(); }, retryMs);
               return;
             }
             skipStreak = 0;
@@ -519,7 +524,7 @@ export class NativeVoiceController {
             while (completed.length > 1 && now - completed[0] > 10_000) completed.shift();
             const interval = now - completed[0];
             debug({
-              skipped: undefined, observations: diagnostics.observations + 1, observation, lastObservedAt: now, frameAgeMs: now - started,
+              skipped: undefined, inFlight: undefined, observations: diagnostics.observations + 1, observation, lastObservedAt: now, frameAgeMs: now - started,
               rateHz: interval > 0 ? (completed.length - 1) * 1000 / interval : 0,
             });
             if (now - started > CAMERA_SAMPLE_GAP_MS) {

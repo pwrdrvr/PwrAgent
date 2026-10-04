@@ -158,7 +158,7 @@ export function cameraDiagnosticsText(debug: VoiceCameraDiagnostics, now = Date.
     : [];
   return [
     "Camera diagnostics",
-    `Results: ${debug.observations} (${debug.rateHz.toFixed(2)}/s), stale discarded: ${debug.staleObservations}, skipped: ${debug.skippedFrames ?? 0}${debug.skipped ? ` (${debug.skipped})` : ""}`,
+    `Results: ${debug.observations} (${debug.rateHz.toFixed(2)}/s), stale discarded: ${debug.staleObservations}, skipped: ${debug.skippedFrames ?? 0}${debug.skipped ? ` (${debug.skipped}${debug.inFlight ? `, ${debug.inFlight} in flight` : ""})` : ""}`,
     `Latest result: ${debug.lastObservedAt === undefined ? "waiting" : `${((now - debug.lastObservedAt) / 1000).toFixed(1)}s ago`}`,
     `Model / frame age: ${observation ? `${observation.latencyMs.toFixed(0)} / ${debug.frameAgeMs?.toFixed(0) ?? "—"} ms` : "—"}`,
     `Filter: ${debug.filter}`,
@@ -237,7 +237,7 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
               <span><b>{observation.latencyMs.toFixed(0)}</b> ms</span>
               <span><b>{rate.toFixed(1)}</b> /s</span>
             </>
-          ) : active ? <span>{view.camera === "starting" ? "starting" : view.cameraWarming ? "warming up" : skipped ?? "waiting"}</span> : null}
+          ) : active ? <span>{view.camera === "starting" ? "starting" : view.cameraWarming ? "warming up" : skipped === "busy" && debug?.inFlight ? `busy · ${debug.inFlight} in flight` : skipped ?? "waiting"}</span> : null}
         </span>
         {debug && onCopyDiagnostics ? (
           <button

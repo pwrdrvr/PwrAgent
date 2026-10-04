@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { classifyVoiceCamera, parseClefObservation } from "../native-voice/clef-camera";
+import { classifyVoiceCamera, clefRequestsInFlight, parseClefObservation } from "../native-voice/clef-camera";
 
 const response = {
   answers: {
@@ -44,6 +44,25 @@ describe("local Clef camera decisions", () => {
     expect(body.image).toBe("fixture-image");
   });
 
+  it("reads the runtime's in-flight count from /health, and reports nothing it cannot trust", async () => {
+    const health = (status: number, body: unknown) => ({ ok: status === 200, status, json: async () => body, body: { cancel: async () => {} } }) as unknown as Response;
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(health(200, { status: "ready", requests_processing: 2, completed_decisions: 9 }))
+      .mockResolvedValueOnce(health(404, { detail: "Not Found" }))
+      .mockResolvedValueOnce(health(200, { requests_processing: -1 }))
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetch);
+    const signal = new AbortController().signal;
+    await expect(clefRequestsInFlight(signal)).resolves.toBe(2);
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/health", expect.objectContaining({ redirect: "error" }));
+    // A server without the route (the plain demo) and a bad count both fall back.
+    await expect(clefRequestsInFlight(signal)).resolves.toBeUndefined();
+    await expect(clefRequestsInFlight(signal)).resolves.toBeUndefined();
+    await expect(clefRequestsInFlight(signal)).resolves.toBeUndefined();
+    const cancelled = new AbortController();
+    fetch.mockImplementationOnce(async () => { cancelled.abort(); throw new DOMException("aborted", "AbortError"); });
+    await expect(clefRequestsInFlight(cancelled.signal)).rejects.toThrow();
+  });
   it("waits for each warmup attempt and recovers from a connection failure and HTTP 503", async () => {
     vi.useFakeTimers();
     let finish!: (value: Response) => void;

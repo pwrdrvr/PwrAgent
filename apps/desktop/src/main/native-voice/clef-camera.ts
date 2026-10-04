@@ -49,6 +49,34 @@ export function parseClefObservation(value: unknown): VoiceCameraObservation {
   };
 }
 
+const CLEF_URL = "http://127.0.0.1:8787";
+const CLEF_HEALTH_TIMEOUT_MS = 1000;
+
+/**
+ * Decisions the PwrSuiteLab Clef runtime is running or holding, from its
+ * `/health` route, which answers without waiting for the model lock. The
+ * count includes requests a client abandoned: Clef finishes those anyway.
+ * Undefined when the server has no such route or does not answer promptly.
+ */
+export async function clefRequestsInFlight(signal: AbortSignal): Promise<number | undefined> {
+  try {
+    const response = await fetch(`${CLEF_URL}/health`, {
+      signal: AbortSignal.any([signal, AbortSignal.timeout(CLEF_HEALTH_TIMEOUT_MS)]),
+      redirect: "error",
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const body: unknown = await response.json();
+    const count = body && typeof body === "object" ? (body as Record<string, unknown>).requests_processing : undefined;
+    return typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : undefined;
+  } catch {
+    signal.throwIfAborted();
+    return undefined;
+  }
+}
+
 export async function classifyVoiceCamera(image: string, signal: AbortSignal, warming = false): Promise<VoiceCameraObservation> {
   // clef-webcam warms the model before opening its API. Keep one request
   // outstanding and tolerate temporary unavailability within the caller's
@@ -57,7 +85,7 @@ export async function classifyVoiceCamera(image: string, signal: AbortSignal, wa
     signal.throwIfAborted();
     let response: Response | undefined;
     try {
-      response = await fetch("http://127.0.0.1:8787/decide", {
+      response = await fetch(`${CLEF_URL}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

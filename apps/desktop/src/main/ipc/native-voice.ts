@@ -4,7 +4,7 @@ import {
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraSkipped,
 } from "../../shared/native-voice-camera";
 import { getMainLogger } from "../log";
-import { classifyVoiceCamera } from "../native-voice/clef-camera";
+import { classifyVoiceCamera, clefRequestsInFlight } from "../native-voice/clef-camera";
 import { ipcMain, session, type WebContents } from "electron";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL,
@@ -23,10 +23,18 @@ const sessions = new NativeVoiceSessionManager((threadId) => getDesktopBackendRe
 // Cold model loading can take a minute or more. Opt-out still aborts immediately.
 const CAMERA_WARMUP_TIMEOUT_MS = 5 * 60_000;
 const CAMERA_ANALYSIS_TIMEOUT_MS = 8000;
+// Polling Clef's /health sends nothing to the model, so a contended camera
+// can look again soon.
+const CAMERA_HEALTH_RETRY_MS = 1000;
 const cameraRequests = new Map<number, { sessionId: string; abort: AbortController }>();
 const cameraReadySessions = new Map<number, string>();
+/** Owners whose last frame missed its deadline; their next frame asks Clef first. */
+const cameraContended = new Set<number>();
 function abortCamera(owner: number, sessionId?: string): void {
-  if (sessionId === undefined || cameraReadySessions.get(owner) === sessionId) cameraReadySessions.delete(owner);
+  if (sessionId === undefined || cameraReadySessions.get(owner) === sessionId) {
+    cameraReadySessions.delete(owner);
+    cameraContended.delete(owner);
+  }
   const request = cameraRequests.get(owner);
   if (!request || (sessionId !== undefined && request.sessionId !== sessionId)) return;
   request.abort.abort();
@@ -134,7 +142,16 @@ export function registerNativeVoiceIpcHandlers(): void {
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; abort.abort(); }, warming ? CAMERA_WARMUP_TIMEOUT_MS : CAMERA_ANALYSIS_TIMEOUT_MS);
     try {
+      // After a missed deadline, Clef is still running that abandoned request
+      // (or another client's). Sending more only lengthens its queue.
+      if (!warming && cameraContended.has(event.sender.id)) {
+        const inFlight = await clefRequestsInFlight(abort.signal);
+        if (inFlight !== undefined && inFlight > 0) {
+          return { skipped: "busy", inFlight, retryAfterMs: CAMERA_HEALTH_RETRY_MS } satisfies VoiceCameraSkipped;
+        }
+      }
       const observation = await classifyVoiceCamera(request.image, abort.signal, warming);
+      cameraContended.delete(event.sender.id);
       if (abort.signal.aborted || !sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) return undefined;
       if (warming) cameraLog.info("camera first decision received", { sessionId: request.sessionId, elapsedMs: Date.now() - started, modelLatencyMs: observation.latencyMs });
       if (!abort.signal.aborted && sessions.allowsCameraSession(event.sender.id, request.sessionId)) {
@@ -151,7 +168,10 @@ export function registerNativeVoiceIpcHandlers(): void {
       // Once Clef has answered, a failure skips this frame, not the camera. A
       // warm model that answers slowly is usually busy with another client
       // (it serializes requests); one that refuses may be restarting.
-      if (!warming) return { skipped: timedOut ? "busy" : "offline" } satisfies VoiceCameraSkipped;
+      if (!warming) {
+        if (timedOut) cameraContended.add(event.sender.id);
+        return { skipped: timedOut ? "busy" : "offline" } satisfies VoiceCameraSkipped;
+      }
       const message = timedOut
         ? "Clef did not respond within five minutes. Camera cues stopped; voice is still available."
         : "Camera cues unavailable. Check that Clef is running at 127.0.0.1:8787.";

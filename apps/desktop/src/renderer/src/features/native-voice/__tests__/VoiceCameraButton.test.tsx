@@ -81,6 +81,8 @@ describe("camera voice control", () => {
     expect(screen.getByLabelText("Camera preview").tagName).toBe("VIDEO");
     result.rerender(<VoiceCameraDock controller={controller} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics({ skipped: "offline", skippedFrames: 3 }) }} />);
     expect(dock).toHaveTextContent("cue model offline");
+    result.rerender(<VoiceCameraDock controller={controller} view={{ ...view, camera: "on", cameraDiagnostics: diagnostics({ skipped: "busy", inFlight: 2 }) }} />);
+    expect(dock).toHaveTextContent("busy · 2 in flight");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(cameraDiagnosticsText(diagnostics({ skipped: "offline", skippedFrames: 3 }))).toContain("skipped: 3 (offline)");
   });

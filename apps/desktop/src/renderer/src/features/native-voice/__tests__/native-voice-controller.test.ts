@@ -289,6 +289,25 @@ describe("voice camera ownership", () => {
     await f.controller.stop();
   });
 
+  it("follows main's pacing when Clef reports work in flight, without growing the backoff", async () => {
+    const f = await liveCamera();
+    const neutral = { present: true, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 250 };
+    f.api.analyzeNativeVoiceCamera = vi.fn()
+      .mockResolvedValueOnce({ skipped: "busy" })
+      .mockResolvedValueOnce({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 })
+      .mockResolvedValueOnce({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 })
+      .mockResolvedValue(neutral);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ skipped: "busy", inFlight: 1 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.api.analyzeNativeVoiceCamera).toHaveBeenCalledTimes(4);
+    expect(f.controller.getView().cameraDiagnostics).toMatchObject({ skipped: undefined, inFlight: undefined });
+    await f.controller.stop();
+  });
+
   it("shows a camera failure without Electron's IPC wrapper", async () => {
     const f = await liveCamera();
     f.api.analyzeNativeVoiceCamera = vi.fn(async () => {

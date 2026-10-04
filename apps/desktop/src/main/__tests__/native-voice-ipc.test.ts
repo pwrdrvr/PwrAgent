@@ -12,12 +12,13 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
   classify: vi.fn<(image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
+  inFlight: vi.fn<(signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
   disconnects: new Set<() => void>(),
   mainWindowIds: new Set<number>(), text: vi.fn(async () => {}),
   openManager: vi.fn(async () => ({ status: "ready", threadId: "sample-voice-manager", created: false })),
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: mocks.info, warn: mocks.warn }) }));
-vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify }));
+vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify, clefRequestsInFlight: mocks.inFlight }));
 vi.mock("electron", () => ({
   ipcMain: { handle: (name: string, handler: (...args: unknown[]) => Promise<void>) => { mocks.handlers.set(name, handler); } },
   session: { defaultSession: { setPermissionCheckHandler: mocks.check, setPermissionRequestHandler: mocks.request } },
@@ -83,11 +84,24 @@ describe("native voice IPC permission boundary", () => {
     await expect(normal).resolves.toEqual({ skipped: "busy" });
     expect(signal.aborted).toBe(true);
     expect(mocks.stop).toHaveBeenCalledTimes(stops);
+    // Clef still runs the abandoned request: ask its /health, and send nothing
+    // while anything is in flight.
+    const classified = mocks.classify.mock.calls.length;
+    mocks.inFlight.mockResolvedValueOnce(1);
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame))
+      .resolves.toEqual({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 });
+    expect(mocks.classify).toHaveBeenCalledTimes(classified);
+    mocks.inFlight.mockResolvedValueOnce(0);
     mocks.classify.mockImplementationOnce(async (_image, _abort, warming) => {
       expect(warming).toBe(false);
       return { present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 };
     });
     await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).resolves.toMatchObject({ latencyMs: 400 });
+    // An answer in time ends the contention: the next frame skips the probe.
+    const probes = mocks.inFlight.mock.calls.length;
+    mocks.classify.mockResolvedValueOnce({ present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame);
+    expect(mocks.inFlight).toHaveBeenCalledTimes(probes);
     mocks.classify.mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:8787"));
     await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, frame)).resolves.toEqual({ skipped: "offline" });
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });

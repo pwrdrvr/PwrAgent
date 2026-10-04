@@ -421,9 +421,12 @@ misses the deadline is usually serving another client, such as a benchmark
 the stale reading, the skipped frame resets continuity so it never completes a
 gesture or counts as absence, and the next frame waits 2s, doubling to 16s,
 because an abandoned request still runs to completion inside Clef. The first
-result after a skip resumes normal sampling. Clef exposes no load or status
-endpoint, so PwrAgent cannot ask whether the model is free before sending.
-Responses to frames older than ten seconds are
+result after a skip resumes normal sampling. After a missed deadline, the
+next frame first asks the PwrSuiteLab Clef runtime's `GET /health` for
+`requests_processing`, which it answers without the model lock and which counts
+the abandoned request. While that is above zero no frame is sent; the dock
+reads **busy · N in flight** and asks again each second. A server without the
+route falls back to the backoff. Responses to frames older than ten seconds are
 discarded and reset continuity; model-loading time cannot count as absence.
 
 The filter requires presence confidence of at least 80% and reaction

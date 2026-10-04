@@ -17,7 +17,13 @@ export type VoiceCameraCue = { sessionId: string; cue: CameraCue };
 /** A frame Clef did not judge: too slow ("busy", usually another client
  * holds the model) or unreachable ("offline"). The camera keeps running and
  * retries. */
-export type VoiceCameraSkipped = { skipped: "busy" | "offline" };
+export type VoiceCameraSkipped = {
+  skipped: "busy" | "offline";
+  /** Decisions Clef reported running or waiting, when it was asked. */
+  inFlight?: number;
+  /** Set when no request reached the model, so retrying soon costs nothing. */
+  retryAfterMs?: number;
+};
 export type VoiceCameraObservation = {
   present: boolean;
   presenceConfidence: number;
