@@ -149,7 +149,7 @@ function descriptionForOperation(
     case "mutate_thread":
       return "Change guarded settings on a PwrAgent thread, its project, its pin, its read state, or whether it is archived. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it.";
     case "mark_project_read":
-      return "Mark every unread thread in one project read in a single call, across all backends and beyond listing limits. Use the exact projectKey from list_instance_projects (directory:<absolute path> for a checkout). Omit instanceId for this machine; pass it for a known peer. Returns projectRead.changedCount. Uses the same guarded, atomic action as the sidebar. Does not archive threads or stop turns. Prefer this over repeated mutate_thread calls. For several projects in Code Mode, call tools.pwragent__mark_project_read for each and print only aggregate results.";
+      return "Mark every unread thread in one project read in a single call, across all backends and beyond listing limits. Use the exact projectKey from list_instance_projects (directory:<absolute path> for a checkout). Omit instanceId for this machine. Pass it for a known peer. Returns projectRead.changedCount. Uses the same guarded, atomic action as the sidebar. Does not archive threads or stop turns. Prefer this over repeated mutate_thread calls. For several projects in Code Mode, call tools.pwragent__mark_project_read for each and print only aggregate results.";
   }
 }
 
