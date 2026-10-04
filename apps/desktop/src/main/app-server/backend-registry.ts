@@ -10113,13 +10113,22 @@ export class DesktopBackendRegistry {
       startTurn: async (entry) => await this.startTurnNow(entry),
       canSteerThread: (entry) => !this.stoppingRunningTurnsForShutdown
         && !this.threadHasBlockingWorkspaceMove(entry)
-        && this.getActiveTurnForThread(entry) !== undefined,
+        && this.getActiveTurnForThread(entry) !== undefined
+        && this.findReviewForParentTurn({
+          backend: entry.backend,
+          parentThreadId: entry.threadId,
+        })?.mode !== "native",
       steerTurn: async (entry) => {
         const active = this.getActiveTurnForThread(entry);
         if (!active) return undefined;
         const backend = (await this.listBackends({ includeUnavailable: true })).backends
           .find((candidate) => candidate.kind === entry.backend);
         if (!backend?.capabilities.steerTurn) return undefined;
+        // Review ownership can change while backend discovery is pending.
+        if (this.findReviewForParentTurn({
+          backend: entry.backend,
+          parentThreadId: entry.threadId,
+        })?.mode === "native") return undefined;
         try {
           const result = await this.steerTurn({
             backend: entry.backend,

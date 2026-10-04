@@ -718,6 +718,38 @@ describe("grouped queued steering", () => {
     queue.close();
   });
 
+  it.each([false, true])("steers exposed guidance when the blocking head is cancelled (edit suspended: %s)", async (suspended) => {
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({ isThreadActive: () => true, canSteerThread: () => true, startTurn: start, steerTurn: steer });
+    try {
+      await queue.submit(buildEntry({ id: "operator" }));
+      const guidance = await queue.submitGroupedSteer(senderEntry("alice"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(steer).not.toHaveBeenCalled();
+      if (suspended) {
+        const edit = barrier();
+        const entered = barrier();
+        const editing = queue.withDispatchSuspended(target, async () => {
+          expect(queue.cancelEntry("operator")?.id).toBe("operator");
+          entered.release();
+          await edit.promise;
+        });
+        await entered.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(steer).not.toHaveBeenCalled();
+        edit.release();
+        await editing;
+      } else expect(queue.cancelEntry("operator")?.id).toBe("operator");
+      await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+      expect(steer.mock.calls[0]![0].id).toBe(guidance.entry.id);
+      expect(start).not.toHaveBeenCalled();
+      expect(queue.getQueuedEntries(target)).toEqual([]);
+    } finally {
+      queue.close();
+    }
+  });
+
   it("does not overtake an operator turn and holds the line on a steer failure", async () => {
     let active = true;
     const steer = vi.fn(async () => { throw new Error("backend disconnected"); });

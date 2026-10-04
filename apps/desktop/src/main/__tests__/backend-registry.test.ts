@@ -34001,6 +34001,55 @@ command = "pnpm dev"
     },
   );
 
+  it.each(["thread-parent", "thread-review"])(
+    "delivers grouped agent guidance after a native review without holding the queue (%s)",
+    async (reviewThreadId) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "turn/steer", "review/start"] },
+        startReviewResult: { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+      await discoverCodexBackendForTest(registry);
+      const steer = vi.spyOn(registry, "steerTurn");
+      await registry.startReview({
+        backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" },
+      });
+      const first = await registry.submitTurn({
+        backend: "codex", threadId: "thread-parent", input: [{ type: "text", text: "Alice evidence" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "alice" } },
+      });
+      const second = await registry.submitTurn({
+        backend: "codex", threadId: "thread-parent", input: [{ type: "text", text: "Bob evidence" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } },
+      });
+      await registry.submitTurn({ backend: "codex", threadId: "thread-parent", queueEntryId: "operator-next",
+        input: [{ type: "text", text: "Operator follow-up" }],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(first.status).toBe("queued");
+      expect(second.entry.id).toBe(first.entry.id);
+      expect(steer).not.toHaveBeenCalled();
+      expect(codexClient.startTurnCallCount).toBe(0);
+      const entries = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "thread-parent")];
+      expect(entries?.map((entry) => entry.queueEntryId)).toEqual([first.entry.id, "operator-next"]);
+      expect(entries?.some((entry) => entry.manualReleaseRequired)).toBe(false);
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: reviewThreadId, turnId: "review-turn", turn: { id: "review-turn", status: "completed", output: [] },
+      } });
+      await waitForCondition(() => codexClient.startTurnCallCount === 1);
+      const delivered = codexClient.lastStartTurnParams?.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+      expect(delivered).toContain("Alice evidence");
+      expect(delivered).toContain("Bob evidence");
+      expect(steer).not.toHaveBeenCalled();
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-parent", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } });
+      await waitForCondition(() => codexClient.startTurnCallCount === 2);
+      expect(codexClient.lastStartTurnParams?.input).toEqual([{ type: "text", text: "Operator follow-up" }]);
+    },
+  );
+
   it("holds the parent queue after a distinct native review fails", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },

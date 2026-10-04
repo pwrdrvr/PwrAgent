@@ -430,6 +430,7 @@ export class ThreadTurnQueue {
       if (entry) {
         void this.emit({ type: "cancelled", entry, reason });
       }
+      if (index === 0 && queue.length > 0) this.scheduleDrain(key);
       return entry;
     }
     return undefined;
