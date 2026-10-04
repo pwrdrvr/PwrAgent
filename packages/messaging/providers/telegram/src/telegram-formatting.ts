@@ -108,7 +108,7 @@ export function richMessageForTelegramText(
   policy: MessagingMarkdownPolicy = "plain",
   attribution?: MessagingResponseAttribution,
 ): TelegramInputRichMessage | undefined {
-  if (policy === "plain" || Buffer.byteLength(text, "utf8") > TELEGRAM_RICH_MESSAGE_TEXT_LIMIT) {
+  if (policy === "plain") {
     return undefined;
   }
   return richMessageFromTokens(lexTelegramMarkdown(text), attribution);
@@ -121,15 +121,15 @@ function richMessageFromTokens(
 ): TelegramInputRichMessage | undefined {
   const stats = { blocks: 0, structured: false, valid: true };
   inspectRichTokens(tokens, stats);
-  const attributionHtml = telegramAttributionHtml(attribution);
+  const textLength = { characters: 0 };
+  const attributionHtml = telegramAttributionHtml(attribution, textLength);
   if (attributionHtml) stats.blocks += 1;
   if (!stats.valid || stats.blocks > 500 || (media?.length ?? 0) > 50) return undefined;
-  const body = renderBlocks(tokens, "rich");
+  const body = renderBlocks(tokens, "rich", false, textLength);
   if (!stats.structured && Buffer.byteLength(renderBlocks(tokens, "regular").trim(), "utf8") <= TELEGRAM_MESSAGE_TEXT_LIMIT) return undefined;
   const html = [body, attributionHtml ? `<footer>${attributionHtml}</footer>` : ""]
     .filter(Boolean).join("\n");
-  // Counting source bytes (including tags) is deliberately conservative.
-  return Buffer.byteLength(html, "utf8") <= TELEGRAM_RICH_MESSAGE_TEXT_LIMIT
+  return textLength.characters <= TELEGRAM_RICH_MESSAGE_TEXT_LIMIT
     ? { html, ...(media?.length ? { media } : {}) }
     : undefined;
 }
@@ -163,11 +163,14 @@ export function richMessageForTelegramIntent(
   return richMessageFromTokens(tokens, intent.attribution, mediaParts.map(({ id, media }) => ({ id, media })));
 }
 
-function telegramAttributionHtml(attribution: MessagingResponseAttribution | undefined): string {
+function telegramAttributionHtml(
+  attribution: MessagingResponseAttribution | undefined,
+  textLength?: TelegramTextLength,
+): string {
   const label = [attribution?.label, attribution?.hint]
     .map((value) => value?.replace(/\s+/g, " ").trim())
     .filter(Boolean).join(" · ");
-  return label ? `<i>${escapeTelegramHtml(label)}</i>` : "";
+  return label ? `<i>${renderText(label, textLength)}</i>` : "";
 }
 
 function withTelegramAttribution(text: string, attribution: MessagingResponseAttribution | undefined): string {
@@ -312,55 +315,72 @@ function renderContentPart(part: MessagingContentPart): string {
 }
 
 type TelegramHtmlMode = "regular" | "rich";
+type TelegramTextLength = { characters: number };
 
-function renderBlocks(tokens: Token[], mode: TelegramHtmlMode, inQuote = false): string {
+function renderText(text: string, textLength?: TelegramTextLength): string {
+  // Telegram limits rich text by UTF-8 characters (Unicode code points),
+  // including formula source. Count text before escaping, excluding markup,
+  // attributes and the layout whitespace inserted between generated blocks.
+  if (textLength) {
+    for (const _character of text) textLength.characters += 1;
+  }
+  return escapeTelegramHtml(text);
+}
+
+function renderBlocks(
+  tokens: Token[],
+  mode: TelegramHtmlMode,
+  inQuote = false,
+  textLength?: TelegramTextLength,
+): string {
   return tokens.map((item) => {
     const token = item as TelegramRenderToken;
     switch (token.type) {
       case "telegram_details": {
-        const summary = renderInline(token.summary, mode);
-        const body = renderBlocks(token.tokens, mode, inQuote);
+        const summary = renderInline(token.summary, mode, textLength);
+        const body = renderBlocks(token.tokens, mode, inQuote, textLength);
         return mode === "rich" ? `<details${token.open ? " open" : ""}><summary>${summary}</summary>${body}</details>`
           : `${wrapInline("<b>", "</b>", summary, mode)}\n\n${body}`;
       }
       case "telegram_math_block":
-        return mode === "rich" ? `<tg-math-block>${escapeTelegramHtml(token.text)}</tg-math-block>`
-          : `<pre><code>${escapeTelegramHtml(token.text)}</code></pre>`;
+        return mode === "rich" ? `<tg-math-block>${renderText(token.text, textLength)}</tg-math-block>`
+          : `<pre><code>${renderText(token.text, textLength)}</code></pre>`;
       case "telegram_footnote_definition":
-        return token.number === undefined ? escapeTelegramHtml(token.raw.trim()) : "";
+        return token.number === undefined ? renderText(token.raw.trim(), textLength) : "";
       case "telegram_footnote": {
-        const text = renderInline(token.tokens, mode);
-        return mode === "rich" ? `<p><tg-reference name="${token.anchor}">[${token.number}] ${text}</tg-reference></p>`
-          : `[${token.number}] ${text}`;
+        const text = renderInline(token.tokens, mode, textLength);
+        const marker = renderText(`[${token.number}] `, textLength);
+        return mode === "rich" ? `<p><tg-reference name="${token.anchor}">${marker}${text}</tg-reference></p>`
+          : `${marker}${text}`;
       }
       case "telegram_media": {
         const media = token.mediaType === "photo" ? `<img src="tg://photo?id=${token.id}"/>`
           : `<tg-document src="tg://document?id=${token.id}"></tg-document>`;
-        return `<figure>${media}${token.caption ? `<figcaption>${escapeTelegramHtml(token.caption)}</figcaption>` : ""}</figure>`;
+        return `<figure>${media}${token.caption ? `<figcaption>${renderText(token.caption, textLength)}</figcaption>` : ""}</figure>`;
       }
       case "space":
       case "def":
         return "";
       case "paragraph":
       case "text": {
-        const text = token.tokens ? renderInline(token.tokens, mode) : escapeTelegramHtml(token.text);
+        const text = token.tokens ? renderInline(token.tokens, mode, textLength) : renderText(token.text, textLength);
         return mode === "rich" && token.type === "paragraph" ? `<p>${text}</p>` : text;
       }
       case "heading": {
-        const text = renderInline(token.tokens, mode);
+        const text = renderInline(token.tokens, mode, textLength);
         return mode === "rich" ? `<h${token.depth}>${text}</h${token.depth}>`
           : wrapInline("<b>", "</b>", text, mode);
       }
       case "code": {
         const language = token.lang?.split(/\s/)[0];
-        if (mode === "rich" && language === "math") return `<tg-math-block>${escapeTelegramHtml(token.text)}</tg-math-block>`;
+        if (mode === "rich" && language === "math") return `<tg-math-block>${renderText(token.text, textLength)}</tg-math-block>`;
         const attribute = language && /^[a-zA-Z0-9_+.-]{1,64}$/.test(language)
           ? ` class="language-${language}"`
           : "";
-        return `<pre><code${attribute}>${escapeTelegramHtml(token.text)}</code></pre>`;
+        return `<pre><code${attribute}>${renderText(token.text, textLength)}</code></pre>`;
       }
       case "blockquote": {
-        let text = renderBlocks(token.tokens, mode, true);
+        let text = renderBlocks(token.tokens, mode, true, textLength);
         // Regular quotes cannot contain other quotes, code or link entities.
         // Retain their text and the quote rather than emitting invalid nesting.
         if (mode === "regular") {
@@ -370,38 +390,39 @@ function renderBlocks(tokens: Token[], mode: TelegramHtmlMode, inQuote = false):
         return `<blockquote>${text}</blockquote>`;
       }
       case "list":
-        return renderList(token, mode, inQuote);
+        return renderList(token, mode, inQuote, textLength);
       case "table":
-        return renderTable(token, mode);
+        return renderTable(token, mode, textLength);
       case "hr":
         return mode === "rich" ? "<hr/>" : "—";
       default:
         // Source HTML is data, never an instruction to create Telegram tags.
-        return escapeTelegramHtml(token.raw);
+        return renderText(token.raw, textLength);
     }
   }).filter(Boolean).join(mode === "rich" ? "\n" : "\n\n");
 }
 
-function renderInline(tokens: Token[], mode: TelegramHtmlMode): string {
+function renderInline(tokens: Token[], mode: TelegramHtmlMode, textLength?: TelegramTextLength): string {
   return tokens.map((item) => {
     const token = item as TelegramRenderToken;
     switch (token.type) {
       case "telegram_math":
-        return mode === "rich" ? `<tg-math>${escapeTelegramHtml(token.text)}</tg-math>`
-          : `<code>${escapeTelegramHtml(token.text)}</code>`;
+        return mode === "rich" ? `<tg-math>${renderText(token.text, textLength)}</tg-math>`
+          : `<code>${renderText(token.text, textLength)}</code>`;
       case "telegram_footnote_reference":
-        return token.number === undefined ? escapeTelegramHtml(token.raw)
-          : mode === "rich" ? `<a href="#${token.anchor}">[${token.number}]</a>` : `[${token.number}]`;
+        return token.number === undefined ? renderText(token.raw, textLength)
+          : mode === "rich" ? `<a href="#${token.anchor}">${renderText(`[${token.number}]`, textLength)}</a>`
+            : renderText(`[${token.number}]`, textLength);
       case "strong":
       case "em":
       case "del": {
         const tag = token.type === "strong" ? "b" : token.type === "em" ? "i" : "s";
-        return wrapInline(`<${tag}>`, `</${tag}>`, renderInline(token.tokens, mode), mode);
+        return wrapInline(`<${tag}>`, `</${tag}>`, renderInline(token.tokens, mode, textLength), mode);
       }
       case "codespan":
-        return `<code>${escapeTelegramHtml(token.text)}</code>`;
+        return `<code>${renderText(token.text, textLength)}</code>`;
       case "link": {
-        const label = renderInline(token.tokens, mode);
+        const label = renderInline(token.tokens, mode, textLength);
         // GFM also creates link tokens for bare URLs, email addresses and
         // www-prefixed filenames. Only source link syntax creates anchors.
         if (!token.raw.startsWith("[") && !token.raw.startsWith("<")) return label;
@@ -413,16 +434,17 @@ function renderInline(tokens: Token[], mode: TelegramHtmlMode): string {
         return wrapInline(`<a href="${href}">`, "</a>", label, mode);
       }
       case "image":
-        return escapeTelegramHtml(token.text);
+        return renderText(token.text, textLength);
       case "br":
+        if (textLength) textLength.characters += 1;
         return mode === "rich" ? "<br>" : "\n";
       case "text":
-        return token.tokens ? renderInline(token.tokens, mode) : escapeTelegramHtml(token.text);
+        return token.tokens ? renderInline(token.tokens, mode, textLength) : renderText(token.text, textLength);
       case "escape":
       case "html":
-        return escapeTelegramHtml(token.text);
+        return renderText(token.text, textLength);
       default:
-        return escapeTelegramHtml(token.raw);
+        return renderText(token.raw, textLength);
     }
   }).join("");
 }
@@ -435,9 +457,14 @@ function wrapInline(open: string, close: string, text: string, mode: TelegramHtm
   ).join("");
 }
 
-function renderList(list: Tokens.List, mode: TelegramHtmlMode, inQuote: boolean): string {
+function renderList(
+  list: Tokens.List,
+  mode: TelegramHtmlMode,
+  inQuote: boolean,
+  textLength?: TelegramTextLength,
+): string {
   const items = list.items.map((item, index) => {
-    const text = renderBlocks(item.tokens, mode, inQuote);
+    const text = renderBlocks(item.tokens, mode, inQuote, textLength);
     if (mode === "rich") {
       const checkbox = item.task ? `<input type="checkbox"${item.checked ? " checked" : ""}>` : "";
       return `<li>${checkbox}${text}</li>`;
@@ -456,11 +483,11 @@ function renderList(list: Tokens.List, mode: TelegramHtmlMode, inQuote: boolean)
   return `<${tag}${start}>${items.join("")}</${tag}>`;
 }
 
-function renderTable(table: Tokens.Table, mode: TelegramHtmlMode): string {
+function renderTable(table: Tokens.Table, mode: TelegramHtmlMode, textLength?: TelegramTextLength): string {
   if (mode === "rich") {
     const row = (cells: Tokens.TableCell[], tag: "th" | "td") => `<tr>${cells.map((cell, index) => {
       const align = table.align[index] ? ` align="${table.align[index]}"` : "";
-      return `<${tag}${align}>${renderInline(cell.tokens, mode)}</${tag}>`;
+      return `<${tag}${align}>${renderInline(cell.tokens, mode, textLength)}</${tag}>`;
     }).join("")}</tr>`;
     return `<table bordered striped compact>${row(table.header, "th")}${table.rows.map((cells) => row(cells, "td")).join("")}</table>`;
   }

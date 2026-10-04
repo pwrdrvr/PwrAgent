@@ -406,10 +406,19 @@ describe("TelegramAdapter rich messages", () => {
   it("leaves ordinary formatting and oversized structured messages on the regular path", async () => {
     const { adapter, send, rich } = harness();
     await adapter.deliver({ ...intent, parts: [{ type: "text", text: "**bold** and `code`", markdown: "markdown" }] });
-    await adapter.deliver({ ...intent, parts: [{ type: "text", text: `# Large\n\n${"🙂".repeat(9000)}`, markdown: "markdown" }] });
+    await adapter.deliver({ ...intent, parts: [{ type: "text", text: `# Large\n\n${"x".repeat(32768)}`, markdown: "markdown" }] });
     expect(send.mock.calls.length).toBeGreaterThan(2);
     expect(send.mock.calls.every(([request]) => Buffer.byteLength(request.text, "utf8") <= 4096)).toBe(true);
     expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("delivers 32768 Unicode characters in one rich message", async () => {
+    const { adapter, send, rich } = harness();
+    const text = "🙂".repeat(32768);
+    const result = await adapter.deliver({ ...intent, parts: [{ type: "text", text: `# ${text}`, markdown: "markdown" }] });
+    expect(result.outcome).toBe("presented");
+    expect(rich).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rich_message: { html: `<h1>${text}</h1>` } }));
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("delivers a long regular response without attempting an empty trailing chunk", async () => {
@@ -459,6 +468,23 @@ describe("TelegramAdapter rich messages", () => {
     expect(edit.mock.calls[0]?.[0].text).toContain("<i>Bound thread: Downloads</i>");
     expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
     expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<footer><i>Bound thread: Downloads</i></footer>");
+  });
+
+  it("finalizes 32768 Unicode characters in the existing stream bubble", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const stream = {
+      id: "long-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "Starting", markdown: "markdown" as const,
+      stream: { key: "long-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const text = "界".repeat(32768);
+    const result = await adapter.deliver({ ...stream, text, stream: { ...stream.stream, sequence: 2, isFinal: true } });
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(edit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message_id: 200, rich_message: { html: `<p>${text}</p>` } }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
   });
 
   it("uses one request for rich final content in the last group stream budget slot", async () => {

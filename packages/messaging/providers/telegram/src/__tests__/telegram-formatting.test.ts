@@ -8,6 +8,7 @@ import {
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   TELEGRAM_MESSAGE_TEXT_LIMIT,
+  TELEGRAM_RICH_MESSAGE_TEXT_LIMIT,
   textForTelegramIntent,
 } from "../telegram-formatting.ts";
 
@@ -222,6 +223,69 @@ describe("telegram formatting", () => {
     ].join("\n");
     expect(richMessageForTelegramText(table(21), "markdown")).toBeUndefined();
     expect(richMessageForTelegramText(table(20), "markdown")).toBeDefined();
+  });
+
+  it.each(["x", "界", "🙂"])("allows exactly 32768 rendered characters for %s", (character) => {
+    const text = character.repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT);
+    expect(richMessageForTelegramText(`# ${text}`, "markdown")?.html).toBe(`<h1>${text}</h1>`);
+    expect(richMessageForTelegramText(`# ${text}${character}`, "markdown")).toBeUndefined();
+  });
+
+  it("excludes Markdown syntax, HTML tags and link destinations from the rich text budget", () => {
+    const text = "x".repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT);
+    const url = `https://example.com/${"a".repeat(800)}`;
+    expect(richMessageForTelegramText(`[**${text}**](${url})`, "markdown")?.html)
+      .toBe(`<p><a href="${url}"><b>${text}</b></a></p>`);
+    expect(richMessageForTelegramText(`[**${text}x**](${url})`, "markdown")).toBeUndefined();
+    const combining = "e\u0301".repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT / 2);
+    expect(richMessageForTelegramText(`# ${combining}`, "markdown")).toBeDefined();
+    expect(richMessageForTelegramText(`# ${combining}x`, "markdown")).toBeUndefined();
+  });
+
+  it("counts escaped text across parts and the attribution footer without block layout whitespace", () => {
+    const text = "<>&".repeat(10922);
+    const intent = {
+      id: "rich-text-budget", kind: "message", createdAt: 1, role: "assistant",
+      parts: [{ type: "text", text }, { type: "text", text: "<" }],
+      attribution: { label: "🙂" },
+    } satisfies Parameters<typeof richMessageForTelegramIntent>[0];
+    expect(richMessageForTelegramIntent(intent)?.html)
+      .toBe(`<p>${escapeTelegramHtml(text)}</p>\n<p>&lt;</p>\n<footer><i>🙂</i></footer>`);
+    expect(richMessageForTelegramIntent({ ...intent, attribution: { label: "🙂x" } })).toBeUndefined();
+  });
+
+  it("counts native table cells, details summaries and formula source", () => {
+    const text = "x".repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT - 1);
+    expect(richMessageForTelegramText(`| H |\n| --- |\n| ${text} |`, "markdown")).toBeDefined();
+    expect(richMessageForTelegramText(`| H |\n| --- |\n| ${text}x |`, "markdown")).toBeUndefined();
+    const details = (body: string) => `<details><summary>S</summary>\n\n$$\n${body}\n$$\n\n</details>`;
+    expect(richMessageForTelegramText(details(text), "markdown")).toBeDefined();
+    expect(richMessageForTelegramText(details(`${text}x`), "markdown")).toBeUndefined();
+  });
+
+  it("counts code and footnotes without fence syntax, languages or anchor attributes", () => {
+    const code = "🙂".repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT);
+    expect(richMessageForTelegramText(`\`\`\`python\n${code}\n\`\`\``, "markdown")?.html)
+      .toBe(`<pre><code class="language-python">${code}</code></pre>`);
+    expect(richMessageForTelegramText(`\`\`\`python\n${code}x\n\`\`\``, "markdown")).toBeUndefined();
+    const note = "x".repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT - 8);
+    expect(richMessageForTelegramText(`R[^a]\n\n[^a]: ${note}`, "markdown")).toBeDefined();
+    expect(richMessageForTelegramText(`R[^a]\n\n[^a]: ${note}x`, "markdown")).toBeUndefined();
+  });
+
+  it("includes media captions in the shared rich text budget", () => {
+    const intent = {
+      id: "rich-caption-budget", kind: "message", createdAt: 1, role: "assistant",
+      parts: [
+        { type: "text", text: "x".repeat(TELEGRAM_RICH_MESSAGE_TEXT_LIMIT - 1) },
+        { type: "image", url: "https://example.com/photo.png", alt: "🙂" },
+      ],
+    } satisfies Parameters<typeof richMessageForTelegramIntent>[0];
+    const media = [{ partIndex: 1, id: "part_1", media: { type: "photo" as const, media: "https://example.com/photo.png" } }];
+    expect(richMessageForTelegramIntent(intent, media)).toBeDefined();
+    expect(richMessageForTelegramIntent({
+      ...intent, parts: [intent.parts[0]!, { type: "image", url: "https://example.com/photo.png", alt: "🙂x" }],
+    }, media)).toBeUndefined();
   });
 
   it("uses rich delivery for code, quotes, lists and long answers", () => {
