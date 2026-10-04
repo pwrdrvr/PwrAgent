@@ -1,12 +1,19 @@
 # Native live voice
 
 Opt-in experimental voice runs on Codex `thread/realtime/start`. It has two
-modes. Both use the same realtime session, and only one session runs at a time.
+backend modes. Only director voice has a visible start control. Both modes use
+the same realtime session, and only one session runs at a time.
 
 ## Thread voice
 
-Thread voice talks to one local Codex coding thread. The **Voice** mic toggle in
-that thread's composer starts it. While it runs, a bar docked above the composer
+Thread voice talks to one local Codex coding thread. Its composer mic is hidden
+until a transcription-only path can fill the draft without starting agent work
+or speaking an assistant reply. Composers on launchpads, peer threads, and other
+providers also omit their director voice fallback mic. Start director voice from
+the window actions or its keyboard shortcut instead.
+
+The composer retains controls for an already-open thread voice session, including
+a session whose stop failed. While it runs, a bar docked above the composer
 shows an accent **Microphone live** state with a level meter, the session
 clock, the last line spoken, the microphone toggle, **Transcript**, and **End
 voice**. **Transcript** opens the
@@ -19,16 +26,9 @@ Leaving the thread ends its voice. A failed stop stays visible on the composer
 the window lands on, so **End voice** can be retried there.
 
 Thread voice runs on this machine's Codex App Server, and its handoffs run
-turns in that thread, so it opens only on a local Codex thread. Everywhere else
-the composer's **Voice** mic starts director voice instead, and its tooltip says
-what that will do:
-
-- On a new-thread launchpad, say what the thread should do. Director voice
-  creates the thread in that project, on the launchpad's machine, with the
-  settings the composer shows. Those settings are the launchpad's saved draft,
-  which `create_instance_thread` applies.
-- On a peer's thread, or a thread on another provider, director voice talks to
-  that thread through the thread tools.
+turns in that thread. It is conversational voice, not composer dictation.
+Director voice can create a thread from the focused launchpad's settings or
+talk to a peer's thread or another provider through the thread tools.
 
 ## Director voice
 
