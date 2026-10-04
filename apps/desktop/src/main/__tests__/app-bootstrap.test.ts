@@ -153,6 +153,9 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
     setTitle: browserWindowState.setTitle,
     show: browserWindowState.show,
     webContents: {
+      id: BrowserWindowMock.mock.calls.length,
+      isDestroyed: () => false,
+      reload: vi.fn(),
       send: browserWindowState.send,
       on: browserWindowState.webContentsOn,
       once: browserWindowState.webContentsOnce,

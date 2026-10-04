@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import { resolve } from "node:path";
+import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import type {
   applyRememberedLinuxPasswordStore,
@@ -13,7 +14,7 @@ const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 // Captures the listeners createMainWindow's return value registers via
 // `window.on(...)` — lets tests drive the main window's "close" handler
 // (quit-on-main-window-close).
-const mainRendererHandlers = new Map<string, (...args: unknown[]) => void>();
+const mainRenderer = new EventEmitter();
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const installWindowFrameSyncMock = vi.fn();
 const wireWindowControlsBridgeMock = vi.fn();
@@ -702,13 +703,13 @@ describe("bootstrapApp", () => {
       },
     );
     mainWindowHandlers.clear();
-    mainRendererHandlers.clear();
+    mainRenderer.removeAllListeners();
     createMainWindowMock.mockReset();
     // createMainWindow returns the BrowserWindow; index.ts wraps each call in
     // quitAppOnMainWindowClose(window), which calls window.on("close", …).
     // Return a stub that records its listeners so tests can invoke them.
     createMainWindowMock.mockImplementation(() => ({
-      webContents: { on: (event: string, handler: (...args: unknown[]) => void) => mainRendererHandlers.set(event, handler) },
+      webContents: mainRenderer,
       on: (event: string, handler: (...args: unknown[]) => void) => {
         mainWindowHandlers.set(event, handler);
       },
@@ -1412,39 +1413,34 @@ describe("bootstrapApp", () => {
     expect(installWindowFrameSyncMock).toHaveBeenCalledWith(app);
   });
 
-  it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction"])(
-    "shuts down resources without a renderer confirmation after %s", async (reason) => {
+  it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction", "clean-exit"])(
+    "retains main-owned resources after renderer %s", async (reason) => {
       startupProfilerInstance.start.mockResolvedValue();
       await import("../index");
       await flushMicrotasks();
       requestQuitMock.mockClear();
-      mainRendererHandlers.get("render-process-gone")!({}, { reason, exitCode: 1 });
+      mainRenderer.emit("render-process-gone", {}, { reason, exitCode: 1 });
       await flushMicrotasks();
       expect(requestQuitMock).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalled());
-      await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
-      expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
-      expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+      expect(disposeDesktopMessagingRuntimeMock).not.toHaveBeenCalled();
+      expect(disposeDesktopFederationRuntimeMock).not.toHaveBeenCalled();
+      expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
+      expect(disposeAgentIpcHandlersMock).not.toHaveBeenCalled();
+      expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+      expect(quitMock).not.toHaveBeenCalled();
     },
   );
 
-  it("renderer loss bypasses an unanswered quit confirmation", async () => {
+  it("renderer loss does not approve an unanswered quit confirmation", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     await import("../index");
     await flushMicrotasks();
     requestQuitMock.mockReturnValue(new Promise(() => {}));
     mainWindowHandlers.get("close")!({ preventDefault: vi.fn() });
-    mainRendererHandlers.get("render-process-gone")!({}, { reason: "oom", exitCode: 1 });
-    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
-    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not shut down for a clean renderer exit", async () => {
-    startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    mainRenderer.emit("render-process-gone", {}, { reason: "oom", exitCode: 1 });
     await flushMicrotasks();
-    mainRendererHandlers.get("render-process-gone")!({}, { reason: "clean-exit", exitCode: 0 });
-    await flushMicrotasks();
+    expect(quitMock).not.toHaveBeenCalled();
+    expect(disposeDesktopMessagingRuntimeMock).not.toHaveBeenCalled();
     expect(disposeDesktopFederationRuntimeMock).not.toHaveBeenCalled();
   });
 
