@@ -395,8 +395,11 @@ importers:
         specifier: workspace:*
         version: link:../../interface
       grammy:
-        specifier: ^1.42.0
+        specifier: ^1.46.0
         version: 1.46.0(encoding@0.1.13)
+      marked:
+        specifier: 16.4.2
+        version: 16.4.2
     devDependencies:
       vitest:
         specifier: ^4.1.4

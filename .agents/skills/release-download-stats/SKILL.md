@@ -53,7 +53,7 @@ polls.
 
 ## Common Commands
 
-Print markdown tables:
+Inspect the script's terminal report:
 
 ```bash
 python3 .agents/skills/release-download-stats/scripts/release_download_stats.py beta.22 beta.21 beta.20
@@ -64,3 +64,28 @@ Emit JSON for further processing:
 ```bash
 python3 .agents/skills/release-download-stats/scripts/release_download_stats.py --json --latest 10
 ```
+
+## Telegram Responses
+
+For Telegram, summarize asset groups as a short stacked list with a heading,
+total downloads and GiB, then one bullet per group. Include deltas only when a
+previous snapshot is available. For example:
+
+```text
+Since September 29
++43 downloads · +8.36 GiB
+
+Asset groups
+• mac updater ZIP — 177 (+12)
+• stable DMG — 96 (+3)
+• versioned DMG — 116 (+22)
+• stable Windows setup — 10 (+1)
+• versioned Windows setup — 72 (+5)
+```
+
+Keep the interpretation caveats as a normal paragraph. Do not paste the
+script's Markdown pipe tables or use a fixed-width alignment grid in a Telegram
+response. Native rich tables may be used for structured detail. The adapter
+attempts rich delivery first and generates readable regular content if the API
+rejects the payload. Do not send a duplicate list alongside the native table.
+Older clients can display an update placeholder for rich messages.
