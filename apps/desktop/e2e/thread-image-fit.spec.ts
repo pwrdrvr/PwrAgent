@@ -393,7 +393,14 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
     await app.window.getByAltText("Interactive flamegraph").click();
     await expect(app.window.getByText("This SVG has interactive controls")).toBeVisible();
-    await app.window.getByRole("button", { name: "Interact with SVG" }).click();
+    // The picture itself is the way in, and its scripts wait for the notice.
+    const lightbox = app.window.getByRole("dialog", { name: "Expanded image" });
+    await lightbox.getByRole("img", { name: "Interactive flamegraph" }).click();
+    const notice = app.window.getByRole("dialog", { name: "Run this SVG\u2019s scripts?" });
+    await expect(notice.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await expect(app.window.locator('iframe[title="Interactive SVG: Interactive flamegraph"]')).toHaveCount(0);
+    await notice.getByRole("button", { name: "Run scripts" }).click();
+    await expect(notice).toBeHidden();
     const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
     await expect(frame.locator("#state")).toHaveText("Ready");
     await frame.locator("#frame").hover();
@@ -489,6 +496,7 @@ for (const shape of INTERACTIVE_SVG_SHAPES) {
       await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
       await app.window.getByAltText("Aspect flame graph").click();
       await app.window.getByRole("button", { name: "Interact with SVG" }).click();
+      await app.window.getByRole("button", { name: "Run scripts" }).click();
       const frame = app.window.frameLocator('iframe[title="Interactive SVG: Aspect flame graph"]');
       const root = frame.locator("body > svg");
       await expect(root).toBeVisible();

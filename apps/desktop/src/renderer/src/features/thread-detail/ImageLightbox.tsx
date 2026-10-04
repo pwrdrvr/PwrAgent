@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronLeftIcon,
@@ -21,6 +21,7 @@ import {
 import { TranscriptImage } from "./TranscriptImage";
 import { interactiveSvgDocument } from "./interactive-svg-document";
 import { loadImageBlob } from "../../lib/load-image-blob";
+import { useInteractiveSvgPreferences } from "../../lib/interactive-svg-preferences";
 
 type ImageLightboxProps = {
   /** Image source — a data URL or any resolvable URL. */
@@ -273,6 +274,25 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     onDismiss: () => setSvgSearchOpen(false),
     surfaceRef: search,
   });
+  const preferences = useInteractiveSvgPreferences();
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [noticeSkip, setNoticeSkip] = useState(false);
+  const [noticeAutoOpen, setNoticeAutoOpen] = useState(false);
+  const [noticeSaving, setNoticeSaving] = useState(false);
+  const [noticeError, setNoticeError] = useState(false);
+  const notice = useRef<HTMLDivElement>(null);
+  const noticeOpener = useRef<HTMLElement | null>(null);
+  const noticeTitleId = useId();
+  const noticeBodyId = useId();
+  /** Where a press on the image began, so a pan is not read as a click. */
+  const imagePress = useRef<{ x: number; y: number } | null>(null);
+  const autoOpened = useRef(false);
+  const closeNotice = (): void => {
+    setNoticeOpen(false);
+    if (noticeOpener.current?.isConnected) noticeOpener.current.focus();
+    noticeOpener.current = null;
+  };
+  useDismissableLayer({ open: noticeOpen, onDismiss: closeNotice, surfaceRef: notice });
 
   useEffect(() => {
     if (!interactiveSvg) return;
@@ -297,6 +317,12 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     })();
     return () => controller.abort();
   }, [interactiveSvg, src]);
+  // Once per image: Preview after an automatic open stays on the preview.
+  useEffect(() => {
+    if (!svgDocument || !preferences.autoOpen || autoOpened.current) return;
+    autoOpened.current = true;
+    setSvgActive(true);
+  }, [preferences.autoOpen, svgDocument]);
   useEffect(() => {
     if (!svgActive) return;
     const handleMessage = (event: MessageEvent) => {
@@ -316,10 +342,47 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     return () => window.removeEventListener("message", handleMessage);
   }, [onClose, svgActive, svgSearchOpen]);
 
-  const toggleInteractiveSvg = (): void => {
-    setSvgActive((active) => !active);
+  const startInteractiveSvg = (): void => {
+    setNoticeOpen(false);
+    noticeOpener.current = null;
+    setSvgSearchOpen(false);
+    setSvgActive(true);
+  };
+  const showPreview = (): void => {
+    setSvgActive(false);
     setSvgSearchOpen(false);
   };
+  /** The SVG's scripts are untrusted code, so they run only once the operator
+   *  has accepted the notice, here or in an earlier "Don't ask again". */
+  const requestInteractiveSvg = (): void => {
+    if (preferences.skipNotice || preferences.autoOpen) {
+      startInteractiveSvg();
+      return;
+    }
+    noticeOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setNoticeSkip(false);
+    setNoticeAutoOpen(false);
+    setNoticeError(false);
+    setNoticeOpen(true);
+  };
+  const acceptNotice = async (): Promise<void> => {
+    const patch = {
+      ...(noticeSkip || noticeAutoOpen ? { interactiveSvgSkipNotice: true } : {}),
+      ...(noticeAutoOpen ? { interactiveSvgAutoOpen: true } : {}),
+    };
+    if (preferences.save && Object.keys(patch).length > 0) {
+      setNoticeSaving(true);
+      setNoticeError(false);
+      const saved = await preferences.save(patch).catch(() => false);
+      setNoticeSaving(false);
+      if (!saved) {
+        setNoticeError(true);
+        return;
+      }
+    }
+    startInteractiveSvg();
+  };
+  const interactOnClick = Boolean(svgDocument) && !svgActive;
 
   return <>
     {/* Focus, not hover: this box is the scrim, so a hover tooltip would pop
@@ -344,7 +407,22 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
         <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
           data-panning={gestures.panning} draggable={false} onDragStart={(event) => event.preventDefault()}
           onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle}
-          {...gestures.imageHandlers} />
+          {...gestures.imageHandlers}
+          {...(interactOnClick ? tooltipHandlers(tooltip, "Click to interact") : {})}
+          onPointerDown={(event) => {
+            imagePress.current = { x: event.clientX, y: event.clientY };
+            if (interactOnClick) tooltip.hide();
+            gestures.imageHandlers.onPointerDown(event);
+          }}
+          onClick={interactOnClick ? (event) => {
+            const start = imagePress.current;
+            imagePress.current = null;
+            // A press that travelled is a pan, the image's other gesture.
+            if (!start || event.detail === 0) return;
+            if (Math.abs(event.clientX - start.x) > DISMISS_SLOP) return;
+            if (Math.abs(event.clientY - start.y) > DISMISS_SLOP) return;
+            requestInteractiveSvg();
+          } : undefined} />
       )}
       {svgActive && svgSearchOpen ? (
         <form ref={search} className="image-lightbox__svg-search" onSubmit={(event) => {
@@ -399,7 +477,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
         {svgDocument ? (
           <button type="button" className={`image-lightbox__tool image-lightbox__tool--labelled${svgActive ? "" : " image-lightbox__tool--interactive-available"}`}
             aria-label={svgActive ? "Show image preview" : "Interact with SVG"}
-            onClick={toggleInteractiveSvg}
+            onClick={svgActive ? showPreview : requestInteractiveSvg}
             {...tooltipHandlers(tooltip, svgActive ? "Show image preview" : "Use SVG hover, zoom, and search controls in an isolated view")}>
             {svgActive ? "Preview" : "Interact"}
           </button>
@@ -408,5 +486,45 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
         {actions}
       </div>
     </div>
+    {noticeOpen ? (
+      <div ref={notice} className="image-lightbox__svg-notice" role="dialog"
+        aria-labelledby={noticeTitleId} aria-describedby={noticeBodyId}>
+        <p id={noticeTitleId} className="image-lightbox__svg-notice-title">Run this SVG&rsquo;s scripts?</p>
+        <p id={noticeBodyId} className="image-lightbox__svg-notice-body">
+          This SVG contains code. PwrAgent runs it in an isolated frame with no network or file
+          access, but malicious code can break out of isolation. Run it only if you trust where it
+          came from: you accept the risk of running it on this computer.
+        </p>
+        {preferences.save ? <>
+          <label className="composer__checkbox image-lightbox__svg-notice-option">
+            <input type="checkbox" checked={noticeSkip || noticeAutoOpen}
+              disabled={noticeSaving || noticeAutoOpen}
+              onChange={(event) => setNoticeSkip(event.currentTarget.checked)} />
+            <span>Don&rsquo;t ask again</span>
+          </label>
+          <label className="composer__checkbox image-lightbox__svg-notice-option">
+            <input type="checkbox" checked={noticeAutoOpen} disabled={noticeSaving}
+              onChange={(event) => setNoticeAutoOpen(event.currentTarget.checked)} />
+            <span>Open SVGs ready to use from now on</span>
+          </label>
+        </> : null}
+        {noticeError ? (
+          <p className="image-lightbox__svg-notice-error" role="alert">
+            Couldn&rsquo;t save that choice. Try again, or clear the checkboxes to run it once.
+          </p>
+        ) : null}
+        <div className="image-lightbox__svg-notice-actions">
+          {/* Focus starts on the safe choice, not on running the code. */}
+          <button type="button" className="image-lightbox__tool image-lightbox__tool--labelled"
+            autoFocus onClick={closeNotice}>
+            Cancel
+          </button>
+          <button type="button" className="image-lightbox__svg-notice-run" disabled={noticeSaving}
+            onClick={() => { void acceptNotice(); }}>
+            Run scripts
+          </button>
+        </div>
+      </div>
+    ) : null}
   </>;
 }

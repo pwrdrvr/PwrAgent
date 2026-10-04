@@ -117,6 +117,10 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
+  onInteractiveSvgChange: (patch: {
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
+  }) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -128,6 +132,9 @@ export function GeneralSettings(props: {
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd =
     props.snapshot.general.attentionPromoteOnTurnEnd;
+  const interactiveSvgSkipNotice =
+    props.snapshot.general.interactiveSvgSkipNotice;
+  const interactiveSvgAutoOpen = props.snapshot.general.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const messagingAcknowledgment =
@@ -219,6 +226,38 @@ export function GeneralSettings(props: {
             source={sourceBadge(attentionPromoteOnTurnEnd)}
             onChange={(next) => {
               return props.onAttentionPromoteOnTurnEndChange(next);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="Interactive SVGs"
+        chip={sourceBadge(interactiveSvgAutoOpen)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={interactiveSvgAutoOpen.value}
+            disabled={props.saving}
+            label="Open SVGs with scripts ready to use"
+            sub="Skip the static preview and run an SVG's own hover, zoom, and search controls as soon as it opens. Its scripts run in an isolated frame with no network or file access, but isolation is not a guarantee against malicious code."
+            source={sourceBadge(interactiveSvgAutoOpen)}
+            onChange={(next) => {
+              return props.onInteractiveSvgChange({ interactiveSvgAutoOpen: next });
+            }}
+          />
+          <ToggleField
+            checked={!interactiveSvgSkipNotice.value && !interactiveSvgAutoOpen.value}
+            disabled={props.saving}
+            label="Ask before running an SVG's scripts"
+            sub="Clicking an SVG with scripts shows a notice before they run."
+            lockedReason={interactiveSvgAutoOpen.value
+              ? "Off while SVGs open ready to use: opening one runs its scripts."
+              : undefined}
+            source={sourceBadge(interactiveSvgSkipNotice)}
+            onChange={(next) => {
+              return props.onInteractiveSvgChange({ interactiveSvgSkipNotice: !next });
             }}
           />
         </div>

@@ -2932,6 +2932,46 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults both interactive SVG preferences off and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettingsProjection();
+    expect(initial.general.interactiveSvgSkipNotice).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(initial.general.interactiveSvgAutoOpen).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        interactiveSvgSkipNotice: true,
+        interactiveSvgAutoOpen: true,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("interactive_svg_skip_notice = true");
+    expect(saved).toContain("interactive_svg_auto_open = true");
+    const projected = await service.readSettingsProjection();
+    expect(projected.general.interactiveSvgSkipNotice).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(projected.general.interactiveSvgAutoOpen).toEqual({
+      value: true,
+      source: "config",
+    });
+  });
+
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

@@ -699,6 +699,17 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
   /**
+   * Skip the notice the image lightbox shows before an SVG's own scripts run
+   * in its isolated frame. The notice's "Don't ask again" sets this.
+   */
+  interactiveSvgSkipNotice: DesktopSettingsValue<boolean>;
+  /**
+   * Open an SVG that has scripts or hover styles straight into its
+   * interactive frame, instead of the static preview. Implies the notice was
+   * accepted: the lightbox does not ask before running it.
+   */
+  interactiveSvgAutoOpen: DesktopSettingsValue<boolean>;
+  /**
    * Whether the profile runs the PwrAgent-managed MCP connection gateway.
    *
    * Off stops the gateway, withholds every managed connection from new
@@ -1427,6 +1438,8 @@ export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;

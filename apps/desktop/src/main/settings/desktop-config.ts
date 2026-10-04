@@ -99,6 +99,8 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -634,6 +636,18 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "attention_promote_on_turn_end"],
       patch.general.attentionPromoteOnTurnEnd,
+    );
+  }
+  if (patch.general?.interactiveSvgSkipNotice !== undefined) {
+    set(
+      ["general", "interactive_svg_skip_notice"],
+      patch.general.interactiveSvgSkipNotice,
+    );
+  }
+  if (patch.general?.interactiveSvgAutoOpen !== undefined) {
+    set(
+      ["general", "interactive_svg_auto_open"],
+      patch.general.interactiveSvgAutoOpen,
     );
   }
   if (patch.general?.mcpGatewayEnabled !== undefined) {
@@ -1866,6 +1880,10 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
+      interactiveSvgSkipNotice: readBoolean(
+        general?.interactive_svg_skip_notice,
+      ),
+      interactiveSvgAutoOpen: readBoolean(general?.interactive_svg_auto_open),
       mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
@@ -2305,6 +2323,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
+  const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
+  const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
@@ -2326,6 +2346,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
+    interactiveSvgSkipNotice !== undefined ||
+    interactiveSvgAutoOpen !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
@@ -2365,6 +2387,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (attentionPromoteOnTurnEnd !== undefined) {
       pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
+    }
+    if (interactiveSvgSkipNotice !== undefined) {
+      pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;
+    }
+    if (interactiveSvgAutoOpen !== undefined) {
+      pruned.general.interactiveSvgAutoOpen = interactiveSvgAutoOpen;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;

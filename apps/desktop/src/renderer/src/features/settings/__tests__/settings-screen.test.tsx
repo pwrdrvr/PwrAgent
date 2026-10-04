@@ -164,6 +164,8 @@ function createSnapshot(
       },
       codexProfileModel: { value: "shared", source: "default" },
       messagingAcknowledgment: { value: null, source: "default" },
+      interactiveSvgSkipNotice: { value: false, source: "default" },
+      interactiveSvgAutoOpen: { value: false, source: "default" },
     },
     onboarding: {
       completed: { value: true, source: "default" },
@@ -1313,6 +1315,29 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           attentionPromoteOnTurnEnd: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", { name: "Ask before running an SVG's scripts" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Ask before running an SVG's scripts" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          interactiveSvgSkipNotice: true,
+        },
+      });
+    });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Open SVGs with scripts ready to use" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          interactiveSvgAutoOpen: true,
         },
       });
     });
