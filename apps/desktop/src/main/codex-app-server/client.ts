@@ -688,6 +688,44 @@ function logSkillsChangedNotification(params: {
   });
 }
 
+/**
+ * One line per MCP approval or login request, so a repeated prompt can be
+ * traced to what Codex asked for. `_meta` carries the tool's arguments, which
+ * can hold queries, paths, typed text, or tokenized URLs, so only the keys
+ * and Codex's own descriptors are logged, never a parameter value or the URL.
+ * Computer Use writes its own title ("Allow Computer Use to use "Electron"?"),
+ * which names the app; any other server may put arguments in the title.
+ */
+function logMcpElicitationRequest(params: unknown, requestId: string | undefined): void {
+  const record = asRecord(params);
+  const meta = asRecord(record?.["_meta"]);
+  const serverName = readStringFromRecord(record, "serverName");
+  const persist = meta?.["persist"];
+  const toolParamsDisplay = Array.isArray(meta?.["tool_params_display"])
+    ? meta["tool_params_display"] as unknown[]
+    : [];
+  codexClientLog.info("MCP elicitation request", {
+    threadId: readStringFromRecord(record, "threadId"),
+    turnId: readStringFromRecord(record, "turnId"),
+    requestId,
+    serverName,
+    mode: readStringFromRecord(record, "mode"),
+    approvalKind: readStringFromRecord(meta, "codex_approval_kind"),
+    connectorId: readStringFromRecord(meta, "connector_id"),
+    connectorName: readStringFromRecord(meta, "connector_name"),
+    riskLevel: readStringFromRecord(meta, "riskLevel"),
+    persist: typeof persist === "string" ? [persist] : readStringArray(persist),
+    paramNames: toolParamsDisplay.flatMap((entry) => {
+      const name = pickString(asRecord(entry) ?? {}, ["name", "key", "label", "display_name"]);
+      return name ? [name] : [];
+    }),
+    metaKeys: meta ? Object.keys(meta) : [],
+    ...(serverName === "cua_repl"
+      ? { message: readStringFromRecord(record, "message") }
+      : {}),
+  });
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -7816,6 +7854,10 @@ export class CodexAppServerClient {
           reportedNotificationMethods: this.reportedUnknownNotificationMethods,
         });
         throw new Error(`No desktop request handler registered for ${method}`);
+      }
+
+      if (method === "mcpServer/elicitation/request") {
+        logMcpElicitationRequest(params, rpcId == null ? undefined : String(rpcId));
       }
 
       if (!isHandledServerRequestMethod(method)) {

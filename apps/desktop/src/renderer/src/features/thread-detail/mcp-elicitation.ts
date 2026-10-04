@@ -88,6 +88,28 @@ export type PendingMcpInteractionState = {
 
 type FieldValue = string | number | boolean | string[] | null;
 
+export type McpApprovalPersistence = "session" | "always";
+
+// This is a server-owned grant, not a client cache of approvals. Only offer
+// scopes advertised by an approval request; forms and login flows need input.
+export function readMcpApprovalPersistence(state: PendingMcpInteractionState): McpApprovalPersistence[] {
+  if (state.mode !== "form" || !state.form?.empty) {
+    return [];
+  }
+  const meta = state._meta;
+  const isApproval = meta?.codex_approval_kind === "mcp_tool_call"
+    || ((state.serverName === "browser" || state.serverName === "browser-use")
+      && typeof meta?.origin === "string" && meta.origin.trim().length > 0);
+  if (!isApproval) {
+    return [];
+  }
+  const modes = Array.isArray(meta?.persist) ? meta.persist : [meta?.persist];
+  if (modes.length === 0 || modes.some((mode) => mode !== "session" && mode !== "always")) {
+    return [];
+  }
+  return [...new Set(modes)] as McpApprovalPersistence[];
+}
+
 export function createMcpElicitationState(
   request: AppServerMcpElicitationRequestNotification
 ): PendingMcpInteractionState | undefined {
@@ -173,7 +195,8 @@ export function canAcceptMcpElicitation(
 
 export function buildMcpElicitationResponse(
   state: PendingMcpInteractionState,
-  action: "accept" | "decline" | "cancel"
+  action: "accept" | "decline" | "cancel",
+  persist?: McpApprovalPersistence,
 ): AppServerMcpElicitationResponse {
   if (action !== "accept") {
     return {
@@ -184,11 +207,18 @@ export function buildMcpElicitationResponse(
   }
 
   if (state.mode === "url") {
+    if (persist) {
+      throw new Error("This MCP request does not support approval persistence.");
+    }
     return {
       action,
       content: {},
       _meta: null,
     };
+  }
+
+  if (persist && !readMcpApprovalPersistence(state).includes(persist)) {
+    throw new Error("This MCP request does not support the selected approval persistence.");
   }
 
   return {
@@ -198,7 +228,7 @@ export function buildMcpElicitationResponse(
         .filter((field) => field.kind !== "unsupported")
         .map((field) => [field.key, fieldContentValue(field)]) ?? []
     ),
-    _meta: null,
+    _meta: persist ? { persist } : null,
   };
 }
 

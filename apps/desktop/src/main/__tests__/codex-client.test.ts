@@ -14675,7 +14675,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("normalizes MCP elicitation requests and returns MCP-shaped responses", async () => {
+  it.each([null, "session", "always"])("normalizes MCP elicitation and preserves the %s grant on the wire", async (persist) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -14691,7 +14691,7 @@ describe("CodexAppServerClient", () => {
       return {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: persist ? { persist } : null
       };
     });
 
@@ -14709,6 +14709,7 @@ describe("CodexAppServerClient", () => {
         mode: "form",
         _meta: {
           codex_approval_kind: "mcp_tool_call",
+          persist: ["session", "always"],
           tool_description: "List, create, close, or select a browser tab.",
           tool_params: {
             action: "list"
@@ -14745,6 +14746,7 @@ describe("CodexAppServerClient", () => {
             properties: {}
           },
           _meta: expect.objectContaining({
+            persist: ["session", "always"],
             tool_description: "List, create, close, or select a browser tab."
           })
         })
@@ -14760,9 +14762,114 @@ describe("CodexAppServerClient", () => {
       result: {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: persist ? { persist } : null
       }
     });
+
+    await client.close();
+  });
+
+  it("logs each MCP elicitation request without its parameter values", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+    client.onRequest(() => ({ action: "decline", content: null, _meta: null }));
+    codexClientLogInfo.mockClear();
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "cua-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        serverName: "cua_repl",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_id: "computer-use",
+          connector_name: "Computer Use",
+          persist: ["session", "always"],
+          tool_params: { app: "com.example.Editor" },
+          tool_params_display: [{ name: "app", display_name: "App", value: "Editor" }]
+        },
+        message: "Allow Computer Use to use \"Editor\"?",
+        requestedSchema: { type: "object", properties: {} }
+      }
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "pw-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        serverName: "playwright",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: "session",
+          riskLevel: "high",
+          tool_params: { url: "https://example.test/?token=secret-value" },
+          tool_params_display: [{ label: "url", value: "https://example.test/?token=secret-value" }]
+        },
+        message: "Allow playwright to open https://example.test/?token=secret-value?",
+        requestedSchema: { type: "object", properties: {} }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const logged = codexClientLogInfo.mock.calls.filter(
+      ([event]) => event === "MCP elicitation request"
+    );
+    expect(logged).toEqual([
+      ["MCP elicitation request", {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        requestId: "cua-1",
+        serverName: "cua_repl",
+        mode: "form",
+        approvalKind: "mcp_tool_call",
+        connectorId: "computer-use",
+        connectorName: "Computer Use",
+        riskLevel: undefined,
+        persist: ["session", "always"],
+        paramNames: ["app"],
+        metaKeys: [
+          "codex_approval_kind",
+          "connector_id",
+          "connector_name",
+          "persist",
+          "tool_params",
+          "tool_params_display",
+        ],
+        message: "Allow Computer Use to use \"Editor\"?",
+      }],
+      ["MCP elicitation request", {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        requestId: "pw-1",
+        serverName: "playwright",
+        mode: "form",
+        approvalKind: "mcp_tool_call",
+        connectorId: undefined,
+        connectorName: undefined,
+        riskLevel: "high",
+        persist: ["session"],
+        paramNames: ["url"],
+        metaKeys: ["codex_approval_kind", "persist", "riskLevel", "tool_params", "tool_params_display"],
+      }],
+    ]);
+    expect(JSON.stringify(logged)).not.toContain("secret-value");
 
     await client.close();
   });
