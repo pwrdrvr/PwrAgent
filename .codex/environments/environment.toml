@@ -2,8 +2,10 @@
 version = 1
 name = "PwrAgent"
 
+# Embedded Git shells can export PREFIX; unset it before each POSIX nvm command.
 [setup]
 script = '''
+unset PREFIX
 nvm install
 corepack enable
 pnpm install
@@ -42,6 +44,7 @@ name = "Work"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=work pnpm dev
@@ -52,6 +55,7 @@ name = "Work"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=work pnpm dev
@@ -80,6 +84,7 @@ name = "Dev - Messaging"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev pnpm dev
@@ -90,6 +95,7 @@ name = "Dev - Messaging"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev pnpm dev
@@ -118,6 +124,7 @@ name = "Dev - No Messaging"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
@@ -128,6 +135,7 @@ name = "Dev - No Messaging"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
@@ -157,6 +165,7 @@ name = "Default - No Messaging"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=default pnpm dev:no-messaging
@@ -167,6 +176,7 @@ name = "Default - No Messaging"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=default pnpm dev:no-messaging
@@ -196,6 +206,7 @@ name = "Dev - Protocol Capture"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROTOCOL_CAPTURE=1 PWRAGENT_PROTOCOL_CAPTURE_ROOT=.local/protocol-captures PWRAGENT_APP_SERVER_PROTOCOL_LOG=1 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
@@ -206,6 +217,7 @@ name = "Dev - Protocol Capture"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROTOCOL_CAPTURE=1 PWRAGENT_PROTOCOL_CAPTURE_ROOT=.local/protocol-captures PWRAGENT_APP_SERVER_PROTOCOL_LOG=1 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
@@ -240,6 +252,7 @@ name = "React DevTools - Standalone"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 npx react-devtools --port 8097
@@ -250,6 +263,7 @@ name = "React DevTools - Standalone"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 npx react-devtools --port 8097
@@ -277,6 +291,7 @@ name = "Dev - React DevTools"
 icon = "run"
 platform = "darwin"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev PWRAGENT_DEV_REACT_DEVTOOLS=1 PWRAGENT_DEV_REACT_DEVTOOLS_PORT=8097 pnpm dev
@@ -287,6 +302,7 @@ name = "Dev - React DevTools"
 icon = "run"
 platform = "linux"
 command = '''
+unset PREFIX
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev PWRAGENT_DEV_REACT_DEVTOOLS=1 PWRAGENT_DEV_REACT_DEVTOOLS_PORT=8097 pnpm dev

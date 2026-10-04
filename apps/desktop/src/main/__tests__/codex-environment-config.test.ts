@@ -23,8 +23,9 @@ describe("codex environment config", () => {
       expect(option.actions[0].command).toContain('$env:PWRAGENT_PROFILE = "work"');
     } else {
       expect(option.shell).toBeUndefined();
-      expect(option.setupScript).toBe("nvm install\ncorepack enable\npnpm install");
+      expect(option.setupScript).toBe("unset PREFIX\nnvm install\ncorepack enable\npnpm install");
       expect(option.cleanupScript).toBe("rm -rf node_modules");
+      expect(option.actions.every((action) => action.command.startsWith("unset PREFIX\nnvm use --silent\n"))).toBe(true);
       expect(option.actions[0].command).toContain("PWRAGENT_PROFILE=work pnpm dev");
     }
   });
