@@ -1,6 +1,7 @@
-import { app, ipcMain, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, type WebContents } from "electron";
 import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
+  INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_LIST_CHANNEL,
   INTEGRATED_TERMINAL_RESIZE_CHANNEL,
@@ -11,6 +12,7 @@ import {
 } from "../../shared/ipc";
 import type {
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalResizeRequest,
@@ -24,6 +26,7 @@ import {
   IntegratedTerminalService,
 } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
+import { buildIntegratedTerminalContextMenuTemplate } from "../terminal/integrated-terminal-context-menu";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import {
@@ -63,6 +66,22 @@ function broadcastSessions(
 }
 
 export function registerIntegratedTerminalIpcHandlers(): void {
+  ipcMain.removeHandler(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL);
+  ipcMain.handle(
+    INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
+    (event, request: IntegratedTerminalContextMenuRequest): void => {
+      if (!request || !Number.isFinite(request.x) || !Number.isFinite(request.y)
+        || typeof request.canCopy !== "boolean") {
+        throw new Error("Invalid terminal context menu request.");
+      }
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || window.isDestroyed()) return;
+      Menu.buildFromTemplate(buildIntegratedTerminalContextMenuTemplate(
+        process.platform,
+        request.canCopy,
+      )).popup({ window, x: Math.round(request.x), y: Math.round(request.y) });
+    },
+  );
   if (!service) {
     service = new IntegratedTerminalService({
       onSessionsChanged: broadcastSessions,
@@ -178,6 +197,7 @@ export function registerIntegratedTerminalIpcHandlers(): void {
 }
 
 export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_WRITE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_RESIZE_CHANNEL);

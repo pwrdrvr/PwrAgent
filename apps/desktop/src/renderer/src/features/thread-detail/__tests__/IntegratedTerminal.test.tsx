@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { IntegratedTerminal } from "../IntegratedTerminal";
@@ -13,6 +13,8 @@ const xtermState = vi.hoisted(() => ({
     handlers: Array<(data: string) => void>;
     emitData: (data: string) => void;
     write: ReturnType<typeof vi.fn>;
+    keyHandler?: (event: KeyboardEvent) => boolean;
+    selection: string;
   }>,
   deferWriteCallbacks: false,
   pendingWriteCallbacks: [] as Array<() => void>,
@@ -26,12 +28,19 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     focus = vi.fn();
     handlers: Array<(data: string) => void> = [];
+    keyHandler?: (event: KeyboardEvent) => boolean;
+    selection = "";
 
     constructor(public options: unknown) {
       xtermState.instances.push(this);
     }
 
     loadAddon = vi.fn();
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+      this.keyHandler = handler;
+    }
+    hasSelection = () => this.selection.length > 0;
+    getSelection = () => this.selection;
     open = vi.fn();
     write = vi.fn((data: string, callback?: () => void) => {
       const responses = xtermState.replayDataEvents.get(data) ?? [];
@@ -96,6 +105,106 @@ describe("IntegratedTerminal", () => {
     cleanup();
     vi.restoreAllMocks();
     document.documentElement.removeAttribute("style");
+  });
+
+  it.each([
+    ["linux", false],
+    ["linux", true],
+    ["win32", false],
+    ["win32", true],
+  ])("leaves native paste enabled without sending quoted-insert on %s (shift=%s)", async (platform, shiftKey) => {
+    const writeIntegratedTerminal = vi.fn(async () => undefined);
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          platform,
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1", threadKey: "codex:thread-a", cwd: "/repo/a", shell: "/bin/bash",
+          })),
+          writeIntegratedTerminal,
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances[0]?.keyHandler).toBeDefined());
+    const terminal = xtermState.instances[0]!;
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      const event = new KeyboardEvent(type, { key: "v", ctrlKey: true, shiftKey, cancelable: true });
+      expect(terminal.keyHandler!(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(writeIntegratedTerminal).not.toHaveBeenCalled();
+
+    // xterm's native paste event emits one framed payload. Keep those frames:
+    // Readline uses them to insert multiline commands without executing them.
+    const paste = "\u001b[200~lsblk -o NAME,SIZE\r\u001b[201~";
+    act(() => terminal.emitData(paste));
+    expect(writeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "session-1", data: paste,
+    });
+    expect(terminal.keyHandler!(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBe(true);
+    expect(terminal.keyHandler!(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, altKey: true }))).toBe(true);
+  });
+
+  it("preserves macOS Command+V paste and Ctrl+V shell input", async () => {
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          platform: "darwin",
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1", threadKey: "codex:thread-a", cwd: "/repo/a", shell: "/bin/zsh",
+          })),
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances[0]?.keyHandler).toBeDefined());
+    const handler = xtermState.instances[0]!.keyHandler!;
+    expect(handler(new KeyboardEvent("keydown", { key: "v", metaKey: true }))).toBe(true);
+    expect(handler(new KeyboardEvent("keydown", { key: "v", ctrlKey: true }))).toBe(true);
+    expect(handler(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it("copies a Linux terminal selection with Ctrl+Shift+C and requests its own context menu", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const showIntegratedTerminalContextMenu = vi.fn(async () => undefined);
+    const { container } = render(
+      <IntegratedTerminal
+        desktopApi={{
+          platform: "linux",
+          copyText,
+          showIntegratedTerminalContextMenu,
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1", threadKey: "codex:thread-a", cwd: "/repo/a", shell: "/bin/bash",
+          })),
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances[0]?.keyHandler).toBeDefined());
+    const terminal = xtermState.instances[0]!;
+    const viewport = container.querySelector(".integrated-terminal__viewport")!;
+    fireEvent.contextMenu(viewport, { clientX: 20, clientY: 30 });
+    expect(showIntegratedTerminalContextMenu).toHaveBeenLastCalledWith({ x: 20, y: 30, canCopy: false });
+
+    terminal.selection = "selected shell output";
+    for (const type of ["keydown", "keyup"]) {
+      const event = new KeyboardEvent(type, { key: "C", ctrlKey: true, shiftKey: true, cancelable: true });
+      expect(terminal.keyHandler!(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    expect(copyText).toHaveBeenCalledExactlyOnceWith("selected shell output");
+    fireEvent.contextMenu(viewport, { clientX: 20, clientY: 30 });
+    expect(showIntegratedTerminalContextMenu).toHaveBeenLastCalledWith({ x: 20, y: 30, canCopy: true });
   });
 
   it("passes concrete terminal palette colors to xterm", async () => {

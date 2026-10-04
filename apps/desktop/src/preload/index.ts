@@ -549,6 +549,7 @@ import type {
 } from "../shared/codex-protocol-capture";
 import type {
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalErrorEvent,
@@ -700,6 +701,7 @@ import {
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
+  INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
@@ -1775,6 +1777,11 @@ const desktopApi = Object.freeze({
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>
     await ipcRenderer.invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, request),
+  showIntegratedTerminalContextMenu: async (
+    request: IntegratedTerminalContextMenuRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL, request);
+  },
   writeIntegratedTerminal: async (
     request: IntegratedTerminalWriteRequest,
   ): Promise<void> => {

@@ -721,6 +721,8 @@ export const TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL =
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";
+export const INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL =
+  "integrated-terminal:context-menu";
 export const INTEGRATED_TERMINAL_RESIZE_CHANNEL =
   "integrated-terminal:resize";
 export const INTEGRATED_TERMINAL_CLOSE_CHANNEL = "integrated-terminal:close";

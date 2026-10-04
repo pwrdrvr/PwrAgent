@@ -43,6 +43,7 @@ import type {
 } from "../../../shared/github-pr-access";
 import type {
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalErrorEvent,
@@ -1204,6 +1205,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;
+  showIntegratedTerminalContextMenu?: (
+    request: IntegratedTerminalContextMenuRequest,
+  ) => Promise<void>;
   writeIntegratedTerminal?: (
     request: IntegratedTerminalWriteRequest,
   ) => Promise<void>;
