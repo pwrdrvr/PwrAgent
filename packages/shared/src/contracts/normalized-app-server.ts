@@ -1212,6 +1212,8 @@ export type AppServerReadThreadResponse = {
    */
   pendingRequest?: AppServerPendingRequestNotification;
   pricing?: {
+    /** Whole-thread estimate input; never added to observed ledger totals. */
+    snapshot?: import("../token-usage-pricing").ThreadPricingSnapshot;
     /** Observed context compactions, oldest first. */
     compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];

@@ -366,7 +366,6 @@ import {
   type ThreadReadEvaluationTokenMiser,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
-  type ThreadCompactionRecord,
   type ThreadTokenMiserSavings,
   type ThreadPricingSummary,
   type ThreadUsageLineRecord,
@@ -889,6 +888,7 @@ type BackendClient = {
   readThreadModelSettings?(params: {
     threadId: string;
   }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
+  readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -5017,11 +5017,7 @@ function withLegacyTokenMiserReplayAccounting(
   };
 }
 
-type ThreadPricingLedger = {
-  compactions?: ThreadCompactionRecord[];
-  lines: ThreadUsageLineRecord[];
-  summaries: ThreadPricingSummary[];
-};
+type ThreadPricingLedger = NonNullable<AppServerReadThreadResponse["pricing"]>;
 
 function toThreadReadEvaluationPricing(
   pricing: ThreadPricingLedger,
@@ -15445,6 +15441,16 @@ export class DesktopBackendRegistry {
     }
     this.assertNotBootstrap("readThread");
     const pricing = await this.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
+    if (backend === "codex" && request.display.resource === "pricing"
+      && pricing.summaries.length === 0 && !pricing.lines.some((line) => line.status !== "superseded")) {
+      const snapshot = await this.withCodexThreadClient(request.threadId, async (client) =>
+        await client.readThreadPricingSnapshot?.(request.threadId), undefined, false);
+      if (snapshot) {
+        const modelLabel = this.codexBackendSummary?.launchpadOptions?.models?.find((model) => model.id === snapshot.model)?.label;
+        const localModel = Boolean(snapshot.model && this.resolveCodexLocalModelIdsFn().includes(snapshot.model));
+        pricing.snapshot = { ...snapshot, ...(modelLabel ? { modelLabel } : {}), localModel };
+      }
+    }
     const stored = await this.overlayStore.readThreadToolAccounting({
       backend, threadId: request.threadId,
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),

@@ -1,7 +1,7 @@
-import type { ThreadPricingSummary, ThreadUsageLineRecord } from "./token-usage-pricing";
+import type { ThreadPricingSnapshot, ThreadPricingSummary, ThreadUsageLineRecord } from "./token-usage-pricing";
 import type { ThreadSubAgentSummary, ThreadTurnFailure } from "./contracts/navigation";
 import type { ThreadCompactionRecord, ThreadTokenMiserAccounting, ThreadTokenMiserInterceptionAccounting } from "./contracts/normalized-app-server";
-import { estimateOpenAiCodexCreditUsage } from "./token-usage-pricing";
+import { estimateOpenAiCodexCreditUsage, estimateTokenUsageCost } from "./token-usage-pricing";
 import { estimateHistoricalThreadUsageGapLines } from "./thread-pricing-projection";
 import { addUsageLineToSummary, buildPricingSpendByModel, emptyPricingSummary } from "./pricing-spend-by-model";
 import { buildTokenMiserSavingsSummary } from "./token-miser-savings-summary";
@@ -502,7 +502,7 @@ export function estimateCodexCreditsForLine(line: PricingUsageLine):
 
 /** Owner-prepared rail data. Totals include history outside this page. */
 export function buildThreadPricingDisplay(params: {
-  pricing?: { compactions?: ThreadCompactionRecord[]; lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[] };
+  pricing?: { compactions?: ThreadCompactionRecord[]; lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[]; snapshot?: ThreadPricingSnapshot };
   subAgents?: ThreadSubAgentSummary[];
   tokenMiserAccounting?: ThreadTokenMiserAccounting;
   activeTurnId?: string;
@@ -564,6 +564,9 @@ export function buildThreadPricingDisplay(params: {
   for (const line of pageLines.slice(0, offset)) selectRowCompactions(compactionsByRow, line, claimedCompactionTurns);
   return {
     summary,
+    fallbackEstimate: !summary && allDisplayLines.length === 0 && params.pricing?.snapshot
+      ? buildThreadPricingSnapshotEstimate(params.pricing.snapshot)
+      : undefined,
     spendByModel: buildPricingSpendByModel({
       lines: allDisplayLines,
       resolveModel: (line) => resolveUsageLineModel(line, line.scope === "monitor" && line.sourceItemId ? subAgentsById.get(line.sourceItemId) : undefined),
@@ -581,3 +584,27 @@ export function buildThreadPricingDisplay(params: {
 }
 
 export type ThreadPricingDisplay = ReturnType<typeof buildThreadPricingDisplay>;
+
+/** Apply today's rates to the whole thread without manufacturing observed rows. */
+export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapshot, at = Date.now()) {
+  if (snapshot.localModel) return { ...snapshot, totalCostMicros: 0 };
+  const { model, tokens } = snapshot;
+  const validCount = (count: number | undefined): count is number =>
+    count !== undefined && Number.isSafeInteger(count) && count >= 0;
+  const input = tokens?.inputTokens;
+  const cached = tokens?.cachedInputTokens;
+  const output = tokens?.outputTokens;
+  const cost = validCount(input) && validCount(cached) && cached <= input && validCount(output)
+    ? estimateTokenUsageCost({
+        at, model, serviceTier: snapshot.serviceTier, inputTokenScope: "aggregate",
+        uncachedInputTokens: input - cached,
+        cachedInputTokens: cached,
+        cacheWriteInputTokens: tokens?.cacheWriteInputTokens ?? 0,
+        outputTokens: output,
+        // Codex's cumulative output already includes its reasoning subset.
+        outputTokensIncludeReasoning: true,
+        reasoningOutputTokens: tokens?.reasoningOutputTokens ?? 0,
+      })
+    : undefined;
+  return { ...snapshot, totalCostMicros: cost?.totalCostMicros };
+}

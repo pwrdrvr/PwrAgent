@@ -221,6 +221,8 @@ class MockTransport implements JsonRpcTransport {
   static threadResumeError:
     | { code?: number; message: string }
     | undefined = undefined;
+  static threadResumeUsage: unknown;
+  static threadResumeUsageTiming: "before" | "after" = "after";
   static threadSettingsUpdateError: string | undefined;
 
   readonly sentMessages: string[] = [];
@@ -1185,6 +1187,12 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
       this.loadedThreads.add(String(payload.params?.threadId));
+      const emitUsage = () => {
+        if (MockTransport.threadResumeUsage && payload.params?.excludeTurns) this.messageHandler!(JSON.stringify({
+          method: "thread/tokenUsage/updated", params: { threadId: payload.params.threadId, turnId: "historical-turn", tokenUsage: MockTransport.threadResumeUsage },
+        }));
+      };
+      if (MockTransport.threadResumeUsageTiming === "before") emitUsage();
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1192,6 +1200,7 @@ class MockTransport implements JsonRpcTransport {
           result: MockTransport.threadResumeResult
         })
       );
+      if (MockTransport.threadResumeUsageTiming === "after") queueMicrotask(emitUsage);
       return;
     }
 
@@ -1938,6 +1947,8 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
+    MockTransport.threadResumeUsage = undefined;
+    MockTransport.threadResumeUsageTiming = "after";
     MockTransport.threadSettingsUpdateError = undefined;
   });
 
@@ -3729,6 +3740,106 @@ describe("CodexAppServerClient", () => {
     await expect(client.readAccountUsage()).resolves.toEqual(
       MockTransport.accountUsageResult,
     );
+  });
+
+  it.each(["before", "after"] as const)("reads saved totals emitted %s the resume response in an isolated reader", async (timing) => {
+    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100, status: { type: "notLoaded" } };
+    MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
+    MockTransport.threadResumeResult = { model: thread.model, thread };
+    MockTransport.threadResumeUsage = { total: tokens, last: { ...tokens, inputTokens: 100, totalTokens: 200 } };
+    MockTransport.threadResumeUsageTiming = timing;
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const observer = vi.fn();
+    client.onNotification(observer);
+    try {
+      const results = await Promise.all([client.readThreadPricingSnapshot(thread.id), client.readThreadPricingSnapshot(thread.id)]);
+      expect(results).toEqual([{ model: thread.model, tokens }, { model: thread.model, tokens }]);
+      expect(MockTransport.instances).toHaveLength(2);
+      const [parent, reader] = MockTransport.instances;
+      expect(reader.closeCount).toBeGreaterThan(0);
+      expect(parent.closeCount).toBe(0);
+      expect(observer.mock.calls.some(([event]) => event.method === "thread/tokenUsage/updated")).toBe(false);
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.filter((request) => request.method === "thread/resume").map((request) => request.params)).toEqual([{ threadId: thread.id, excludeTurns: true }]);
+      expect(requests.some((request) => ["thread/settings/update", "turn/start", "fs/readFile"].includes(request.method))).toBe(false);
+      MockTransport.readThreadResultByThreadId.set(thread.id, { thread: { ...thread, model: "gpt-6-astra" } });
+      expect(await client.readThreadPricingSnapshot(thread.id)).toEqual({ model: "gpt-6-astra", tokens });
+      expect(MockTransport.instances).toHaveLength(2);
+      MockTransport.readThreadResultByThreadId.set(thread.id, { thread: { ...thread, updatedAt: 101 } });
+      MockTransport.threadResumeUsage = { total: { ...tokens, inputTokens: 2_000, totalTokens: 2_100 } };
+      expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(2_100);
+      expect(MockTransport.instances).toHaveLength(3);
+      expect(MockTransport.instances[2].closeCount).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps totals unknown while another app owns the writer and tries again after it closes", async () => {
+    const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100 };
+    MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
+    MockTransport.threadResumeError = { message: "thread already has an active writer" };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readThreadPricingSnapshot(thread.id)).toEqual({ model: thread.model });
+      expect(MockTransport.instances[1].closeCount).toBeGreaterThan(0);
+      MockTransport.threadResumeError = undefined;
+      MockTransport.threadResumeResult = { model: thread.model, thread };
+      MockTransport.threadResumeUsage = { total: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, totalTokens: 1_100 } };
+      expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(1_100);
+      expect(MockTransport.instances[2].closeCount).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("bounds a successful resume that supplies no token notification", async () => {
+    MockTransport.readThreadResultByThreadId.set("no-usage", { thread: { id: "no-usage", model: "gpt-6.1-sol" } });
+    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 10 });
+    try {
+      expect(await client.readThreadPricingSnapshot("no-usage")).toEqual({ model: "gpt-6.1-sol", tokens: undefined });
+      expect(MockTransport.instances[1].closeCount).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("closes the isolated reader and cancels queued snapshot reads when its parent closes", async () => {
+    for (const id of ["no-usage", "queued-usage"]) {
+      MockTransport.readThreadResultByThreadId.set(id, { thread: { id, model: "gpt-6.1-sol" } });
+    }
+    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    vi.useFakeTimers();
+    const reads = Promise.all([client.readThreadPricingSnapshot("no-usage"), client.readThreadPricingSnapshot("queued-usage")]);
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(MockTransport.instances).toHaveLength(2);
+      const reader = MockTransport.instances[1];
+      expect(reader.loadedThreads.has("no-usage")).toBe(true);
+      let closed = false;
+      closing = client.close().then(() => { closed = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      // No clock advance: shutdown must release the writer and notification
+      // waiter immediately, rather than waiting out the snapshot timeout.
+      expect(reader.closeCount).toBeGreaterThan(0);
+      expect(reader.loadedThreads.size).toBe(0);
+      expect(closed).toBe(true);
+      await reads;
+      expect(MockTransport.instances).toHaveLength(2);
+    } finally {
+      await vi.runAllTimersAsync();
+      await reads;
+      await (closing ?? client.close());
+      vi.useRealTimers();
+    }
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {

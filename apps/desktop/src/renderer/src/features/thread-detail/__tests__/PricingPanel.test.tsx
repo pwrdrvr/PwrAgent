@@ -17,6 +17,59 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("shows current-model historical estimates above account usage with an attribution warning", () => {
+  const display = spend.buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: {
+    model: "gpt-6.1-sol",
+    modelLabel: "GPT-6.1 Sol",
+    tokens: { inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 20_000, reasoningOutputTokens: 10_000, totalTokens: 1_020_000 },
+  } } });
+  const view = render(<PricingPanel display={display} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card).toHaveTextContent("GPT-6.1 Sol");
+  expect(card).toHaveTextContent("1,020,000");
+  expect(card).toHaveTextContent("200,000");
+  expect(card).toHaveTextContent("800,000");
+  expect(card).toHaveTextContent("20,000");
+  expect(card).toHaveTextContent("10,000");
+  expect(card).toHaveTextContent("estimated");
+  expect(card).toHaveTextContent("all tokens used the current model at today's list prices");
+  expect(card).toHaveTextContent("model switches, speed settings, and earlier provider price changes");
+  expect(view.queryByText("No usage pricing recorded yet.")).not.toBeInTheDocument();
+  expect(view.container.querySelector(".pricing-usage-row")).toBeNull();
+});
+
+it("shows unavailable historical totals without inventing a price", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: { model: "gpt-6.1-sol", modelLabel: "GPT-6.1 Sol" } }} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card).toHaveTextContent("GPT-6.1 Sol");
+  expect(card).toHaveTextContent("Price unavailable");
+  expect(card).toHaveTextContent("Codex has not provided historical token totals");
+  expect(card).not.toHaveTextContent("$0.00");
+});
+
+it("replaces the fallback card when normal pricing is available", () => {
+  const fallbackEstimate = spend.buildThreadPricingSnapshotEstimate({ model: "gpt-6.1-sol" });
+  const empty = spend.buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: { model: "gpt-6.1-sol" } } });
+  const view = render(<PricingPanel display={empty} />);
+  expect(view.container.querySelector(".pricing-snapshot-card")).toBeInTheDocument();
+  const { pricing } = buildTokenMiserPricingFixture();
+  // A stale fallback in a merged viewer snapshot must not add a second card.
+  view.rerender(<PricingPanel display={{ ...spend.buildThreadPricingDisplay({ pricing }), fallbackEstimate }} />);
+  expect(view.container.querySelector(".pricing-snapshot-card")).not.toBeInTheDocument();
+  expect(view.container.querySelector(".pricing-summary-card")).toBeInTheDocument();
+});
+
+it("shows zero-cost local estimates and describes the local pricing assumption", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: {
+    model: "gpt-6.1-sol", localModel: true,
+    tokens: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, totalTokens: 1_100 },
+  } }} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card).toHaveTextContent("$0.000 estimated");
+  expect(card).toHaveTextContent("declared local with zero token cost");
+  expect(card).not.toHaveTextContent("today's list prices");
+});
+
 it("balances the two summary cards without rounding the usage rows or accounting", () => {
   const { pricing, accounting } = buildTokenMiserPricingFixture();
   pricing.lines[0] = { ...pricing.lines[0]!, totalCostMicros: 30_039_073 };
