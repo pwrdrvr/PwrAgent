@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/package-manager-distribution.yml
+      - .github/actions/distribution-asset/**
       - scripts/package-manager-release*
       - scripts/submit-package-manager-release.mjs
   # Releases are built as prereleases. Only explicit stable promotion qualifies.
@@ -15,11 +16,16 @@ on:
         description: Open Homebrew and Winget PRs after platform validation
         type: boolean
         default: false
+      force_validation:
+        description: Repeat native validation even if identical inputs already passed
+        type: boolean
+        default: false
   schedule:
     - cron: "43 8 * * *"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: package-manager-distribution-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'stable' }}
@@ -31,7 +37,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
-      needed: ${{ steps.generate.outputs.needed }}
+      needed: ${{ steps.plan.outputs.needed }}
+      submit: ${{ steps.plan.outputs.submit }}
+      homebrew: ${{ steps.plan.outputs.homebrew }}
+      winget: ${{ steps.plan.outputs.winget }}
+      winget_key: ${{ steps.plan.outputs.winget_key }}
       automation_sha: ${{ steps.checkout.outputs.commit }}
     steps:
       - id: checkout
@@ -43,66 +53,146 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "22"
-      - id: generate
+      - id: plan
+        name: Audit channels and resolve validation reuse before native runners
         env:
-          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
-          DISTRIBUTION_READ_TOKEN_AVAILABLE: ${{ secrets.DISTRIBUTION_READ_TOKEN != '' }}
+          GH_TOKEN: ${{ github.token }}
+          DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
-          EVENT_NAME: ${{ github.event_name }}
+          FORCE_VALIDATION: ${{ inputs.force_validation || false }}
+          SUBMIT_REQUESTED: ${{ inputs.submit || false }}
         run: |
           set -euo pipefail
-          echo "Organization distribution read token available: $DISTRIBUTION_READ_TOKEN_AVAILABLE"
-          mkdir -p distribution
-          node scripts/package-manager-release.mjs --audit > distribution/preflight.json
-          cat distribution/preflight.json >> "$GITHUB_STEP_SUMMARY"
-          # shellcheck disable=SC2016
-          needed="$(node --input-type=module -e '
-            import fs from "node:fs";
-            const a = JSON.parse(fs.readFileSync("distribution/preflight.json"));
-            const relevant = !process.env.EVENT_TAG || process.env.EVENT_TAG === `v${a.stable.version}`;
-            const validation = ["pull_request", "workflow_dispatch"].includes(process.env.EVENT_NAME);
-            console.log(relevant && (validation || [a.homebrew, a.winget].some(c => c.version !== a.stable.version && c.pending.length === 0)));
-          ')"
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
-          if [ "$needed" = true ]; then
-            node scripts/package-manager-release.mjs --out distribution/current --previous-out distribution/previous
-          fi
+          node scripts/package-manager-release-plan.mjs plan distribution | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_0 != ''
+        with:
+          index: "0"
+          key: ${{ steps.plan.outputs.asset_0 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_1 != ''
+        with:
+          index: "1"
+          key: ${{ steps.plan.outputs.asset_1 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_2 != ''
+        with:
+          index: "2"
+          key: ${{ steps.plan.outputs.asset_2 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_3 != ''
+        with:
+          index: "3"
+          key: ${{ steps.plan.outputs.asset_3 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_4 != ''
+        with:
+          index: "4"
+          key: ${{ steps.plan.outputs.asset_4 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_5 != ''
+        with:
+          index: "5"
+          key: ${{ steps.plan.outputs.asset_5 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_6 != ''
+        with:
+          index: "6"
+          key: ${{ steps.plan.outputs.asset_6 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_7 != ''
+        with:
+          index: "7"
+          key: ${{ steps.plan.outputs.asset_7 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_8 != ''
+        with:
+          index: "8"
+          key: ${{ steps.plan.outputs.asset_8 }}
+      - uses: ./.github/actions/distribution-asset
+        if: steps.plan.outputs.asset_9 != ''
+        with:
+          index: "9"
+          key: ${{ steps.plan.outputs.asset_9 }}
+      - name: Verify published checksums before sharing installers
+        if: steps.plan.outputs.native == 'true'
+        run: node scripts/package-manager-release-plan.mjs verify distribution
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: package-manager-inputs
+          compression-level: 0
           path: |
             distribution/preflight.json
+            distribution/plan.json
             distribution/current/audit.json
             distribution/current/Casks
             distribution/current/manifests
             distribution/previous/Casks
             distribution/previous/manifests
           if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: fromJSON(steps.plan.outputs.homebrew).include[0] != null
+        with:
+          name: package-manager-macos-assets
+          compression-level: 0
+          path: |
+            distribution/assets/*.dmg
+            distribution/assets/previous/*.dmg
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: steps.plan.outputs.winget == 'true'
+        with:
+          name: package-manager-windows-assets
+          compression-level: 0
+          path: |
+            distribution/assets/*.exe
+            distribution/assets/previous/*.exe
+          if-no-files-found: error
+
 
   homebrew:
+    name: homebrew (${{ matrix.runner }})
     needs: prepare
-    if: needs.prepare.outputs.needed == 'true'
+    if: needs.prepare.outputs.needed == 'true' && fromJSON(needs.prepare.outputs.homebrew).include[0] != null
     strategy:
       fail-fast: false
-      matrix:
-        runner: [macos-26, macos-26-intel]
+      matrix: ${{ fromJSON(needs.prepare.outputs.homebrew) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
       HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
       HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.automation_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: package-manager-inputs
           path: distribution
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-macos-assets
+          path: distribution/assets
+      - name: Pin Homebrew validator code
+        env:
+          BREW_SHA: ${{ matrix.tool.brew }}
+        run: |
+          set -euo pipefail
+          repository="$(brew --repository)"
+          git -C "$repository" fetch --depth=1 origin "$BREW_SHA"
+          git -C "$repository" checkout --detach "$BREW_SHA"
+          test "$(git -C "$repository" rev-parse HEAD)" = "$BREW_SHA"
+          brew --version
       - name: Validate architecture, signature and notarization of both DMGs
         run: |
           set -euo pipefail
           version="$(jq -r .stable.version distribution/current/audit.json)"
           for arch in arm64 universal; do
             name="PwrAgent-${version}-${arch}.dmg"
-            curl --fail --location --retry 3 -o "$RUNNER_TEMP/$name" "https://github.com/pwrdrvr/PwrAgent/releases/download/v${version}/${name}"
+            cp "distribution/assets/$name" "$RUNNER_TEMP/$name"
             expected="$(jq -r --arg name "$name" '.hashes[$name]' distribution/current/audit.json)"
             echo "$expected  $RUNNER_TEMP/$name" | shasum -a 256 --check
             mount="$RUNNER_TEMP/mount-$arch"
@@ -135,8 +225,20 @@ jobs:
           git -C "$tap" -c user.name=distribution-validation -c user.email=validation@pwragent.ai -c commit.gpgsign=false add Casks/pwragent.rb
           git -C "$tap" -c user.name=distribution-validation -c user.email=validation@pwragent.ai -c commit.gpgsign=false commit -m "Validate generated PwrAgent cask"
           token=pwrdrvr/distribution-validation/pwragent
+          seed_cache() {
+            local cached arch name expected
+            arch=universal
+            if [ "$(uname -m)" = arm64 ]; then arch=arm64; fi
+            cached="$(brew --cache --cask "$token")"
+            mkdir -p "$(dirname "$cached")"
+            name="PwrAgent-$1-$arch.dmg"
+            cp "$2/$name" "$cached"
+            expected="$(jq -er --arg name "$name" '[.current.assets[], .previous.assets[]] | map(select(.name == $name)) | .[0].digest | sub("^sha256:"; "")' distribution/plan.json)"
+            echo "$expected  $cached" | shasum -a 256 --check
+          }
           if brew trust --help >/dev/null 2>&1; then brew trust --cask "$token"; fi
           brew style "$tap/Casks/pwragent.rb"
+          seed_cache "$(jq -r .stable.version distribution/current/audit.json)" distribution/assets
           brew audit --cask --online "$token"
           brew install --cask "$token"
           test -d /Applications/PwrAgent.app
@@ -145,6 +247,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$expected"
           brew uninstall --cask "$token"
           cp distribution/previous/Casks/pwragent.rb "$tap/Casks/pwragent.rb"
+          seed_cache "$(jq -r .previousVersion distribution/current/audit.json)" distribution/assets/previous
           brew install --cask "$token"
           previous="$(jq -r .previousVersion distribution/current/audit.json)"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$previous"
@@ -155,16 +258,38 @@ jobs:
           spctl --assess --type execute --verbose=2 /Applications/PwrAgent.app
           brew uninstall --cask "$token"
 
+      - name: Record successful validation for the exact hosted image
+        id: record
+        shell: bash
+        env:
+          PLATFORM_RUNNER: ${{ matrix.runner }}
+        run: node scripts/package-manager-release-plan.mjs record distribution "$PLATFORM_RUNNER"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.record.outputs.reusable == 'true'
+        with:
+          path: .local/distribution-validation
+          key: ${{ matrix.key }}
+          enableCrossOsArchive: true
+
+
   winget:
     needs: prepare
-    if: needs.prepare.outputs.needed == 'true'
+    if: needs.prepare.outputs.winget == 'true'
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.automation_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: package-manager-inputs
           path: distribution
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-manager-windows-assets
+          path: distribution/assets
       - name: Install Microsoft's WinGet client
         shell: pwsh
         env:
@@ -173,7 +298,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           # Install complete release packages rather than registering the runner's
           # provisioned App Installer stub, which can lack its x64 application.
-          $release = gh api repos/microsoft/winget-cli/releases/latest | ConvertFrom-Json
+          # Install the exact client resolved by the Linux metadata planner.
+          $plan = Get-Content distribution/plan.json -Raw | ConvertFrom-Json
+          $platform = $plan.native | Where-Object family -eq winget
+          $release = [pscustomobject]@{ tag_name = $platform.tool.tag; assets = $platform.tool.assets; prerelease = $false; draft = $false }
           if ($LASTEXITCODE -or $release.prerelease -or $release.draft) { throw "Could not resolve stable WinGet release" }
           $bundleName = "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
           $dependenciesName = "DesktopAppInstaller_Dependencies.zip"
@@ -201,14 +329,17 @@ jobs:
           $audit = Get-Content distribution/current/audit.json -Raw | ConvertFrom-Json
           $version = $audit.stable.version
           $previous = $audit.previousVersion
-          $currentManifest = "distribution/current/manifests/p/PwrDrvr/PwrAgent/$version"
-          winget validate --manifest $currentManifest
-          if ($LASTEXITCODE) { throw "winget validate failed" }
+          foreach ($role in @("current", "previous")) {
+            $v = if ($role -eq "current") { $version } else { $previous }
+            winget validate --manifest "distribution/$role/manifests/p/PwrDrvr/PwrAgent/$v"
+            if ($LASTEXITCODE) { throw "Original production manifest validation failed" }
+          }
           winget settings --enable LocalManifestFiles
           if ($LASTEXITCODE) { throw "Could not enable local manifests" }
           foreach ($v in @($previous, $version)) {
             $installer = "$env:RUNNER_TEMP/PwrAgent-$v-setup.exe"
-            Invoke-WebRequest "https://github.com/pwrdrvr/PwrAgent/releases/download/v$v/PwrAgent-$v-windows-x64-setup.exe" -OutFile $installer
+            $assetRoot = if ($v -eq $version) { "distribution/assets" } else { "distribution/assets/previous" }
+            Copy-Item "$assetRoot/PwrAgent-$v-windows-x64-setup.exe" $installer
             $root = if ($v -eq $version) { "current" } else { "previous" }
             $text = Get-Content "distribution/$root/manifests/p/PwrDrvr/PwrAgent/$v/PwrDrvr.PwrAgent.installer.yaml" -Raw
             $expected = [regex]::Match($text, 'InstallerSha256: ([A-F0-9]{64})').Groups[1].Value
@@ -216,45 +347,76 @@ jobs:
             $signature = Get-AuthenticodeSignature $installer
             if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch 'PwrDrvr LLC') { throw "Invalid publisher signature" }
           }
-          $installDir = "$env:RUNNER_TEMP\pwragent-user"
-          function Assert-InstalledVersion($expected) {
-            $exe = "$installDir\PwrAgent.exe"
-            $versionInfo = (Get-Item $exe).VersionInfo
-            # electron-builder stamps the app version in FileVersion and appends
-            # the zero build component to the executable's ProductVersion.
-            if ($versionInfo.FileVersion -ne $expected -or $versionInfo.ProductVersion -ne "$expected.0") {
-              throw "Wrong installed version: FileVersion=$($versionInfo.FileVersion), ProductVersion=$($versionInfo.ProductVersion); expected $expected / $expected.0"
+          $ready = Join-Path $env:RUNNER_TEMP "pwragent-loopback.json"
+          $server = Start-Process node -ArgumentList @("scripts/package-manager-release-loopback.mjs", "distribution", $ready) -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP/pwragent-loopback.log" -RedirectStandardError "$env:RUNNER_TEMP/pwragent-loopback-error.log"
+          try {
+            $deadline = (Get-Date).AddSeconds(15)
+            while (-not (Test-Path $ready)) {
+              if ($server.HasExited -or (Get-Date) -gt $deadline) { throw "Verified installer mirror did not start" }
+              Start-Sleep -Milliseconds 100
             }
-            $bytes = [System.IO.File]::ReadAllBytes($exe)
-            $offset = [BitConverter]::ToInt32($bytes, 0x3c)
-            if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x8664) { throw "Installed executable is not x64" }
-            if ((Get-AuthenticodeSignature $exe).Status -ne "Valid") { throw "Installed executable signature failed" }
+            $currentManifest = "distribution/installation/current/manifests/p/PwrDrvr/PwrAgent/$version"
+            winget validate --manifest $currentManifest
+            if ($LASTEXITCODE) { throw "Installation-only manifest validation failed" }
+            $installDir = "$env:RUNNER_TEMP\pwragent-user"
+            function Assert-InstalledVersion($expected) {
+              $exe = "$installDir\PwrAgent.exe"
+              $versionInfo = (Get-Item $exe).VersionInfo
+              # electron-builder stamps the app version in FileVersion and appends
+              # the zero build component to the executable's ProductVersion.
+              if ($versionInfo.FileVersion -ne $expected -or $versionInfo.ProductVersion -ne "$expected.0") {
+                throw "Wrong installed version: FileVersion=$($versionInfo.FileVersion), ProductVersion=$($versionInfo.ProductVersion); expected $expected / $expected.0"
+              }
+              $bytes = [System.IO.File]::ReadAllBytes($exe)
+              $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+              if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x8664) { throw "Installed executable is not x64" }
+              if ((Get-AuthenticodeSignature $exe).Status -ne "Valid") { throw "Installed executable signature failed" }
+            }
+            winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "Fresh user install failed" }
+            Assert-InstalledVersion $version
+            winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "User uninstall failed" }
+            # Install the actual previous stable version, then exercise local-manifest upgrade.
+            $previousManifest = "distribution/installation/previous/manifests/p/PwrDrvr/PwrAgent/$previous"
+            winget install --manifest $previousManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "Upgrade baseline install failed" }
+            Assert-InstalledVersion $previous
+            winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "Upgrade failed" }
+            Assert-InstalledVersion $version
+            winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "Upgrade uninstall failed" }
+            $installDir = "$env:RUNNER_TEMP\pwragent-machine"
+            winget install --manifest $currentManifest --scope machine --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "Fresh machine install failed" }
+            Assert-InstalledVersion $version
+            winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE) { throw "Machine uninstall failed" }
+
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+            Get-Content "$env:RUNNER_TEMP/pwragent-loopback.log"
+            Get-Content "$env:RUNNER_TEMP/pwragent-loopback-error.log"
           }
-          winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "Fresh user install failed" }
-          Assert-InstalledVersion $version
-          winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "User uninstall failed" }
-          # Install the actual previous stable version, then exercise local-manifest upgrade.
-          $previousManifest = "distribution/previous/manifests/p/PwrDrvr/PwrAgent/$previous"
-          winget install --manifest $previousManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "Upgrade baseline install failed" }
-          Assert-InstalledVersion $previous
-          winget install --manifest $currentManifest --scope user --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "Upgrade failed" }
-          Assert-InstalledVersion $version
-          winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "Upgrade uninstall failed" }
-          $installDir = "$env:RUNNER_TEMP\pwragent-machine"
-          winget install --manifest $currentManifest --scope machine --silent --location $installDir --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "Fresh machine install failed" }
-          Assert-InstalledVersion $version
-          winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE) { throw "Machine uninstall failed" }
+
+      - name: Record successful validation for the exact hosted image
+        id: record
+        shell: bash
+        env:
+          PLATFORM_RUNNER: windows-2025
+        run: node scripts/package-manager-release-plan.mjs record distribution "$PLATFORM_RUNNER"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.record.outputs.reusable == 'true'
+        with:
+          path: .local/distribution-validation
+          key: ${{ needs.prepare.outputs.winget_key }}
+          enableCrossOsArchive: true
+
 
   submit:
     needs: [prepare, homebrew, winget]
-    if: needs.prepare.outputs.needed == 'true' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.submit)
+    if: always() && !cancelled() && !failure() && needs.prepare.outputs.submit == 'true' && (github.event_name != 'workflow_dispatch' || inputs.submit)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

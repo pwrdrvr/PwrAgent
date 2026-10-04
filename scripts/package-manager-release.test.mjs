@@ -2,8 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
-import { auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { candidateKey, distributionNeeded, materializeRelease, auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
 import { submitChannel } from "./submit-package-manager-release.mjs";
 
 const version = "1.1.4";
@@ -18,9 +18,57 @@ const release = {
 };
 const hashes = Object.fromEntries(names.slice(0, 3).map((name, index) => [name, String(index + 1).repeat(64)]));
 const dirs = [];
-afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { vi.unstubAllGlobals(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
 describe("package manager release inputs", () => {
+  it("keeps idle and pending cron audits metadata-only, but reconciles missing channels", () => {
+    const audit = { stable: { version }, homebrew: { version, pending: [] }, winget: { version, pending: [] } };
+    expect(distributionNeeded(audit, "schedule")).toBe(false);
+    audit.winget = { version: null, pending: [{ url: "pending" }] };
+    expect(distributionNeeded(audit, "schedule")).toBe(false);
+    audit.winget.pending = [];
+    expect(distributionNeeded(audit, "schedule")).toBe(true);
+    expect(distributionNeeded(audit, "release", "v1.1.3")).toBe(false);
+    expect(distributionNeeded(audit, "pull_request")).toBe(true);
+  });
+
+  it("reuses only identical digest-pinned candidates, including the upgrade baseline", () => {
+    const pinned = { ...release, assets: release.assets.map((asset, id) => ({ ...asset, id, digest: `sha256:${"a".repeat(64)}` })) };
+    const key = candidateKey([pinned, pinned]);
+    expect(candidateKey([structuredClone(pinned), pinned])).toBe(key);
+    for (const patch of [{ id: 99 }, { size: 4 }, { digest: `sha256:${"b".repeat(64)}` }]) {
+      const changed = structuredClone(pinned);
+      Object.assign(changed.assets[0], patch);
+      expect(candidateKey([pinned, changed])).not.toBe(key);
+    }
+    expect(candidateKey([release])).toBeNull();
+  });
+
+  it("materializes repeated candidates without downloads and rejects corrupted cached checksums or installers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "package-release-"));
+    dirs.push(dir);
+    const sha = createHash("sha256").update("abc").digest("hex");
+    const contents = new Map(names.slice(0, 3).map((name) => [name, "abc"]));
+    contents.set(names[3], names.slice(0, 2).map((name) => `${sha}  ${name}`).join("\n"));
+    contents.set(names[4], `${sha}  ${names[2]}\n`);
+    const pinned = { ...release, assets: release.assets.map((asset, id) => ({
+      ...asset, id, size: Buffer.byteLength(contents.get(asset.name)),
+      digest: `sha256:${createHash("sha256").update(contents.get(asset.name)).digest("hex")}`,
+    })) };
+    const fetchAsset = vi.fn(async (url) => new Response(contents.get(url.split("/").at(-1))));
+    vi.stubGlobal("fetch", fetchAsset);
+    const cache = join(dir, "assets");
+    await materializeRelease(pinned, join(dir, "first"), cache);
+    await materializeRelease(pinned, join(dir, "second"), cache);
+    expect(fetchAsset).toHaveBeenCalledTimes(5);
+    await writeFile(join(cache, names[3]), "corrupt");
+    await expect(materializeRelease(pinned, join(dir, "bad"), cache)).rejects.toThrow(/mismatch/);
+    await writeFile(join(cache, names[3]), contents.get(names[3]));
+    await writeFile(join(cache, names[0]), "bad");
+    await expect(materializeRelease(pinned, join(dir, "bad"), cache)).rejects.toThrow(/mismatch/);
+    expect(fetchAsset).toHaveBeenCalledTimes(5);
+  });
+
   it("rejects drafts and every unpromoted or suffixed release", () => {
     for (const patch of [{ draft: true }, { prerelease: true }, { tag_name: "v1.1.4-beta.1" }, { tag_name: "1.1.4" }]) {
       expect(() => stableVersion({ ...release, ...patch })).toThrow(/promoted/);
