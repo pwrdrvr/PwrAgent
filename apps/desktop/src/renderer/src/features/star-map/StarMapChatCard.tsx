@@ -22,7 +22,7 @@ import {
   type NavigationThreadSummary,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
-import { CelestialIcon } from "../../icons";
+import { CelestialIcon, PencilIcon, TrashIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
@@ -33,8 +33,11 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
   type CompactComposerAction,
+  type CompactComposerDraftRestore,
   type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
+import { QueuedRowIconButton } from "../composer/QueuedMessageInspector";
+import { restoreQueuedMessage } from "../composer/queued-message-content";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import {
@@ -216,6 +219,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // backend, so the card says which one happened.
   const [sendNotice, setSendNotice] = useState<string | undefined>(undefined);
   const startRequestPendingRef = useRef(false);
+  // A queued send shows in the transcript at once, as an optimistic message
+  // that the thread's replay retires when the turn runs. A queued message
+  // that is deleted or taken back to edit never runs, so its optimistic
+  // copy has to be retired by hand. Keyed by queued-row id.
+  const queuedOptimisticIdsRef = useRef(new Map<string, string>());
+  const [draftRestore, setDraftRestore] =
+    useState<CompactComposerDraftRestore>();
+  const onDraftRestoreApplied = useCallback((id: number) => {
+    setDraftRestore((current) => current?.id === id ? undefined : current);
+  }, []);
   const onAttachmentError = useCallback((message?: string): void => {
     setAttachmentError(message);
     if (message) {
@@ -453,6 +466,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       );
       if (next.length !== current.length) {
         ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
+      }
+      for (const removed of current) {
+        if (removed.queueEntryId !== notification.queueEntryId) continue;
+        const optimisticId = queuedOptimisticIdsRef.current.get(removed.id);
+        queuedOptimisticIdsRef.current.delete(removed.id);
+        // Cancelled from another surface: it will never reach the replay.
+        if (optimisticId && notification.status === "cancelled") {
+          sessionRef.current.removeOptimisticMessage(optimisticId);
+        }
       }
     });
   }, [composerScopeKey, desktopApi, ownedComposerDraftStore, thread]);
@@ -1079,6 +1101,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         displayText,
         imageParts,
       );
+      queuedOptimisticIdsRef.current.set(queuedProjection.id, optimisticId);
       try {
         const response = await desktopApi.startTurn({
           backend: thread.source,
@@ -1117,6 +1140,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             );
           }
         }
+        if (response.queueStatus !== "queued") {
+          queuedOptimisticIdsRef.current.delete(queuedProjection.id);
+        }
         reportAcceptedReply();
         return true;
       } catch (error) {
@@ -1128,6 +1154,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
               .filter((queued) => queued.id !== queuedProjection.id),
           );
         }
+        queuedOptimisticIdsRef.current.delete(queuedProjection.id);
         sessionRef.current.removeOptimisticMessage(optimisticId);
         setSendError(
           error instanceof Error
@@ -1153,6 +1180,112 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       thread.source,
       ownedComposerDraftStore,
     ],
+  );
+
+  const forgetQueuedTurn = useCallback(
+    (queued: ComposerQueuedTurnSnapshot) => {
+      ownedComposerDraftStore?.removeQueuedTurnById(composerScopeKey, queued.id);
+      const optimisticId = queuedOptimisticIdsRef.current.get(queued.id);
+      queuedOptimisticIdsRef.current.delete(queued.id);
+      if (optimisticId) {
+        sessionRef.current.removeOptimisticMessage(optimisticId);
+      }
+    },
+    [composerScopeKey, ownedComposerDraftStore],
+  );
+
+  /** True once the owner has taken the message out of its queue. */
+  const cancelQueuedTurn = useCallback(
+    async (
+      queued: ComposerQueuedTurnSnapshot,
+      expectedContentHash?: string,
+    ): Promise<boolean> => {
+      if (!queued.queueEntryId) return true;
+      if (!desktopApi?.cancelQueuedTurn) {
+        setSendError("Queued turn cancellation is unavailable.");
+        return false;
+      }
+      try {
+        const response = await desktopApi.cancelQueuedTurn({
+          ...(federationTarget ? { federationTarget } : {}),
+          queueEntryId: queued.queueEntryId,
+          expectedContentHash,
+        });
+        if (response.cancelled) return true;
+        if (response.disposition === "already_admitted") {
+          // It is running. Its `started` event retires the row; once there
+          // is a turn id, nothing is left to wait for.
+          if (response.turnId) {
+            ownedComposerDraftStore?.removeQueuedTurnById(
+              composerScopeKey,
+              queued.id,
+            );
+          }
+          return false;
+        }
+        setSendError(
+          response.disposition === "content_changed"
+            ? "The queued message changed. Open it again before editing."
+            : "The queued turn is no longer waiting.",
+        );
+        return false;
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    },
+    [composerScopeKey, desktopApi, federationTarget, ownedComposerDraftStore],
+  );
+
+  const deleteQueuedTurn = useCallback(
+    async (queued: ComposerQueuedTurnSnapshot) => {
+      setSendError(undefined);
+      if (await cancelQueuedTurn(queued)) {
+        forgetQueuedTurn(queued);
+      }
+    },
+    [cancelQueuedTurn, forgetQueuedTurn],
+  );
+
+  const editQueuedTurn = useCallback(
+    async (queued: ComposerQueuedTurnSnapshot) => {
+      setSendError(undefined);
+      let editable = queued;
+      let contentHash: string | undefined;
+      if (queued.queueEntryId) {
+        if (!desktopApi?.readQueuedTurn) {
+          setSendError(
+            "Full queued message content is unavailable. The message remains queued.",
+          );
+          return;
+        }
+        try {
+          // The row holds a display preview; only the owner's input is
+          // editable content.
+          const content = await desktopApi.readQueuedTurn({
+            backend: thread.source,
+            threadId: thread.id,
+            queueEntryId: queued.queueEntryId,
+            forEdit: true,
+            ...(federationTarget ? { federationTarget } : {}),
+          });
+          contentHash = content.contentHash;
+          editable = restoreQueuedMessage(queued, content);
+        } catch (error) {
+          setSendError(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+      if (!(await cancelQueuedTurn(queued, contentHash))) return;
+      forgetQueuedTurn(queued);
+      setDraftRestore((current) => ({
+        id: (current?.id ?? 0) + 1,
+        draft: editable.text,
+        imageAttachments: editable.imageAttachments,
+        fileAttachments: editable.fileAttachments,
+      }));
+    },
+    [cancelQueuedTurn, desktopApi, federationTarget, forgetQueuedTurn, thread.id, thread.source],
   );
 
   const interrupt = useCallback(async () => {
@@ -1761,6 +1894,27 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                   {queued.title ?? queuedTurnPreview(queued)}
                 </span>
               </div>
+              <div className="composer__queued-actions">
+                <QueuedRowIconButton
+                  label="Edit"
+                  disabled={queued.backendQueuePending || composerDisabled}
+                  onClick={() => {
+                    void editQueuedTurn(queued);
+                  }}
+                >
+                  <PencilIcon size={14} />
+                </QueuedRowIconButton>
+                <QueuedRowIconButton
+                  label="Delete"
+                  tone="danger"
+                  disabled={queued.backendQueuePending}
+                  onClick={() => {
+                    void deleteQueuedTurn(queued);
+                  }}
+                >
+                  <TrashIcon size={14} />
+                </QueuedRowIconButton>
+              </div>
             </div>
           ))}
         </div>
@@ -1772,6 +1926,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           }
           canSteer={canSteer}
           disabled={composerDisabled}
+          draftRestore={draftRestore}
           draftScopeKey={composerScopeKey}
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}
@@ -1784,6 +1939,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           model={threadModel}
           normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
           onAttachmentError={onAttachmentError}
+          onDraftRestoreApplied={onDraftRestoreApplied}
           onInterrupt={onInterrupt}
           onSend={send}
           pastedImageMaxPatches={props.pastedImageMaxPatches}

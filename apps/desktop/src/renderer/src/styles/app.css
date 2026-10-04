@@ -32716,8 +32716,9 @@ button.pricing-token-miser__folded:focus-visible {
   object-fit: cover;
 }
 
-/* The Star Map card's row: read-only, so no chevron and no actions, and a
-   size down to match the compact composer below it. */
+/* The Star Map card's row: no chevron (the card has no room to open a full
+   message; Edit puts it in the composer instead), and a size down to match
+   the compact composer below it. */
 .composer__queued--message.composer__queued--compact {
   min-height: 28px;
   padding: 0 8px;
@@ -32734,6 +32735,16 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__queued--compact .composer__queued-text {
   font-size: 12px;
+}
+
+.composer__queued--compact > .composer__queued-actions {
+  height: 26px;
+  padding-right: 2px;
+}
+
+.composer__queued--compact .composer__queued-icon-action {
+  width: 22px;
+  height: 22px;
 }
 
 /* Second-line content sits under the label, past the chevron. */
