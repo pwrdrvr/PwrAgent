@@ -36,10 +36,11 @@ export function interactiveSvgDocument(
   if (!interactive) return undefined;
 
   const serialized = new XMLSerializer().serializeToString(svg);
+  const rootWidth = interactiveSvgRootWidth(svg);
   return `<!doctype html><html><head>
     <meta http-equiv="Content-Security-Policy" content="${INTERACTIVE_SVG_CSP}">
     <meta name="referrer" content="no-referrer">
-    <style>:root { color-scheme: ${colorScheme}; } html { height: 100%; overflow: auto; } body { display: flex; flex-direction: column; min-height: 100%; margin: 0; } svg { display: block; flex: none; max-width: 100%; height: auto; margin: auto; background: Canvas; border-radius: 4px; }</style>
+    <style>:root { color-scheme: ${colorScheme}; } html { height: 100%; overflow: auto; } body { display: flex; flex-direction: column; min-height: 100%; margin: 0; } body > svg { display: block; flex: none; width: ${rootWidth}; margin: auto; background: Canvas; border-radius: 4px; } body > svg[viewBox] { height: auto; }</style>
     <script>
       (function() {
         const replaceState = history.replaceState.bind(history);
@@ -80,4 +81,28 @@ export function interactiveSvgDocument(
       });
     </script>
   </body></html>`;
+}
+
+const PIXEL_LENGTH = /^\s*(\d+(?:\.\d+)?|\.\d+)(?:px)?\s*$/;
+
+/**
+ * The root's CSS width, fixed when the document is built.
+ *
+ * It cannot be read back from the SVG later: inferno's fluid layout removes
+ * the root's `width` and `viewBox` in its load handler, and an inline `<svg>`
+ * with no width left is sized at the 300px replaced-element default. Capping
+ * at the declared width matches the preview, which never upscales; an SVG that
+ * declares no pixel width fills the frame, as it would as a document of its
+ * own. The height is the SVG's own `height` attribute, except while a viewBox
+ * gives it a ratio to follow (`body > svg[viewBox]`), so a fluid graph keeps
+ * the pixel height its frames are laid out in.
+ */
+function interactiveSvgRootWidth(svg: Element): string {
+  const width = PIXEL_LENGTH.exec(svg.getAttribute("width") ?? "");
+  if (width && Number(width[1]) > 0) return `min(100%, ${Number(width[1])}px)`;
+  const viewBox = (svg.getAttribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
+  if (viewBox.length === 4 && viewBox[2] > 0 && viewBox[3] > 0) {
+    return `min(100%, calc(100vh * ${viewBox[2] / viewBox[3]}))`;
+  }
+  return "100%";
 }
