@@ -3207,6 +3207,85 @@ describe("DesktopBackendRegistry", () => {
     } finally { await registry.close(); }
   });
 
+  it("restores the remembered stock director after restart with current settings and no catalog replacement", async () => {
+    const threadId = "persisted-director";
+    const resume = vi.fn(async (_params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]) => {});
+    const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const overlayStore = { ...createOverlayStoreMock({ overlays: {
+      [`codex:${threadId}`]: { backend: "codex", threadId, model: "gpt-5.4", reasoningEffort: "high", serviceTier: "priority", executionMode: "full-access", extraLinkedDirectories: [] },
+    } }), getVoiceManagerThread: () => ({ backend: "codex", threadId }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true });
+    try {
+      const voice = await registry.acquireNativeVoiceBackend(threadId);
+      expect(resume).toHaveBeenCalledWith(expect.objectContaining({
+        threadId, model: "gpt-5.4", reasoningEffort: "high", serviceTier: "priority", approvalPolicy: "never", sandbox: "danger-full-access",
+      }));
+      expect(resume.mock.calls[0]).toHaveLength(1);
+      expect(resume.mock.calls[0][0]).not.toHaveProperty("dynamicTools");
+      expect(client.refreshThreadTools).not.toHaveBeenCalled();
+      expect(client.startTurnCalls).toHaveLength(0);
+      expect(client.startRealtime).not.toHaveBeenCalled();
+      voice.release();
+      await emitStartedTurn(registry, "codex", threadId, "sample-active-turn");
+      const active = await registry.acquireNativeVoiceBackend(threadId);
+      expect(resume).toHaveBeenCalledOnce();
+      const searched = await client.emitRequest({ method: "item/tool/call", params: {
+        threadId, turnId: "sample-active-turn", callId: "restored-search", requestId: "restored-search",
+        namespace: "pwragent", tool: "tool_search", arguments: { query: "get_thread_status", limit: 1 },
+      } } as AppServerPendingRequestNotification) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(searched.success).toBe(true);
+      expect(JSON.parse(searched.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
+      active.release();
+    } finally { await registry.close(); }
+  });
+
+  it("keeps ordinary idle threads and custom director environments behind verified refresh", async () => {
+    const resume = vi.fn(async (_params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]) => {});
+    const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const runtime: CodexThreadEnvironmentRuntime = {
+      environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local",
+      cwd: "/sample/voice-manager", shellEnvironment: { SAMPLE_TOOLCHAIN: "changed" },
+    };
+    const overlayStore = { ...createOverlayStoreMock({ overlays: {
+      "codex:persisted-director": { backend: "codex", threadId: "persisted-director", codexEnvironmentRuntime: runtime, extraLinkedDirectories: [] },
+    } }), getVoiceManagerThread: () => ({ backend: "codex", threadId: "persisted-director" }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    try {
+      for (const threadId of ["ordinary-thread", "persisted-director"]) {
+        await expect(registry.acquireNativeVoiceBackend(threadId)).rejects.toThrow("Select a supported PwrAgent managed Codex runtime");
+      }
+      expect(resume).not.toHaveBeenCalled();
+    } finally { await registry.close(); }
+  });
+
+  it("prefers negotiated director refresh when available and propagates stock restoration failures", async () => {
+    const resume = vi.fn(async (_params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]) => { throw new Error("Sample restoration rejected"); });
+    const client = Object.assign(voiceClient(), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const overlayStore = { ...createOverlayStoreMock(), getVoiceManagerThread: () => ({ backend: "codex", threadId: "persisted-director" }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    try {
+      const voice = await registry.acquireNativeVoiceBackend("persisted-director");
+      expect(client.refreshThreadTools).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      voice.release();
+    } finally { await registry.close(); }
+    const stock = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const stockRegistry = new DesktopBackendRegistry({ codexClient: stock, overlayStore });
+    try {
+      await expect(stockRegistry.acquireNativeVoiceBackend("persisted-director")).rejects.toThrow("Sample restoration rejected");
+      expect(stock.startRealtime).not.toHaveBeenCalled();
+      expect(stock.refreshThreadTools).not.toHaveBeenCalled();
+    } finally { await stockRegistry.close(); }
+  });
+
   it("uses negotiated refresh when fresh voice proof no longer matches", async () => {
     const client = Object.assign(voiceClient(), { prepareFreshNativeVoiceThread: vi.fn(async () => false) });
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });

@@ -261,18 +261,37 @@ for the effective model, effort, service tier, approval and sandbox settings.
 proof of the selected effort. The fresh director's generic discovery catalog
 is sufficient; eager director tools optimize latency but do not add authority.
 
-An App Server reset, a coding turn, thread closure or catalog refresh
-invalidates this proof. A persisted thread or changed catalog/environment
-still requires negotiated refresh. If the runtime lacks that extension,
-select a supported PwrAgent managed Codex runtime in Settings. Restarting the
-app or recreating the manager cannot add refresh support. Active coding
-threads keep their existing catalog ownership path.
+Owned realtime handoffs retain admitted catalog proof for another voice
+session in the same process. An App Server reset, an unowned coding turn,
+thread closure, catalog refresh, or local turn/review mutation revokes it.
+Revocation precedes resume, even if settings or inference later fail.
+
+The remembered Voice manager uses ordinary `thread/resume` on stock Codex
+when current-process proof is unavailable. Codex restores the tools registered
+at creation; PwrAgent awaits current model, effort, service tier, workspace,
+approval and sandbox settings before opening voice. This preserves the
+manager's thread and history across app restarts. With discovery enabled,
+the registered `tool_search` bootstrap returns current PwrAgent definitions;
+tool dispatch still checks live turn ownership and current permissions.
+Resume does not replace the persisted catalog or establish proof that it
+equals the current catalog. New wire tools or changed schemas can still need
+a supported managed runtime's refresh extension. A manager with a custom
+execution environment, or any other idle thread with unknown/drifted catalog
+ownership, retains the verified-refresh requirement. Active coding threads
+keep their existing catalog ownership path.
 
 A separate local stock 0.160.0 process acknowledged an ephemeral
 `thread/start` with a contrived dynamic tool and a subsequent
 `thread/settings/update` with model, effort, approval and sandbox settings.
 Its `server/capabilities/read` call returned an unsupported-method error.
 This probe sent no inference, realtime or microphone request.
+
+A second stock 0.160.0 probe used an isolated Codex home and a loopback
+Responses fixture. After process exit, ordinary resume restored the exact
+creation-time discovery schema in the next model request, and the settings
+update was acknowledged. Both contrived turns completed. This probe used no
+cloud inference, realtime session or microphone; a spoken session after an
+app restart remains an operator validation step.
 
 ## Validation
 

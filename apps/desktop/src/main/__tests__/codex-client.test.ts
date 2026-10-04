@@ -14301,6 +14301,167 @@ describe("CodexAppServerClient", () => {
       } finally { await client.close(); }
     });
 
+    it("reuses admitted catalog proof after an owned realtime handoff and stop on stock 0.160", async () => {
+      MockTransport.serverVersion = "0.160.0";
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        const admission = { ...settings, threadId, dynamicTools };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        const realtime = { threadId, version: "v3" as const, outputModality: "audio" as const,
+          transport: { type: "webrtc" as const, sdp: "v=0\r\nsample" } };
+        await client.startRealtime(realtime);
+        const transport = MockTransport.instances.at(-1)!;
+        transport.emitInbound({ method: "turn/started", params: { threadId, turn: { id: "voice-handoff", status: "inProgress" } } });
+        transport.emitInbound({ method: "turn/completed", params: { threadId, turn: { id: "voice-handoff", status: "completed" } } });
+        await client.stopRealtime(threadId);
+        expect(await client.prepareFreshNativeVoiceThread({ ...admission, model: "updated-model", reasoningEffort: "high", approvalPolicy: "never", sandbox: "danger-full-access" })).toBe(true);
+        await client.startRealtime(realtime);
+        await client.stopRealtime(threadId);
+        const requests = MockTransport.instances.flatMap((item) => item.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+        expect(requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(2);
+        expect(requests.filter((request) => request.method === "thread/settings/update")).toHaveLength(2);
+        expect(requests.filter((request) => request.method === "thread/settings/update").at(-1)?.params).toMatchObject({ model: "updated-model", effort: "high", approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
+        expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
+        expect(await client.prepareFreshNativeVoiceThread({ ...admission, dynamicTools: [] })).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it.each(["turn/started", "thread/closed", "reset"])("revokes admitted proof on unowned %s", async (event) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        const admission = { ...settings, threadId, dynamicTools };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        if (event === "reset") await client.close();
+        else MockTransport.instances.at(-1)!.emitInbound({ method: event, params: { threadId, turn: { id: "unknown-turn", status: "inProgress" } } });
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it("revokes admitted proof before a failed catalog refresh", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        const admission = { ...settings, threadId, dynamicTools };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        MockTransport.threadResumeError = { message: "Sample refresh failed" };
+        await expect(client.refreshThreadTools(admission)).rejects.toThrow("Sample refresh failed");
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it.each([
+      ["catalog", "settings"], ["catalog", "review"],
+      ["environment", "settings"], ["environment", "review"],
+    ] as const)("revokes admitted proof before review changes %s when %s fails", async (mutation, failure) => {
+      MockTransport.serverCapabilitiesResult = {
+        codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
+      };
+      const runtime = {
+        environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local" as const,
+        cwd: settings.cwd, shellEnvironment: { SAMPLE_TOOLCHAIN: "original" },
+      };
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools, codexEnvironmentRuntime: runtime });
+        const admission = { ...settings, threadId, dynamicTools, codexEnvironmentRuntime: runtime };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        await client.startRealtime({ threadId, version: "v3", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0\r\nsample" } });
+        const transport = MockTransport.instances.at(-1)!;
+        transport.emitInbound({ method: "turn/started", params: { threadId, turn: { id: "voice-handoff", status: "inProgress" } } });
+        transport.emitInbound({ method: "turn/completed", params: { threadId, turn: { id: "voice-handoff", status: "completed" } } });
+        await client.stopRealtime(threadId);
+        if (failure === "settings") MockTransport.threadSettingsUpdateError = "Sample settings rejected.";
+        else {
+          const send = transport.send.bind(transport);
+          vi.spyOn(transport, "send").mockImplementation((message) => {
+            const request = JSON.parse(message);
+            if (request.method === "review/start") {
+              transport.sentMessages.push(message);
+              transport.emitInbound({ id: request.id, error: { code: -32000, message: "Sample review rejected." } });
+            } else send(message);
+          });
+        }
+        await expect(client.startReview({
+          ...settings, threadId, target: { type: "uncommittedChanges" }, model: "updated-model", reasoningEffort: "high",
+          ...(mutation === "catalog" ? { dynamicTools: [{ ...dynamicTools[0], name: "fixture_changed" }] } : {}),
+          codexEnvironmentRuntime: mutation === "environment"
+            ? { ...runtime, shellEnvironment: { SAMPLE_TOOLCHAIN: "changed" } } : runtime,
+        })).rejects.toThrow(failure === "settings" ? "Sample settings rejected" : "Sample review rejected");
+        const requests = transport.sentMessages.map((message) => JSON.parse(message));
+        expect(requests.filter((request) => request.method === "thread/resume")).toHaveLength(1);
+        expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject(mutation === "catalog"
+          ? { dynamicTools: [{ ...dynamicTools[0], name: "fixture_changed" }] }
+          : { config: { "shell_environment_policy.set.SAMPLE_TOOLCHAIN": "changed" } });
+        MockTransport.threadSettingsUpdateError = undefined;
+        const settingsCount = requests.filter((request) => request.method === "thread/settings/update").length;
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(false);
+        expect(transport.sentMessages.map((message) => JSON.parse(message))
+          .filter((request) => request.method === "thread/settings/update")).toHaveLength(settingsCount);
+      } finally { await client.close(); }
+    });
+
+    it("restores a persisted director catalog on stock without claiming current catalog proof", async () => {
+      MockTransport.serverVersion = "0.160.0";
+      const updating = deferred();
+      const finishUpdate = deferred();
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex", directoryResolver: async () => [],
+        connectionObserver: { onMessage: async (event) => {
+          if (event.direction === "outbound" && event.envelope.method === "thread/settings/update") {
+            updating.resolve();
+            await finishUpdate.promise;
+          }
+        } },
+      });
+      try {
+        let settled = false;
+        const resume = client.resumeNativeVoiceThread({
+          ...settings, threadId: "persisted-director", model: "updated-model", reasoningEffort: "high", serviceTier: "fast",
+          approvalPolicy: "never", sandbox: "danger-full-access",
+        });
+        void resume.then(() => { settled = true; });
+        await updating.promise;
+        expect(settled).toBe(false);
+        finishUpdate.resolve();
+        await resume;
+        const requests = MockTransport.instances.flatMap((item) => item.sentMessages.map((message) => JSON.parse(message)));
+        const restored = requests.find((request) => request.method === "thread/resume");
+        expect(restored.params).toMatchObject({ threadId: "persisted-director", cwd: settings.cwd });
+        expect(restored.params).not.toHaveProperty("dynamicTools");
+        expect(restored.params).not.toHaveProperty("baseInstructions");
+        expect(restored.params).not.toHaveProperty("developerInstructions");
+        const updated = requests.find((request) => request.method === "thread/settings/update");
+        expect(updated.params).toMatchObject({ model: "updated-model", effort: "high", serviceTier: "priority", approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
+        expect(requests.indexOf(updated)).toBeGreaterThan(requests.indexOf(restored));
+        expect(requests.some((request) => ["thread/start", "turn/start", "thread/realtime/start"].includes(request.method))).toBe(false);
+        expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId: "persisted-director", dynamicTools })).toBe(false);
+      } finally { finishUpdate.resolve(); await client.close(); }
+    });
+
+    it.each(["active", "resume", "settings"])("rejects persisted voice restoration on %s failure", async (failure) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        if (failure === "active") MockTransport.readThreadResultByThreadId.set("persisted-director", { thread: { id: "persisted-director", status: { type: "active" } } });
+        if (failure === "resume") MockTransport.threadResumeError = { message: "Sample resume rejected" };
+        if (failure === "settings") MockTransport.threadSettingsUpdateError = "Sample settings rejected";
+        await expect(client.resumeNativeVoiceThread({ ...settings, threadId: "persisted-director", model: "sample-model" }))
+          .rejects.toThrow(failure === "active" ? "current turn" : `Sample ${failure} rejected`);
+        const requests = MockTransport.instances.flatMap((item) => item.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.some((request) => request.method === "thread/realtime/start")).toBe(false);
+        expect(requests.some((request) => request.method === "thread/resume")).toBe(failure !== "active");
+        expect(requests.some((request) => request.method === "thread/settings/update")).toBe(failure === "settings");
+      } finally { await client.close(); }
+    });
+
     it.each([false, true])("awaits settings acknowledgment and rechecks ownership (invalidated: %s)", async (invalidate) => {
       const updating = deferred();
       const finishUpdate = deferred();
