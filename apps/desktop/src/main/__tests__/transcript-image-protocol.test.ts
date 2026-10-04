@@ -238,6 +238,30 @@ describe("transcript image protocol", () => {
     });
   });
 
+  it("serves public GitHub attachments and revalidates renderer-controlled protocol requests", async () => {
+    const { installTranscriptImageProtocol } = await import("../transcript-image-protocol");
+    const { toGitHubAttachmentImageProtocolUrl } = await import("@pwragent/shared");
+    const source = "https://github.com/user-attachments/assets/11111111-2222-3333-4444-555555555555";
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const fetchImage = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(png, {
+      headers: { "content-type": "image/png" },
+    }));
+    try {
+      installTranscriptImageProtocol();
+      const handler = protocolHandleMock.mock.calls[0]?.[1] as (request: Request) => Promise<Response>;
+      const response = await handler(new Request(toGitHubAttachmentImageProtocolUrl(source)));
+      expect(response.status).toBe(200);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+      fetchImage.mockClear();
+      expect((await handler(new Request(toGitHubAttachmentImageProtocolUrl("http://localhost/private")))).status).toBe(403);
+      expect((await handler(new Request(toGitHubAttachmentImageProtocolUrl(source), { method: "POST" }))).status).toBe(403);
+      expect((await handler(new Request("pwragent-image://github/%ZZ"))).status).toBe(400);
+      expect(fetchImage).not.toHaveBeenCalled();
+    } finally {
+      fetchImage.mockRestore();
+    }
+  });
+
   it("serves federation protocol URLs through the remote image resolver", async () => {
     const {
       installTranscriptImageProtocol,

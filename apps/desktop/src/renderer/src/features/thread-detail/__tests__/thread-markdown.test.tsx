@@ -1367,7 +1367,7 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("button", { name: /Collapse quote/ })).not.toBeInTheDocument();
   });
 
-  it("renders markdown image syntax as literal text instead of an image", () => {
+  it("keeps images outside the public GitHub attachment allowlist inert", () => {
     const { container } = render(
       <ThreadMarkdown
         text={"Keep ![Transcript preview](https://example.com/preview.png) inert for now."}
@@ -1378,6 +1378,24 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain(
       "![Transcript preview](https://example.com/preview.png)"
     );
+  });
+
+  it("renders public GitHub attachment Markdown through the image protocol", () => {
+    const url = "https://github.com/user-attachments/assets/11111111-2222-3333-4444-555555555555";
+    render(<ThreadMarkdown text={`![Synthetic preview](${url})`} />);
+    const image = screen.getByRole("img", { name: "Synthetic preview" });
+    expect(image).toHaveAttribute("src", `pwragent-image://github/${encodeURIComponent(url)}`);
+    expect(image).toHaveAttribute("loading", "lazy");
+    expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
+    fireEvent.error(image);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText(`![Synthetic preview](${url})`)).toBeInTheDocument();
+  });
+
+  it("does not create images from raw HTML or attachment URLs inside code fences", () => {
+    const url = "https://github.com/user-attachments/assets/11111111-2222-3333-4444-555555555555";
+    const { container } = render(<ThreadMarkdown text={`<img src="${url}" />\n\n\`\`\`md\n![Preview](${url})\n\`\`\``} />);
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("renders wide review-style markdown tables with transcript table chrome", () => {

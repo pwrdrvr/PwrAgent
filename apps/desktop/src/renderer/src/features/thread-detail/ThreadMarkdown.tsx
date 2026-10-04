@@ -2,6 +2,8 @@ import {
   findSharedSkillNames,
   isSharedSkillName,
   isThreadUrl,
+  isGitHubAttachmentImageUrl,
+  toGitHubAttachmentImageProtocolUrl,
   isWindowsFilesystemPath,
   PWRAGENT_URL_SCHEME,
   type AppServerSkillSummary,
@@ -564,11 +566,7 @@ const markdownComponents: Components = {
     const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
     const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
-    return (
-      <span className="thread-markdown__image-literal">
-        {`![${altText}](${src}${title})`}
-      </span>
-    );
+    return <MarkdownImage key={src} alt={altText} src={src} title={title} />;
   },
   ol(listProps) {
     return <ol className="transcript-message__list" start={listProps.start}>{listProps.children}</ol>;
@@ -621,6 +619,28 @@ const markdownComponents: Components = {
     return <ul className="transcript-message__list">{listProps.children}</ul>;
   },
 };
+
+function MarkdownImage(props: { alt: string; src: string; title: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!failed && isGitHubAttachmentImageUrl(props.src)) {
+    return (
+      <img
+        className="thread-markdown__attachment-image"
+        src={toGitHubAttachmentImageProtocolUrl(props.src)}
+        alt={props.alt}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <span className="thread-markdown__image-literal">
+      {`![${props.alt}](${props.src}${props.title})`}
+    </span>
+  );
+}
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const sourceMarkdownText = useMemo(

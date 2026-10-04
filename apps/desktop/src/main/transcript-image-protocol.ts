@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
 import { isPwrSnapSignedMediaUrl } from "./pwrsnap-media-url";
+import { fetchGitHubAttachmentImage } from "./github-attachment-image";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 
 export const TRANSCRIPT_IMAGE_PROTOCOL_SCHEME = "pwragent-image";
@@ -1112,6 +1113,17 @@ export function installTranscriptImageProtocol(
   options: TranscriptImageProtocolInstallOptions = {},
 ): void {
   protocol.handle(TRANSCRIPT_IMAGE_PROTOCOL_SCHEME, async (request) => {
+    const requestUrl = new URL(request.url);
+    if (requestUrl.hostname === "github") {
+      if (request.method !== "GET" || requestUrl.username || requestUrl.password || requestUrl.port) {
+        return new Response("Invalid attachment image request", { status: 403 });
+      }
+      try {
+        return await fetchGitHubAttachmentImage(decodeURIComponent(requestUrl.pathname.slice(1)));
+      } catch {
+        return new Response("Invalid attachment image URL", { status: 400 });
+      }
+    }
     const federatedRequest = decodeFederatedTranscriptImageProtocolRequest(
       request.url,
     );
