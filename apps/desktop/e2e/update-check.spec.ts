@@ -7,8 +7,8 @@
 //
 // The fake is opted into with `PWRAGENT_DEV_FAKE_UPDATE`, and that opt-in is
 // read inside the `!productionUpdatesEnabled()` branch, ahead of the Linux
-// one. So this spec runs on every platform, including the Linux lane, where a
-// packaged build answers `skipped` and offers no in-app download at all.
+// one. So this spec runs on every platform, including portable Linux builds
+// that cannot use the production updater.
 
 import {
   expect,

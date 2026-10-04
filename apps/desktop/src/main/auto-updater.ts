@@ -15,6 +15,7 @@ import type {
   AppUpdateCheckResult,
   AppUpdateDirection,
   AppUpdateInstallResult,
+  AppManualUpdateInstructions,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
   AppUpdateStatus,
@@ -145,6 +146,7 @@ type GitHubReleaseAsset = {
 const MAC_UPDATE_CHANNEL_FILE = "latest-mac.yml";
 
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
+  nextStatus = withLinuxUpdateHelp(nextStatus);
   updateStatus = nextStatus;
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) {
@@ -544,15 +546,65 @@ async function simulateDevUpdateCheck(
   return await updateCheckInFlight;
 }
 
-function linuxManualPackageUpdateCheckResult(): AppUpdateCheckResult {
+// Use the updater electron-updater selected from electron-builder's packaged
+// `resources/package-type`, rather than treating every Linux installation alike.
+function linuxPackageUpdater() {
+  if (process.platform !== "linux") return undefined;
+  if (
+    autoUpdater instanceof electronUpdater.DebUpdater
+    || autoUpdater instanceof electronUpdater.RpmUpdater
+    || autoUpdater instanceof electronUpdater.PacmanUpdater
+  ) return autoUpdater;
+  return undefined;
+}
+
+function linuxUpdateFormat(): "deb" | "rpm" | "pacman" | "AppImage" | undefined {
+  if (process.platform !== "linux") return undefined;
+  if (autoUpdater instanceof electronUpdater.DebUpdater) return "deb";
+  if (autoUpdater instanceof electronUpdater.RpmUpdater) return "rpm";
+  if (autoUpdater instanceof electronUpdater.PacmanUpdater) return "pacman";
+  if (autoUpdater instanceof electronUpdater.AppImageUpdater && process.env.APPIMAGE) {
+    return "AppImage";
+  }
+  return undefined;
+}
+
+function linuxManualUpdateCheckResult(): AppUpdateCheckResult {
   return {
     status: "skipped",
-    reason: "Linux builds are updated by installing a newer package.",
+    reason: "This portable Linux build cannot update itself. Download a newer tar.gz from https://github.com/pwrdrvr/PwrAgent/releases and replace the extracted directory. DEB, RPM, and pacman installations support in-app updates.",
   };
 }
 
-function linuxManualPackageUpdatesEnabled(): boolean {
-  return process.platform === "linux";
+function linuxManualUpdatesRequired(): boolean {
+  return process.platform === "linux" && linuxUpdateFormat() === undefined;
+}
+
+function linuxUpdateArtifactSuffix(format: string): string {
+  const arch = process.arch === "x64"
+    ? (format === "deb" ? "amd64" : format === "rpm" ? "x86_64" : "x64")
+    : (format === "rpm" || format === "pacman" ? "aarch64" : process.arch);
+  return `-linux-${arch}.${format}`;
+}
+
+function linuxManualUpdateInstructions(tag?: string): AppManualUpdateInstructions | undefined {
+  const format = linuxUpdateFormat();
+  if (!format || format === "AppImage" || !["x64", "arm64"].includes(process.arch)) return undefined;
+  const filename = `PwrAgent-linux-${process.arch}.${format}`;
+  const source = tag
+    ? `download/${encodeURIComponent(tag)}/PwrAgent-${encodeURIComponent(tag.replace(/^v/i, ""))}${linuxUpdateArtifactSuffix(format)}`
+    : `latest/download/${filename}`;
+  const install = format === "deb" ? "apt install" : format === "rpm" ? "rpm -Uvh --oldpackage" : "pacman -U";
+  return {
+    description: `To install ${tag ? tag : "the latest stable release"} manually, close PwrAgent and run this command in a terminal. Installation requires administrator authorization.`,
+    command: `curl -fL -o "${filename}" "https://github.com/pwrdrvr/PwrAgent/releases/${source}" && sudo ${install} "./${filename}"`,
+  };
+}
+
+function withLinuxUpdateHelp<T extends AppUpdateCheckResult | AppUpdateStatus>(result: T, tag?: string): T {
+  if (result.status !== "error" && result.status !== "skipped") return result;
+  const manualUpdate = linuxManualUpdateInstructions(tag);
+  return manualUpdate ? { manualUpdate, ...result } : result;
 }
 
 function preserveDownloadedStatus(nextStatus: AppUpdateStatus): boolean {
@@ -595,9 +647,9 @@ function downloadedUpdateMatchesChannel(
 
 function syncAutoInstallOnAppQuit(updateSelection: UpdateSelectionKey): void {
   const eligibleDownload = downloadedUpdateMatchesChannel(updateSelection);
-  if (eligibleDownload?.direction === "downgrade") {
-    // Moving back down a channel is never something to do behind the
-    // operator's back on the next quit. It waits for the explicit restart.
+  if (process.platform === "linux" || eligibleDownload?.direction === "downgrade") {
+    // A Linux privilege prompt and a move back down a channel both require
+    // the explicit Restart action, never an ordinary quit.
     autoUpdater.autoInstallOnAppQuit = false;
     return;
   }
@@ -710,8 +762,8 @@ async function runAppUpdateCheck(
     return result;
   }
 
-  if (linuxManualPackageUpdatesEnabled()) {
-    const result = linuxManualPackageUpdateCheckResult();
+  if (linuxManualUpdatesRequired()) {
+    const result = linuxManualUpdateCheckResult();
     setUpdateStatus(result);
     return result;
   }
@@ -875,9 +927,9 @@ async function runAppUpdateCheck(
             deferredUpdateCheckTimer.unref?.();
           }
         }
-        return { status: "skipped", reason: err.message };
+        return withLinuxUpdateHelp({ status: "skipped" as const, reason: err.message });
       }
-      const result = {
+      const result = withLinuxUpdateHelp({
         status: "error",
         message:
           failureContext === undefined
@@ -885,7 +937,7 @@ async function runAppUpdateCheck(
             // name — the generic summary is all the truth there is.
             ? summarizeUpdateError(err)
             : describeUpdateCheckFailure(err, failureContext),
-      } as const;
+      } as const, failureContext?.tag);
       setUpdateStatusUnlessDownloaded(result);
       // The log keeps the whole error — URL, headers, stack. `result.message`
       // is only what Settings shows, and diagnosing a feed failure from the
@@ -1258,6 +1310,15 @@ function hasMacUpdateAssets(release: GitHubRelease): boolean {
 export function selectAppUpdateReleases(
   releases: GitHubRelease[],
 ): SelectedUpdateReleases {
+  if (process.platform === "linux") {
+    const format = linuxUpdateFormat();
+    const channelFile = process.arch === "x64" ? "latest-linux.yml" : `latest-linux-${process.arch}.yml`;
+    return selectChannelReleases(releases.filter((release) =>
+      format !== undefined
+      && hasUploadedReleaseAsset(release, (name) => name === channelFile)
+      && hasUploadedReleaseAsset(release, (name) => name.endsWith(linuxUpdateArtifactSuffix(format))),
+    ));
+  }
   return selectChannelReleases(releases.filter(hasMacUpdateAssets));
 }
 
@@ -1452,7 +1513,7 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
     if (
       initialized
       && productionUpdatesEnabled()
-      && !linuxManualPackageUpdatesEnabled()
+      && !linuxManualUpdatesRequired()
       && !updateCheckInFlight
       && !activeDownload
       && version
@@ -1516,9 +1577,9 @@ export function initAutoUpdater(): void {
     return;
   }
 
-  if (linuxManualPackageUpdatesEnabled()) {
-    log.info("auto-update disabled for Linux package builds");
-    setUpdateStatus(linuxManualPackageUpdateCheckResult());
+  if (linuxManualUpdatesRequired()) {
+    log.info("auto-update disabled for portable Linux builds");
+    setUpdateStatus(linuxManualUpdateCheckResult());
     return;
   }
 
@@ -1529,7 +1590,9 @@ export function initAutoUpdater(): void {
   // docs/desktop-release-runbook.md.
   autoUpdater.logger = log as unknown as Console;
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Native Linux packages elevate through the package manager. Only the
+  // explicit Restart action may prompt for authorization, never ordinary quit.
+  autoUpdater.autoInstallOnAppQuit = process.platform !== "linux";
   configureAutoUpdaterChannel();
   try {
     let previousSelection = currentUpdateSelectionKey();
@@ -1668,7 +1731,30 @@ export async function installDownloadedAppUpdate(options?: {
   try {
     log.info("installing downloaded update", { version });
     let updateHandoffPromise: Promise<void> | undefined;
+    let installFailure: Extract<AppUpdateInstallResult, { status: "error" }> | undefined;
     const performQuit = (): void => {
+      const linuxUpdater = linuxPackageUpdater();
+      if (linuxUpdater) {
+        // Linux authorization can fail or be canceled. BaseUpdater installs
+        // synchronously and schedules app.quit() with setImmediate only on
+        // success. Ask BEFORE teardown so a declined prompt leaves a running
+        // app; latch below before its scheduled quit can reach before-quit.
+        let installError: Error | undefined;
+        const captureError = (error: Error): void => { installError = error; };
+        linuxUpdater.once("error", captureError);
+        try {
+          linuxUpdater.quitAndInstall();
+        } finally {
+          linuxUpdater.removeListener("error", captureError);
+        }
+        if (installError) {
+          installFailure = withLinuxUpdateHelp({
+            status: "error" as const,
+            message: `Installation failed or authorization was canceled: ${summarizeUpdateError(installError)}`,
+          }, `v${version}`);
+          return;
+        }
+      }
       // The accepted update is now irreversible. Latch immediately so a user
       // closing the last window while teardown runs cannot start another quit.
       markUpdateInstallInProgress();
@@ -1685,7 +1771,13 @@ export async function installDownloadedAppUpdate(options?: {
           // From this point onward the updater owns before-quit. Set the ready
           // latch immediately before the synchronous native handoff.
           markUpdateInstallUpdaterQuitReady();
-          autoUpdater.quitAndInstall();
+          if (linuxUpdater) {
+            // The package is installed and its relaunch is armed. Its first
+            // quit may have been held by before-quit while preparation ran.
+            app.quit();
+          } else {
+            autoUpdater.quitAndInstall();
+          }
         });
     };
     if (options?.requestQuit) {
@@ -1699,12 +1791,12 @@ export async function installDownloadedAppUpdate(options?: {
     } else {
       performQuit();
     }
-    return { status: "restarting" };
+    return installFailure ?? { status: "restarting" };
   } catch (err) {
-    return {
-      status: "error",
+    return withLinuxUpdateHelp({
+      status: "error" as const,
       message: err instanceof Error ? err.message : String(err),
-    };
+    }, `v${version}`);
   }
 }
 

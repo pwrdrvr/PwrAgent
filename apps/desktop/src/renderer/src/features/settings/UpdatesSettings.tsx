@@ -33,6 +33,7 @@ import {
   SettingsSectionStack,
   useSettingsFieldPending,
 } from "./SettingsLayout";
+import { copyText } from "../../lib/copy-text";
 import { ReleaseNotesLink } from "../update/ReleaseNotesLink";
 import { ReleaseSlotMatrix } from "./ReleaseSlotMatrix";
 import { sourceBadge } from "./settings-fields";
@@ -42,7 +43,7 @@ function updateResultText(result: AppUpdateCheckResult): string {
     return result.reason;
   }
   if (result.status === "error") {
-    return `Update check failed: ${result.message}`;
+    return `Update failed: ${result.message}`;
   }
   if (result.status === "checking") {
     return "Checking for updates...";
@@ -244,6 +245,7 @@ export function UpdatesSettings(props: {
     if (result.status === "error") {
       setUpdateRestartError(result.message);
       setUpdateRestarting(false);
+      if (result.manualUpdate) setUpdateResult(result);
     }
   };
 
@@ -321,6 +323,23 @@ export function UpdatesSettings(props: {
                   role={updateResult.status === "error" ? "alert" : undefined}
                 >
                   {updateResultText(updateResult)}
+                  {"manualUpdate" in updateResult && updateResult.manualUpdate ? (
+                    <span className="settings-update-channel__manual">
+                      <span>{updateResult.manualUpdate.description}</span>
+                      <code>{updateResult.manualUpdate.command}</code>
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => {
+                          if ("manualUpdate" in updateResult && updateResult.manualUpdate) {
+                            void copyText(updateResult.manualUpdate.command, props.desktopApi);
+                          }
+                        }}
+                      >
+                        Copy update command
+                      </button>
+                    </span>
+                  ) : null}
                   {/* Scoped to the version that sentence just named, so it
                       has to stay inline with it rather than float down to
                       the controls. */}

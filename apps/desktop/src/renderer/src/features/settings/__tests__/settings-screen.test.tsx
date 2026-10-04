@@ -713,6 +713,31 @@ function messagingRoutesHeader(): Element | null {
 }
 
 describe("SettingsScreen", () => {
+  it("shows and copies a runnable Linux update fallback after a failed check", async () => {
+    const manualUpdate = {
+      description: "Close PwrAgent and run this command in a terminal.",
+      command: "curl -fL -o PwrAgent.deb https://example.test/PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "error" as const, message: "offline", manualUpdate })),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(
+      <SettingsScreen
+        initialSection="updates"
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    const copy = await screen.findByRole("button", { name: "Copy update command" });
+    expect(screen.getByText(manualUpdate.description)).toBeInTheDocument();
+    expect(screen.getByText(manualUpdate.command)).toBeInTheDocument();
+    fireEvent.click(copy);
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
