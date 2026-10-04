@@ -33455,6 +33455,11 @@ button.pricing-token-miser__folded:focus-visible {
   max-height: none;
 }
 
+/* A click on an SVG with scripts offers interaction; a drag still pans. */
+.image-lightbox__image[data-interact-on-click="true"] {
+  cursor: pointer;
+}
+
 .image-lightbox__image[data-panning="true"] {
   cursor: grabbing;
 }

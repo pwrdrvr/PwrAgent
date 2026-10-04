@@ -385,8 +385,9 @@ describe("ImageLightbox, SVG script notice", () => {
 
     // The Interact button sits at the far end of the bottom pill; the picture
     // is where an operator actually reaches, so it says what a click does.
+    expect(image).toHaveAttribute("data-interact-on-click", "true");
     fireEvent.mouseEnter(image);
-    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Click to interact");
+    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Click to enable SVG interaction");
 
     pressAndClick(image);
     expect(scriptNotice()).toBeInTheDocument();
@@ -398,6 +399,23 @@ describe("ImageLightbox, SVG script notice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
     expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
     expect(scriptNotice()).toBeNull();
+  });
+
+  it("raises the hint on movement when the pointer was already on the image", async () => {
+    await renderScriptedSvg();
+    const image = screen.getByRole("img", { name: "Flamegraph" });
+
+    // No enter event: the pointer arrived before the SVG was read.
+    fireEvent.mouseMove(image, { buttons: 1 });
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+    fireEvent.mouseMove(image, { buttons: 0 });
+    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Click to enable SVG interaction");
+
+    pressAndClick(stubPointerCapture(image));
+    expect(scriptNotice()).toBeInTheDocument();
+    fireEvent.mouseMove(image, { buttons: 0 });
+    fireEvent.mouseEnter(image);
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
   });
 
   it("reads a press that travelled as a pan, not a request to interact", async () => {

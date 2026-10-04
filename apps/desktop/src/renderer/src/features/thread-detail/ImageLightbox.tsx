@@ -400,6 +400,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     startInteractiveSvg();
   };
   const interactOnClick = Boolean(svgDocument) && !svgActive;
+  const interactHint = "Click to enable SVG interaction";
 
   return <>
     {/* Focus, not hover: this box is the scrim, so a hover tooltip would pop
@@ -422,10 +423,16 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
           srcDoc={svgDocument} />
       ) : (
         <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
-          data-panning={gestures.panning} draggable={false} onDragStart={(event) => event.preventDefault()}
+          data-panning={gestures.panning} data-interact-on-click={interactOnClick} draggable={false} onDragStart={(event) => event.preventDefault()}
           onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle}
           {...gestures.imageHandlers}
-          {...(interactOnClick ? tooltipHandlers(tooltip, "Click to interact") : {})}
+          {...(interactOnClick && !noticeOpen ? tooltipHandlers(tooltip, interactHint) : {})}
+          // The SVG is read after the lightbox opens, under a pointer that is
+          // usually already on the image: no enter event follows, so the first
+          // movement raises the hint instead.
+          onMouseMove={interactOnClick && !noticeOpen && !tooltip.visible ? (event) => {
+            if (event.buttons === 0) tooltip.show(event.currentTarget, interactHint);
+          } : undefined}
           onPointerDown={(event) => {
             imagePress.current = { x: event.clientX, y: event.clientY };
             if (interactOnClick) tooltip.hide();
