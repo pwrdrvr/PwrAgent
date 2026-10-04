@@ -26233,6 +26233,14 @@ command = "pnpm dev"
     { name: "already claimed", global: true, override: undefined, active: true, claimed: false, expected: 0 },
     { name: "failed steer is not retried", global: true, override: undefined, active: true, claimed: true, expected: 1, fail: true },
     { name: "monitor child", global: true, override: undefined, active: true, claimed: true, expected: 0, monitor: true },
+    { name: "varied PR reads", global: true, override: undefined, active: true, claimed: true, expected: 0, commands: [
+      "gh pr view 2535 --repo owner/repo --json statusCheckRollup",
+      "gh pr view 2535 --repo owner/repo --json body --jq .body",
+      "gh pr view 2535 --repo owner/repo --json url,headRefOid,body",
+    ] },
+    { name: "repeated PR status query", global: true, override: undefined, active: true, claimed: true, expected: 1, commands: [
+      "gh pr view 2535 --repo owner/repo --json statusCheckRollup",
+    ] },
   ])("delivers a monitor job suggestion only to the eligible active turn: $name", async (scenario) => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
@@ -26272,9 +26280,12 @@ command = "pnpm dev"
       const now = vi.spyOn(Date, "now");
       for (let index = 0; index < 5; index++) {
         now.mockReturnValue(1_000_000 + index * 120_000);
+        const command = scenario.commands
+          ? scenario.commands[index % scenario.commands.length]!
+          : "gh run view 123 --repo owner/repo --json status";
         await record({ backend: "codex", notification: { method: "item/completed", params: {
           threadId: "thread-1", turnId: turn.turnId,
-          item: { id: `poll-${index}`, type: "commandExecution", command: "gh run view 123 --repo owner/repo --json status", status: "completed", aggregatedOutput: "queued" },
+          item: { id: `poll-${index}`, type: "commandExecution", command, status: "completed", aggregatedOutput: "queued" },
         } } } as AgentEvent);
       }
       now.mockRestore();
