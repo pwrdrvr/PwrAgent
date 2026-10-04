@@ -5,7 +5,7 @@ import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode, useMemo, useState, type ComponentProps } from "react";
+import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -4637,6 +4637,111 @@ describe("Composer", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("settles ordinary new-thread typing across persisted draft updates", async () => {
+    let commits = 0;
+    const commitsPerKey: number[] = [];
+    const savedPrompts: string[] = [];
+    const store = createComposerDraftStore();
+    function TypingLaunchpad() {
+      const [launchpad, setLaunchpad] = useState(
+        () => createRetargetingLaunchpad(retargetingPwrSnap, ""),
+      );
+      return (
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={retargetingPwrSnap}
+          draftStore={store}
+          launchpad={launchpad}
+          desktopApi={{ openUsageActivity: async () => undefined }}
+          onUpdateLaunchpad={async (_key, patch) => {
+            if (patch.prompt !== undefined) savedPrompts.push(patch.prompt);
+            setLaunchpad((current) => ({
+              ...current,
+              ...patch,
+              updatedAt: current.updatedAt + 1,
+            }));
+          }}
+          skills={[]}
+        />
+      );
+    }
+    render(
+      <StrictMode>
+        <Profiler id="new-thread-typing" onRender={() => { commits += 1; }}>
+          <TypingLaunchpad />
+        </Profiler>
+      </StrictMode>,
+    );
+    await flushReactUpdates();
+    const input = screen.getByRole("textbox", { name: "New thread" });
+    const editor = (input as HTMLElement & { editor: Editor }).editor;
+    const type = (text: string): void => {
+      for (const char of text) {
+        const before = commits;
+        act(() => editor.view.dispatch(editor.state.tr.insertText(char)));
+        commitsPerKey.push(commits - before);
+      }
+    };
+    const first = "Our fixture tools expose actions to project agents";
+    const rest = " (or all threads... perhaps) and allow ordinary typing";
+    type(first);
+    await waitFor(() => expect(savedPrompts).toContain(first));
+    type(rest);
+    await waitFor(() => expect(savedPrompts).toContain(first + rest));
+    expect(input).toHaveValue(first + rest);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(commitsPerKey).toEqual(Array.from(first + rest, () => 1));
+  });
+
+  it("keeps the open context card stable while typing without usage changes", async () => {
+    const phases: string[] = [];
+    render(
+      <Profiler id="context-card-typing" onRender={(_id, phase) => phases.push(phase)}>
+        <Composer
+          backends={[backendSummary("codex")]}
+          contextWindow={{
+            modelContextWindow: 128_000,
+            phase: 2,
+            remainingPercent: 75,
+            remainingTokens: 96_000,
+            totalTokens: 32_000,
+            usedPercent: 25,
+          }}
+          desktopApi={{ openUsageActivity: async () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "context-card-typing",
+            source: "codex",
+            title: "Typing fixture",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      </Profiler>,
+    );
+    await flushReactUpdates();
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /^Context window 25% full/ }));
+    await flushReactUpdates();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("25% full");
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    const editor = (input as HTMLElement & { editor: Editor }).editor;
+    const commitsPerKey: number[] = [];
+    const message = "Fixture ordinary typing without usage changes";
+    for (const char of message) {
+      const before = phases.length;
+      act(() => editor.view.dispatch(editor.state.tr.insertText(char)));
+      commitsPerKey.push(phases.length - before);
+    }
+    expect(input).toHaveValue(message);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("25% full");
+    // Editing the draft must not schedule a second commit to refresh an
+    // unchanged usage card through a newly created callback prop.
+    expect(commitsPerKey).toEqual(Array.from(message, () => 1));
   });
 
   it("opens Usage Activity from the context moon when the app can", () => {
