@@ -261,6 +261,7 @@ async function sendToRemoteThread(
         messageOrigin: request.messageOrigin,
       })
     : await match.backend.startTurn({
+        delivery: request.delivery,
         backend: request.backend,
         threadId: request.threadId,
         input: request.input,

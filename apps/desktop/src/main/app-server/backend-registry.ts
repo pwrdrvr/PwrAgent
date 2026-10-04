@@ -723,6 +723,7 @@ import {
 import {
   ThreadTurnQueue,
   type ThreadTurnQueueLifecycleEvent,
+  type ThreadTurnQueueEntry,
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueImmediateSubmissionResult,
   type ThreadTurnQueueSubmissionResult,
@@ -10106,6 +10107,42 @@ export class DesktopBackendRegistry {
     });
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
+      canSteerThread: (entry) => !this.stoppingRunningTurnsForShutdown
+        && !this.threadHasBlockingWorkspaceMove(entry)
+        && this.getActiveTurnForThread(entry) !== undefined
+        && this.findReviewForParentTurn({
+          backend: entry.backend,
+          parentThreadId: entry.threadId,
+        })?.mode !== "native",
+      steerTurn: async (entry) => {
+        const active = this.getActiveTurnForThread(entry);
+        if (!active) return undefined;
+        const backend = (await this.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend);
+        if (!backend?.capabilities.steerTurn) return undefined;
+        // Review ownership can change while backend discovery is pending.
+        if (this.findReviewForParentTurn({
+          backend: entry.backend,
+          parentThreadId: entry.threadId,
+        })?.mode === "native") return undefined;
+        try {
+          const result = await this.steerTurn({
+            backend: entry.backend,
+            threadId: entry.threadId,
+            expectedTurnId: active.turnId,
+            requestId: entry.id,
+            input: entry.input,
+          }, entry.messageOrigin);
+          return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/no active turn|expected active turn id/.test(message)) {
+            const current = this.getActiveTurnForThread(entry);
+            return current?.turnId !== active.turnId ? "retry" : undefined;
+          }
+          throw error;
+        }
+      },
       // A turn a quit stopped releases its thread; the next queued turn must
       // not start in its place, so every thread reads as busy from then on.
       isThreadActive: ({ backend, threadId }) =>
@@ -11104,16 +11141,19 @@ export class DesktopBackendRegistry {
   private async emitTurnQueueLifecycle(
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
-    const source = event.entry.messageOrigin?.sourceThread;
-    if (
-      source?.messageId
-      && event.type !== "terminal"
-    ) {
-      this.updateCorrespondenceStatus(source, source.messageId, {
-        state: event.type === "blocked" ? "held" : event.type,
-        queueEntryId: event.entry.id,
-        ...(event.type === "started" ? { turnId: event.turnId } : {}),
-      });
+    const origins = event.type === "queued" && event.inputUpdated
+      ? event.entry.agentMessageOrigins?.slice(-1) ?? []
+      : event.entry.agentMessageOrigins
+      ?? [event.entry.messageOrigin];
+    for (const origin of origins) {
+      const source = origin?.sourceThread;
+      if (source?.messageId && event.type !== "terminal") {
+        this.updateCorrespondenceStatus(source, source.messageId, {
+          state: event.type === "blocked" ? "held" : event.type,
+          queueEntryId: event.entry.id,
+          ...(event.type === "started" ? { turnId: event.turnId } : {}),
+        });
+      }
     }
     const baseParams = {
       threadId: event.entry.threadId,
@@ -11133,6 +11173,7 @@ export class DesktopBackendRegistry {
             ? {
                 ...baseParams,
                 status: "queued",
+                ...(event.inputUpdated ? { inputUpdated: true } : {}),
                 position: event.position,
                 // Windows that did not submit this entry mirror a chip
                 // from the event; carry the text so they need not wait
@@ -17403,9 +17444,27 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
+    delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", queueEntryId, ...entry } = params;
+    const { origin = "manual", queueEntryId, delivery, ...entry } = params;
+    const hasTurnSettings = [
+      entry.executionMode,
+      entry.approvalPolicy,
+      entry.sandbox,
+      entry.model,
+      entry.collaborationMode,
+      entry.serviceTier,
+      entry.reasoningEffort,
+      entry.fastMode,
+    ].some((value) => value !== undefined);
+    if (entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings) {
+      return await this.threadTurnQueue.submitGroupedSteer({
+        ...entry,
+        ...(queueEntryId ? { id: queueEntryId } : {}),
+        origin,
+      });
+    }
     return await this.threadTurnQueue.submit({
       ...entry,
       ...(queueEntryId ? { id: queueEntryId } : {}),
@@ -17554,22 +17613,29 @@ export class DesktopBackendRegistry {
     const entry = this.threadTurnQueue.getQueuedEntries(request)
       .find((candidate) => candidate.id === request.queueEntryId);
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
-    const owner = entry.messageOrigin?.sourceThread;
+    if (entry.agentMessageOrigins && !entry.agentMessages) {
+      throw new Error("The operator edited this batch; sender replacement would overwrite those edits.");
+    }
     const sender = request.messageOrigin?.sourceThread;
+    const owners = entry.agentMessages?.map((message) => message.origin?.sourceThread)
+      ?? [entry.messageOrigin?.sourceThread];
     if (
       entry.messageOrigin?.kind !== "agent"
       || request.messageOrigin?.kind !== "agent"
-      || !owner || !sender
-      || owner.backend !== sender.backend
-      || owner.threadId !== sender.threadId
-      || owner.instanceId !== sender.instanceId
+      || !sender
+      || !owners.some((owner) => owner && owner.backend === sender.backend
+        && owner.threadId === sender.threadId && owner.instanceId === sender.instanceId)
     ) {
       throw new Error("Only the sending thread can replace its own queued agent message.");
     }
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    this.updateQueuedTurnInput(entry.id, request.input);
+    if (entry.agentMessages) {
+      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, request.input, sender);
+      if (!updated) throw new Error("The sender's queued message is no longer waiting.");
+      this.emitQueuedTurnInputUpdated(updated);
+    } else this.updateQueuedTurnInput(entry.id, request.input);
     return {
       backend: entry.backend,
       threadId: entry.threadId,
@@ -17585,6 +17651,10 @@ export class DesktopBackendRegistry {
   ): void {
     const entry = this.threadTurnQueue.updateQueuedEntryInput(entryId, input);
     if (!entry) return;
+    this.emitQueuedTurnInputUpdated(entry);
+  }
+
+  private emitQueuedTurnInputUpdated(entry: ThreadTurnQueueEntry): void {
     // This is an input refresh, not another queue admission. In particular,
     // do not replay sender correspondence lifecycle transitions.
     void this.emit({
@@ -20153,6 +20223,23 @@ export class DesktopBackendRegistry {
             requestId: request.requestId,
             turnId: stopped.turnId,
             disposition: "interrupted",
+          };
+        }
+        if (request.messageOrigin?.kind === "agent") {
+          const queued = await this.threadTurnQueue.submitGroupedSteer({
+            backend: request.backend,
+            threadId: request.threadId,
+            input: request.input ?? [],
+            messageOrigin: request.messageOrigin,
+            origin: "manual",
+          }, { deferStart: true });
+          return {
+            ok: true,
+            backend: request.backend,
+            threadId: request.threadId,
+            requestId: request.requestId,
+            turnId: queued.entry.id,
+            disposition: "queued",
           };
         }
         const steered = await this.steerTurn(
@@ -24724,6 +24811,7 @@ export class DesktopBackendRegistry {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
     this.closed = true;
+    this.threadTurnQueue.close();
     this.backgroundTerminalGeneration += 1;
     this.codexBackgroundTerminals.clear();
     this.backgroundTerminalReadRevisions.clear();
@@ -37046,6 +37134,7 @@ export class DesktopBackendRegistry {
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
       const remoteRequest = {
+        ...(request.args.delivery ? { delivery: request.args.delivery } : {}),
         replaceQueueEntryId: request.args.replaceQueueEntryId,
         backend,
         threadId,
@@ -37097,6 +37186,7 @@ export class DesktopBackendRegistry {
             });
           } else {
             const submitted = await this.submitTurn({
+              delivery: request.args.delivery,
               backend,
               threadId,
               input,
@@ -37188,7 +37278,7 @@ export class DesktopBackendRegistry {
             ? {
                 queueStatus: turn.queueStatus,
                 queueEntryId: turn.queueEntryId,
-                guidance: "Batch related findings. To update this pending message, call send_message_to_thread with replaceQueueEntryId set to this queueEntryId and the complete consolidated prompt. Do not append overlapping updates as separate turns.",
+                guidance: "Pending guidance is grouped across senders and prefers steering. Replace your own contribution with replaceQueueEntryId and your complete consolidated prompt; other senders' contributions are preserved.",
                 ...(turn.position === undefined ? {} : { position: turn.position }),
               }
             : {}),
