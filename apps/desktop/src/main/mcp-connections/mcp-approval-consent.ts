@@ -32,7 +32,8 @@ export function buildAutomationMcpConsent(params: {
     return undefined;
   }
   const scopes = meta.persist === undefined ? [] : Array.isArray(meta.persist) ? meta.persist : [meta.persist];
-  if (scopes.length > 2 || scopes.some((scope) => scope !== "session" && scope !== "always")) return undefined;
+  // Match interactive consent: validate each scope, allowing duplicate entries.
+  if (scopes.some((scope) => scope !== "session" && scope !== "always")) return undefined;
   // Creation-time authorization belongs to this run. Never mint a permanent
   // app/site grant on behalf of an unattended automation.
   return { action: "accept", content: {}, _meta: scopes.includes("session") ? { persist: "session" } : null };

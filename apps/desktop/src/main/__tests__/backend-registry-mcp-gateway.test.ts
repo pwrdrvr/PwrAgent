@@ -276,6 +276,17 @@ describe("backend MCP gateway dispatch", () => {
     expect(await response).toEqual({ action: "accept", content: {}, _meta: { persist: "session" } });
   });
 
+  it.each([
+    { persist: "session", meta: { persist: "session" } },
+    { persist: ["session", "session", "always"], meta: { persist: "session" } },
+    { persist: ["always", "always", "always"], meta: null },
+  ])("accepts valid advertised automation scopes without rejecting duplicates: $persist", async ({ persist, meta }) => {
+    await startApprovedAutomation();
+    expect(await internals.handleServerRequest("codex", appConsent({ persist }))).toEqual({
+      action: "accept", content: {}, _meta: meta,
+    });
+  });
+
   it("never creates a permanent native grant for an automation", async () => {
     await startApprovedAutomation();
     expect(await internals.handleServerRequest("codex", appConsent({ persist: ["always"] }))).toEqual({
