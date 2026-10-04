@@ -171,7 +171,7 @@ describe("native voice browser lifecycle", () => {
 describe("voice camera ownership", () => {
   async function liveCamera() {
     const f = fixture();
-    const capture = { stream: f.stream as unknown as MediaStream, frame: vi.fn(() => "data:image/jpeg;base64,fixture"), close: vi.fn() };
+    const capture = { stream: f.stream as unknown as MediaStream, frames: vi.fn(() => ["data:image/jpeg;base64,fixture"]), close: vi.fn() };
     f.platform.camera = vi.fn(async () => capture);
     f.api.sendNativeVoiceCameraCue = vi.fn(async () => {});
     f.api.setNativeVoiceCamera = vi.fn(async () => {});

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CAMERA_GESTURES,
+  CAMERA_HEAD_CUES,
+  CAMERA_HEAD_MOTIONS,
   CAMERA_VIBES,
   type CameraCue,
   type CameraGesture,
+  type CameraHeadCue,
   type VoiceCameraObservation,
 } from "../../../../shared/native-voice-camera";
 import { CopyIcon } from "../../icons";
@@ -67,17 +70,21 @@ const GESTURE_LABELS: Record<CameraGesture, string> = {
   none: "none",
 };
 
+const HEAD_LABELS: Record<CameraHeadCue, string> = { head_nod: "nod", head_shake: "head shake" };
+
 const isGesture = (value: string): value is CameraGesture => CAMERA_GESTURES.some((gesture) => gesture === value);
+const isHeadCue = (value: string): value is CameraHeadCue => CAMERA_HEAD_CUES.some((cue) => cue === value);
 
 /** A cue as the operator would say it: "thumbs up", not `thumbs_up`. */
 export function cameraCueLabel(cue: CameraCue): string {
-  return isGesture(cue) ? GESTURE_LABELS[cue] : cue;
+  return isGesture(cue) ? GESTURE_LABELS[cue] : isHeadCue(cue) ? HEAD_LABELS[cue] : cue;
 }
 
-type Question = "gesture" | "vibe" | "present";
+type Question = "gesture" | "head" | "vibe" | "present";
 
 function questionFor(cue: CameraCue): Question {
   if (cue === "away") return "present";
+  if (isHeadCue(cue)) return "head";
   return isGesture(cue) ? "gesture" : "vibe";
 }
 
@@ -94,6 +101,13 @@ function readings(observation: VoiceCameraObservation): Reading[] {
       pick: gesture ? GESTURE_LABELS[gesture] : "none",
       confidence: gesture ? observation.gestureConfidence ?? observation.gestureScores?.[gesture] : undefined,
       idle: !gesture || gesture === "none",
+    },
+    {
+      // Asked only of a burst; one still cannot show motion.
+      question: "head",
+      pick: observation.head ?? "—",
+      confidence: observation.headConfidence,
+      idle: !observation.head || observation.head === "still",
     },
     {
       question: "vibe",
@@ -127,6 +141,16 @@ function scoreCards(observation: VoiceCameraObservation): ScoreCard[] {
       })),
     },
     {
+      question: "head",
+      type: "choice",
+      pick: observation.head ?? "—",
+      options: CAMERA_HEAD_MOTIONS.map((motion) => ({
+        label: motion,
+        score: observation.headScores?.[motion],
+        selected: observation.head === motion,
+      })),
+    },
+    {
       question: "vibe",
       type: "choice",
       pick: observation.reaction,
@@ -155,7 +179,10 @@ const barWidth = (value?: number) => `${Math.max(0, Math.min(1, value ?? 0)) * 1
 export function cameraDiagnosticsText(debug: VoiceCameraDiagnostics, now = Date.now()): string {
   const observation = debug.observation;
   const scores = observation
-    ? scoreCards(observation).map((card) => `${card.question}: ${card.options.map((option) => `${option.label} ${percent(option.score)}`).join(", ")}`)
+    ? scoreCards(observation)
+      // A single frame was not asked about head movement.
+      .filter((card) => card.question !== "head" || observation.head)
+      .map((card) => `${card.question}: ${card.options.map((option) => `${option.label} ${percent(option.score)}`).join(", ")}`)
     : [];
   return [
     "Camera diagnostics",
@@ -228,7 +255,7 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
           : stale ? "Camera cues waiting for a fresh frame"
             : "Camera cues receiving observations";
   const live = active && view.camera === "on" && !view.cameraWarming && observation !== undefined;
-  const placeholders = (["gesture", "vibe", "present"] as const);
+  const placeholders = (["gesture", "head", "vibe", "present"] as const);
 
   return (
     <section className="voice-camera-dock" aria-label="Camera cues">
@@ -292,7 +319,7 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassNam
           </div>
           <div className="voice-camera-dock__cards">
             {(observation ? scoreCards(observation) : placeholders.map((question) => ({ question, type: question === "present" ? "noul" as const : "choice" as const, pick: "—", options: [] }))).map((card) => (
-              <div key={card.question} className="voice-camera-dock__card">
+              <div key={card.question} className={`voice-camera-dock__card voice-camera-dock__card--${card.question}`}>
                 <div className="voice-camera-dock__card-head">
                   <span className="voice-camera-dock__question">{card.question}</span>
                   <span className="voice-camera-dock__type">{card.type}</span>

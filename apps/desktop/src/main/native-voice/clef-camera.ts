@@ -1,5 +1,6 @@
 import {
-  CAMERA_VIBES, CAMERA_GESTURES, VOICE_CAMERA_QUESTIONS, VOICE_CAMERA_REPEAT_QUESTIONS, cameraConversationState,
+  CAMERA_VIBES, CAMERA_GESTURES, CAMERA_HEAD_MOTIONS, VOICE_CAMERA_BURST, VOICE_CAMERA_HEAD_QUESTION, VOICE_CAMERA_QUESTIONS,
+  VOICE_CAMERA_REPEAT_QUESTIONS, cameraConversationState,
   type VoiceCameraConversationLine, type VoiceCameraObservation, type VoiceCameraRepeatVerdict,
 } from "../../shared/native-voice-camera";
 import {
@@ -13,14 +14,21 @@ import {
 } from "../decision/system-one";
 
 /**
- * Every camera decision request is built here. A frame is judged alone; the
+ * Every camera decision request is built here. Frames are judged alone; the
  * conversation is judged in its own text-only request, because a transcript
- * in the frame's `state` biases the frame's own answers.
+ * in the frames' `state` biases the frames' own answers. A burst of two or
+ * more frames is also asked about head movement.
  */
-export function cameraDecisionRequest(input: { image: string } | { conversation: VoiceCameraConversationLine[] }): SystemOneRequest {
-  return "image" in input
-    ? { state: "A live webcam frame from a laptop.", questions: VOICE_CAMERA_QUESTIONS, images: [input.image] }
-    : { state: cameraConversationState(input.conversation), questions: VOICE_CAMERA_REPEAT_QUESTIONS };
+export function cameraDecisionRequest(input: { images: string[] } | { conversation: VoiceCameraConversationLine[] }): SystemOneRequest {
+  if ("conversation" in input) return { state: cameraConversationState(input.conversation), questions: VOICE_CAMERA_REPEAT_QUESTIONS };
+  const { images } = input;
+  return images.length > 1
+    ? {
+      state: `${images.length} live webcam frames from a laptop, ${VOICE_CAMERA_BURST.spacingMs} ms apart, oldest first.`,
+      questions: { ...VOICE_CAMERA_QUESTIONS, head: VOICE_CAMERA_HEAD_QUESTION },
+      images,
+    }
+    : { state: "A live webcam frame from a laptop.", questions: VOICE_CAMERA_QUESTIONS, images };
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -32,7 +40,7 @@ function probability(value: unknown): number {
   return value;
 }
 /** A System One answer to the camera questions. It carries no timing, so the caller measures `latencyMs`. */
-export function parseClefObservation(value: unknown, latencyMs: number): VoiceCameraObservation {
+export function parseClefObservation(value: unknown, latencyMs: number, headAsked = false): VoiceCameraObservation {
   const data = object(value);
   const answers = object(data.answers);
   const presence = object(answers.presence);
@@ -64,11 +72,21 @@ export function parseClefObservation(value: unknown, latencyMs: number): VoiceCa
     gesture = answer.choice as NonNullable<typeof gesture>;
     gestureScores = Object.fromEntries(CAMERA_GESTURES.map((key) => [key, probability(scores[key])])) as NonNullable<typeof gestureScores>;
   }
+  let head: VoiceCameraObservation["head"];
+  let headScores: VoiceCameraObservation["headScores"];
+  if (headAsked) {
+    const answer = object(answers.head);
+    if (answer.type !== "choice" || !CAMERA_HEAD_MOTIONS.includes(answer.choice as NonNullable<typeof head>)) throw new Error("Invalid Clef head movement.");
+    const scores = object(answer.probabilities);
+    head = answer.choice as NonNullable<typeof head>;
+    headScores = Object.fromEntries(CAMERA_HEAD_MOTIONS.map((key) => [key, probability(scores[key])])) as NonNullable<typeof headScores>;
+  }
   return {
     present, presenceScores, presenceConfidence: present ? presenceScores.present : presenceScores.away,
     reaction: reaction.choice as VoiceCameraObservation["reaction"], reactionScores,
     reactionConfidence: probability(reactionProbabilities[String(reaction.choice)]),
     ...(gesture && gestureScores ? { gesture, gestureScores, gestureConfidence: gestureScores[gesture] } : {}),
+    ...(head && headScores ? { head, headScores, headConfidence: headScores[head] } : {}),
     latencyMs,
   };
 }
@@ -114,12 +132,12 @@ export function parseClefRepeatVerdict(value: unknown): VoiceCameraRepeatVerdict
  */
 export async function classifyVoiceCamera(
   target: SystemOneTarget,
-  image: string,
+  images: string[],
   signal: AbortSignal,
   warming = false,
 ): Promise<VoiceCameraObservation> {
-  const { body, latencyMs } = await decide(target, cameraDecisionRequest({ image }), signal, warming);
-  return parseClefObservation(body, latencyMs);
+  const { body, latencyMs } = await decide(target, cameraDecisionRequest({ images }), signal, warming);
+  return parseClefObservation(body, latencyMs, images.length > 1);
 }
 
 /**

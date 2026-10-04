@@ -1,6 +1,6 @@
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL,
-  NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL, isCameraCue, isCameraConversation,
+  NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL, VOICE_CAMERA_BURST, isCameraCue, isCameraConversation,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraSkipped,
   type VoiceCameraRepeatCheck, type VoiceCameraRepeatVerdict,
 } from "../../shared/native-voice-camera";
@@ -155,8 +155,9 @@ export function registerNativeVoiceIpcHandlers(): void {
     if (!sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) {
       throw new Error("Enable the camera in this voice session first.");
     }
-    if (typeof request.image !== "string" || request.image.length > 300_000
-      || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(request.image)) throw new Error("Invalid camera frame.");
+    if (!Array.isArray(request.images) || request.images.length < 1 || request.images.length > VOICE_CAMERA_BURST.frames
+      || !request.images.every((image) => typeof image === "string" && image.length <= 300_000
+        && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image))) throw new Error("Invalid camera frame.");
     if (cameraRequests.has(event.sender.id)) throw new Error("A camera frame is already being analyzed.");
     // Settings can change mid-session: turning cues off, or choosing a hosted
     // model, stops frames from going anywhere.
@@ -184,7 +185,7 @@ export function registerNativeVoiceIpcHandlers(): void {
           return { skipped: "busy", inFlight, retryAfterMs: CAMERA_HEALTH_RETRY_MS } satisfies VoiceCameraSkipped;
         }
       }
-      const observation = await classifyVoiceCamera(target, request.image, abort.signal, warming);
+      const observation = await classifyVoiceCamera(target, request.images, abort.signal, warming);
       cameraContended.delete(event.sender.id);
       if (abort.signal.aborted || !sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) return undefined;
       if (warming) cameraLog.info("camera first decision received", { sessionId: request.sessionId, elapsedMs: Date.now() - started, modelLatencyMs: observation.latencyMs });

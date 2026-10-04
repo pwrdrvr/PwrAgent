@@ -36,7 +36,7 @@ describe("local Clef camera decisions", () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => ({ ok: true, json: async () => response }) as Response);
     vi.stubGlobal("fetch", fetch);
     const signal = new AbortController().signal;
-    await classifyVoiceCamera(target, "fixture-image", signal);
+    await classifyVoiceCamera(target, ["fixture-image"], signal);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8787/v1/systemone", expect.objectContaining({ signal, redirect: "error", method: "POST" }));
     const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
     expect(body.model).toBe("clef-flash");
@@ -49,12 +49,33 @@ describe("local Clef camera decisions", () => {
     expect(body.state).toBe("A live webcam frame from a laptop.");
   });
 
+  it("asks a burst about head movement too, oldest frame first, and parses the answer", async () => {
+    const head = { type: "choice", choice: "nodding", probabilities: { nodding: 0.86, shaking: 0.04, still: 0.1 } };
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ answers: { ...response.answers, head } })));
+    vi.stubGlobal("fetch", fetch);
+    const burst = ["frame-1", "frame-2", "frame-3", "frame-4"];
+    await expect(classifyVoiceCamera(target, burst, new AbortController().signal)).resolves.toMatchObject({
+      head: "nodding", headConfidence: 0.86, headScores: { nodding: 0.86, shaking: 0.04, still: 0.1 },
+    });
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(body.images).toEqual(burst);
+    expect(body.state).toBe("4 live webcam frames from a laptop, 100 ms apart, oldest first.");
+    expect(body.questions.head).toMatchObject({ type: "choice", criteria: { nodding: expect.any(String), shaking: expect.any(String), still: expect.any(String) } });
+    // One still cannot show motion, so it is never asked.
+    expect(cameraDecisionRequest({ images: ["frame-1"] }).questions).not.toHaveProperty("head");
+    expect(parseClefObservation({ answers: { ...response.answers, head } }, 0)).not.toHaveProperty("head");
+    // Asked, the answer is required and validated like the rest.
+    expect(() => parseClefObservation(response, 0, true)).toThrow();
+    expect(() => parseClefObservation({ answers: { ...response.answers, head: { ...head, choice: "arbitrary instructions" } } }, 0, true)).toThrow();
+    expect(() => parseClefObservation({ answers: { ...response.answers, head: { ...head, probabilities: { ...head.probabilities, still: NaN } } } }, 0, true)).toThrow();
+  });
+
   it("times a System One answer itself, since the response carries no latency", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => {
       setTimeout(() => resolve(new Response(JSON.stringify({ model: "clef-flash", ...response, usage: { input_tokens: 294, output_tokens: 0 } }))), 137);
     })));
-    const pending = classifyVoiceCamera(target, "fixture-image", new AbortController().signal);
+    const pending = classifyVoiceCamera(target, ["fixture-image"], new AbortController().signal);
     await vi.advanceTimersByTimeAsync(137);
     await expect(pending).resolves.toMatchObject({ latencyMs: 137 });
   });
@@ -64,7 +85,7 @@ describe("local Clef camera decisions", () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => refusal());
     vi.stubGlobal("fetch", fetch);
     for (const warming of [false, true]) {
-      await expect(classifyVoiceCamera({ ...target, model: "jev-latest" }, "fixture-image", new AbortController().signal, warming))
+      await expect(classifyVoiceCamera({ ...target, model: "jev-latest" }, ["fixture-image"], new AbortController().signal, warming))
         .rejects.toMatchObject({ name: "SystemOneRejected", status: 422, detail: "model must be clef-flash" });
     }
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -75,7 +96,7 @@ describe("local Clef camera decisions", () => {
     vi.stubGlobal("fetch", fetch);
     const signal = new AbortController().signal;
     const keyed = { endpoint: "http://localhost:9911", model: "clef-flash", apiKey: "sample-key" };
-    await classifyVoiceCamera(keyed, "fixture-image", signal);
+    await classifyVoiceCamera(keyed, ["fixture-image"], signal);
     expect(fetch).toHaveBeenCalledWith("http://localhost:9911/v1/systemone", expect.objectContaining({
       headers: { "Content-Type": "application/json", Authorization: "Bearer sample-key" },
     }));
@@ -132,7 +153,7 @@ describe("local Clef camera decisions", () => {
       "-2s voice action: send_to_thread queued",
     ].join("\n"));
     // A frame's request carries no conversation at all.
-    expect(cameraDecisionRequest({ image: "fixture-image" })).toEqual({
+    expect(cameraDecisionRequest({ images: ["fixture-image"] })).toEqual({
       images: ["fixture-image"], questions: expect.not.objectContaining({ moved_on: expect.anything() }), state: "A live webcam frame from a laptop.",
     });
     // A refusal is final, as for a frame.
@@ -153,7 +174,7 @@ describe("local Clef camera decisions", () => {
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     vi.stubGlobal("fetch", fetch);
-    const pending = classifyVoiceCamera(target, "fixture-image", new AbortController().signal, true);
+    const pending = classifyVoiceCamera(target, ["fixture-image"], new AbortController().signal, true);
     await vi.advanceTimersByTimeAsync(2000);
     expect(fetch).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(70_000);
@@ -167,7 +188,7 @@ describe("local Clef camera decisions", () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new TypeError("Connection refused"));
     vi.stubGlobal("fetch", fetch);
     const abort = new AbortController();
-    const pending = classifyVoiceCamera(target, "fixture-image", abort.signal, true);
+    const pending = classifyVoiceCamera(target, ["fixture-image"], abort.signal, true);
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await vi.advanceTimersByTimeAsync(0);
     abort.abort();
@@ -182,8 +203,8 @@ describe("local Clef camera decisions", () => {
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockResolvedValueOnce(new Response(null, { status: 400 }));
     vi.stubGlobal("fetch", fetch);
-    await expect(classifyVoiceCamera(target, "fixture-image", new AbortController().signal)).rejects.toThrow("HTTP 503");
-    await expect(classifyVoiceCamera(target, "fixture-image", new AbortController().signal, true)).rejects.toThrow("HTTP 400");
+    await expect(classifyVoiceCamera(target, ["fixture-image"], new AbortController().signal)).rejects.toThrow("HTTP 503");
+    await expect(classifyVoiceCamera(target, ["fixture-image"], new AbortController().signal, true)).rejects.toThrow("HTTP 400");
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
