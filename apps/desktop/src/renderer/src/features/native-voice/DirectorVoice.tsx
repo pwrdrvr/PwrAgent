@@ -1,4 +1,4 @@
-import { VoiceCameraButton, VoiceCameraDock } from "./VoiceCameraButton";
+import { cameraCueLabel, VoiceCameraButton, VoiceCameraDock } from "./VoiceCameraButton";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isRemoteFederationTarget,
@@ -28,6 +28,7 @@ import {
   type VoiceView,
 } from "./native-voice-controller";
 import {
+  CUE_DELIVERY_LABEL,
   isVoiceActive,
   useNativeVoice,
   VoiceElapsed,
@@ -431,7 +432,15 @@ export function DirectorVoicePanel(props: DirectorVoicePanelProps) {
     const closed = closing.current;
     closing.current = false;
     setShown((current) => {
-      if (!current || current.endedAt !== undefined) return current;
+      if (!current) return current;
+      if (current.endedAt !== undefined) {
+        // A cue receipt can settle after the session ended; the kept
+        // transcript takes the settled state rather than "sending…".
+        return next.mode === "director" && next.threadId === current.view.threadId
+          && next.cameraCues !== undefined && next.cameraCues !== current.view.cameraCues
+          ? { ...current, view: { ...current.view, cameraCues: next.cameraCues } }
+          : current;
+      }
       // The last live view keeps the transcript; a failure clears the
       // controller's own view before the operator has read it.
       return closed ? undefined : { view: current.view, endedAt };
@@ -534,13 +543,18 @@ function OpenDirectorVoicePanel({
   });
   const ended = endedAt !== undefined;
   const listening = view.status === "listening";
+  const endHadFocus = useRef(false);
   // What "this" means to the voice, so it describes the window, never an
   // action. It follows the window live, so it goes when the session ends.
   const looking = ended ? undefined : focus
     ? `Looking at: ${focus.title || "Untitled thread"}${focus.federation?.instanceLabel ? ` on ${focus.federation.instanceLabel}` : ""}`
     : launchpad ? `Looking at: new thread in ${launchpad.directoryLabel}` : "Looking at: no thread";
-  const transcript = [...view.transcript]
-    .map((row) => `${row.role === "user" ? "You" : "Director"}: ${row.text}`)
+  const transcript = [
+    ...view.transcript.map((row) => ({ seq: row.seq, line: `${row.role === "user" ? "You" : "Director"}: ${row.text}` })),
+    ...(view.cameraCues ?? []).map((row) => ({ seq: row.seq, line: `[camera: ${cameraCueLabel(row.cue)}, ${CUE_DELIVERY_LABEL[row.delivery]}]` })),
+  ]
+    .sort((left, right) => left.seq - right.seq)
+    .map((row) => row.line)
     .join("\n");
   return (
     <section
@@ -553,7 +567,7 @@ function OpenDirectorVoicePanel({
         <VoiceElapsed since={view.liveSince} until={endedAt} />
         <div className="director-voice-panel__actions">
           {!ended ? <VoiceMicToggle controller={controller} tooltipClassName={PANEL_TOOLTIP_CLASS} view={view} /> : null}
-          {!ended ? <VoiceCameraButton controller={controller} view={view} /> : null}
+          {!ended ? <VoiceCameraButton controller={controller} tooltipClassName={PANEL_TOOLTIP_CLASS} view={view} /> : null}
           <button
             className="app-notice-toast__icon-button"
             type="button"
@@ -583,6 +597,12 @@ function OpenDirectorVoicePanel({
         action={ended ? (
           otherVoiceActive ? null : (
             <button
+              ref={(node) => {
+                if (node && endHadFocus.current) {
+                  endHadFocus.current = false;
+                  node.focus();
+                }
+              }}
               className="button button--ghost director-voice-panel__session director-voice-panel__session--start"
               type="button"
               onClick={() => { void toggleDirectorVoice(api, controller); }}
@@ -596,10 +616,14 @@ function OpenDirectorVoicePanel({
             className="button button--ghost director-voice-panel__session"
             type="button"
             aria-label="End director voice"
-            disabled={view.status === "stopping"}
+            // Not `disabled`: that drops focus to <body> mid-stop. Start
+            // again takes focus when it replaces this button.
+            aria-disabled={view.status === "stopping" ? true : undefined}
             {...tooltipHandlers(tooltip, "End the session. The transcript stays.")}
-            onClick={() => {
+            onClick={(event) => {
               tooltip.hide();
+              if (view.status === "stopping") return;
+              endHadFocus.current = event.currentTarget === document.activeElement;
               onEnd();
             }}
           >
@@ -626,7 +650,12 @@ function OpenDirectorVoicePanel({
       </div>
       {/* A sibling of the feed, never inside it: the camera holds one place
           while the transcript scrolls above it. */}
-      <VoiceCameraDock controller={controller} view={view} onCopyDiagnostics={(text) => { void copyText(text, desktopApi); }} />
+      <VoiceCameraDock
+        controller={controller}
+        onCopyDiagnostics={(text) => { void copyText(text, desktopApi); }}
+        tooltipClassName={PANEL_TOOLTIP_CLASS}
+        view={view}
+      />
       {listening ? <VoiceTextInput controller={controller} recipient="director" sendLabel="Send" /> : null}
       <button
         className="director-voice-panel__grip"

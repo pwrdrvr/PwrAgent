@@ -7,6 +7,7 @@ import {
   type VoiceCameraObservation,
 } from "../../../../shared/native-voice-camera";
 import { CopyIcon } from "../../icons";
+import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { NativeVoiceController, VoiceCameraDiagnostics, VoiceView } from "./native-voice-controller";
 
 type CameraProps = { controller: NativeVoiceController; view: VoiceView };
@@ -21,21 +22,36 @@ export function CameraGlyph({ size = 13 }: { size?: number }) {
   );
 }
 
-export function VoiceCameraButton({ controller, view }: CameraProps) {
+type TooltipProps = {
+  /** A floating host passes its own layer: the tooltip portals out of it. */
+  tooltipClassName?: string;
+};
+
+const cameraHint = (active: boolean) => `${active ? "Turn off camera cues" : "Turn on camera cues"}. Frames stay on this machine. Voice ends after 30 seconds away.`;
+
+export function VoiceCameraButton({ controller, tooltipClassName = "viewport-tooltip", view }: CameraProps & TooltipProps) {
+  const tooltip = useViewportTooltip({ className: tooltipClassName });
   if (view.status !== "listening") return null;
   const active = Boolean(view.camera);
-  const label = active ? "Turn off camera cues" : "Turn on camera cues";
   return (
-    <button
-      type="button"
-      className={`sidebar__icon-button${active ? " is-active" : ""}`}
-      aria-label={label}
-      aria-pressed={active}
-      title={`${label}. Frames stay on this machine. Voice ends after 30 seconds away.`}
-      onClick={() => { void controller.setCamera(!active); }}
-    >
-      <CameraGlyph size={16} />
-    </button>
+    <>
+      <button
+        type="button"
+        className={`sidebar__icon-button${active ? " is-active" : ""}`}
+        aria-label={active ? "Turn off camera cues" : "Turn on camera cues"}
+        aria-pressed={active}
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
+        {...tooltipHandlers(tooltip, cameraHint(active))}
+        onClick={(event) => {
+          void controller.setCamera(!active);
+          // The open hint describes the state just left; show the new one.
+          tooltip.show(event.currentTarget, cameraHint(!active));
+        }}
+      >
+        <CameraGlyph size={16} />
+      </button>
+      {tooltip.tooltipNode}
+    </>
   );
 }
 
@@ -167,9 +183,10 @@ export function cameraDiagnosticsText(debug: VoiceCameraDiagnostics, now = Date.
  * wider, the video spans the dock with every option's meter below it. Both
  * readouts render and CSS shows one, so a resize never remounts the video.
  */
-export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraProps & {
+export function VoiceCameraDock({ controller, onCopyDiagnostics, tooltipClassName = "viewport-tooltip", view }: CameraProps & TooltipProps & {
   onCopyDiagnostics?: (text: string) => void;
 }) {
+  const tooltip = useViewportTooltip({ className: tooltipClassName });
   const video = useRef<HTMLVideoElement>(null);
   const [now, setNow] = useState(Date.now);
   const active = Boolean(view.camera) && view.status === "listening";
@@ -223,13 +240,14 @@ export function VoiceCameraDock({ controller, onCopyDiagnostics, view }: CameraP
             className="app-notice-toast__icon-button"
             type="button"
             aria-label="Copy camera diagnostics"
-            title="Copy camera diagnostics"
+            {...tooltipHandlers(tooltip, "Copy camera diagnostics")}
             onClick={() => onCopyDiagnostics(cameraDiagnosticsText(debug, now))}
           >
             <CopyIcon size={13} aria-hidden="true" />
           </button>
         ) : null}
       </div>
+      {tooltip.tooltipNode}
       <span className="voice-camera-dock__sr" role="status">{status}</span>
       {view.cameraError ? (
         <div className="voice-camera-dock__error" role="alert">

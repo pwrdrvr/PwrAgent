@@ -223,6 +223,22 @@ describe("voice camera ownership", () => {
     await f.controller.stop();
   });
 
+  it("settles a gesture's transcript receipt even when the camera stops before the RPC answers", async () => {
+    const f = await liveCamera();
+    const pending = deferred<void>();
+    f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: true, presenceConfidence: 0.95, reaction: "neutral" as const,
+      reactionConfidence: 0.9, gesture: "stop" as const, gestureConfidence: 0.93, latencyMs: 250 }));
+    f.api.sendNativeVoiceCameraCue = vi.fn(() => pending.promise);
+    await f.controller.setCamera(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.controller.getView().cameraCues).toEqual([expect.objectContaining({ cue: "stop", delivery: "pending" })]);
+    await f.controller.setCamera(false);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.controller.getView().cameraCues).toEqual([expect.objectContaining({ cue: "stop", delivery: "acknowledged" })]);
+    await f.controller.stop();
+  });
+
   it("automatically delivers a stop gesture as a camera cue without spoken-user text or a tool call", async () => {
     const f = await liveCamera();
     f.api.analyzeNativeVoiceCamera = vi.fn(async () => ({ present: true, presenceConfidence: 0.95, reaction: "neutral" as const,

@@ -207,7 +207,7 @@ function micHint(muted: boolean): string {
     : `Mute. The reply keeps playing, then voice ends ${MUTED_IDLE_END_SECONDS} seconds after it finishes.`;
 }
 
-const CUE_DELIVERY_LABEL = { pending: "sending…", acknowledged: "sent", failed: "not delivered" } as const;
+export const CUE_DELIVERY_LABEL = { pending: "sending…", acknowledged: "sent", failed: "not delivered" } as const;
 
 /**
  * Transcript rows, tool receipts, and sent camera cues, in the order they

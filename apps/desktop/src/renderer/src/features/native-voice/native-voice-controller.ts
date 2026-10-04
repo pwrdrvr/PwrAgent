@@ -527,16 +527,16 @@ export class NativeVoiceController {
               });
               debug({ lastCue: decision.cue, delivery: "pending" });
               // Do not reset muted-idle timers: a camera cue is not user activity.
+              // The receipt settles even if the camera stopped meanwhile: the
+              // transcript outlives the camera, and "sending…" must not stick.
               try {
                 await this.api.sendNativeVoiceCameraCue!({ sessionId: resources.id, cue: decision.cue });
-                if (!current()) return;
                 delivered("acknowledged");
+                if (!current()) return;
                 debug({ delivery: "acknowledged", acknowledgedAt: Date.now(), cuesAcknowledged: diagnostics.cuesAcknowledged + 1 });
               } catch (error) {
-                if (current()) {
-                  delivered("failed");
-                  debug({ delivery: "failed" });
-                }
+                delivered("failed");
+                if (current()) debug({ delivery: "failed" });
                 throw error;
               }
             }

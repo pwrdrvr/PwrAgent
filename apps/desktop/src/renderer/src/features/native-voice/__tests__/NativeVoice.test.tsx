@@ -375,9 +375,12 @@ it("ends director voice from End without closing the panel", async () => {
   const end = within(directorPanel()!).getByRole("button", { name: "End director voice" });
   expect(end).toHaveTextContent("End");
   expect(end.closest("header")).toBeNull();
+  end.focus();
   fireEvent.click(end);
   await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
   await waitFor(() => expect(state()).toHaveTextContent("Voice ended"));
+  // Focus follows the session control rather than falling to <body>.
+  expect(within(directorPanel()!).getByRole("button", { name: "Start again" })).toHaveFocus();
   expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("You: Pause the sample thread.Director: Paused.");
   // Nothing to mute or film once the session is over.
   expect(within(directorPanel()!).queryByRole("button", { name: /microphone|camera cues/ })).toBeNull();
