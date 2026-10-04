@@ -457,6 +457,21 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "messaging-attach-active-turn": {
+    "commits": 9,
+    "note": "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
+    "observedWalBytes": 107120,
+    "rowsChanged": 7,
+    "statements": 9
+  },
+  "messaging-attach-idle-turn": {
+    "commits": 8,
+    "note": "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
+    "observedWalBytes": 94760,
+    "rowsChanged": 6,
+    "statements": 8
+  },
+  "messaging-attach-waiting-turn": {"commits": 9, "note": "one attachment with a pre-existing pending request: binding/status persistence plus one suspended activity delivery; no new timer or turn-state persistence", "observedWalBytes": 107120, "rowsChanged": 7, "statements": 9},
   "messaging-binding-revoke": {
     "commits": 11,
     "note": "one bus-driven binding revoke including Agent Session close status",

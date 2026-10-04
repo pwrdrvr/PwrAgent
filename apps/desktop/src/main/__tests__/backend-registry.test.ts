@@ -34896,6 +34896,9 @@ command = "pnpm dev"
     } as AppServerPendingRequestNotification;
     const responsePromise = codexClient.emitRequest(request);
     await waitForCondition(() => events.length === 1);
+    expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toEqual(request);
+    expect(registry.getPendingRequestForThread({ backend: "acp:grok", threadId: "thread-1" })).toBeUndefined();
+    expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-2" })).toBeUndefined();
 
     await registry.submitServerRequest({
       backend: "codex",
@@ -34906,6 +34909,7 @@ command = "pnpm dev"
     });
 
     await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+    expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
     expect(events.map((event) => event.notification.method)).toEqual([
       "item/commandExecution/requestApproval",
       "serverRequest/resolved",
