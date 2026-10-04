@@ -1,4 +1,4 @@
-import { Marked, type Token, type TokenizerExtension } from "marked";
+import { Marked, type MarkedToken, type Token, type TokenizerExtension } from "marked";
 
 export type TelegramMarkdownToken =
   | { type: "telegram_details"; raw: string; open: boolean; summary: Token[]; tokens: Token[] }
@@ -7,11 +7,12 @@ export type TelegramMarkdownToken =
   | { type: "telegram_footnote_definition" | "telegram_footnote"; raw: string; name: string; tokens: Token[]; number?: number; anchor?: string };
 
 const detailsDepth = new WeakMap<object, number>();
+// Let Marked invoke block extensions at block boundaries. A start hint can
+// otherwise truncate a paragraph before its inline code spans are parsed.
 const extensions: TokenizerExtension[] = [
   {
     name: "telegram_details",
     level: "block",
-    start: (src) => src.indexOf("<details"),
     childTokens: ["summary", "tokens"],
     tokenizer(src) {
       const opening = /^ {0,3}<details(?:\s+(open))?\s*>[ \t]*(?:\n)?/i.exec(src);
@@ -28,7 +29,8 @@ const extensions: TokenizerExtension[] = [
         return {
           type: "telegram_details", raw, open: Boolean(opening[1]),
           summary: this.lexer.inline(summary?.[1] ?? "Details"),
-          tokens: this.lexer.blockTokens(body.slice(summary?.[0].length ?? 0).trim()),
+          tokens: this.lexer.blockTokens(body.slice(summary?.[0].length ?? 0)
+            .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, "")),
         };
       } finally {
         detailsDepth.set(this.lexer, depth);
@@ -51,7 +53,6 @@ const extensions: TokenizerExtension[] = [
   {
     name: "telegram_math_block",
     level: "block",
-    start: (src) => src.search(/\$\$|\\\[/),
     tokenizer(src) {
       const opening = /^ {0,3}(\$\$|\\\[)/.exec(src);
       if (!opening) return;
@@ -104,7 +105,7 @@ export function lexTelegramMarkdown(text: string, anchorPrefix = "fn"): Token[] 
   const tokens = markdown.lexer(text);
   const definitions = new Map<string, Extract<TelegramMarkdownToken, { type: "telegram_footnote_definition" | "telegram_footnote" }>>();
   const references: Array<Extract<TelegramMarkdownToken, { type: "telegram_footnote_reference" }>> = [];
-  markdown.walkTokens(tokens, (token) => {
+  walkRenderedTokens(tokens, (token) => {
     if (token.type === "telegram_footnote_definition" && !definitions.has(token.name)) {
       definitions.set(token.name, token as TelegramMarkdownToken & { type: "telegram_footnote_definition" });
     } else if (token.type === "telegram_footnote_reference") {
@@ -121,11 +122,38 @@ export function lexTelegramMarkdown(text: string, anchorPrefix = "fn"): Token[] 
       used.set(reference.name, number);
       definition.number = number;
       definition.anchor = `${anchorPrefix}-${number}`;
+      // Definitions are rendered after the body. Follow only used notes,
+      // after all body references, and visit each definition once so cycles
+      // and repeated references cannot create extra notes or consume numbers.
+      walkRenderedTokens(definition.tokens, (token) => {
+        if (token.type === "telegram_footnote_reference") {
+          references.push(token as TelegramMarkdownToken & { type: "telegram_footnote_reference" });
+        }
+      });
     }
     reference.number = number;
     reference.anchor = definition.anchor;
   }
   return [...tokens, ...[...used.keys()].map((name) => ({ ...definitions.get(name)!, type: "telegram_footnote" }))];
+}
+
+/** Walk the syntax rendered as formatting, leaving literal source opaque. */
+function walkRenderedTokens(tokens: Token[], visit: (token: Token) => void): void {
+  for (const item of tokens) {
+    const token = item as MarkedToken | TelegramMarkdownToken;
+    visit(token);
+    if (token.type === "telegram_footnote_definition" || token.type === "image") continue;
+    if (token.type === "table") {
+      for (const row of [token.header, ...token.rows]) {
+        for (const cell of row) walkRenderedTokens(cell.tokens, visit);
+      }
+    } else if (token.type === "list") {
+      for (const entry of token.items) walkRenderedTokens(entry.tokens, visit);
+    } else {
+      if (token.type === "telegram_details") walkRenderedTokens(token.summary, visit);
+      if ("tokens" in token && token.tokens) walkRenderedTokens(token.tokens, visit);
+    }
+  }
 }
 
 /** Match nested details while leaving tag-shaped source in code untouched. */

@@ -312,6 +312,31 @@ describe("telegram formatting", () => {
     expect(renderTelegramHtml('<details><summary>literal</summary></details>', "plain")).toContain("&lt;details&gt;");
   });
 
+  it.each(["regular", "rich"])("keeps block extension syntax literal inside %s inline code", (mode) => {
+    const text = '# Code\n\nUse `<details><summary>X</summary></details>` and `echo $$` literally.\n\nUse `echo\n$$ x $$\nnow` too.';
+    const html = mode === "rich" ? richMessageForTelegramText(text, "markdown")?.html : renderTelegramHtml(text, "markdown");
+    expect(html).toContain('Use <code>&lt;details&gt;&lt;summary&gt;X&lt;/summary&gt;&lt;/details&gt;</code> and <code>echo $$</code> literally.');
+    expect(html).toContain('Use <code>echo $$ x $$ now</code> too.');
+    expect(html).not.toContain("<details");
+    expect(html).not.toContain("tg-math");
+  });
+
+  it("recognizes real details and math blocks after paragraphs", () => {
+    const text = 'Before details.\n\n<details><summary>Title</summary>\n\nBody.\n\n</details>\n\nBefore math.\n\n$$\nx^2\n$$';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain('<p>Before details.</p>\n<details><summary>Title</summary><p>Body.</p></details>');
+    expect(rich).toContain('<p>Before math.</p>\n<tg-math-block>x^2</tg-math-block>');
+  });
+
+  it.each(["    ", "\t"])("preserves details-body code indentation %j", (indent) => {
+    const text = `<details><summary>Code</summary>\n\n \t\n${indent}**bold**\n${indent}$x$\n\n</details>`;
+    for (const html of [renderTelegramHtml(text, "markdown"), richMessageForTelegramText(text, "markdown")?.html]) {
+      expect(html).toContain('<pre><code>**bold**\n$x$</code></pre>');
+      expect(html).not.toContain('<b>bold</b>');
+      expect(html).not.toContain('tg-math');
+    }
+  });
+
   it("renders footnotes in first-use order and preserves unresolved source", () => {
     const text = 'Second[^b], first[^a], repeated[^b] and missing[^unknown].\n\n[^a]: **Alpha**\n[^b]: [Beta](https://example.com)\n    continued\n[^unused]: Keep this unused definition.';
     const rich = richMessageForTelegramText(text, "markdown")?.html;
@@ -327,6 +352,45 @@ describe("telegram formatting", () => {
     expect(regular).not.toContain("tg-reference");
     expect(renderTelegramHtml('`[^a]`\n\n```md\n[^a]: source\n```', "markdown"))
       .toContain('<code>[^a]</code>');
+  });
+
+  it("does not resolve references inside unused footnote definitions", () => {
+    const text = '# Notes\n\n[^unused]: See [^a].\n[^a]: Alpha';
+    const regular = renderTelegramHtml(text, "markdown");
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    for (const html of [regular, rich]) {
+      expect(html).toContain('[^unused]: See [^a].');
+      expect(html).toContain('[^a]: Alpha');
+      expect(html).not.toContain('[1]');
+      expect(html).not.toContain('tg-reference');
+    }
+  });
+
+  it("numbers rendered references before following reachable definitions", () => {
+    const text = '[^unused]: Hidden [^d].\n[^a]: Alpha[^c].\n[^b]: Beta.\n[^c]: Gamma[^a].\n[^d]: Delta.\n\nFirst[^a], second[^b].';
+    const rich = richMessageForTelegramText(text, "markdown")?.html;
+    expect(rich).toContain('First<a href="#fn-1">[1]</a>, second<a href="#fn-2">[2]</a>.');
+    expect(rich).toContain('<tg-reference name="fn-1">[1] Alpha<a href="#fn-3">[3]</a>.</tg-reference>');
+    expect(rich).toContain('<tg-reference name="fn-2">[2] Beta.</tg-reference>');
+    expect(rich).toContain('<tg-reference name="fn-3">[3] Gamma<a href="#fn-1">[1]</a>.</tg-reference>');
+    expect(rich).not.toContain('#fn-4');
+    expect(rich).toContain('[^d]: Delta.');
+    const regular = renderTelegramHtml(text, "markdown");
+    expect(regular).toContain('First[1], second[2].');
+    expect(regular).toContain('[1] Alpha[3].');
+    expect(regular).toContain('[2] Beta.');
+    expect(regular).toContain('[3] Gamma[1].');
+    expect(regular).not.toContain('[4]');
+  });
+
+  it("keeps references in image alt text literal", () => {
+    const text = '# Image\n\n![alt[^a]](https://example.com/photo.png)\n\n[^a]: Alpha';
+    for (const html of [renderTelegramHtml(text, "markdown"), richMessageForTelegramText(text, "markdown")?.html]) {
+      expect(html).toContain('alt[^a]');
+      expect(html).toContain('[^a]: Alpha');
+      expect(html).not.toContain('tg-reference');
+      expect(html).not.toContain('[1]');
+    }
   });
 
   it("does not close details on tags in multiline or indented code", () => {
