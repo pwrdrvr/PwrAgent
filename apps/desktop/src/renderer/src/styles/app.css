@@ -35793,7 +35793,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 /* A folder name sits beside its path, so the name column stops at 160px and
    the path takes the rest. An instance's meta is a short status, and the
-   160px cap cut machine names ("Harold-Mac-Mini-…") beside empty space:
+   160px cap cut machine names ("Studio-MBP-M5-M…") beside empty space:
    the name takes the row and the status keeps its own width. */
 .composer__autocomplete--directories .composer__autocomplete-option--instance:not(.composer__autocomplete-option--action) {
   grid-template-columns: minmax(0, 1fr) auto;
