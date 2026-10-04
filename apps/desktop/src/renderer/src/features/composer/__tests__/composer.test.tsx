@@ -886,7 +886,7 @@ describe("Composer", () => {
     expect(within(screen.getByLabelText("Queued message")).getByRole("button", {
       name: "Steer when ready",
     })).toBeEnabled();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Queued next");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Next");
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
   });
 
@@ -6532,7 +6532,7 @@ describe("Composer", () => {
     });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Queued next",
+      "Next",
     );
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Wait behind the active backend turn",
@@ -7246,7 +7246,7 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -7824,7 +7824,7 @@ describe("Composer", () => {
           input: [{ type: "text", text: "Follow up next" }],
         }),
       );
-      expect(screen.getByText("Queued next")).toBeInTheDocument();
+      expect(screen.getByText("Next")).toBeInTheDocument();
       expect(screen.getByText("Follow up next")).toBeInTheDocument();
     });
     expect(textarea).toHaveValue("");
@@ -9465,7 +9465,7 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledTimes(1);
-      expect(screen.getByText("Queued next")).toBeInTheDocument();
+      expect(screen.getByText("Next")).toBeInTheDocument();
       expect(screen.getByText("1 image")).toBeInTheDocument();
       expect(
         screen.getByLabelText("Queued image attachments: 1"),
@@ -11709,7 +11709,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "Pending steer draft" } });
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Queued follow-up")).toBeInTheDocument();
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(steerTurn).toHaveBeenCalledTimes(1);
@@ -11774,7 +11774,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued elsewhere" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
@@ -11898,7 +11898,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued preflight block" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     rerender(
       <Composer
@@ -12740,7 +12740,7 @@ describe("Composer", () => {
     expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(1);
     expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
     expect(startTurn).not.toHaveBeenCalled();
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
   });
 
@@ -12959,7 +12959,7 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(await screen.findByText("Queued next")).toBeInTheDocument();
+    expect(await screen.findByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
 
@@ -13006,7 +13006,7 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
   });
 
   it("starts a queued review without clearing the next live draft", async () => {
@@ -13123,7 +13123,7 @@ describe("Composer", () => {
     await clickButton("Queue");
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
     expect(screen.getByText("/review does not accept image attachments.")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("/review main");
     expect(screen.getByAltText("review-image.png")).toBeInTheDocument();

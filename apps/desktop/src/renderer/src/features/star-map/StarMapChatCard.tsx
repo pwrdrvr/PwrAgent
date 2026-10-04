@@ -1741,19 +1741,24 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
               aria-label={
                 index === 0 ? "Queued message" : `Queued message ${index + 1}`
               }
-              className="composer__queued"
+              className="composer__queued composer__queued--message composer__queued--compact"
               key={queued.id}
             >
-              <div className="composer__queued-copy">
+              <div className="composer__queued-line">
                 <span className="composer__queued-label">
                   {queued.backendQueuePending
                     ? "Sending…"
                     : index === 0
-                      ? "Queued next"
-                      : `Queued #${index + 1}`}
+                      ? "Next"
+                      : `#${index + 1}`}
                 </span>
-                <span className="composer__queued-text">
-                  {queuedTurnPreview(queued)}
+                <span
+                  className={[
+                    "composer__queued-text",
+                    queued.title ? "" : "composer__queued-text--raw",
+                  ].filter(Boolean).join(" ")}
+                >
+                  {queued.title ?? queuedTurnPreview(queued)}
                 </span>
               </div>
             </div>

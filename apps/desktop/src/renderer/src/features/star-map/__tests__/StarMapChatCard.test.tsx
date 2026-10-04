@@ -1777,7 +1777,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Queued message").textContent).toBe(
-        "Queued nextwait your turn",
+        "Nextwait your turn",
       );
     });
     expect(startTurn).toHaveBeenCalledWith(

@@ -18251,9 +18251,12 @@ a.button {
    keeps room for the thinking indicator. So no padding here, and no
    override of the items rule either: the card takes the transcript's own
    spacing rather than restating it. */
+/* A zero basis, so the transcript takes what the band and composer leave.
+   With `auto` it shrank in proportion to its content height, and a long
+   transcript squeezed the band to three rows, well under its cap. */
 .star-map-chat-card__transcript {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
@@ -32431,8 +32434,24 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
+/* A queued message is one line: chevron, short state label, title. Actions
+   float over the line's right end on hover or focus, and anything longer — an
+   error, the opened message — takes a line of its own below. Twenty queued
+   messages are twenty 32px rows, not twenty cards. */
 .composer__queued--message {
-  grid-template-columns: minmax(0, 1fr) auto;
+  --queued-row-bg: var(--bg-panel-elevated);
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  min-height: 32px;
+  padding: 0 8px 0 4px;
+  background: var(--queued-row-bg);
+}
+
+.composer__queued--message:hover {
+  border-color: var(--border-strong);
 }
 
 .composer__queued--steer {
@@ -32450,6 +32469,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__queued--scheduled {
+  --queued-row-bg: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
   border-color: var(--accent-border);
   background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
 }
@@ -32460,6 +32480,10 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__queued--failed {
   border-color: color-mix(in srgb, var(--status-error) 60%, var(--border-subtle));
+}
+
+.composer__queued--message.composer__queued--failed {
+  --queued-row-bg: color-mix(in srgb, var(--danger-soft) 40%, var(--bg-panel-elevated));
 }
 
 .composer__queued--failed .composer__queued-label,
@@ -32537,6 +32561,194 @@ button.pricing-token-miser__folded:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.composer__queued-line {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 30px;
+}
+
+.composer__queued--message .composer__queued-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.composer__queued--message .composer__queued-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* No title yet, or a message short enough to be its own: shown as typed, a
+   step quieter than a title. */
+.composer__queued-text--raw {
+  color: var(--text-secondary);
+}
+
+/* The chevron button's hit area covers the whole line (the row is the
+   positioned ancestor), so the summary opens on a click anywhere. The actions
+   stack above it. */
+.composer__queued-disclosure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.composer__queued-disclosure::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.composer__queued-disclosure:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+/* The rail's 8px border chevron (`.composer__queued-env-action-chevron`). */
+.composer__queued-chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.composer__queued-disclosure[data-open="true"] .composer__queued-chevron {
+  transform: rotate(45deg);
+}
+
+.composer__queued--message > .composer__queued-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 6px 0 36px;
+  border-radius: 0 8px 8px 0;
+  background: linear-gradient(to right, transparent, var(--queued-row-bg) 30px);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.composer__queued--message:hover > .composer__queued-actions,
+.composer__queued--message:focus-within > .composer__queued-actions,
+.composer__queued--pinned-actions > .composer__queued-actions {
+  opacity: 1;
+}
+
+.composer__queued--message > .composer__queued-actions .composer__secondary-action {
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.composer__queued-icon-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.composer__queued-icon-action:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__queued-icon-action--danger:hover:not(:disabled) {
+  color: var(--danger-text);
+}
+
+.composer__queued-icon-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.composer__queued-icon-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.composer__queued-image-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px 0 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.composer__queued-image-chip img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+/* The Star Map card's row: read-only, so no chevron and no actions, and a
+   size down to match the compact composer below it. */
+.composer__queued--message.composer__queued--compact {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.composer__queued--compact .composer__queued-line {
+  gap: 6px;
+  height: 26px;
+}
+
+.composer__queued--compact .composer__queued-label {
+  font-size: 10px;
+}
+
+.composer__queued--compact .composer__queued-text {
+  font-size: 12px;
+}
+
+/* Second-line content sits under the label, past the chevron. */
+.composer__queued-detail,
+.composer__queued--message > .queued-message-inspector {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-left: 30px;
+}
+
+.composer__queued-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
 }
 
 /* Env-action anchor: collapsed-by-default <details> with chevron, body
@@ -40538,21 +40750,8 @@ button.pricing-token-miser__folded:focus-visible {
 
 .federation-activity__sizes { margin-top: 18px; }
 
-.queued-message-inspector-shell {
-  grid-column: 1 / -1;
-  min-width: 0;
-}
-
-.queued-message-inspector-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .queued-message-inspector {
-  margin-top: 8px;
+  margin-bottom: 8px;
   max-height: 320px;
   overflow: auto;
   padding: 8px;

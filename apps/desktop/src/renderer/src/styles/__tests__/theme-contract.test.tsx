@@ -544,6 +544,10 @@ describe("Tangerine Terminal theme contract", () => {
       // band's own surface token.
       "rail-band-gap",
       "rail-band-fade-color",
+      // A queued message row's surface, defined on `.composer__queued--message`
+      // so the hover actions' fade matches each row tone. Every value it
+      // resolves to is a theme token.
+      "queued-row-bg",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

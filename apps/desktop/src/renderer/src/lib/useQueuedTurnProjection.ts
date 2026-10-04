@@ -81,6 +81,7 @@ export function useQueuedTurnProjection(params: {
                 ...entry,
                 manualReleaseRequired: snapshot.manualReleaseRequired,
                 holdReason: snapshot.holdReason,
+                title: snapshot.title ?? entry.title,
               }
             : entry;
         });
@@ -92,6 +93,7 @@ export function useQueuedTurnProjection(params: {
           queueEntryCreatedAt: entry.createdAt,
           manualReleaseRequired: entry.manualReleaseRequired,
           holdReason: entry.holdReason,
+          ...(entry.title ? { title: entry.title } : {}),
           text: entry.displayText,
           imageAttachments: [],
           fileAttachments: [],

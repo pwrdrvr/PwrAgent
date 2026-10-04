@@ -21,6 +21,48 @@ function buildEntry(
 }
 
 describe("ThreadTurnQueue", () => {
+  it("keeps a display title on a queued entry until its input changes", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+    });
+    await queue.submit(buildEntry());
+
+    expect(queue.setQueuedEntryTitle("entry-1", "Greeting")).toMatchObject({ title: "Greeting" });
+    expect(queue.getAllQueuedEntries()[0]?.title).toBe("Greeting");
+    const updated = queue.updateQueuedEntryInput("entry-1", [{ type: "text", text: "goodbye" }]);
+    expect(updated).not.toHaveProperty("title");
+    expect(queue.getAllQueuedEntries()[0]).not.toHaveProperty("title");
+    expect(queue.setQueuedEntryTitle("missing", "Nothing")).toBeUndefined();
+  });
+
+  it("drops a grouped steer's title when another message joins the batch", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+    });
+    const first = await queue.submitGroupedSteer(buildEntry({ id: "group" }));
+    expect(first.status).toBe("queued");
+    queue.setQueuedEntryTitle("group", "First report");
+
+    await queue.submitGroupedSteer({
+      ...buildEntry({ id: "second" }),
+      input: [{ type: "text", text: "second report" }],
+    });
+
+    const entries = queue.getAllQueuedEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).not.toHaveProperty("title");
+  });
+
   it("starts idle thread submissions immediately", async () => {
     const startedEntries: string[] = [];
     const events: ThreadTurnQueueLifecycleEvent[] = [];

@@ -301,6 +301,12 @@ export type ThreadQueuedTurnSummary = {
   position: number;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /**
+   * Generated display title for a message too long to show as typed. Absent
+   * until the helper answers, and from owners that predate it; show
+   * `displayText` then.
+   */
+  title?: string;
 };
 
 /**

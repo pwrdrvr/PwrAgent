@@ -113,6 +113,12 @@ describe("composer band bounds", () => {
     );
     // The composer itself never gives up height to the rows above it.
     expect(ruleBody(".compact-composer")).toMatch(/flex:\s*0 0 auto/);
+    // The transcript takes the remainder. An `auto` basis made it shrink in
+    // proportion to its content, which held a long thread's band to a few
+    // rows no matter how far under its cap the band was.
+    expect(cssRuleBody(".star-map-chat-card__transcript")).toMatch(
+      /flex:\s*1 1 0;/,
+    );
   });
 
   it("fades a band's edges only while content lies past them", () => {
