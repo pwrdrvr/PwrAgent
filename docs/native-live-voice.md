@@ -373,9 +373,13 @@ cue was just delivered shows **sent** for four seconds.
 The panel's size picks the layout, through a container query. At
 the default width the mirrored preview sits beside each question's top pick
 (gesture, vibe, present) with its confidence. Dragged to about 470px wide and
-800px tall, the video spans the dock with every option's meter for all three
-questions below it, plus the filter status. The height floor keeps the
-transcript readable; the panel is a size container, so both dimensions count. Both readouts stay mounted, so a resize never restarts the video.
+800px tall, every option's meter for all three questions spans the dock below
+the preview and picks, plus the filter status. From about 790px wide and 660px
+tall, the meters move beside a larger preview, the way the Clef demo lays them
+out. The preview keeps a 4:3 frame at every size, so extra width goes to the
+meters instead of cropping the video to a strip. The height floors keep the
+transcript readable; the panel is a size container, so both dimensions count.
+Both readouts stay mounted, so a resize never restarts the video.
 **Copy camera diagnostics** copies what the dock leaves off-screen: frame age,
 stale-result count, acknowledgment counts, and the owning thread and session.
 Received results and acknowledged context are counted separately.

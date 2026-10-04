@@ -709,20 +709,46 @@
   }
 }
 /* Dragged wider (and tall enough that the transcript keeps room), the dock
-   trades the side-by-side readout for the Clef layout: the video across the
-   dock, every option's meter below it. */
+   adds every option's meter. The video always keeps a 4:3 frame; extra width
+   goes to the meters, never to a cropped strip of video. */
 .voice-camera-dock__cards,
 .voice-camera-dock__caption-wide,
 .voice-camera-dock__filter {
   display: none;
 }
-@container director-voice (min-width: 440px) and (min-height: 780px) {
+/* Medium: the compact 4:3 tile and its picks stay put, the meters span
+   below both. */
+@container director-voice (440px <= width < 760px) and (height >= 780px) {
   .voice-camera-dock__body {
-    grid-template-columns: minmax(0, 1fr);
+    row-gap: 10px;
+  }
+  .voice-camera-dock__cards {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
   }
+  /* The picks beside the video already name each answer. */
+  .voice-camera-dock__card .voice-camera-dock__pick {
+    display: none;
+  }
+  .voice-camera-dock__filter {
+    display: block;
+    grid-column: 1 / -1;
+  }
+}
+/* Wide: the meters move beside the video, Clef-demo style. Side by side the
+   dock is shorter, so this needs less height than the medium layout. */
+@container director-voice (width >= 760px) and (height >= 640px) {
+  .voice-camera-dock__body {
+    grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 12px;
+  }
   .voice-camera-dock__video {
-    height: 180px;
+    grid-row: 1 / span 2;
+    height: auto;
+    aspect-ratio: 4 / 3;
   }
   .voice-camera-dock__reads {
     display: none;
