@@ -3135,7 +3135,10 @@ class DesktopAppServerService {
         const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
           query: { kind: "directory-index", keys: directoryKeys }, pageSize: 100, cursor, deadlineAt,
         }, token);
-        if (page.coverage.state !== "complete" || page.unchanged) throw new Error("Directory metadata is incomplete. Retry after the owner finishes refreshing.");
+        // Provider coverage describes thread discovery, not whether an owner
+        // knows a directory's path. Refresh known paths even while discovery
+        // is checking or degraded, including newly registered empty folders.
+        if (page.unchanged) throw new Error("Directory refresh returned no owner metadata.");
         bytes += Buffer.byteLength(JSON.stringify(page), "utf8");
         if (bytes > 512 * 1024) throw new Error("Directory refresh metadata exceeds its bounded budget.");
         for (const directory of page.directories ?? []) {

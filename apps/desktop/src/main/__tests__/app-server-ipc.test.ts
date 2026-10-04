@@ -8032,6 +8032,26 @@ describe("app server ipc", () => {
     ]);
   });
 
+  it.each(["checking", "degraded"])("refreshes a registered empty directory while provider discovery is %s", async (state) => {
+    const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    readNavigationQueryIndex.mockReturnValueOnce({
+      threads: [],
+      directories: [{ key: "directory:/repo/new-project", kind: "directory", label: "new-project",
+        path: "/repo/new-project", threadKeys: [], needsAttentionCount: 0 }],
+    });
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)?.({}, {
+      directoryKeys: ["directory:/repo/new-project"], force: true,
+    })).resolves.toEqual({ scheduledCount: 1 });
+
+    await vi.waitFor(() => expect(readDirectoryStatusEntries).toHaveBeenCalled());
+    expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({ key: "directory:/repo/new-project", path: "/repo/new-project" }),
+    ]);
+  });
+
   it("does not probe removed directories and bounds explicit directory refresh admission", async () => {
     const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();
