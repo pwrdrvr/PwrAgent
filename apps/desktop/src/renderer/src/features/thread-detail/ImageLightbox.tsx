@@ -400,7 +400,13 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     startInteractiveSvg();
   };
   const interactOnClick = Boolean(svgDocument) && !svgActive;
-  const interactHint = "Click to enable SVG interaction";
+  const showInteractHint = (event: ReactMouseEvent<HTMLImageElement>): void => {
+    if (event.buttons !== 0) return;
+    const point = { x: event.clientX, y: event.clientY };
+    if (!tooltip.movePointer(point)) {
+      tooltip.showAtPointer(event.currentTarget, point, "Click to enable SVG interaction");
+    }
+  };
 
   return <>
     {/* Focus, not hover: this box is the scrim, so a hover tooltip would pop
@@ -426,13 +432,13 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
           data-panning={gestures.panning} data-interact-on-click={interactOnClick} draggable={false} onDragStart={(event) => event.preventDefault()}
           onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle}
           {...gestures.imageHandlers}
-          {...(interactOnClick && !noticeOpen ? tooltipHandlers(tooltip, interactHint) : {})}
-          // The SVG is read after the lightbox opens, under a pointer that is
-          // usually already on the image: no enter event follows, so the first
-          // movement raises the hint instead.
-          onMouseMove={interactOnClick && !noticeOpen && !tooltip.visible ? (event) => {
-            if (event.buttons === 0) tooltip.show(event.currentTarget, interactHint);
-          } : undefined}
+          // The hint follows the pointer: the image fills most of the window,
+          // so its edge is nowhere near what the operator is looking at. The
+          // SVG is read after the lightbox opens, under a pointer usually
+          // already on the image, so movement raises it as well as entry.
+          onMouseEnter={interactOnClick && !noticeOpen ? showInteractHint : undefined}
+          onMouseMove={interactOnClick && !noticeOpen ? showInteractHint : undefined}
+          onMouseLeave={interactOnClick ? tooltip.hide : undefined}
           onPointerDown={(event) => {
             imagePress.current = { x: event.clientX, y: event.clientY };
             if (interactOnClick) tooltip.hide();

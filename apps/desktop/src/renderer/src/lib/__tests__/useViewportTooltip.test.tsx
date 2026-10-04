@@ -811,3 +811,78 @@ describe("useViewportTooltip", () => {
     });
   });
 });
+
+function PointerTooltipFixture() {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  return (
+    <div>
+      <div
+        data-testid="large-target"
+        onMouseMove={(event) => {
+          const point = { x: event.clientX, y: event.clientY };
+          if (!tooltip.movePointer(point)) {
+            tooltip.showAtPointer(event.currentTarget, point, "Click here");
+          }
+        }}
+      />
+      <button type="button" onMouseEnter={(event) => tooltip.show(event.currentTarget, "Edge tooltip")}>
+        edge
+      </button>
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
+
+describe("pointer-anchored viewport tooltips", () => {
+  function sizeTooltip(width: number, height: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("viewport-tooltip")
+        ? new DOMRect(0, 0, width, height)
+        : new DOMRect(0, 0, 900, 600);
+    });
+  }
+
+  it("sits beside the cursor and follows it, flipping above near the bottom", async () => {
+    vi.stubGlobal("innerWidth", 1000);
+    vi.stubGlobal("innerHeight", 700);
+    sizeTooltip(120, 24);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    render(<PointerTooltipFixture />);
+    const target = screen.getByTestId("large-target");
+
+    fireEvent.mouseMove(target, { clientX: 300, clientY: 200 });
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("Click here");
+    expect(tooltip.style.left).toBe("312px");
+    expect(tooltip.style.top).toBe("220px");
+
+    // Moves batch into one write per frame.
+    fireEvent.mouseMove(target, { clientX: 500, clientY: 300 });
+    fireEvent.mouseMove(target, { clientX: 520, clientY: 680 });
+    expect(frames).toHaveLength(1);
+    act(() => frames.shift()?.(0));
+    expect(tooltip.style.left).toBe("532px");
+    // 680 + 20 + 24 would cross the bottom edge, so it goes above the cursor.
+    expect(tooltip.style.top).toBe(`${680 - 10 - 24}px`);
+
+    // Near the right edge it stays on screen.
+    fireEvent.mouseMove(target, { clientX: 990, clientY: 100 });
+    act(() => frames.shift()?.(0));
+    expect(tooltip.style.left).toBe(`${1000 - 12 - 120}px`);
+  });
+
+  it("stops following once an ordinary tooltip replaces it", async () => {
+    sizeTooltip(120, 24);
+    render(<PointerTooltipFixture />);
+    fireEvent.mouseMove(screen.getByTestId("large-target"), { clientX: 300, clientY: 200 });
+    await screen.findByRole("tooltip");
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "edge" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Edge tooltip");
+    // The next move over the large target starts its own tooltip again.
+    fireEvent.mouseMove(screen.getByTestId("large-target"), { clientX: 310, clientY: 210 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Click here");
+  });
+});

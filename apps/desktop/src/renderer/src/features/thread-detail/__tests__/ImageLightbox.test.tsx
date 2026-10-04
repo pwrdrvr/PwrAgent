@@ -386,8 +386,14 @@ describe("ImageLightbox, SVG script notice", () => {
     // The Interact button sits at the far end of the bottom pill; the picture
     // is where an operator actually reaches, so it says what a click does.
     expect(image).toHaveAttribute("data-interact-on-click", "true");
-    fireEvent.mouseEnter(image);
-    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Click to enable SVG interaction");
+    fireEvent.mouseEnter(image, { clientX: 300, clientY: 200 });
+    const hint = document.body.querySelector<HTMLElement>(".viewport-tooltip");
+    expect(hint).toHaveTextContent("Click to enable SVG interaction");
+    // Beside the cursor, not above the image's edge.
+    expect(hint?.style.left).toBe("312px");
+    expect(hint?.style.top).toBe("220px");
+    fireEvent.mouseLeave(image);
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
 
     pressAndClick(image);
     expect(scriptNotice()).toBeInTheDocument();
