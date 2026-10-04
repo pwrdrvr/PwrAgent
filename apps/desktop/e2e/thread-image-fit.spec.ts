@@ -433,6 +433,84 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
   }
 });
 
+// Two shapes a flame graph arrives in. inferno's fluid layout removes the
+// root's `width` and `viewBox` on load, so the frame's own CSS is all that
+// sizes it; a fixed flamegraph.pl export keeps both and must scale without
+// distortion. Neither may be upscaled past its declared width.
+const INTERACTIVE_SVG_SHAPES = [
+  {
+    name: "a fluid flame graph that removes its own width and viewBox",
+    height: 390,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="390" viewBox="0 0 1200 390" onload="init(evt)">
+      <script><![CDATA[
+        function init() {
+          var svg = document.getElementsByTagName("svg")[0];
+          svg.removeAttribute("width");
+          svg.removeAttribute("viewBox");
+        }
+      ]]></script>
+      <rect width="100%" height="390" fill="#eeeeb0"/>
+      <text x="50%" y="24" text-anchor="middle">Fluid flame graph</text>
+    </svg>`,
+  },
+  {
+    name: "a fixed flame graph with a viewBox",
+    height: undefined,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" onload="init(evt)">
+      <script><![CDATA[ function init() {} ]]></script>
+      <rect width="1200" height="330" fill="#eeeeb0"/>
+    </svg>`,
+  },
+];
+
+for (const shape of INTERACTIVE_SVG_SHAPES) {
+  test(`keeps the aspect ratio of ${shape.name} in the interactive frame`, async () => {
+    const fixture = await createThreadImageFitFixture();
+    const homeRoot = path.join(path.dirname(fixture.fixturePath), "home");
+    const codexHome = path.join(homeRoot, ".codex");
+    const svgPath = path.join(codexHome, "worktrees", "aspect.svg");
+    const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
+    const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
+    await mkdir(path.dirname(svgPath), { recursive: true });
+    await writeFile(svgPath, shape.svg);
+    const image = { type: "image", url: pathToFileURL(svgPath).toString(), alt: "Aspect flame graph" };
+    for (const message of [...read.result.entries, ...read.result.messages]) {
+      if (message.id === "message-image-fit-2") message.parts[2] = image;
+    }
+    await writeFile(fixture.fixturePath, JSON.stringify(replay));
+    const app = await launchElectronApp({
+      fixturePath: fixture.fixturePath,
+      homeRoot,
+      env: { CODEX_HOME: codexHome },
+      windowSize: { width: 1280, height: 900 },
+    });
+
+    try {
+      await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+      await app.window.getByAltText("Aspect flame graph").click();
+      await app.window.getByRole("button", { name: "Interact with SVG" }).click();
+      const frame = app.window.frameLocator('iframe[title="Interactive SVG: Aspect flame graph"]');
+      const root = frame.locator("body > svg");
+      await expect(root).toBeVisible();
+      // Read after the SVG's own load handler has run: the fluid shape only
+      // loses its width and viewBox there.
+      await expect.poll(() => root.evaluate(() => document.readyState)).toBe("complete");
+      const box = await root.evaluate((svg) => {
+        const rect = svg.getBoundingClientRect();
+        return { width: rect.width, height: rect.height, frameWidth: document.documentElement.clientWidth };
+      });
+
+      const expectedWidth = Math.min(box.frameWidth, 1200);
+      expect(Math.abs(box.width - expectedWidth)).toBeLessThanOrEqual(1);
+      const expectedHeight = shape.height ?? expectedWidth * 330 / 1200;
+      expect(Math.abs(box.height - expectedHeight)).toBeLessThanOrEqual(1);
+    } finally {
+      await app.close();
+      await fixture.cleanup();
+    }
+  });
+}
+
 test("loads an offscreen transcript image only after scrolling it into view", async () => {
   const fixture = await createThreadImageFitFixture(true);
   const app = await launchElectronApp({
