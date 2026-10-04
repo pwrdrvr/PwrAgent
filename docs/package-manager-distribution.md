@@ -88,6 +88,18 @@ runs on stable release publication/edit (including promotion), daily, and on
 demand. PRs affecting the scripts or workflow run validation without submission.
 The workflow reads current release automation for promotion of older tags,
 pins that checkout for submission, and serializes channel updates.
+Idle daily audits and channels with pending submissions read metadata only.
+Needed candidates cache current and previous release assets by API asset identity
+and digest, and recheck sizes, published checksums and API digests on every use.
+Platform jobs reuse successful validation only for the same candidate, upgrade
+baseline, runner architecture and validation code. PRs and manual dispatches always run platform checks. PRs cannot save shared
+validation results. Missing API digests disable reuse.
+Failed validation never saves a success marker; submission retries remain enabled.
+Signature, notarization and install/upgrade checks still run for new candidates.
+Homebrew installs use the verified DMGs in its URL-keyed cache. WinGet may still
+download installers during its local-manifest install/upgrade tests; those checks
+are retained, but repeated successful candidates skip them. Cache eviction can
+also cause a necessary download or validation to run again.
 
 Configure these in **pwrdrvr/PwrAgent**, without copying signing secrets:
 

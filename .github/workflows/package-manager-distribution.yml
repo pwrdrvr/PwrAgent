@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       needed: ${{ steps.generate.outputs.needed }}
+      candidate: ${{ steps.candidate.outputs.key }}
       automation_sha: ${{ steps.checkout.outputs.commit }}
     steps:
       - id: checkout
@@ -58,20 +59,48 @@ jobs:
           # shellcheck disable=SC2016
           needed="$(node --input-type=module -e '
             import fs from "node:fs";
+            import { distributionNeeded } from "./scripts/package-manager-release.mjs";
             const a = JSON.parse(fs.readFileSync("distribution/preflight.json"));
-            const relevant = !process.env.EVENT_TAG || process.env.EVENT_TAG === `v${a.stable.version}`;
-            const validation = ["pull_request", "workflow_dispatch"].includes(process.env.EVENT_NAME);
-            console.log(relevant && (validation || [a.homebrew, a.winget].some(c => c.version !== a.stable.version && c.pending.length === 0)));
+            console.log(distributionNeeded(a, process.env.EVENT_NAME, process.env.EVENT_TAG));
           ')"
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
-          if [ "$needed" = true ]; then
-            node scripts/package-manager-release.mjs --out distribution/current --previous-out distribution/previous
-          fi
+      - id: candidate
+        if: steps.generate.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          AUTOMATION_HASH: ${{ hashFiles('.github/workflows/package-manager-distribution.yml', 'scripts/package-manager-release*.mjs') }}
+        run: |
+          set -euo pipefail
+          identity="$(node scripts/package-manager-release.mjs --candidate-key)"
+          echo "$identity" > distribution/identity
+          # Missing API digests disable reuse, never weaken verification.
+          echo "key=${AUTOMATION_HASH}-${identity:-uncacheable-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        id: assets
+        if: steps.generate.outputs.needed == 'true'
+        with:
+          path: distribution/assets
+          key: distribution-assets-${{ steps.candidate.outputs.key }}
+      - name: Generate and verify cached release bytes
+        if: steps.generate.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/package-manager-release.mjs --out distribution/current --previous-out distribution/previous --assets distribution/assets
+          test "$(cat distribution/identity)" = "$(node scripts/package-manager-release.mjs --candidate-key)"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.generate.outputs.needed == 'true' && steps.assets.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        with:
+          path: distribution/assets
+          key: distribution-assets-${{ steps.candidate.outputs.key }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: package-manager-inputs
+          compression-level: 0
           path: |
             distribution/preflight.json
+            distribution/assets
             distribution/current/audit.json
             distribution/current/Casks
             distribution/current/manifests
@@ -96,13 +125,20 @@ jobs:
         with:
           name: package-manager-inputs
           path: distribution
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        id: validated
+        if: github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch'
+        with:
+          path: distribution/validated
+          key: distribution-validated-${{ matrix.runner }}-${{ runner.arch }}-${{ needs.prepare.outputs.candidate }}
       - name: Validate architecture, signature and notarization of both DMGs
+        if: steps.validated.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           version="$(jq -r .stable.version distribution/current/audit.json)"
           for arch in arm64 universal; do
             name="PwrAgent-${version}-${arch}.dmg"
-            curl --fail --location --retry 3 -o "$RUNNER_TEMP/$name" "https://github.com/pwrdrvr/PwrAgent/releases/download/v${version}/${name}"
+            cp "distribution/assets/$name" "$RUNNER_TEMP/$name"
             expected="$(jq -r --arg name "$name" '.hashes[$name]' distribution/current/audit.json)"
             echo "$expected  $RUNNER_TEMP/$name" | shasum -a 256 --check
             mount="$RUNNER_TEMP/mount-$arch"
@@ -125,6 +161,7 @@ jobs:
       - name: Validate fresh install and upgrade through Homebrew
         env:
           HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+        if: steps.validated.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           tap="$(brew --repository)/Library/Taps/pwrdrvr/homebrew-distribution-validation"
@@ -135,8 +172,17 @@ jobs:
           git -C "$tap" -c user.name=distribution-validation -c user.email=validation@pwragent.ai -c commit.gpgsign=false add Casks/pwragent.rb
           git -C "$tap" -c user.name=distribution-validation -c user.email=validation@pwragent.ai -c commit.gpgsign=false commit -m "Validate generated PwrAgent cask"
           token=pwrdrvr/distribution-validation/pwragent
+          seed_cache() {
+            local cached arch
+            arch=universal
+            if [ "$(uname -m)" = arm64 ]; then arch=arm64; fi
+            cached="$(brew --cache --cask "$token")"
+            mkdir -p "$(dirname "$cached")"
+            cp "$2/PwrAgent-$1-$arch.dmg" "$cached"
+          }
           if brew trust --help >/dev/null 2>&1; then brew trust --cask "$token"; fi
           brew style "$tap/Casks/pwragent.rb"
+          seed_cache "$(jq -r .stable.version distribution/current/audit.json)" distribution/assets
           brew audit --cask --online "$token"
           brew install --cask "$token"
           test -d /Applications/PwrAgent.app
@@ -145,6 +191,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$expected"
           brew uninstall --cask "$token"
           cp distribution/previous/Casks/pwragent.rb "$tap/Casks/pwragent.rb"
+          seed_cache "$(jq -r .previousVersion distribution/current/audit.json)" distribution/assets/previous
           brew install --cask "$token"
           previous="$(jq -r .previousVersion distribution/current/audit.json)"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/PwrAgent.app/Contents/Info.plist)" = "$previous"
@@ -154,6 +201,18 @@ jobs:
           codesign --verify --deep --strict /Applications/PwrAgent.app
           spctl --assess --type execute --verbose=2 /Applications/PwrAgent.app
           brew uninstall --cask "$token"
+
+      - name: Record successful platform validation
+        if: steps.validated.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p distribution/validated
+          echo '${{ needs.prepare.outputs.candidate }}' > distribution/validated/success
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.validated.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        with:
+          path: distribution/validated
+          key: distribution-validated-${{ matrix.runner }}-${{ runner.arch }}-${{ needs.prepare.outputs.candidate }}
 
   winget:
     needs: prepare
@@ -165,7 +224,14 @@ jobs:
         with:
           name: package-manager-inputs
           path: distribution
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        id: validated
+        if: github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch'
+        with:
+          path: distribution/validated
+          key: distribution-validated-windows-2025-${{ runner.arch }}-${{ needs.prepare.outputs.candidate }}
       - name: Install Microsoft's WinGet client
+        if: steps.validated.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -193,6 +259,7 @@ jobs:
           Write-Output "Installed official WinGet release $($release.tag_name)"
           Add-Content $env:GITHUB_PATH "$env:LOCALAPPDATA\Microsoft\WindowsApps"
       - name: Validate signed installer, fresh user/machine installs and upgrade
+        if: steps.validated.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -208,7 +275,8 @@ jobs:
           if ($LASTEXITCODE) { throw "Could not enable local manifests" }
           foreach ($v in @($previous, $version)) {
             $installer = "$env:RUNNER_TEMP/PwrAgent-$v-setup.exe"
-            Invoke-WebRequest "https://github.com/pwrdrvr/PwrAgent/releases/download/v$v/PwrAgent-$v-windows-x64-setup.exe" -OutFile $installer
+            $assetRoot = if ($v -eq $version) { "distribution/assets" } else { "distribution/assets/previous" }
+            Copy-Item "$assetRoot/PwrAgent-$v-windows-x64-setup.exe" $installer
             $root = if ($v -eq $version) { "current" } else { "previous" }
             $text = Get-Content "distribution/$root/manifests/p/PwrDrvr/PwrAgent/$v/PwrDrvr.PwrAgent.installer.yaml" -Raw
             $expected = [regex]::Match($text, 'InstallerSha256: ([A-F0-9]{64})').Groups[1].Value
@@ -251,6 +319,18 @@ jobs:
           Assert-InstalledVersion $version
           winget uninstall --name PwrAgent --exact --silent --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE) { throw "Machine uninstall failed" }
+
+      - name: Record successful platform validation
+        if: steps.validated.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p distribution/validated
+          echo '${{ needs.prepare.outputs.candidate }}' > distribution/validated/success
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.validated.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+        with:
+          path: distribution/validated
+          key: distribution-validated-windows-2025-${{ runner.arch }}-${{ needs.prepare.outputs.candidate }}
 
   submit:
     needs: [prepare, homebrew, winget]

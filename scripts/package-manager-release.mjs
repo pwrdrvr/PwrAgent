@@ -239,6 +239,35 @@ export function auditChannels(api = ghJson) {
   };
 }
 
+export function distributionNeeded(audit, event, tag = "") {
+  if (tag && tag !== `v${audit.stable.version}`) return false;
+  return ["pull_request", "workflow_dispatch"].includes(event)
+    || [audit.homebrew, audit.winget].some((channel) =>
+      channel.version !== audit.stable.version && channel.pending.length === 0);
+}
+
+// A tag/URL alone is mutable. Reuse requires every asset's API identity and digest.
+export function candidateKey(releases) {
+  const identities = releases.map((release) => ({
+    tag: release.tag_name,
+    assets: releaseAssets(release).map(({ id, name, size, digest, browser_download_url }) =>
+      ({ id, name, size, digest, browser_download_url })),
+  }));
+  if (identities.some(({ assets }) => assets.some((asset) =>
+    !Number.isSafeInteger(asset.id) || !/^sha256:[a-f0-9]{64}$/.test(asset.digest)))) return null;
+  return createHash("sha256").update(JSON.stringify(identities)).digest("hex");
+}
+
+function previousRelease(version) {
+  const releases = ghJson(`repos/${SOURCE_REPO}/releases?per_page=100`, false, "map({tag_name, draft, prerelease})");
+  const candidates = releases.filter((item) => !item.draft && !item.prerelease && /^v\d+\.\d+\.\d+$/.test(item.tag_name))
+    .filter((item) => compareVersions(item.tag_name.slice(1), version) < 0)
+    .sort((a, b) => compareVersions(a.tag_name.slice(1), b.tag_name.slice(1)));
+  const previous = candidates.at(-1);
+  if (!previous) throw new Error("No previous stable release in the latest 100 releases; select an upgrade baseline manually");
+  return ghJson(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
+}
+
 async function download(asset, dir) {
   const file = resolve(dir, asset.name);
   try {
@@ -262,6 +291,9 @@ export async function materializeRelease(release, out, cache) {
   await mkdir(cache, { recursive: true });
   const assets = releaseAssets(release);
   for (const asset of assets) await download(asset, cache);
+  for (const asset of assets.slice(3)) {
+    if (asset.digest) await verifyFile(resolve(cache, asset.name), asset, asset.digest.replace(/^sha256:/, ""));
+  }
   const manifests = await Promise.all(assets.slice(3).map((asset) => readFile(resolve(cache, asset.name), "utf8")));
   const hashes = {};
   for (const [index, asset] of assets.slice(0, 3).entries()) {
@@ -281,9 +313,14 @@ async function main(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
-    if (!["--audit", "--out", "--tag", "--assets", "--previous-out"].includes(key)) throw new Error(`Unknown argument ${key}`);
-    options[key] = key === "--audit" ? true : argv[++i];
+    if (!["--audit", "--out", "--tag", "--assets", "--previous-out", "--candidate-key"].includes(key)) throw new Error(`Unknown argument ${key}`);
+    options[key] = ["--audit", "--candidate-key"].includes(key) ? true : argv[++i];
     if (!options[key]) throw new Error(`Missing value for ${key}`);
+  }
+  if (options["--candidate-key"]) {
+    const release = ghJson(`repos/${SOURCE_REPO}/releases/latest`);
+    console.log(candidateKey([release, previousRelease(stableVersion(release))]) ?? "");
+    return;
   }
   const audit = auditChannels();
   console.log(JSON.stringify(audit, null, 2));
@@ -303,13 +340,7 @@ async function main(argv) {
   const hashes = await materializeRelease(release, out, cache);
   let previous = null;
   if (options["--previous-out"]) {
-    const releases = ghJson(`repos/${SOURCE_REPO}/releases?per_page=100`, false, "map({tag_name, draft, prerelease})");
-    const candidates = releases.filter((item) => !item.draft && !item.prerelease && /^v\d+\.\d+\.\d+$/.test(item.tag_name))
-      .filter((item) => compareVersions(item.tag_name.slice(1), version) < 0)
-      .sort((a, b) => compareVersions(a.tag_name.slice(1), b.tag_name.slice(1)));
-    previous = candidates.at(-1);
-    if (!previous) throw new Error("No previous stable release in the latest 100 releases; select an upgrade baseline manually");
-    previous = ghJson(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
+    previous = previousRelease(version);
     await materializeRelease(previous, resolve(options["--previous-out"]), resolve(cache, "previous"));
   }
   await writeFile(resolve(out, "audit.json"), JSON.stringify({ ...audit, hashes, previousVersion: previous?.tag_name.slice(1) ?? null }, null, 2) + "\n");
