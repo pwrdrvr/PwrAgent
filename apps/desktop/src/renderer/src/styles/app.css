@@ -19678,184 +19678,6 @@ a.button {
   font-weight: 700;
 }
 
-.environment-setup-choice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px 18px;
-  margin: 12px 22px;
-  padding: 14px 16px;
-  /* Stay inside the transcript column even when the context rail is pinned. */
-  max-width: 100%;
-  box-sizing: border-box;
-  /* The panel is a sibling of the transcript inside `.thread-view__primary`,
-     so every pixel it takes comes out of the transcript. A flex item's
-     `min-height: auto` floor let it size to its own content and refuse to
-     shrink: at a 700px-tall window it measured 685px inside a 644px pane,
-     which left the transcript 0px tall (nothing to scroll) and pushed the
-     actions row 53px below the `overflow: hidden` on `.thread-view`, so
-     "Continue anyway" could not be reached at all. The height bound lives on
-     `__body` — the part that scrolls — and the actions row sits outside it. */
-  min-height: 0;
-  border: 1px solid var(--danger-border);
-  border-radius: 8px;
-  background: var(--danger-soft);
-  color: var(--text-primary);
-}
-
-.environment-setup-choice__body {
-  /* Take all remaining horizontal space so the output pre fills the
-     dialog. The actions column on the right is flex: 0 0 auto so it
-     only gets its natural width, leaving the rest to the body. */
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  /* The panel's vertical bound, and the panel's one scroll container. It is
-     here rather than on the section because the actions row wraps below the
-     body under ~1200px of chat column, and a wrapped flex line is sized to
-     its content: capping the section would clip the buttons instead of
-     shrinking the body. A percentage would resolve against the section's
-     auto height (that is, not at all), so the bound is window-relative, in
-     the `min(<px>, <vh>)` form `.launchpad-pending__command` already uses:
-     the vh share keeps the actions inside the pane well below the 640px
-     minimum window height, and the pixel ceiling stops a tall display from
-     handing the panel 600px of transcript for no reason. */
-  min-height: 0;
-  max-height: min(360px, 40vh);
-  overflow-y: auto;
-}
-
-.environment-setup-choice__heading > *:first-child {
-  margin-top: 0;
-}
-
-.environment-setup-choice h3 {
-  margin: 0;
-  font-size: 16px;
-  line-height: 1.3;
-}
-
-.environment-setup-choice p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.environment-setup-choice__error {
-  color: var(--danger-text);
-}
-
-.environment-setup-choice__details {
-  margin: 0;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel-elevated);
-  padding: 0;
-}
-
-.environment-setup-choice__details > summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  user-select: none;
-  /* `__body` scrolls, and this summary carries the exit code and the collapse
-     control — the two things worth keeping in view while reading the output.
-     Its containing block is the `<details>`, which spans the whole scrolled
-     stack, so it stays pinned for as long as any of the detail is visible.
-     `.launchpad-pending__output`'s header is pinned for the same reason. */
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--bg-panel-elevated);
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-}
-
-.environment-setup-choice__details > summary::-webkit-details-marker {
-  display: none;
-}
-
-.environment-setup-choice__details[open] > summary {
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.environment-setup-choice__field {
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.environment-setup-choice__field + .environment-setup-choice__field {
-  border-top: 1px solid var(--border-subtle);
-}
-
-.environment-setup-choice__field-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
-.environment-setup-choice__pre {
-  margin: 0;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-primary);
-  white-space: pre;
-  overflow-x: auto;
-  /* Defensive: ensure the user can actually copy build output from the
-     dialog. Some upstream rules globally set user-select: none on chrome. */
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.environment-setup-choice__pre--output {
-  /* No height cap of its own: `__body` is the panel's one scroll container,
-     and a 320px box inside a body that is itself shorter than that on a small
-     window made two nested vertical scrollers the wheel had to chain out of.
-     Wrapping rather than scrolling sideways matches
-     `.launchpad-pending__output pre`, the live setup panel's output block —
-     and it is what keeps this readable now that the body scrolls, because
-     `__pre`'s horizontal scrollbar would otherwise sit at the bottom of the
-     full output, outside the body's viewport. */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.environment-setup-choice__path {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-all;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.environment-setup-choice__actions {
-  /* Natural width only so the body next to it can stretch to fill the
-     dialog. When the dialog wraps onto two rows (narrow widths), this
-     wraps under the body at full width with the buttons right-aligned. */
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-self: flex-start;
-  gap: 8px;
-}
-
 .thread-header__eyebrow-row {
   display: flex;
   align-items: center;
@@ -20110,37 +19932,11 @@ a.button {
   min-height: 0;
 }
 
-/* A failed environment can coincide with a failed first history read. The
-   setup choice and composer both have substantial natural heights, while the
-   transcript normally starts from a zero flex basis. On a short or narrow
-   pane that left only a sliver for the history error; its text then painted
-   out of that sliver and underneath the composer.
-
-   Reserving the error row makes the setup panel surrender height. Its normal
-   wrapping flex layout cannot pass that deficit into `__body`: the wrapped
-   flex lines keep their content heights and overflow the panel, including the
-   escape actions. In this combined state, use one non-wrapping column instead.
-   `__body` is the only child allowed to shrink and already scrolls, while the
-   natural-height action row remains `flex: 0 0 auto` inside the panel. */
-.thread-view__primary:has(> .transcript-panel .transcript-error)
-  > .environment-setup-choice {
-  flex-direction: column;
-  flex-wrap: nowrap;
-  align-items: stretch;
-  justify-content: flex-start;
-  overflow: hidden;
-}
-
-.thread-view__primary:has(> .transcript-panel .transcript-error)
-  > .environment-setup-choice
-  > .environment-setup-choice__actions {
-  width: 100%;
-  align-self: end;
-}
-
-/* Reserve one readable error row. Longer errors scroll inside
-   `.transcript-error` instead of escaping the card. */
-.thread-view__primary:has(> .environment-setup-choice)
+/* A failed environment setup can coincide with a failed first history read.
+   The setup row lives in the composer band, which can give up height, so
+   reserve one readable history-error row and let the band take the deficit.
+   Longer errors scroll inside `.transcript-error` instead of escaping it. */
+.thread-view__primary:has(> .composer .environment-setup-row)
   > .transcript-panel:has(.transcript-error) {
   flex-basis: 132px;
   min-height: 132px;
@@ -20448,6 +20244,10 @@ a.button {
 .launchpad-pending__output pre {
   flex: 1;
   min-height: 0;
+  /* The forking placeholder is the one place this panel still renders, and
+     its output box is a block-level <details> sized to its content: without
+     a bound, a long install log ran past the clipped bottom of the column. */
+  max-height: min(360px, 45vh);
   padding: 12px;
   overflow: auto;
 }
@@ -25449,6 +25249,116 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+/* Environment setup, as one row in the band (EnvironmentSetupRow.tsx). It
+   borrows the env action row's chrome and the error row's header, so the
+   three read as one family; these rules cover only what it adds. */
+.environment-setup-row__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+}
+
+.environment-setup-row__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.environment-setup-row__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.environment-setup-row[data-open="true"] .composer__queued-env-action-chevron {
+  transform: rotate(45deg);
+}
+
+.environment-setup-row__tail {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.composer__queued-env-action-actions .environment-setup-row__retry,
+.environment-setup-row__decision-actions .composer__secondary-action,
+.environment-setup-row__body-actions .composer__secondary-action {
+  flex: 0 0 auto;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* The decision a thread with no turns still needs. It sits outside the
+   disclosure, so it is visible while the row is collapsed. 24px of left
+   padding puts the copy under the label, past the chevron. */
+.environment-setup-row__decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  padding: 0 8px 7px 24px;
+}
+
+.environment-setup-row__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.environment-setup-row__hint--error {
+  color: var(--danger-text);
+}
+
+.environment-setup-row__decision-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.environment-setup-row__decision-actions .environment-setup-row__cleanup {
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+
+.environment-setup-row__decision-actions .environment-setup-row__cleanup:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.environment-setup-row__body-actions {
+  display: flex;
+}
+
+/* Two classes: `.composer__queued-env-action-output` sets `white-space: pre`
+   further down at the same specificity. Setup output wraps, as it did in the
+   panel this replaces, so a long pnpm line is readable without a sideways
+   scroll at the bottom of a box that already scrolls vertically. */
+.environment-setup-row .environment-setup-row__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Shorter than the band on a small window, so the command, path and the
+     output's own tail can share the band's viewport instead of the output
+     box alone filling it. */
+  max-height: min(320px, 28vh);
+}
+
+.environment-setup-row__path {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .composer-error-rail:empty {
   display: none;
 }
@@ -25495,6 +25405,15 @@ div.composer-error-row__toggle {
 .composer-error-row .composer-error-row__detail {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* The band scrolls at min(40vh, 300px); a 320px detail box inside it would
+     be taller than its own scroller on a small window. */
+  max-height: min(320px, 28vh);
+}
+
+/* Same reason, for an env action's output above the composer. The sidebar
+   copy keeps its own 260px bound. */
+.env-action-run--composer .composer__queued-env-action-output {
+  max-height: min(320px, 28vh);
 }
 
 .transcript-activity {
@@ -31871,6 +31790,56 @@ button.pricing-token-miser__folded:focus-visible {
 .composer > .composer__pending-controls > * {
   width: 100%;
   max-width: var(--chat-column-max);
+  /* The input, attachments tray and toolbar never give up height. The band
+     below is the one composer row that does. */
+  flex-shrink: 0;
+}
+
+/* The band: every transient row between the transcript and the input —
+   sub-agents, automations, environment setup, env actions, composer errors,
+   queued turns. Before it existed these were all direct children of the
+   composer, each sized to its content, and each open row could add 320px of
+   output. A failed environment setup on an existing thread stacked a
+   content-sized panel above the transcript and an open error row in here, and
+   the composer's toolbar ended up below `.thread-view`'s `overflow: hidden`
+   edge, unreachable.
+
+   Now the band is capped and scrolls, and it is the only composer row allowed
+   to shrink, so the column gives up height in a fixed order: the transcript
+   first (its basis is 0), then the band, never the input. The vh share keeps
+   about 180px of transcript at the 640px minimum window; the pixel ceiling
+   stops a tall display from handing the band half the column. See
+   `styles/__tests__/composer-band-bounds.test.ts`. */
+.composer > .composer__pending-controls > .composer__band {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  max-height: min(40vh, 300px);
+  overflow-y: auto;
+  /* A scroller clips on both axes, which would slice the 2px focus rings of
+     the rows' controls at the band's edges. Pad them back in and return the
+     space with a matching negative margin so the rows stay on the chat
+     column's edges. */
+  width: calc(100% + 6px);
+  max-width: calc(var(--chat-column-max) + 6px);
+  margin: -3px;
+  padding: 3px;
+  box-sizing: border-box;
+}
+
+/* Same specificity as the rule above, so `display: none` wins by order. */
+.composer > .composer__pending-controls > .composer__band:empty {
+  display: none;
+}
+
+/* In the thread column the composer may shrink — only its band can — so a
+   column over budget takes the deficit out of the band rather than pushing the
+   composer's content past the clipped bottom edge. */
+.thread-view__primary > .composer {
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 .integrated-terminal {
