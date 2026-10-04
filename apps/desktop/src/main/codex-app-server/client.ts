@@ -7654,6 +7654,9 @@ export class CodexAppServerClient {
   // bookkeeping. Owned realtime handoffs do not replace that catalog.
   private readonly admittedNativeVoiceThreads = new Map<string, NativeVoiceCatalogProof>();
   private readonly ownedRealtimeThreads = new Set<string>();
+  // thread/start has no persisted history until its first turn. Forks can
+  // already have history, so pending-first-turn resume state is not enough.
+  private readonly threadsAwaitingFirstTurn = new Set<string>();
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
   private readonly helperThreadIds = new Set<string>();
@@ -7809,6 +7812,7 @@ export class CodexAppServerClient {
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
       if (helperThreadId && (normalized.method === "turn/started" || method === "thread/closed")) {
+        this.threadsAwaitingFirstTurn.delete(helperThreadId);
         this.freshNativeVoiceThreads.delete(helperThreadId);
         this.pendingFirstTurnThreadResults.delete(helperThreadId);
         this.pendingFirstTurnShellEnvironments.delete(helperThreadId);
@@ -8088,6 +8092,7 @@ export class CodexAppServerClient {
     this.freshNativeVoiceThreads.clear();
     this.admittedNativeVoiceThreads.clear();
     this.ownedRealtimeThreads.clear();
+    this.threadsAwaitingFirstTurn.clear();
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
@@ -9715,6 +9720,15 @@ export class CodexAppServerClient {
   }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
 
+    if (params.includeTurns !== false && this.threadsAwaitingFirstTurn.has(params.threadId)) {
+      // Environment setup can block the first turn after thread/start. Do
+      // not ask for paginated history whose source rollout does not exist.
+      return extractThreadReplayFromReadResult(
+        this.pendingFirstTurnThreadResults.get(params.threadId),
+        { threadId: params.threadId },
+      );
+    }
+
     let result: unknown;
     try {
       // Full-history hydration on thread/read is deprecated for paginated
@@ -9968,6 +9982,7 @@ export class CodexAppServerClient {
       defaultModeRequestUserInput: params.defaultModeRequestUserInput,
     });
     this.pendingFirstTurnThreadResults.set(threadId, result);
+    this.threadsAwaitingFirstTurn.add(threadId);
     this.pendingFirstTurnShellEnvironments.set(
       threadId,
       JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment),
@@ -10179,6 +10194,7 @@ export class CodexAppServerClient {
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    this.threadsAwaitingFirstTurn.delete(params.threadId);
     this.freshNativeVoiceThreads.delete(params.threadId);
     this.admittedNativeVoiceThreads.delete(params.threadId);
     this.pendingFirstTurnThreadResults.delete(params.threadId);
@@ -10680,6 +10696,7 @@ export class CodexAppServerClient {
     if (!turnId) {
       throw new Error("codex app server review/start did not return turnId");
     }
+    this.threadsAwaitingFirstTurn.delete(reviewThreadId);
     this.pendingFirstTurnThreadResults.delete(params.threadId);
     this.pendingFirstTurnShellEnvironments.delete(params.threadId);
 
