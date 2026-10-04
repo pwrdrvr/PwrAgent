@@ -44,7 +44,7 @@ export function ghJson(endpoint, optional = false, projection = null, runtime = 
   if (projection) args.push("--jq", projection);
   // Only this GET helper uses the read credential. Submission writes keep GH_TOKEN.
   const env = { ...runtime.env };
-  if (env.DISTRIBUTION_READ_TOKEN) env.GH_TOKEN = env.DISTRIBUTION_READ_TOKEN;
+  if (env.DISTRIBUTION_READ_TOKEN && !endpoint.includes("/actions/caches")) env.GH_TOKEN = env.DISTRIBUTION_READ_TOKEN;
   let waited = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     const result = runtime.run("gh", args, { encoding: "utf8", env });
@@ -258,17 +258,17 @@ export function candidateKey(releases) {
   return createHash("sha256").update(JSON.stringify(identities)).digest("hex");
 }
 
-function previousRelease(version) {
-  const releases = ghJson(`repos/${SOURCE_REPO}/releases?per_page=100`, false, "map({tag_name, draft, prerelease})");
+export function previousRelease(version, api = ghJson) {
+  const releases = api(`repos/${SOURCE_REPO}/releases?per_page=100`, false, "map({tag_name, draft, prerelease})");
   const candidates = releases.filter((item) => !item.draft && !item.prerelease && /^v\d+\.\d+\.\d+$/.test(item.tag_name))
     .filter((item) => compareVersions(item.tag_name.slice(1), version) < 0)
     .sort((a, b) => compareVersions(a.tag_name.slice(1), b.tag_name.slice(1)));
   const previous = candidates.at(-1);
   if (!previous) throw new Error("No previous stable release in the latest 100 releases; select an upgrade baseline manually");
-  return ghJson(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
+  return api(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
 }
 
-async function download(asset, dir) {
+export async function download(asset, dir) {
   const file = resolve(dir, asset.name);
   try {
     await stat(file);

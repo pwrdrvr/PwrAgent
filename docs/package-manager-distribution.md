@@ -89,17 +89,46 @@ demand. PRs affecting the scripts or workflow run validation without submission.
 The workflow reads current release automation for promotion of older tags,
 pins that checkout for submission, and serializes channel updates.
 Idle daily audits and channels with pending submissions read metadata only.
-Needed candidates cache current and previous release assets by API asset identity
-and digest, and recheck sizes, published checksums and API digests on every use.
-Platform jobs reuse successful validation only for the same candidate, upgrade
-baseline, runner architecture and validation code. PRs and manual dispatches always run platform checks. PRs cannot save shared
-validation results. Missing API digests disable reuse.
-Failed validation never saves a success marker; submission retries remain enabled.
-Signature, notarization and install/upgrade checks still run for new candidates.
-Homebrew installs use the verified DMGs in its URL-keyed cache. WinGet may still
-download installers during its local-manifest install/upgrade tests; those checks
-are retained, but repeated successful candidates skip them. Cache eviction can
-also cause a necessary download or validation to run again.
+A Linux planner resolves immutable current/previous asset identities and generated
+package inputs, then checks exact successful-validation keys before starting any
+native runner or downloading installers. Repeated PR, manual and scheduled
+candidates reuse validation; `force_validation=true` deliberately repeats it.
+Publication retries remain separate from native validation: a stale channel with
+no pending PR can retry submission using already validated inputs.
+
+Validation keys include current/previous versions and asset digests, generated
+casks/manifests, validator code, architecture, published hosted-image version,
+the pinned stable Homebrew commit and the resolved stable WinGet client assets.
+A runner validates normally during an image rollout, but records no reusable
+success unless its actual `ImageVersion` matches the planned image. Changes to
+these inputs require new coverage. A PR can reuse its own or main's success;
+trusted submission accepts only main's success, never PR results. Failed checks
+never create a success marker.
+
+Installer caches use exact version/name/SHA256 keys independently of validator
+code and current/previous role. Restores check API sizes and digests, then
+published SHA256SUMS before sharing bytes. A corrupt restore fails closed:
+remove that exact cache and retry; never bypass the checksum. Automation stops
+with a named blocker if required API digests or platform metadata are missing.
+Homebrew's actual URL-keyed cache is seeded from these verified DMGs. WinGet
+validates untouched production manifests and uses installation-only copies with
+loopback HTTP URLs for verified EXEs. Hashes, scopes and switches stay intact;
+production GitHub URLs are never changed or submitted as loopback URLs.
+Architecture, minimum OS, publisher signature, notarization, installed-version,
+user/machine scope and upgrade assertions remain in place.
+
+A cold full validation now fetches four DMGs and two EXEs once each, rather than
+preparation plus native re-downloads (eight direct DMG and four direct EXE
+requests previously), plus up to four Homebrew and four WinGet fetches before
+client retries. This halves direct installer requests on a cold full validation. Warm byte caches need
+zero PwrAgent installer downloads even after validator changes or forced checks.
+An identical successful candidate needs zero native jobs, instead of two macOS
+jobs and one Windows job. Idle daily audits already made zero installer requests;
+the October 3/4 runs are examples, not evidence of daily installer inflation.
+Cache eviction and new release bytes still require downloads. WinGet's own
+client packages and public metadata audits are separate traffic. The loopback
+install tests preserve package-manager behavior but do not test GitHub's CDN
+transport on every run; cold byte acquisition verifies that transport separately.
 
 Configure these in **pwrdrvr/PwrAgent**, without copying signing secrets:
 
