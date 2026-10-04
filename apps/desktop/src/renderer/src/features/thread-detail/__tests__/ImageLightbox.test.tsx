@@ -45,7 +45,7 @@ describe("ImageLightbox", () => {
     expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
     expect(await screen.findByText("This SVG has interactive controls")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
     const frame = await screen.findByTitle("Interactive SVG: Flamegraph");
     expect(frame).toHaveAttribute("sandbox", "allow-scripts");
     expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
@@ -402,7 +402,7 @@ describe("ImageLightbox, SVG script notice", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
     expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
     expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
     expect(scriptNotice()).toBeNull();
   });
@@ -452,68 +452,59 @@ describe("ImageLightbox, SVG script notice", () => {
     expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
   });
 
-  it("offers no remembered choice it could not save", async () => {
+  it("offers no lasting choice it could not save", async () => {
     await renderScriptedSvg();
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Always Run" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Run Once" })).toBeInTheDocument();
   });
 
-  it("runs once without saving anything when both boxes are clear", async () => {
+  it("asks one question: no display preference rides on the notice", async () => {
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(scriptNotice()).toHaveTextContent("Turn it off in Settings \u2192 General.");
+  });
+
+  it("runs once without saving anything", async () => {
     const save = vi.fn().mockResolvedValue(true);
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
 
     expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
     expect(save).not.toHaveBeenCalled();
   });
 
-  it("saves Don't ask again before running", async () => {
+  it("saves Always Run as trust only, then runs", async () => {
     const save = vi.fn().mockResolvedValue(true);
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Don\u2019t ask again" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
 
     expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    // Opening SVGs interactive is Settings' to change, never the notice's.
     expect(save).toHaveBeenCalledWith({ interactiveSvgSkipNotice: true });
   });
 
-  it("treats opening ready to use as not asking either", async () => {
-    const save = vi.fn().mockResolvedValue(true);
-    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
-    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Open SVGs ready to use from now on" }));
-
-    // Opening one runs its scripts, so asking first cannot stay on.
-    const skip = screen.getByRole("checkbox", { name: "Don\u2019t ask again" });
-    expect(skip).toBeChecked();
-    expect(skip).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
-    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
-    expect(save).toHaveBeenCalledWith({ interactiveSvgSkipNotice: true, interactiveSvgAutoOpen: true });
-  });
-
-  it("keeps the notice and runs nothing when the choice could not be saved", async () => {
+  it("keeps the notice and runs nothing when Always Run could not be saved", async () => {
     const save = vi.fn().mockResolvedValue(false);
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Don\u2019t ask again" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn\u2019t save that choice");
     expect(scriptNotice()).toBeInTheDocument();
     expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
   });
 
-  it("runs nothing when the operator cancels while the choice is still saving", async () => {
+  it("runs nothing when the operator cancels while Always Run is still saving", async () => {
     let finishSave: (saved: boolean) => void = () => {};
     const save = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Don\u2019t ask again" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
+    expect(screen.getByRole("button", { name: "Run Once" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await act(async () => { finishSave(true); });
@@ -522,16 +513,14 @@ describe("ImageLightbox, SVG script notice", () => {
     expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
   });
 
-  it("keeps the operator's choices and opener when asked again while asking", async () => {
-    const save = vi.fn().mockResolvedValue(true);
-    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+  it("keeps the original opener when asked again while asking", async () => {
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
     const interact = screen.getByRole("button", { name: "Interact with SVG" });
     interact.focus();
     fireEvent.click(interact);
-    fireEvent.click(screen.getByRole("checkbox", { name: "Don\u2019t ask again" }));
 
     pressAndClick(stubPointerCapture(screen.getByRole("img", { name: "Flamegraph" })));
-    expect(screen.getByRole("checkbox", { name: "Don\u2019t ask again" })).toBeChecked();
+    expect(scriptNotice()).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(interact).toHaveFocus();
@@ -553,7 +542,7 @@ describe("ImageLightbox, SVG script notice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
     fireEvent.click(await screen.findByRole("button", { name: "Show image preview" }));
 
-    // The snapshot carrying the notice's "open ready to use" lands late.
+    // A Settings change to open SVGs interactive lands while this one is open.
     view.rerender(lightbox({ skipNotice: true, autoOpen: true }));
     await act(async () => {});
     expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
@@ -569,7 +558,7 @@ describe("ImageLightbox, SVG script notice", () => {
     expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
   });
 
-  it("opens ready to use, and Preview then stays on the preview", async () => {
+  it("opens interactive when set, and Preview then stays on the preview", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       blob: async () => new Blob([SCRIPTED_SVG], { type: "image/svg+xml" }),

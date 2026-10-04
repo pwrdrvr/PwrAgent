@@ -700,7 +700,7 @@ export type DesktopGeneralSettingsSnapshot = {
   attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
   /**
    * Skip the notice the image lightbox shows before an SVG's own scripts run
-   * in its isolated frame. The notice's "Don't ask again" sets this.
+   * in its isolated frame. The notice's "Always Run" sets this.
    */
   interactiveSvgSkipNotice: DesktopSettingsValue<boolean>;
   /**

@@ -33390,14 +33390,10 @@ button.pricing-token-miser__folded:focus-visible {
   text-wrap: pretty;
 }
 
-/* Two classes: `.composer__checkbox` is declared far below and would win the
-   equal-specificity tie on `display` and `font-size`. */
-.image-lightbox__svg-notice .image-lightbox__svg-notice-option {
-  display: flex;
-  width: fit-content;
-  margin-top: 10px;
-  font-size: 12px;
-  cursor: pointer;
+.image-lightbox__svg-notice-foot {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 
 .image-lightbox__svg-notice-error {
@@ -33410,6 +33406,33 @@ button.pricing-token-miser__folded:focus-visible {
   justify-content: flex-end;
   gap: 6px;
   margin-top: 14px;
+}
+
+/* The lasting choice: an outline, so it never reads as the default. */
+.image-lightbox__svg-notice-always {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-lightbox__svg-notice-always:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.image-lightbox__svg-notice-always:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-lightbox__svg-notice-always:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* The notice's one accent action, matching the SVG search field's Find. */

@@ -280,8 +280,6 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   });
   const preferences = useInteractiveSvgPreferences();
   const [noticeOpen, setNoticeOpen] = useState(false);
-  const [noticeSkip, setNoticeSkip] = useState(false);
-  const [noticeAutoOpen, setNoticeAutoOpen] = useState(false);
   const [noticeSaving, setNoticeSaving] = useState(false);
   const [noticeError, setNoticeError] = useState(false);
   const notice = useRef<HTMLDivElement>(null);
@@ -351,7 +349,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   }, [onClose, svgActive, svgSearchOpen]);
 
   const startInteractiveSvg = (): void => {
-    // The operator chose for this image; a later "open ready to use" must not
+    // The operator chose for this image; a later "Open SVGs interactive" must not
     // override a Preview they pick after it.
     autoOpened.current = true;
     noticeGeneration.current += 1;
@@ -365,31 +363,26 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     setSvgSearchOpen(false);
   };
   /** The SVG's scripts are untrusted code, so they run only once the operator
-   *  has accepted the notice, here or in an earlier "Don't ask again". */
+   *  has accepted the notice, here or in an earlier "Always Run". */
   const requestInteractiveSvg = (): void => {
     if (preferences.skipNotice || preferences.autoOpen) {
       startInteractiveSvg();
       return;
     }
-    // Already asking: keep the operator's choices and the original opener,
-    // not the notice's own Cancel button.
+    // Already asking: keep the original opener, not the notice's own Cancel.
     if (noticeOpen) return;
     noticeOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setNoticeSkip(false);
-    setNoticeAutoOpen(false);
     setNoticeError(false);
     setNoticeOpen(true);
   };
-  const acceptNotice = async (): Promise<void> => {
-    const patch = {
-      ...(noticeSkip || noticeAutoOpen ? { interactiveSvgSkipNotice: true } : {}),
-      ...(noticeAutoOpen ? { interactiveSvgAutoOpen: true } : {}),
-    };
-    if (preferences.save && Object.keys(patch).length > 0) {
+  /** The notice asks one thing: whether to trust SVG scripts. Opening SVGs
+   *  interactive is a display preference, and lives only in Settings. */
+  const acceptNotice = async (always: boolean): Promise<void> => {
+    if (always && preferences.save) {
       const generation = noticeGeneration.current;
       setNoticeSaving(true);
       setNoticeError(false);
-      const saved = await preferences.save(patch).catch(() => false);
+      const saved = await preferences.save({ interactiveSvgSkipNotice: true }).catch(() => false);
       setNoticeSaving(false);
       if (generation !== noticeGeneration.current) return;
       if (!saved) {
@@ -522,22 +515,14 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
           access, but malicious code can break out of isolation. Run it only if you trust where it
           came from: you accept the risk of running it on this computer.
         </p>
-        {preferences.save ? <>
-          <label className="composer__checkbox image-lightbox__svg-notice-option">
-            <input type="checkbox" checked={noticeSkip || noticeAutoOpen}
-              disabled={noticeSaving || noticeAutoOpen}
-              onChange={(event) => setNoticeSkip(event.currentTarget.checked)} />
-            <span>Don&rsquo;t ask again</span>
-          </label>
-          <label className="composer__checkbox image-lightbox__svg-notice-option">
-            <input type="checkbox" checked={noticeAutoOpen} disabled={noticeSaving}
-              onChange={(event) => setNoticeAutoOpen(event.currentTarget.checked)} />
-            <span>Open SVGs ready to use from now on</span>
-          </label>
-        </> : null}
+        {preferences.save ? (
+          <p className="image-lightbox__svg-notice-foot">
+            Always Run trusts every SVG&rsquo;s scripts. Turn it off in Settings &rarr; General.
+          </p>
+        ) : null}
         {noticeError ? (
           <p className="image-lightbox__svg-notice-error" role="alert">
-            Couldn&rsquo;t save that choice. Try again, or clear the checkboxes to run it once.
+            Couldn&rsquo;t save that choice. Try again, or Run Once.
           </p>
         ) : null}
         <div className="image-lightbox__svg-notice-actions">
@@ -546,9 +531,16 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
             autoFocus onClick={closeNotice}>
             Cancel
           </button>
+          {/* Offered only where the choice can be kept. */}
+          {preferences.save ? (
+            <button type="button" className="image-lightbox__svg-notice-always" disabled={noticeSaving}
+              onClick={() => { void acceptNotice(true); }}>
+              Always Run
+            </button>
+          ) : null}
           <button type="button" className="image-lightbox__svg-notice-run" disabled={noticeSaving}
-            onClick={() => { void acceptNotice(); }}>
-            Run scripts
+            onClick={() => { void acceptNotice(false); }}>
+            Run Once
           </button>
         </div>
       </div>

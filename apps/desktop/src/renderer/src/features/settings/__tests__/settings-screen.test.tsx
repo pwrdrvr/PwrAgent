@@ -1126,6 +1126,37 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
   });
 
+  it("turns opening SVGs interactive off with trust in their scripts", async () => {
+    const base = createSnapshot();
+    const settings = createSettingsState(createSnapshot({
+      general: {
+        ...base.general,
+        interactiveSvgSkipNotice: { value: true, source: "config" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
+      },
+    }));
+    render(
+      <SettingsScreen
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Open SVGs interactive" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { interactiveSvgAutoOpen: true },
+      });
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Run SVG scripts without asking" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { interactiveSvgSkipNotice: false, interactiveSvgAutoOpen: false },
+      });
+    });
+  });
+
   it("commits an edited Codex path before an unrelated button action", async () => {
     const settings = createSettingsState();
 
@@ -1319,25 +1350,21 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
-      screen.getByRole("switch", { name: "Ask before running an SVG's scripts" }),
-    ).toHaveAttribute("aria-checked", "true");
+      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+    ).toHaveAttribute("aria-checked", "false");
+    // Opening interactive runs scripts, so it waits on trust, and says so.
+    expect(
+      screen.getByText(
+        "Needs \u201cRun SVG scripts without asking\u201d: opening an SVG runs its scripts.",
+      ),
+    ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("switch", { name: "Ask before running an SVG's scripts" }),
+      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           interactiveSvgSkipNotice: true,
-        },
-      });
-    });
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Open SVGs with scripts ready to use" }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        general: {
-          interactiveSvgAutoOpen: true,
         },
       });
     });
