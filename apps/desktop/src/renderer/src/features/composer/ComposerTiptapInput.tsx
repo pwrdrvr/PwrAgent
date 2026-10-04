@@ -12,6 +12,7 @@ import {
   type MouseEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
@@ -2972,7 +2973,8 @@ export const ComposerTiptapInput = forwardRef<
         nextEditor.state.selection.from,
         readMode,
       );
-      propsRef.current.onChange(next.value, next.skillTokens, {
+        recordRendererUpdate(RendererUpdateEvent.editorPublish);
+        propsRef.current.onChange(next.value, next.skillTokens, {
         editorDocument: nextEditor.getJSON(),
       });
     },
@@ -2998,6 +3000,7 @@ export const ComposerTiptapInput = forwardRef<
     // rather than relying on editability updates to report it as a user edit.
     const initial = readTiptapContent(editor, readMode);
     if (getContentSignature(initial) !== getContentSignature(propsRef.current)) {
+      recordRendererUpdate(RendererUpdateEvent.editorNormalize);
       propsRef.current.onChange(initial.value, initial.skillTokens, {
         editorDocument: editor.getJSON(),
       });
@@ -3141,6 +3144,7 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     let loadedEditorDocument = false;
+    recordRendererUpdate(RendererUpdateEvent.editorControlledSync);
     if (
       nextEditorDocumentSignature &&
       currentEditorDocumentSignature !== nextEditorDocumentSignature
@@ -3199,6 +3203,7 @@ export const ComposerTiptapInput = forwardRef<
       }
       const restored = readTiptapContent(editor, readMode);
       const restoredEditorDocument = editor.getJSON();
+      recordRendererUpdate(RendererUpdateEvent.editorControlledPublish);
       propsRef.current.onChange(restored.value, restored.skillTokens, {
         editorDocument: restoredEditorDocument,
       });

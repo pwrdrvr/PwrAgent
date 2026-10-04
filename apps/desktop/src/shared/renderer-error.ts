@@ -1,3 +1,5 @@
+import type { RendererUpdateSnapshot } from "./renderer-update-diagnostics";
+
 export type RendererErrorSource =
   | "error-boundary"
   | "window-error"
@@ -20,4 +22,5 @@ export type RendererErrorReport = {
   stack?: string;
   timestamp: string;
   userAgent: string;
+  updateDiagnostics?: RendererUpdateSnapshot;
 };
