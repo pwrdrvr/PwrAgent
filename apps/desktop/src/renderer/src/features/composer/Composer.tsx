@@ -1,6 +1,7 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   attachedPullRequestsForWorkspace,
@@ -8499,7 +8500,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const applyDirectoryReference = (
-    directory: Pick<NavigationDirectorySummary, "label" | "path"> & { kind?: string },
+    directory: Pick<NavigationDirectorySummary, "label" | "path"> & {
+      kind?: string;
+      shortLabel?: string;
+    },
   ): void => {
     if (!inputRef.current) {
       return;
@@ -10554,6 +10558,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     nextSkillTokens?: ComposerSkillToken[],
     metadata?: ComposerInputChangeMetadata,
   ): void => {
+    recordRendererUpdate(RendererUpdateEvent.composerChange, isLaunchpad ? "new-thread" : "reply");
     if (!recoveringDraftRef.current) {
       recoveryCycleRef.current = undefined;
       recoveryEligibilityVersionRef.current += 1;
@@ -12263,9 +12268,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     autocompleteOptionRefs.current[index] = node;
                   }}
                   aria-selected={index === activeDirectoryRefIndex}
-                  className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                  className={`composer__autocomplete-option${directory.kind === "instance" ? " composer__autocomplete-option--instance" : ""}${index === activeDirectoryRefIndex ? " is-active" : ""}`}
                   role="option"
                   tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                  title={directory.kind === "instance"
+                    ? `${directory.label} · ${directory.status}`
+                    : undefined}
                   type="button"
                   onMouseDown={(event) => {
                     event.preventDefault();
@@ -12286,7 +12294,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         : <InstanceGlyph instanceId={directory.instanceId} size={13} />
                     ) : <FolderIcon size={13} aria-hidden="true" />}
                     <HighlightedAutocompleteLabel
-                      label={directory.label}
+                      label={directory.kind === "instance"
+                        ? directory.shortLabel ?? directory.label
+                        : directory.label}
                       query={directoryRefTrigger?.query ?? ""}
                     />
                   </span>
@@ -13620,9 +13630,11 @@ function ContextWindowMoon({
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
-  const { show, update, hide, visible, tooltipNode } = useViewportTooltip({
+  const { show, update, hide, visible, tooltipNode, tooltipId } = useViewportTooltip({
     className: "context-usage-card",
   });
+  // The card's copy depends on availability, not the callback identity.
+  const opensUsage = Boolean(onOpenUsage);
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -13630,6 +13642,7 @@ function ContextWindowMoon({
   // drop the card so it can't reappear at stale coordinates.
   useEffect(() => {
     if (!contextWindow) {
+      recordRendererUpdate(RendererUpdateEvent.contextCardClear, tooltipId);
       hide();
       return;
     }
@@ -13640,14 +13653,15 @@ function ContextWindowMoon({
       CONTEXT_MOON_PHASES.length - 1,
       Math.max(0, contextWindow.phase),
     );
+    recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
         contextWindow={contextWindow}
-        opensUsage={Boolean(onOpenUsage)}
+        opensUsage={opensUsage}
         phaseLabel={CONTEXT_MOON_PHASES[phase]}
       />,
     );
-  }, [contextWindow, hide, onOpenUsage, update, visible]);
+  }, [contextWindow, hide, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -13663,7 +13677,7 @@ function ContextWindowMoon({
   const card = (
     <ContextWindowUsageCard
       contextWindow={contextWindow}
-      opensUsage={Boolean(onOpenUsage)}
+      opensUsage={opensUsage}
       phaseLabel={phaseLabel}
     />
   );

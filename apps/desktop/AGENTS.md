@@ -214,6 +214,39 @@ pnpm dev
   the repo's Electron binary without the PwrAgent app entry/path.** A bare
   Electron launch opens Electron's default shell, not PwrAgent.
 
+## Renderer update diagnostics in release builds
+
+The renderer keeps a 64-entry in-memory history of selected composer, Tiptap,
+context-card, and tooltip update requests. Consecutive identical requests
+coalesce; counters retain totals since renderer startup. These are requests,
+including no-ops, rather than React render or commit counts. Scope labels are
+static composer modes or React-generated tooltip IDs. No draft text, document
+contents, thread IDs, paths, or token usage enter the recorder.
+
+In the Electron DevTools console, inspect:
+
+```js
+window.__pwragentRendererUpdates.snapshot()
+window.__pwragentRendererUpdates.lastError()
+window.__pwragentRendererUpdates.eventNames
+```
+
+`eventNames[event.event]` decodes an event code; `counts` uses the same order.
+`firstMs`, `lastMs`, and `capturedAtMs` are renderer `performance.now()` times.
+Snapshots are detached copies. `lastError()` retains the latest reported
+failure through automatic recovery; a renderer reload clears this history.
+The error boundary captures before failed-tree teardown. Global errors and
+unhandled rejections capture at notification time.
+
+Normal recording has no timers, IPC, logging, or database writes. Fixed arrays
+use 1,944 bytes for numeric storage and scope-reference slots, plus JavaScript
+object/string overhead. A reported error also retains one bounded snapshot.
+Main logs `report update diagnostics` as a separate JSON string, capped at
+8 KiB, associated with the existing `stackId`. Identical fault details are
+logged at most once per minute. The log includes event names and the number of
+entries omitted to meet the limit. This history covers the instrumented edges;
+it does not identify every React setter or prove which request caused a loop.
+
 ## Profiling the Renderer with React DevTools
 
 Nothing in the app connects React DevTools on its own. Two opt-in env vars,

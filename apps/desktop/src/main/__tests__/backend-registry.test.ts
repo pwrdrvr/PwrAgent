@@ -3858,7 +3858,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("preserves merged PR commit exclusions in review working-state probes", async () => {
+  it.each(["open", "closed", "merged"] as const)("preserves published %s PR heads in review working-state probes", async (lifecycleState) => {
     const worktreePath = "/worktrees/PwrAgnt";
     const attachedCommitSha = "a".repeat(40);
     const detachedCommitSha = "b".repeat(40);
@@ -3870,9 +3870,9 @@ describe("DesktopBackendRegistry", () => {
       number: params.number,
       org: "pwrdrvr",
       repo: "PwrAgent",
-      state: "merged",
-      lifecycleState: "merged",
-      commitShas: params.commitShas,
+      state: "passing",
+      lifecycleState,
+      headSha: params.commitShas[0],
       url: `https://github.com/pwrdrvr/PwrAgent/pull/${params.number}`,
     });
     const readWorkingStateEntries = vi.fn(() =>
@@ -3936,8 +3936,13 @@ describe("DesktopBackendRegistry", () => {
           path: "/repos/PwrSnap",
         },
       ],
-      prs: [mergedPr({ number: 735, commitShas: [attachedCommitSha] })],
+      prs: [mergedPr({ number: 735, commitShas: ["c".repeat(40)] })],
     };
+    registry.setThreadPullRequestCanonicalizer(async (prs) =>
+      prs.map((pr) => pr.number === 735
+        ? { ...pr, headSha: attachedCommitSha }
+        : pr),
+    );
 
     try {
       await registry.hydrateThreadGitWorkingStates(
@@ -4506,7 +4511,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("authorizes federated commit reads against the owner thread and PR overlay", async () => {
+  it.each(["open", "merged"] as const)("authorizes federated commit reads using the published %s PR head", async (lifecycleState) => {
     const worktreePath = "/worktrees/PwrAgnt";
     const attachedCommitSha = "a".repeat(40);
     const detachedCommitSha = "b".repeat(40);
@@ -4548,7 +4553,7 @@ describe("DesktopBackendRegistry", () => {
     });
     registry.setThreadPullRequestCanonicalizer(async (prs) =>
       prs.map((pr) => pr.number === 735
-        ? { ...pr, state: "merged", lifecycleState: "merged" }
+        ? { ...pr, state: "passing", lifecycleState, headSha: attachedCommitSha, commitShas: [] }
         : pr),
     );
 
@@ -60029,4 +60034,70 @@ it("serves owner display panels without replaying the provider transcript", asyn
     if (resource === "subagents") expect(result.display?.subAgents?.[0]?.task).toBe("A displayed task");
   }
   expect(codexClient.readThreadCalls).toEqual([]);
+});
+
+describe("mark_project_read dynamic tool", () => {
+  async function setup() {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
+    });
+    onTestFinished(() => registry.close());
+    const markProjectRead = vi.fn(async () => ({
+      projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140,
+    }));
+    registry.setAgentThreadActions({ markProjectRead, archiveThread: vi.fn(), setThreadPin: vi.fn(), markThreadSeen: vi.fn() });
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+      threadId: "agent-thread", turnId: "turn-1", turn: { id: "turn-1" },
+    } } });
+    const call = async (args: Record<string, unknown>, turnId = "turn-1") => {
+      const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "agent-thread", turnId, callId: "bulk-call", requestId: "bulk-call",
+        namespace: "pwragent", tool: "mark_project_read", arguments: args,
+      } } as AppServerPendingRequestNotification) as { success: boolean; contentItems: Array<{ text: string }> };
+      return { success: response.success, payload: JSON.parse(response.contentItems[0]!.text) };
+    };
+    return { registry, call, markProjectRead };
+  }
+
+  it("dispatches one project action without enumerating target threads", async () => {
+    const { call, markProjectRead } = await setup();
+    expect(await call({ projectKey: "directory:/repo" })).toEqual({ success: true, payload: { projectRead: {
+      projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140,
+    } } });
+    expect(markProjectRead).toHaveBeenCalledExactlyOnceWith({ projectKey: "directory:/repo" });
+  });
+
+  it.each([{}, { projectKey: " " }, { projectKey: 1 }, { projectKey: "directory:/repo", instanceId: " " },
+    { projectKey: "directory:/repo", archive: true }])("rejects invalid project arguments %j without mutations", async (args) => {
+    const { call, markProjectRead } = await setup();
+    expect(await call(args)).toMatchObject({ success: false, payload: { code: "invalid_arguments" } });
+    expect(markProjectRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects a call outside the active turn", async () => {
+    const { call, markProjectRead } = await setup();
+    expect(await call({ projectKey: "directory:/repo" }, "stale-turn")).toMatchObject({ success: false });
+    expect(markProjectRead).not.toHaveBeenCalled();
+  });
+
+  it("enforces the messaging permission gate before applying the bulk action", async () => {
+    const { registry, call, markProjectRead } = await setup();
+    const checkDynamicToolPermission = vi.fn(() => ({ owns: true, allowed: false, permission: "thread.control.organize" }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
+    expect(await call({ projectKey: "directory:/repo", instanceId: "peer" })).toMatchObject({ success: false });
+    expect(checkDynamicToolPermission).toHaveBeenCalledWith(expect.objectContaining({
+      category: "thread_inspection", tool: "mark_project_read", arguments: { projectKey: "directory:/repo", instanceId: "peer" },
+    }));
+    expect(markProjectRead).not.toHaveBeenCalled();
+  });
+
+  it("returns an owner error without another attempt", async () => {
+    const { call, markProjectRead } = await setup();
+    markProjectRead.mockRejectedValue(new Error("Owner directory membership is still checking"));
+    expect(await call({ projectKey: "directory:/repo" })).toMatchObject({ success: false, payload: {
+      code: "internal_error", message: "Owner directory membership is still checking",
+    } });
+    expect(markProjectRead).toHaveBeenCalledTimes(1);
+  });
 });

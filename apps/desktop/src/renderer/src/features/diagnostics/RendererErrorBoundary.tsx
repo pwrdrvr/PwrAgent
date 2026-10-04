@@ -35,6 +35,9 @@ export class RendererErrorBoundary extends Component<
   override componentDidCatch(error: unknown, errorInfo: ErrorInfo): void {
     const report = createRendererErrorReport("error-boundary", error, {
       componentStack: errorInfo.componentStack,
+      // Unmount cleanup runs before componentDidCatch. Keep the history from
+      // getDerivedStateFromError, before the failed tree's teardown updates.
+      updateDiagnostics: this.state.report?.updateDiagnostics,
     });
     const recovering = this.automaticAttempts < MAX_AUTOMATIC_RENDERER_RECOVERIES;
     if (recovering) this.automaticAttempts += 1;

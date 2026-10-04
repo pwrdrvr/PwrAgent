@@ -10,6 +10,7 @@ import {
 } from "../ComposerTiptapInput";
 import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 import { copyTextAsCodeBlock } from "../../../lib/copy-text";
+import { RendererUpdateEvent, snapshotRendererUpdates } from "../../../lib/renderer-update-diagnostics";
 
 afterEach(() => {
   cleanup();
@@ -47,6 +48,32 @@ function renderTiptapInput(props?: {
   const result = render(<Wrapper />);
   return { ...result, onChange };
 }
+
+it("records native typing and external synchronization without recording draft contents", () => {
+  let replaceValue: (value: string) => void = () => { throw new Error("Editor not mounted"); };
+  function Wrapper() {
+    const [value, setValue] = useState("");
+    replaceValue = setValue;
+    return <ComposerTiptapInput id="diagnostic-editor" label="Diagnostic editor" value={value}
+      skillTokens={[]} placeholder="Ask anything" onChange={setValue} />;
+  }
+  render(<Wrapper />);
+  const editor = (screen.getByRole("textbox", { name: "Diagnostic editor" }) as HTMLElement & { editor: Editor }).editor;
+  const before = snapshotRendererUpdates();
+  const draft = "Private contrived draft that must stay private";
+  for (const character of draft) {
+    act(() => editor.view.dispatch(editor.state.tr.insertText(character)));
+  }
+  const typed = snapshotRendererUpdates();
+  expect(typed.counts[RendererUpdateEvent.editorPublish] - before.counts[RendererUpdateEvent.editorPublish]).toBe(draft.length);
+  expect(typed.counts[RendererUpdateEvent.editorControlledSync]).toBe(before.counts[RendererUpdateEvent.editorControlledSync]);
+  act(() => replaceValue("External replacement"));
+  const synced = snapshotRendererUpdates();
+  expect(synced.counts[RendererUpdateEvent.editorControlledSync] - typed.counts[RendererUpdateEvent.editorControlledSync]).toBe(1);
+  expect(editor.getText()).toBe("External replacement");
+  expect(JSON.stringify(synced)).not.toContain(draft);
+  expect(JSON.stringify(synced)).not.toContain("External replacement");
+});
 
 it("never exposes an editable DOM while mounting a disabled composer", () => {
   const editableValues: string[] = [];

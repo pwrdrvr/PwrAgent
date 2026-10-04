@@ -56,6 +56,19 @@ describe("federation machine names", () => {
     expect(screen.getByLabelText("Runs on Laptop (Studio-MBP-M5-Max)")).toHaveTextContent("Laptop");
   });
 
+  it("names the full machine in the tooltip of an @ mention written with its short name", () => {
+    render(<FederationDisplayLabelsProvider health={{ ...health, instanceId: "mini" }}>
+      <InstanceChip instanceId="max" label="M5 Max" />
+      <InstanceChip instanceId="mini" label="M4 Mini / default" />
+    </FederationDisplayLabelsProvider>);
+    expect(screen.getByLabelText("Runs on M5 Max (Studio-MBP-M5-Max)")).toHaveTextContent("M5 Max");
+    expect(screen.getByTitle("Studio-MBP-M5-Max · max")).toBeInTheDocument();
+    // This instance resolves too: a mention can name the machine it is on.
+    expect(screen.getByLabelText("Runs on M4 Mini / default (Studio-Mac-Mini-M4 / default)"))
+      .toHaveTextContent("M4 Mini / default");
+    expect(screen.getByTitle("Studio-Mac-Mini-M4 / default · mini")).toBeInTheDocument();
+  });
+
   it("uses the remote viewer owner's short name while retaining its offline state and default choice", () => {
     const onRetarget = vi.fn();
     render(<LaunchpadMachineChip control={{

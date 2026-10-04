@@ -12,6 +12,7 @@ import {
   type MouseEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
@@ -276,8 +277,12 @@ const SkillMention = Mention.extend({
       ];
     }
     if (node.attrs.kind === "instance") {
+      // `name` is the short name the chip shows; `description`, when the
+      // chip was minted from the picker, is the full machine label.
       const label = String(node.attrs.name ?? "instance");
       const path = String(node.attrs.path ?? "");
+      const fullLabel =
+        typeof node.attrs.description === "string" ? node.attrs.description : "";
       return ["span", {
         class: "chip chip--instance composer-tiptap-input__mention",
         "data-type": "mention",
@@ -287,7 +292,8 @@ const SkillMention = Mention.extend({
         "data-label": label,
         "data-skill-name": label,
         "data-skill-path": path,
-        "data-tooltip": `${label}\n${path}`,
+        ...(fullLabel ? { "data-skill-description": fullLabel } : {}),
+        "data-tooltip": `${fullLabel || label}\n${path}`,
       }, `@${label}`];
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
@@ -2967,7 +2973,8 @@ export const ComposerTiptapInput = forwardRef<
         nextEditor.state.selection.from,
         readMode,
       );
-      propsRef.current.onChange(next.value, next.skillTokens, {
+        recordRendererUpdate(RendererUpdateEvent.editorPublish);
+        propsRef.current.onChange(next.value, next.skillTokens, {
         editorDocument: nextEditor.getJSON(),
       });
     },
@@ -2993,6 +3000,7 @@ export const ComposerTiptapInput = forwardRef<
     // rather than relying on editability updates to report it as a user edit.
     const initial = readTiptapContent(editor, readMode);
     if (getContentSignature(initial) !== getContentSignature(propsRef.current)) {
+      recordRendererUpdate(RendererUpdateEvent.editorNormalize);
       propsRef.current.onChange(initial.value, initial.skillTokens, {
         editorDocument: editor.getJSON(),
       });
@@ -3136,6 +3144,7 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     let loadedEditorDocument = false;
+    recordRendererUpdate(RendererUpdateEvent.editorControlledSync);
     if (
       nextEditorDocumentSignature &&
       currentEditorDocumentSignature !== nextEditorDocumentSignature
@@ -3194,6 +3203,7 @@ export const ComposerTiptapInput = forwardRef<
       }
       const restored = readTiptapContent(editor, readMode);
       const restoredEditorDocument = editor.getJSON();
+      recordRendererUpdate(RendererUpdateEvent.editorControlledPublish);
       propsRef.current.onChange(restored.value, restored.skillTokens, {
         editorDocument: restoredEditorDocument,
       });

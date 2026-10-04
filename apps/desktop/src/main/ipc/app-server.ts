@@ -1,3 +1,4 @@
+import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
@@ -1484,11 +1485,11 @@ class DesktopAppServerService {
     string,
     ThreadPrRefreshContext[]
   >();
-  // Merged PR commits are accepted as "pushed" even when the PR head branch
-  // has been deleted and no remote ref still contains those SHAs locally.
-  private readonly mergedPrCommitShasByThread = new Map<
+  // Provider-observed PR commits are published even with stale local remote
+  // refs or a deleted source branch. Keep PR identities to read fresh status.
+  private readonly publishedPrCommitsByThread = new Map<
     string,
-    { worktreePath: string; commitShas: Set<string> }
+    { worktreePath: string; prs: PrSummary[] }
   >();
   private threadSearchService: ThreadSearchService | null = null;
   private threadMigrationService: ThreadMigrationService | null = null;
@@ -2413,7 +2414,7 @@ class DesktopAppServerService {
     const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
       canonicalSnapshot.threads,
     );
-    this.rememberMergedPrCommitShas(
+    this.rememberPublishedPrCommitShas(
       canonicalSnapshot.threads,
       detachedPrsByThreadKey,
     );
@@ -2617,7 +2618,7 @@ class DesktopAppServerService {
   async resolveEditCommitStates(
     request: ResolveEditCommitStatesRequest,
   ): Promise<ResolveEditCommitStatesResponse> {
-    const acceptedPushedCommitShas = this.getMergedPrCommitShasForWorktree(
+    const acceptedPushedCommitShas = this.getPublishedPrCommitShasForWorktree(
       request.worktreePath,
     );
     // Coalesce identical in-flight requests (same worktree + groups) so an
@@ -2693,7 +2694,7 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
       request.worktreePath,
       {
-        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+        acceptedPushedCommitShas: this.getPublishedPrCommitShasForWorktree(
           request.worktreePath,
         ),
         maxCommits: request.maxCommits,
@@ -2730,7 +2731,7 @@ class DesktopAppServerService {
       request.commitSha,
       request.path,
       {
-        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+        acceptedPushedCommitShas: this.getPublishedPrCommitShasForWorktree(
           request.worktreePath,
         ),
         maxBytes: request.maxBytes,
@@ -2993,13 +2994,13 @@ class DesktopAppServerService {
     return detachedPrsByThreadKey;
   }
 
-  private rememberMergedPrCommitShas(
+  private rememberPublishedPrCommitShas(
     threads: NavigationSnapshot["threads"],
     detachedPrsByThreadKey: Map<string, PrSummary[]> = new Map(),
   ): void {
     for (const thread of threads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      this.rememberMergedPrCommitShasForThread({
+      this.rememberPublishedPrCommitShasForThread({
         backend: thread.source,
         threadId: thread.id,
         worktreePath: this.resolveThreadWorkingStatePath(thread),
@@ -3011,7 +3012,7 @@ class DesktopAppServerService {
     }
   }
 
-  private rememberMergedPrCommitShasForThread(params: {
+  private rememberPublishedPrCommitShasForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
     worktreePath?: string;
@@ -3021,37 +3022,29 @@ class DesktopAppServerService {
     const worktreePath = params.worktreePath?.trim()
       || this.worktreePathByThreadKey.get(threadKey);
     if (!worktreePath) {
-      this.mergedPrCommitShasByThread.delete(threadKey);
+      this.publishedPrCommitsByThread.delete(threadKey);
       return undefined;
     }
-    const commitShas = this.extractMergedPrCommitShas(params.prs);
-    if (commitShas.length === 0) {
-      this.mergedPrCommitShasByThread.delete(threadKey);
+    const prs = this.canonicalizePrs(params.prs);
+    if (prs.length === 0) {
+      this.publishedPrCommitsByThread.delete(threadKey);
       return worktreePath;
     }
-    this.mergedPrCommitShasByThread.set(threadKey, {
+    this.publishedPrCommitsByThread.set(threadKey, {
       worktreePath,
-      commitShas: new Set(commitShas),
+      prs,
     });
     return worktreePath;
   }
 
-  private extractMergedPrCommitShas(
-    prs: PrSummary[] | undefined,
-  ): string[] {
-    return (prs ?? [])
-      .filter((pr) => pr.lifecycleState === "merged" || pr.state === "merged")
-      .flatMap((pr) => normalizeCommitShas(pr.commitShas) ?? []);
-  }
-
-  private getMergedPrCommitShasForWorktree(worktreePath: string): string[] {
+  private getPublishedPrCommitShasForWorktree(worktreePath: string): string[] {
     const accepted = new Set<string>();
     const normalizedWorktreePath = worktreePath.trim();
-    for (const entry of this.mergedPrCommitShasByThread.values()) {
+    for (const entry of this.publishedPrCommitsByThread.values()) {
       if (entry.worktreePath !== normalizedWorktreePath) {
         continue;
       }
-      for (const sha of entry.commitShas) {
+      for (const sha of publishedPrCommitShas(this.canonicalizePrs(entry.prs))) {
         accepted.add(sha);
       }
     }
@@ -3487,7 +3480,7 @@ class DesktopAppServerService {
         worktreePath,
         ...(params.userAction ? { userAction: true } : {}),
         acceptedPushedCommitShas:
-          this.getMergedPrCommitShasForWorktree(worktreePath),
+          this.getPublishedPrCommitShasForWorktree(worktreePath),
       })) {
         scheduled += 1;
       }
@@ -3698,14 +3691,14 @@ class DesktopAppServerService {
         this.rememberThreadPrRefreshContexts(ownerThreads);
         const detachedPrs = await this.readDetachedPrsByThreadKey(ownerThreads);
         if (!isCurrent()) continue;
-        this.rememberMergedPrCommitShas(ownerThreads, detachedPrs);
+        this.rememberPublishedPrCommitShas(ownerThreads, detachedPrs);
         this.syncPrPollingSchedulerState();
         void getDesktopBackendRegistry().refreshThreadGitWorkingStates(ownerThreads).catch((error: unknown) => {
           appServerLog.warn("owner worktree status refresh failed", { error: String(error) });
         });
         if (complete) {
           const live = new Set(canonical.threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
-          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.mergedPrCommitShasByThread]) {
+          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.publishedPrCommitsByThread]) {
             for (const key of map.keys()) if (!live.has(key)) map.delete(key);
           }
           const liveDirectories = new Set(index.directories.map((directory) => directory.key));
@@ -5368,7 +5361,7 @@ class DesktopAppServerService {
     detachedPrs?: PrSummary[];
   }): Promise<void> {
     await this.rememberThreadPrAttachmentUpdate(params);
-    const worktreePath = this.rememberMergedPrCommitShasForThread({
+    const worktreePath = this.rememberPublishedPrCommitShasForThread({
       ...params,
       prs: [...params.prs, ...(params.detachedPrs ?? [])],
     });
