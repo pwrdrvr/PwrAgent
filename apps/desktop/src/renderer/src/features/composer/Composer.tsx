@@ -13625,6 +13625,8 @@ function ContextWindowMoon({
   const { show, update, hide, visible, tooltipNode, tooltipId } = useViewportTooltip({
     className: "context-usage-card",
   });
+  // The card's copy depends on availability, not the callback identity.
+  const opensUsage = Boolean(onOpenUsage);
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -13647,11 +13649,11 @@ function ContextWindowMoon({
     update(
       <ContextWindowUsageCard
         contextWindow={contextWindow}
-        opensUsage={Boolean(onOpenUsage)}
+        opensUsage={opensUsage}
         phaseLabel={CONTEXT_MOON_PHASES[phase]}
       />,
     );
-  }, [contextWindow, hide, onOpenUsage, tooltipId, update, visible]);
+  }, [contextWindow, hide, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -13667,7 +13669,7 @@ function ContextWindowMoon({
   const card = (
     <ContextWindowUsageCard
       contextWindow={contextWindow}
-      opensUsage={Boolean(onOpenUsage)}
+      opensUsage={opensUsage}
       phaseLabel={phaseLabel}
     />
   );
