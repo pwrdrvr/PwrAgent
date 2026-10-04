@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdtemp,
   mkdir,
@@ -756,6 +757,102 @@ describe("transcript image protocol", () => {
     } finally {
       await rm(agentTempDir, { recursive: true, force: true });
     }
+  });
+
+  it("adopts another profile's snapshot once the linked source is gone", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    // The source never exists here: macOS swept it out of /tmp after the
+    // other profile snapshotted it.
+    const imagePath = path.join(tempDir, "swept", "original-on-flamegraph.svg");
+    const sourceUrl = pathToFileURL(imagePath).toString();
+    const message = {
+      id: "message-swept-image-link",
+      role: "assistant" as const,
+      text: `[Original](${imagePath})`,
+    };
+    const rawResponse = {
+      backend: "codex" as const,
+      fetchedAt: 1,
+      threadId: "thread-swept-image-link",
+      replay: {
+        entries: [{ type: "message" as const, ...message }],
+        messages: [message],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const cacheName = `markdown-${createHash("sha256")
+      .update(`${message.id}\0${sourceUrl}`)
+      .digest("hex")}.svg`;
+    const otherProfileRoot = path.join(tempDir, "other-profile-thread-images");
+    const unrelatedProfileRoot = path.join(tempDir, "unrelated-profile-thread-images");
+    await mkdir(otherProfileRoot, { recursive: true });
+    await mkdir(unrelatedProfileRoot, { recursive: true });
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    await writeFile(path.join(otherProfileRoot, cacheName), svg);
+    await writeFile(path.join(unrelatedProfileRoot, `markdown-${"0".repeat(64)}.svg`), svg);
+    const activeRoot = path.join(tempDir, "active-profile-thread-images");
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      rawResponse,
+      {
+        resolveRoot: () => activeRoot,
+        resolveSiblingRoots: async () => [unrelatedProfileRoot, otherProfileRoot],
+      },
+      { includeTemporaryImageRoots: true },
+    );
+
+    const imagePart = response.replay.messages[0]?.parts?.[1];
+    expect(imagePart).toMatchObject({ type: "image", sourceUrl, alt: "Original" });
+    const adoptedPath = filePathFromProtocolUrl(imagePart?.type === "image" ? imagePart.url : "");
+    // Copied, not referenced: it survives the other profile's removal.
+    expect(adoptedPath).toBe(path.join(activeRoot, cacheName));
+    await expect(readFile(adoptedPath)).resolves.toEqual(svg);
+  });
+
+  it("does not adopt a snapshot taken for a different message", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const imagePath = path.join(tempDir, "swept", "combined-on-flamegraph.svg");
+    const message = {
+      id: "message-without-snapshot",
+      role: "assistant" as const,
+      text: `[On](${imagePath})`,
+    };
+    const otherProfileRoot = path.join(tempDir, "other-profile-thread-images");
+    await mkdir(otherProfileRoot, { recursive: true });
+    const otherMessageCache = `markdown-${createHash("sha256")
+      .update(`another-message\0${pathToFileURL(imagePath).toString()}`)
+      .digest("hex")}.svg`;
+    await writeFile(
+      path.join(otherProfileRoot, otherMessageCache),
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+    );
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex" as const,
+        fetchedAt: 1,
+        threadId: "thread-without-snapshot",
+        replay: {
+          entries: [{ type: "message" as const, ...message }],
+          messages: [message],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      {
+        resolveRoot: () => path.join(tempDir, "active-profile-thread-images"),
+        resolveSiblingRoots: async () => [otherProfileRoot],
+      },
+      { includeTemporaryImageRoots: true },
+    );
+
+    expect((response.replay.messages[0]?.parts ?? []).some((part) => part.type === "image")).toBe(false);
   });
 
   it("returns durable data images for messaging after temporary source cleanup", async () => {
