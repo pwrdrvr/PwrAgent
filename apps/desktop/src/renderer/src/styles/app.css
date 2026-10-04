@@ -18424,16 +18424,54 @@ a.button {
   user-select: text;
 }
 
+/* The card's band: every transient row between the transcript and the
+   compact composer — live work, the send error or notice, queued turns —
+   the same set of rows the full thread view keeps in `.composer__band`.
+   Before it existed these were loose children of the body that could not
+   shrink, so a long queue pushed the composer past the card's clipped bottom
+   edge. Now the band is capped at a share of the body and scrolls, and the
+   order the body gives up height in is the main window's: transcript first,
+   then the band, never the composer. The body's height is the card's own
+   inline height, so the percentage resolves. See
+   `styles/__tests__/composer-band-bounds.test.ts`. */
+.star-map-chat-card__band {
+  --rail-band-gap: 6px;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--rail-band-gap);
+  min-height: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.star-map-chat-card__band:empty {
+  display: none;
+}
+
+/* The rows keep their content height and let the band scroll; a flex item's
+   default `min-height: auto` already guarantees that, this says it aloud. */
+.star-map-chat-card__band > * {
+  flex-shrink: 0;
+}
+
 /* The full thread view surfaces monitor jobs and native sub-agents in the
    band above its composer. A floating chat is still an operating surface for
    that same thread, so carry the shared strip into the equivalent position
    instead of making the operator open the full window to discover live work.
    The component returns null while empty, leaving no reserved gap. */
-.star-map-chat-card > .live-strip {
-  flex: 0 0 auto;
+.star-map-chat-card__band > .live-strip {
   padding: 4px 0;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
+}
+
+/* The band draws the divider and the inset now. */
+.star-map-chat-card__band > .star-map-chat-card__error,
+.star-map-chat-card__band > .star-map-chat-card__notice {
+  padding: 0 2px;
+  border-top: 0;
 }
 
 /* Compact composer: for surfaces with no vertical budget. The field sits
@@ -31811,10 +31849,11 @@ button.pricing-token-miser__folded:focus-visible {
    stops a tall display from handing the band half the column. See
    `styles/__tests__/composer-band-bounds.test.ts`. */
 .composer > .composer__pending-controls > .composer__band {
+  --rail-band-gap: 12px;
   display: flex;
   flex: 0 1 auto;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--rail-band-gap);
   min-height: 0;
   max-height: min(40vh, 300px);
   overflow-y: auto;
@@ -31832,6 +31871,89 @@ button.pricing-token-miser__folded:focus-visible {
 /* Same specificity as the rule above, so `display: none` wins by order. */
 .composer > .composer__pending-controls > .composer__band:empty {
   display: none;
+}
+
+/* Overflow cue for the capped bands (this one and the Star Map chat card's).
+   macOS draws no scrollbar until the operator scrolls, so a band holding
+   twenty queued messages looked like a band holding three, with the fourth
+   sliced at the edge. Each edge now fades into the surface while content
+   lies past it.
+
+   The band is a scroll-state container and its own ::before / ::after are
+   the fades: sticky to the scrollport edges, zero net height (each pulls
+   back its own height plus the band's gap), and shown by a scroll-state
+   query. The query is re-evaluated on every layout, so a band that drains
+   below its cap while scrolled to the end drops the fade with it. A
+   scroll-driven `animation-timeline: scroll(self)` mask was tried first and
+   does not: Chromium holds the last value of a timeline that goes inactive,
+   which left a fade over the first row of a two-row band.
+
+   The fades paint the band's surface color, so each band names it. */
+.composer > .composer__pending-controls > .composer__band {
+  container-type: scroll-state;
+  --rail-band-fade-color: var(--bg-app);
+}
+
+.star-map-chat-card__band {
+  container-type: scroll-state;
+  --rail-band-fade-color: var(--bg-panel-elevated);
+}
+
+.composer__band::before,
+.composer__band::after,
+.star-map-chat-card__band::before,
+.star-map-chat-card__band::after {
+  content: "";
+  position: sticky;
+  z-index: 2;
+  flex-shrink: 0;
+  height: 24px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.composer__band::before,
+.star-map-chat-card__band::before {
+  top: 0;
+  margin-bottom: calc(-24px - var(--rail-band-gap));
+  background: linear-gradient(
+    to bottom,
+    var(--rail-band-fade-color) 0%,
+    transparent 100%
+  );
+}
+
+.composer__band::after,
+.star-map-chat-card__band::after {
+  bottom: 0;
+  margin-top: calc(-24px - var(--rail-band-gap));
+  background: linear-gradient(
+    to top,
+    var(--rail-band-fade-color) 0%,
+    transparent 100%
+  );
+}
+
+@container scroll-state(scrollable: top) {
+  .composer__band::before,
+  .star-map-chat-card__band::before {
+    opacity: 1;
+  }
+}
+
+@container scroll-state(scrollable: bottom) {
+  .composer__band::after,
+  .star-map-chat-card__band::after {
+    opacity: 1;
+  }
+}
+
+/* A control that Tab scrolls to an edge stops clear of the fade (24px plus
+   the ring's reach), the same way the transcript's fades are handled. */
+.composer__band :where(:focus-visible),
+.star-map-chat-card__band :where(:focus-visible) {
+  scroll-margin-block: 28px;
 }
 
 /* In the thread column the composer may shrink — only its band can — so a

@@ -1713,48 +1713,52 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           />
         </div>
 
-        <MemoizedActiveSubAgentsStrip
-          desktopApi={desktopApi}
-          onRefreshNavigation={props.onRefreshNavigation}
-          thread={thread}
-        />
+        {/* The band above the compact composer: capped and scrolling, so no
+            queue length can push the composer out of the card. */}
+        <div className="star-map-chat-card__band">
+          <MemoizedActiveSubAgentsStrip
+            desktopApi={desktopApi}
+            onRefreshNavigation={props.onRefreshNavigation}
+            thread={thread}
+          />
 
-        {sendError || attachmentError || readinessError ? (
-          <p className="star-map-chat-card__error" role="alert">
-            {sendError ?? attachmentError ?? readinessError}
-            {readinessError ? <button onClick={() => {
-              void selectedDetail.refresh();
-              void queueReadiness.refresh();
-            }} type="button">Retry thread</button> : undefined}
-          </p>
-        ) : sendNotice ? (
-          <p className="star-map-chat-card__notice" role="status">
-            {sendNotice}
-          </p>
-        ) : undefined}
+          {sendError || attachmentError || readinessError ? (
+            <p className="star-map-chat-card__error" role="alert">
+              {sendError ?? attachmentError ?? readinessError}
+              {readinessError ? <button onClick={() => {
+                void selectedDetail.refresh();
+                void queueReadiness.refresh();
+              }} type="button">Retry thread</button> : undefined}
+            </p>
+          ) : sendNotice ? (
+            <p className="star-map-chat-card__notice" role="status">
+              {sendNotice}
+            </p>
+          ) : undefined}
 
-        {queuedTurns.map((queued, index) => (
-          <div
-            aria-label={
-              index === 0 ? "Queued message" : `Queued message ${index + 1}`
-            }
-            className="composer__queued"
-            key={queued.id}
-          >
-            <div className="composer__queued-copy">
-              <span className="composer__queued-label">
-                {queued.backendQueuePending
-                  ? "Sending…"
-                  : index === 0
-                    ? "Queued next"
-                    : `Queued #${index + 1}`}
-              </span>
-              <span className="composer__queued-text">
-                {queuedTurnPreview(queued)}
-              </span>
+          {queuedTurns.map((queued, index) => (
+            <div
+              aria-label={
+                index === 0 ? "Queued message" : `Queued message ${index + 1}`
+              }
+              className="composer__queued"
+              key={queued.id}
+            >
+              <div className="composer__queued-copy">
+                <span className="composer__queued-label">
+                  {queued.backendQueuePending
+                    ? "Sending…"
+                    : index === 0
+                      ? "Queued next"
+                      : `Queued #${index + 1}`}
+                </span>
+                <span className="composer__queued-text">
+                  {queuedTurnPreview(queued)}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
 
         <MemoizedCompactComposer
           busy={session.threadBusy}

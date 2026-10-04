@@ -538,6 +538,12 @@ describe("Tangerine Terminal theme contract", () => {
       // `--savings-*` theme tokens. Every surface reads its verdict color
       // through it, so the tier → color map exists once.
       "savings-verdict",
+      // Capped composer bands — defined on `.composer__band` and
+      // `.star-map-chat-card__band`, not `:root`. The gap is read back by the
+      // edge fades' negative margins; the fade color is set only to the
+      // band's own surface token.
+      "rail-band-gap",
+      "rail-band-fade-color",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

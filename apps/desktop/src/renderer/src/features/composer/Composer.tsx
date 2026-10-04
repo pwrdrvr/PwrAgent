@@ -84,6 +84,7 @@ import {
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -1465,7 +1466,11 @@ export function EnvActionAnchorList(props: {
   onMoveToSidebar?: () => void;
   onStopRun?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
 }): ReactNode {
-  const runs = readCodexEnvironmentActionRuns(props.runtime);
+  // Superseded first, then dismissed: dismissing the newest result must not
+  // bring back the one it replaced.
+  const runs = withoutSupersededCodexEnvironmentActionRuns(
+    readCodexEnvironmentActionRuns(props.runtime),
+  );
   const visible = runs.filter((run) => {
     if (props.hiddenRunIds?.has(run.runId)) return false;
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
