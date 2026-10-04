@@ -13030,7 +13030,7 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
         })
       : undefined;
-    const pendingRequest = this.pendingServerRequestForThread({
+    const pendingRequest = this.getPendingRequestForThread({
       backend,
       threadId: request.threadId,
     });
@@ -15652,7 +15652,7 @@ export class DesktopBackendRegistry {
       backend,
       request.threadId,
     );
-    const pendingRequest = this.pendingServerRequestForThread({
+    const pendingRequest = this.getPendingRequestForThread({
       backend,
       threadId: request.threadId,
     });
@@ -23050,7 +23050,7 @@ export class DesktopBackendRegistry {
     return keys;
   }
 
-  private pendingServerRequestForThread(params: {
+  getPendingRequestForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): AppServerPendingRequestNotification | undefined {

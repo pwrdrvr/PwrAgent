@@ -15966,16 +15966,24 @@ export class MessagingController {
       });
       let activeTurn = this.getActiveTurn(binding);
       const backendTurn = admission.activeTurn;
+      const pendingRequest = admission.pendingRequest;
+      const waiting =
+        pendingRequest?.params.threadId === binding.threadId
+        && (!pendingRequest.params.turnId || pendingRequest.params.turnId === backendTurn?.turnId);
       if (
         activeTurn === previousTurn
         && backendTurn?.backend === binding.backend
         && backendTurn.threadId === binding.threadId
         && admission.threadStatus !== "idle"
-        && (!activeTurn || activeTurn.turnId !== backendTurn.turnId)
+        && (
+          !activeTurn
+          || activeTurn.turnId !== backendTurn.turnId
+          || (activeTurn.status === "working" && waiting)
+        )
       ) {
         activeTurn = {
           turnId: backendTurn.turnId,
-          status: "working",
+          status: waiting ? "waiting" : "working",
           updatedAt: this.now(),
         };
         this.setActiveTurn(binding, activeTurn);

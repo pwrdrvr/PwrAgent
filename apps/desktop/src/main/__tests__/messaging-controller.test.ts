@@ -6426,6 +6426,102 @@ describe("MessagingController", () => {
     }
   });
 
+  it.each([
+    { backend: "codex" as const, method: "item/tool/requestUserInput" as const },
+    { backend: "codex" as const, method: "item/commandExecution/requestApproval" as const },
+    { backend: "acp:grok" as const, method: "item/tool/requestUserInput" as const },
+    { backend: "acp:grok" as const, method: "item/commandExecution/requestApproval" as const },
+  ])("restores waiting when $backend has $method pending before attachment", async ({ backend, method }) => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({ ...navigation.threads[0]!, id: "thread-2", source: backend });
+    const pendingRequest: AppServerPendingRequestNotification = method === "item/tool/requestUserInput"
+      ? {
+          method,
+          params: {
+            threadId: "thread-2",
+            turnId: "handoff-turn",
+            requestId: "question-before-attach",
+            questions: [{ id: "q1", header: "Mode", question: "Proceed?", isOther: true, isSecret: false, options: [] }],
+          },
+        }
+      : {
+          method,
+          params: {
+            threadId: "thread-2",
+            turnId: "handoff-turn",
+            requestId: "approval-before-attach",
+            prompt: "Run tests?",
+            command: "pnpm test",
+          },
+        };
+    const harness = await createHarness({
+      navigation,
+      getThreadAdmissionState: async (request) => request.threadId === "thread-2"
+        ? {
+            activeTurn: { backend, threadId: "thread-2", turnId: "handoff-turn" },
+            pendingRequest,
+            thread: navigation.threads.at(-1),
+            threadStatus: "active",
+          }
+        : {},
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("attach another thread"));
+    harness.delivered.length = 0;
+    // No target binding exists when the request originally arrives.
+    await harness.controller.handleBackendPendingRequest(backend, pendingRequest);
+    expect(harness.delivered).toEqual([]);
+
+    await expect(harness.controller.handlePwrAgentMessagingRequest({
+      operation: "attach_thread_here",
+      context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      args: { backend, threadId: "thread-2", placement: "current_conversation" },
+    })).resolves.toMatchObject({ ok: true });
+    expect(harness.delivered.filter((intent) => intent.kind === "activity" && intent.state === "active")).toEqual([]);
+    expect(harness.delivered.filter((intent) => intent.kind === "activity").at(-1)).toMatchObject({
+      state: "idle",
+      sessionState: "suspended",
+    });
+    expect(harness.delivered.filter((intent) => intent.kind === "status").at(-1)).toMatchObject({
+      status: "waiting",
+    });
+  });
+
+  it.each(["other-thread", "other-turn"] as const)("ignores a pending request for %s during attachment", async (pending) => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({ ...navigation.threads[0]!, id: "thread-2" });
+    const harness = await createHarness({
+      navigation,
+      getThreadAdmissionState: async (request) => request.threadId === "thread-2"
+        ? {
+            activeTurn: { backend: "codex", threadId: "thread-2", turnId: "handoff-turn" },
+            pendingRequest: {
+              method: "item/tool/requestUserInput",
+              params: {
+                threadId: pending === "other-thread" ? "thread-3" : "thread-2",
+                turnId: pending === "other-turn" ? "older-turn" : "handoff-turn",
+                requestId: "question-stale",
+                questions: [],
+              },
+            },
+            thread: navigation.threads.at(-1),
+            threadStatus: "active",
+          }
+        : {},
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("attach another thread"));
+    harness.delivered.length = 0;
+
+    await expect(harness.controller.handlePwrAgentMessagingRequest({
+      operation: "attach_thread_here",
+      context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      args: { backend: "codex", threadId: "thread-2", placement: "current_conversation" },
+    })).resolves.toMatchObject({ ok: true });
+    expect(harness.delivered.filter((intent) => intent.kind === "activity").at(-1)).toMatchObject({ state: "active" });
+    expect(harness.delivered.filter((intent) => intent.kind === "status").at(-1)).toMatchObject({ status: "working" });
+  });
+
   it.each(["completed", "waiting", "idle", "failed"] as const)(
     "does not start typing when an attached turn lookup is %s",
     async (lookup) => {
@@ -6486,7 +6582,7 @@ describe("MessagingController", () => {
     },
   );
 
-  it.each([false, true])("budgets SQLite writes for attaching a running turn (active=%s)", async (active) => {
+  it.each(["idle", "active", "waiting"] as const)("budgets SQLite writes for attaching a turn (state=%s)", async (state) => {
     const previous = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-attach-writes-"));
@@ -6498,9 +6594,21 @@ describe("MessagingController", () => {
       const harness = await createHarness({
         navigation,
         store: new SqliteMessagingStore(db),
-        readActiveTurn: async (request) => active && request.threadId === "thread-2"
-          ? { backend: "codex", threadId: "thread-2", turnId: "handoff-turn" }
-          : undefined,
+        getThreadAdmissionState: async (request) => request.threadId === "thread-2"
+          ? {
+              ...(state !== "idle"
+                ? { activeTurn: { backend: "codex", threadId: "thread-2", turnId: "handoff-turn" } }
+                : {}),
+              ...(state === "waiting"
+                ? { pendingRequest: {
+                    method: "item/tool/requestUserInput",
+                    params: { threadId: "thread-2", turnId: "handoff-turn", requestId: "question-1", questions: [] },
+                  } }
+                : {}),
+              thread: navigation.threads.at(-1),
+              threadStatus: state === "idle" ? "idle" : "active",
+            }
+          : {},
       });
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("attach another thread"));
@@ -6515,8 +6623,10 @@ describe("MessagingController", () => {
       expect(result).toMatchObject({ ok: true });
       harness.controller.dispose();
       expectSqliteWriteBudget({
-        scenario: `messaging-attach-${active ? "active" : "idle"}-turn`,
-        note: "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
+        scenario: `messaging-attach-${state}-turn`,
+        note: state === "waiting"
+          ? "one attachment with a pre-existing pending request: binding/status persistence plus one suspended activity delivery; no new timer or turn-state persistence"
+          : "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
         writes,
       });
     } finally {

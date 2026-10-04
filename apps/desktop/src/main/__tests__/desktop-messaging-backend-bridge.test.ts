@@ -165,6 +165,16 @@ describe("DesktopMessagingBackendBridge", () => {
     }));
     const listThreads = vi.fn(async () => []);
     const readDirectoryStatuses = vi.fn(async () => ({}));
+    const pendingRequest = {
+      method: "item/tool/requestUserInput" as const,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-live",
+        requestId: "question-1",
+        questions: [],
+      },
+    };
+    const getPendingRequestForThread = vi.fn(() => pendingRequest);
     const registry = {
       getActiveTurnForThread: vi.fn(() => ({
         backend: "codex",
@@ -172,6 +182,7 @@ describe("DesktopMessagingBackendBridge", () => {
         turnId: "turn-live",
       })),
       getCachedThreadSummary,
+      getPendingRequestForThread,
       isThreadTurnOccupied: vi.fn(() => true),
       getQueuedExecutionModeForThread: vi.fn(() => ({ mode: "full-access", queuedAt: 2_000 })),
       getQueuedTurnsForThread: vi.fn(() => [
@@ -195,6 +206,7 @@ describe("DesktopMessagingBackendBridge", () => {
 
     expect(state).toMatchObject({
       activeTurn: { turnId: "turn-live" },
+      pendingRequest,
       threadStatus: "active",
       thread: {
         executionMode: "default",
@@ -207,6 +219,10 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     });
     expect(getCachedThreadSummary).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(getPendingRequestForThread).toHaveBeenCalledExactlyOnceWith({
       backend: "codex",
       threadId: "thread-1",
     });
@@ -231,6 +247,7 @@ describe("DesktopMessagingBackendBridge", () => {
     });
     const registry = {
       getActiveTurnForThread: vi.fn(() => undefined),
+      getPendingRequestForThread: vi.fn(() => undefined),
       getCachedThreadSummary: vi.fn(() => undefined),
       getQueuedExecutionModeForThread: vi.fn(() => undefined),
       getQueuedTurnsForThread: vi.fn(() => []),
@@ -1289,7 +1306,13 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     };
     const remoteNavigationSnapshot = vi.fn(async () => remoteNavigation);
+    const pendingRequest = {
+      method: "item/tool/requestUserInput" as const,
+      params: { threadId: "thread-1", turnId: "turn-remote", requestId: "question-remote", questions: [] },
+    };
     const resolveThreadAdmissionState = vi.fn(async () => ({
+      activeTurn: { backend: "codex" as const, threadId: "thread-1", turnId: "turn-remote" },
+      pendingRequest,
       thread: {
         id: "thread-1",
         title: "Remote thread",
@@ -1298,7 +1321,7 @@ describe("DesktopMessagingBackendBridge", () => {
         linkedDirectories: [],
         inbox: { inInbox: false },
       },
-      threadStatus: "idle" as const,
+      threadStatus: "active" as const,
     }));
     const listBackends = vi.fn(async () => ({
       fetchedAt: 2_000,
@@ -1373,6 +1396,8 @@ describe("DesktopMessagingBackendBridge", () => {
         threadId: "thread-1",
       }),
     ).resolves.toMatchObject({
+      activeTurn: { turnId: "turn-remote" },
+      pendingRequest,
       thread: {
         id: "thread-1",
         federation: {

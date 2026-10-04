@@ -207,6 +207,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       })),
     ]);
     const activeTurn = this.registry.getActiveTurnForThread(request);
+    const pendingRequest = this.registry.getPendingRequestForThread(request);
     const threadStatus = this.registry.isThreadTurnOccupied(request)
       ? "active"
       : "idle";
@@ -228,6 +229,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       : undefined;
     return {
       ...(activeTurn ? { activeTurn } : {}),
+      ...(pendingRequest ? { pendingRequest } : {}),
       ...(thread ? { thread } : {}),
       threadStatus,
     };

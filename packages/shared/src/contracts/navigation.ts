@@ -6,6 +6,7 @@ import type {
   AppServerBackendScope,
   AppServerBuiltinBackendKind,
   AppServerBackendKind,
+  AppServerPendingRequestNotification,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
@@ -312,6 +313,7 @@ export type ThreadAdmissionState = {
     threadId: ThreadIdentifier;
     turnId: string;
   };
+  pendingRequest?: AppServerPendingRequestNotification;
   thread?: NavigationThreadSummary;
   threadStatus?: AppServerThreadStatus;
 };
