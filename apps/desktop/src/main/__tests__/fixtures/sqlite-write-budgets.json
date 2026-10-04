@@ -435,6 +435,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "mcp-automation-native-consent": {"commits": 0, "note": "Native automation MCP consent checks the in-memory run grant and reads the Agent selection without adding SQLite commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "mcp-gateway-discovery-and-invocation": {
     "commits": 0,
     "note": "Fixed MCP gateway discovery and one scoped approved call use in-memory catalogs and the existing event flow, with no additional SQLite commits.",

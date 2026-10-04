@@ -541,6 +541,7 @@ import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-ag
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
+import { buildAutomationMcpConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
   buildStarMapIntakeAgentTools,
@@ -9099,6 +9100,7 @@ export class DesktopBackendRegistry {
       suppressBindingBroadcast?: boolean;
       mcpConnectionIds?: string[];
       mcpServerAliases?: Record<string, string[]>;
+      mcpAllowedServerNames?: string[];
       toolAllowlist?: string[];
       mcpRegistrations?: McpConnectionBridgeRegistration[];
       pendingTerminalNotification?: AppServerNotification;
@@ -10988,6 +10990,7 @@ export class DesktopBackendRegistry {
       suppressBindingBroadcast: params.suppressBindingBroadcast,
       mcpConnectionIds: mcp?.connectionIds,
       mcpServerAliases: mcp?.serverAliases,
+      mcpAllowedServerNames: mcp?.allowedServerNames,
       toolAllowlist: params.toolAllowlist,
       mcpRegistrations: mcp?.registrations,
       pendingTerminalNotification: undefined as AppServerNotification | undefined,
@@ -17973,6 +17976,7 @@ export class DesktopBackendRegistry {
     config?: CodexThreadStartParams["config"];
     connectionIds: string[];
     serverAliases: Record<string, string[]>;
+    allowedServerNames: string[];
     registrations: McpConnectionBridgeRegistration[];
   }> {
     const registrations: Array<{ connectionId: string; registration: McpConnectionBridgeRegistration }> = [];
@@ -18020,6 +18024,9 @@ export class DesktopBackendRegistry {
       return {
         config: servers.length || baseConfig ? mergeCodexThreadConfigs(baseConfig, policy.config) : undefined,
         connectionIds: policy.connectionIds,
+        allowedServerNames: servers
+          .filter((server) => readRecord(readRecord(policy.config?.mcp_servers)?.[server.name])?.enabled !== false)
+          .flatMap((server) => [server.name, ...(server.aliases ?? [])]),
         serverAliases: Object.fromEntries(servers.filter((server) => server.connectionId).map((server) => [server.connectionId!, [server.name, ...(server.aliases ?? [])]])),
         registrations: selectedRegistrations.map(({ registration }) => registration),
       };
@@ -26425,6 +26432,7 @@ export class DesktopBackendRegistry {
         queueEntryId: string;
         mcpConnectionIds?: string[];
         mcpServerAliases?: Record<string, string[]>;
+        mcpAllowedServerNames?: string[];
         toolAllowlist?: string[];
       }
     | undefined {
@@ -35350,6 +35358,25 @@ export class DesktopBackendRegistry {
       backend,
       request,
     );
+    if (backend === "codex" && headlessAutomation && isMcpToolApproval(request)) {
+      const serverName = String(request.params.serverName ?? "");
+      const aliases = Object.values(headlessAutomation.mcpServerAliases ?? {})
+        .filter((names) => names.includes(serverName)).flat();
+      const selected = await this.readThreadMcpConnections({
+        backend, threadId: headlessAutomation.agentThreadId,
+      });
+      const connectionIds = Object.entries(headlessAutomation.mcpServerAliases ?? {})
+        .filter(([, names]) => names.includes(serverName)).map(([id]) => id);
+      const stillSelected = connectionIds.length > 0
+        ? connectionIds.some((id) => headlessAutomation.mcpConnectionIds?.includes(id) && selected.connectionIds.includes(id))
+        : selected.providerServersEnabled;
+      const consent = headlessAutomation.mcpAllowedServerNames?.includes(serverName)
+        && stillSelected
+        && this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
+        ? buildAutomationMcpConsent({ request, serverNames: [serverName, ...aliases], toolAllowlist: headlessAutomation.toolAllowlist })
+        : undefined;
+      return consent ?? { action: "cancel", content: null, _meta: null };
+    }
     if (headlessAutomation) {
       backendRegistryLog.warn("auto-cancelling headless automation server request", {
         agentThreadId: headlessAutomation.agentThreadId,
