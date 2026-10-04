@@ -2197,6 +2197,17 @@ describe("selectChannelReleases", () => {
 });
 
 describe("selectAppUpdateReleases", () => {
+  const originalPlatform = process.platform;
+
+  // These macOS asset fixtures must select macOS even on a Linux CI runner.
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  });
+
   it.each(["v1.2.0-alpha.1", "v1.2.0-beta.1"])(
     "prefers newer %s over a staged final",
     async (tag) => {
