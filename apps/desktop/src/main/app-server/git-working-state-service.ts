@@ -979,10 +979,10 @@ export async function probeWorktreeWorkingState(
   );
 
   // "Unpushed" means reachable from HEAD but on no remote ref or accepted
-  // merged-PR head. Excluding an accepted head also excludes its ancestors,
-  // which is load-bearing after squash merge: the in-process GitHub lookup
-  // retains the PR head SHA, while the deleted source branch's earlier commits
-  // are no longer reachable from a remote ref. Commits added after that head
+  // published PR head. Excluding an accepted head also excludes its ancestors,
+  // including when a push leaves local remote refs stale or a squash merge
+  // deletes the source branch. The provider lookup confirms the published
+  // PR head independently of local remote refs. Commits added after that head
   // remain countable. With no remotes configured, every commit would count —
   // meaningless for a local-only repo, so report 0 instead.
   let unpushedCommits = 0;
@@ -1358,7 +1358,7 @@ export class GitWorkingStateService {
 
   /**
    * List commits reachable from HEAD that exist on no remote ref or accepted
-   * merged-PR head. Commit and per-commit file lists are bounded; patch text is
+   * published PR head. Commit and per-commit file lists are bounded; patch text is
    * loaded only when the renderer expands an individual file.
    */
   async listUnpublishedCommits(
@@ -1682,7 +1682,7 @@ export class GitWorkingStateService {
         return existing;
       }
       // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
-      // tip) isn't reachable from any remote ref or accepted merged-PR head.
+      // tip) isn't reachable from any remote ref or accepted published PR head.
       // Accepted heads intentionally act as revision exclusions rather than
       // exact-SHA matches so earlier commits from a squash-merged branch also
       // read as pushed. Empty ⇒ pushed. With no remotes or accepted heads,
