@@ -1,5 +1,9 @@
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { threadLockRefusalMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
+import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
+import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
+import { resolveActiveProfilePath } from "../profile";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
@@ -22,6 +26,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
   buildNavigationSnapshot,
+  buildPricingSpendByModel,
   buildThreadIdentityKey,
   CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   federatedThreadIdentityKey,
@@ -1057,6 +1062,26 @@ function createOverlayStoreMock(params?: {
         parentThreadBackend,
       parentThreadInstanceId,
       } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadLock: async ({
+      backend,
+      threadId,
+      lock,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      lock: ThreadOverlayState["lock"];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const { lock: _previous, ...current } = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = (lock ? { ...current, lock } : current) as ThreadOverlayState;
       overlays.set(key, next);
       return next;
     },
@@ -3100,6 +3125,90 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.withThreadHandoff(params.threadId, async () => "released")).resolves.toBe("released");
   });
 
+  it("refuses every turn source on a locked thread, naming the note, until it is unlocked", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Continue" }] };
+    await registry.setThreadLock({ ...params, locked: true, note: "Worktree handed to the repair thread" }, { source: "operator" });
+    const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
+
+    await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
+    // Automations see a lock as busy, so a PR watch waits without spending an attempt.
+    await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
+    await expect(registry.startTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.steerTurn({ ...params, expectedTurnId: "turn-1", requestId: "steer-1" })).rejects.toThrow(refusal);
+    await expect(registry.startReview({ backend: "codex", threadId: "parked", target: { type: "uncommittedChanges" } }))
+      .rejects.toThrow(refusal);
+    await expect(registry.compactThread({ backend: "codex", threadId: "parked" })).rejects.toThrow(refusal);
+
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+    await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("holds a delivery on a locked thread and starts it once unlocked", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Monitor result" }] };
+    const { lock } = await registry.setThreadLock({ ...params, locked: true, note: "Parked" }, { source: "operator" });
+
+    // A monitor's result for a locked parent is held, not refused.
+    await expect(registry.submitHeldTurn({
+      ...params,
+      queueEntryId: "monitor-result",
+      holdReason: threadLockRefusalMessage(lock!),
+    })).resolves.toMatchObject({ status: "queued" });
+    // A release while locked keeps it held.
+    await expect(registry.releaseQueuedTurnWithDisposition("monitor-result"))
+      .resolves.toMatchObject({ disposition: "blocked" });
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+    await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+  });
+
+  it("leaves a queue held for another reason alone on unlock", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Retry me" }] };
+    await registry.submitHeldTurn({ ...params, queueEntryId: "failed-turn", holdReason: "The previous turn failed." });
+    await registry.setThreadLock({ ...params, locked: true }, { source: "operator" });
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(codexClient.startTurnCallCount).toBe(0);
+  });
+
+  it("publishes each lock change and keeps the original time and source when the note changes", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (event.notification.method === "thread/lock/updated") events.push(event);
+    });
+    onTestFinished(unsubscribe);
+    const thread = { backend: "codex" as const, threadId: "parked" };
+
+    const locked = await registry.setThreadLock({ ...thread, locked: true }, { source: "agent_tool" });
+    expect(locked.lock).toMatchObject({ source: "agent_tool" });
+    expect(locked.lock).not.toHaveProperty("note");
+    const renoted = await registry.setThreadLock({ ...thread, locked: true, note: "  Parked for the repair.  " }, { source: "operator" });
+    expect(renoted.lock).toEqual({ note: "Parked for the repair.", lockedAt: locked.lock!.lockedAt, source: "agent_tool" });
+    // Locking again without a note keeps the note; an unchanged lock publishes nothing.
+    await registry.setThreadLock({ ...thread, locked: true }, { source: "operator" });
+    await registry.setThreadLock({ ...thread, locked: false }, { source: "operator" });
+    await registry.setThreadLock({ ...thread, locked: false }, { source: "operator" });
+
+    expect(events.map((event) => (event.notification.params as { lock?: unknown }).lock)).toEqual([
+      locked.lock,
+      renoted.lock,
+      undefined,
+    ]);
+    expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
@@ -3205,6 +3314,85 @@ describe("DesktopBackendRegistry", () => {
       expect(client.prepareFreshNativeVoiceThread).toHaveBeenCalledTimes(2);
       voice.release();
     } finally { await registry.close(); }
+  });
+
+  it("restores the remembered stock director after restart with current settings and no catalog replacement", async () => {
+    const threadId = "persisted-director";
+    const resume = vi.fn(async (_params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]) => {});
+    const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const overlayStore = { ...createOverlayStoreMock({ overlays: {
+      [`codex:${threadId}`]: { backend: "codex", threadId, model: "gpt-5.4", reasoningEffort: "high", serviceTier: "priority", executionMode: "full-access", extraLinkedDirectories: [] },
+    } }), getVoiceManagerThread: () => ({ backend: "codex", threadId }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true });
+    try {
+      const voice = await registry.acquireNativeVoiceBackend(threadId);
+      expect(resume).toHaveBeenCalledWith(expect.objectContaining({
+        threadId, model: "gpt-5.4", reasoningEffort: "high", serviceTier: "priority", approvalPolicy: "never", sandbox: "danger-full-access",
+      }));
+      expect(resume.mock.calls[0]).toHaveLength(1);
+      expect(resume.mock.calls[0][0]).not.toHaveProperty("dynamicTools");
+      expect(client.refreshThreadTools).not.toHaveBeenCalled();
+      expect(client.startTurnCalls).toHaveLength(0);
+      expect(client.startRealtime).not.toHaveBeenCalled();
+      voice.release();
+      await emitStartedTurn(registry, "codex", threadId, "sample-active-turn");
+      const active = await registry.acquireNativeVoiceBackend(threadId);
+      expect(resume).toHaveBeenCalledOnce();
+      const searched = await client.emitRequest({ method: "item/tool/call", params: {
+        threadId, turnId: "sample-active-turn", callId: "restored-search", requestId: "restored-search",
+        namespace: "pwragent", tool: "tool_search", arguments: { query: "get_thread_status", limit: 1 },
+      } } as AppServerPendingRequestNotification) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(searched.success).toBe(true);
+      expect(JSON.parse(searched.contentItems[0].text).tools[0]).toMatchObject({ name: "get_thread_status", inputSchema: { type: "object" } });
+      active.release();
+    } finally { await registry.close(); }
+  });
+
+  it("keeps ordinary idle threads and custom director environments behind verified refresh", async () => {
+    const resume = vi.fn(async (_params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]) => {});
+    const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const runtime: CodexThreadEnvironmentRuntime = {
+      environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local",
+      cwd: "/sample/voice-manager", shellEnvironment: { SAMPLE_TOOLCHAIN: "changed" },
+    };
+    const overlayStore = { ...createOverlayStoreMock({ overlays: {
+      "codex:persisted-director": { backend: "codex", threadId: "persisted-director", codexEnvironmentRuntime: runtime, extraLinkedDirectories: [] },
+    } }), getVoiceManagerThread: () => ({ backend: "codex", threadId: "persisted-director" }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    try {
+      for (const threadId of ["ordinary-thread", "persisted-director"]) {
+        await expect(registry.acquireNativeVoiceBackend(threadId)).rejects.toThrow("Select a supported PwrAgent managed Codex runtime");
+      }
+      expect(resume).not.toHaveBeenCalled();
+    } finally { await registry.close(); }
+  });
+
+  it("prefers negotiated director refresh when available and propagates stock restoration failures", async () => {
+    const resume = vi.fn(async (_params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]) => { throw new Error("Sample restoration rejected"); });
+    const client = Object.assign(voiceClient(), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const overlayStore = { ...createOverlayStoreMock(), getVoiceManagerThread: () => ({ backend: "codex", threadId: "persisted-director" }) };
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    try {
+      const voice = await registry.acquireNativeVoiceBackend("persisted-director");
+      expect(client.refreshThreadTools).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      voice.release();
+    } finally { await registry.close(); }
+    const stock = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
+      prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
+    });
+    const stockRegistry = new DesktopBackendRegistry({ codexClient: stock, overlayStore });
+    try {
+      await expect(stockRegistry.acquireNativeVoiceBackend("persisted-director")).rejects.toThrow("Sample restoration rejected");
+      expect(stock.startRealtime).not.toHaveBeenCalled();
+      expect(stock.refreshThreadTools).not.toHaveBeenCalled();
+    } finally { await stockRegistry.close(); }
   });
 
   it("uses negotiated refresh when fresh voice proof no longer matches", async () => {
@@ -3779,7 +3967,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("preserves merged PR commit exclusions in review working-state probes", async () => {
+  it.each(["open", "closed", "merged"] as const)("preserves published %s PR heads in review working-state probes", async (lifecycleState) => {
     const worktreePath = "/worktrees/PwrAgnt";
     const attachedCommitSha = "a".repeat(40);
     const detachedCommitSha = "b".repeat(40);
@@ -3791,9 +3979,9 @@ describe("DesktopBackendRegistry", () => {
       number: params.number,
       org: "pwrdrvr",
       repo: "PwrAgent",
-      state: "merged",
-      lifecycleState: "merged",
-      commitShas: params.commitShas,
+      state: "passing",
+      lifecycleState,
+      headSha: params.commitShas[0],
       url: `https://github.com/pwrdrvr/PwrAgent/pull/${params.number}`,
     });
     const readWorkingStateEntries = vi.fn(() =>
@@ -3857,8 +4045,13 @@ describe("DesktopBackendRegistry", () => {
           path: "/repos/PwrSnap",
         },
       ],
-      prs: [mergedPr({ number: 735, commitShas: [attachedCommitSha] })],
+      prs: [mergedPr({ number: 735, commitShas: ["c".repeat(40)] })],
     };
+    registry.setThreadPullRequestCanonicalizer(async (prs) =>
+      prs.map((pr) => pr.number === 735
+        ? { ...pr, headSha: attachedCommitSha }
+        : pr),
+    );
 
     try {
       await registry.hydrateThreadGitWorkingStates(
@@ -4427,7 +4620,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("authorizes federated commit reads against the owner thread and PR overlay", async () => {
+  it.each(["open", "merged"] as const)("authorizes federated commit reads using the published %s PR head", async (lifecycleState) => {
     const worktreePath = "/worktrees/PwrAgnt";
     const attachedCommitSha = "a".repeat(40);
     const detachedCommitSha = "b".repeat(40);
@@ -4469,7 +4662,7 @@ describe("DesktopBackendRegistry", () => {
     });
     registry.setThreadPullRequestCanonicalizer(async (prs) =>
       prs.map((pr) => pr.number === 735
-        ? { ...pr, state: "merged", lifecycleState: "merged" }
+        ? { ...pr, state: "passing", lifecycleState, headSha: attachedCommitSha, commitShas: [] }
         : pr),
     );
 
@@ -7266,6 +7459,57 @@ describe("DesktopBackendRegistry", () => {
     localIds = [];
     const cleared = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
     expect(cleared.display?.pricingPage?.rows.every((row) => row.line.priceStatus === "unpriced")).toBe(true);
+  });
+
+  it("loads an unobserved thread pricing snapshot only on pricing demand and replaces it with observed usage", async () => {
+    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] }), {
+      readThreadPricingSnapshot: vi.fn(async () => ({ model: "gpt-6.1-sol", tokens })),
+    });
+    const lines: ThreadUsageLineRecord[] = [];
+    const overlayStore = { ...createOverlayStoreMock(), readThreadPricing: vi.fn(async () => ({ lines, summaries: [] })) };
+    const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    onTestFinished(() => registry.close());
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "tools" } });
+    expect(codexClient.readThreadPricingSnapshot).not.toHaveBeenCalled();
+    const response = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(response.display?.pricingPage?.fallbackEstimate).toMatchObject({ model: "gpt-6.1-sol", modelLabel: "GPT-6.1 Sol", tokens });
+    expect(response.display?.pricingPage?.rows).toEqual([]);
+    expect(response.display?.pricingPage?.summary).toBeUndefined();
+    expect(writes).not.toHaveBeenCalled();
+    lines.push({
+      backend: "codex", threadId: "thread-1", usageLineId: "observed-turn", turnId: "turn-1", model: "gpt-6.1-sol",
+      provider: "openai", currency: "USD", createdAt: 1000, scope: "turn", source: "live", status: "finalized", priceStatus: "priced",
+      inputTokens: 100, uncachedInputTokens: 20, cachedInputTokens: 80, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110,
+      uncachedInputCostMicros: 40, cachedInputCostMicros: 8, outputCostMicros: 100, totalCostMicros: 148,
+    });
+    const observed = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(observed.display?.pricingPage?.fallbackEstimate).toBeUndefined();
+    expect(observed.display?.pricingPage?.summary?.totalCostMicros).toBe(148);
+    expect(codexClient.readThreadPricingSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it.each(["gpt-6.1-sol", "/models/bonsai.gguf"])("projects zero-cost historical estimates for declared local model %s", async (model) => {
+    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: model, label: "Declared local model" }] }), {
+      readThreadPricingSnapshot: vi.fn(async () => ({ model, tokens })),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    let localIds = [model];
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, resolveCodexLocalModelIds: () => localIds });
+    onTestFinished(() => registry.close());
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const response = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(response.display?.pricingPage?.fallbackEstimate).toMatchObject({ model, modelLabel: "Declared local model", tokens, totalCostMicros: 0 });
+    expect(response.display?.pricingPage?.summary).toBeUndefined();
+    expect(response.display?.pricingPage?.rows).toEqual([]);
+    expect(writes).not.toHaveBeenCalled();
+    localIds = [];
+    const cleared = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(cleared.display?.pricingPage?.fallbackEstimate?.totalCostMicros).toBe(model === "gpt-6.1-sol" ? 1_480 : undefined);
   });
 
   it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
@@ -25522,7 +25766,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("redacts managed local PDF paths before lifecycle title generation", async () => {
+  it.each(["direct", "queue"] as const)("redacts managed local PDF paths before lifecycle title generation via %s", async (submission) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-title-pdf-"));
     const pdfPath = path.join(root, "roadster.pdf");
     await writeFile(pdfPath, "%PDF-1.7\n", "utf8");
@@ -25544,7 +25788,7 @@ command = "pnpm dev"
       threads: [],
     });
     const originalStartTurn = codexClient.startTurn.bind(codexClient);
-    vi.spyOn(codexClient, "startTurn").mockImplementation((params) => {
+    const backendStart = vi.spyOn(codexClient, "startTurn").mockImplementation((params) => {
       const result = originalStartTurn(params);
       startTurnEntered.resolve();
       return result;
@@ -25571,7 +25815,7 @@ command = "pnpm dev"
 
     let startTurnPromise: ReturnType<typeof registry.startTurn> | undefined;
     try {
-      startTurnPromise = registry.startTurn({
+      const params = {
         backend: "codex",
         threadId: "thread-title-pdf",
         input: [
@@ -25580,8 +25824,14 @@ command = "pnpm dev"
             text: `Compare [@roadster.pdf](${pdfPath}).`,
           },
           { type: "localFile", name: "roadster.pdf", path: pdfPath },
-        ],
-      });
+        ] as AppServerTurnInputItem[],
+      } as const;
+      startTurnPromise = submission === "direct"
+        ? registry.startTurn(params)
+        : registry.submitTurn(params).then((result) => {
+            if (result.status !== "started") throw new Error("Expected immediate PDF submission.");
+            return { backend: result.entry.backend, threadId: result.entry.threadId, turnId: result.turnId };
+          });
       // PDF preparation performs real I/O. Observe backend entry rather than
       // assuming it completes within a fixed number of event-loop flushes.
       await Promise.race([startTurnEntered.promise, startTurnPromise]);
@@ -25608,6 +25858,13 @@ command = "pnpm dev"
       expect(titleService.generateTitle).not.toHaveBeenCalledWith(
         expect.objectContaining({ userPrompt: expect.stringContaining(pdfPath) }),
       );
+      expect(titleService.generateTitle).not.toHaveBeenCalledWith(
+        expect.objectContaining({ userPrompt: expect.stringContaining("thread-assets") }),
+      );
+      const providerInput = backendStart.mock.calls[0]?.[0].input;
+      const prompt = providerInput?.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+      expect(prompt).toContain("Compare @roadster.pdf.");
+      expect(JSON.stringify(providerInput)).not.toContain(pdfPath);
 
       startTurnDelay.resolve();
       await expect(startTurnPromise).resolves.toEqual({
@@ -25650,12 +25907,15 @@ command = "pnpm dev"
         {
           type: "localFile",
           name: "notes.txt",
-          path: filePath,
+          path: expect.stringContaining(path.join("thread-assets", "codex", "thread-local-file")),
           mimeType: "text/plain",
           sizeBytes: Buffer.byteLength(text),
           textPreview: text,
         },
       ]);
+      const retainedFile = codexClient.lastStartTurnParams?.input[1];
+      if (retainedFile?.type !== "localFile") throw new Error("Expected retained notes.");
+      await expect(readFile(retainedFile.path, "utf8")).resolves.toBe(text);
     } finally {
       await registry.close();
       await rm(root, { force: true, recursive: true });
@@ -26098,6 +26358,14 @@ command = "pnpm dev"
     { name: "already claimed", global: true, override: undefined, active: true, claimed: false, expected: 0 },
     { name: "failed steer is not retried", global: true, override: undefined, active: true, claimed: true, expected: 1, fail: true },
     { name: "monitor child", global: true, override: undefined, active: true, claimed: true, expected: 0, monitor: true },
+    { name: "varied PR reads", global: true, override: undefined, active: true, claimed: true, expected: 0, commands: [
+      "gh pr view 2535 --repo owner/repo --json statusCheckRollup",
+      "gh pr view 2535 --repo owner/repo --json body --jq .body",
+      "gh pr view 2535 --repo owner/repo --json url,headRefOid,body",
+    ] },
+    { name: "repeated PR status query", global: true, override: undefined, active: true, claimed: true, expected: 1, commands: [
+      "gh pr view 2535 --repo owner/repo --json statusCheckRollup",
+    ] },
   ])("delivers a monitor job suggestion only to the eligible active turn: $name", async (scenario) => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
@@ -26137,9 +26405,12 @@ command = "pnpm dev"
       const now = vi.spyOn(Date, "now");
       for (let index = 0; index < 5; index++) {
         now.mockReturnValue(1_000_000 + index * 120_000);
+        const command = scenario.commands
+          ? scenario.commands[index % scenario.commands.length]!
+          : "gh run view 123 --repo owner/repo --json status";
         await record({ backend: "codex", notification: { method: "item/completed", params: {
           threadId: "thread-1", turnId: turn.turnId,
-          item: { id: `poll-${index}`, type: "commandExecution", command: "gh run view 123 --repo owner/repo --json status", status: "completed", aggregatedOutput: "queued" },
+          item: { id: `poll-${index}`, type: "commandExecution", command, status: "completed", aggregatedOutput: "queued" },
         } } } as AgentEvent);
       }
       now.mockRestore();
@@ -27877,6 +28148,153 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each([["manual", true], ["agent", true], ["manual", false], ["agent", false]] as const)("preserves %s submission order while retaining an attachment: active=%s", async (origin, active) => {
+    const image = await stageTurnInputAttachment({ type: "localImage", name: "first.png", data: Buffer.from([1, 2, 3]) }, { backend: "codex", threadId: "order-source" });
+    const client = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const retentionEntered = createDeferred<void>();
+    const retentionRelease = createDeferred<void>();
+    const originalRetain = turnInputAttachmentFiles.ownThreadInputAttachments;
+    const retain = vi.spyOn(turnInputAttachmentFiles, "ownThreadInputAttachments").mockImplementation(async (input, owner, roots) => {
+      if (input.includes(image)) {
+        retentionEntered.resolve();
+        await retentionRelease.promise;
+      }
+      return await originalRetain(input, owner, roots);
+    });
+    const submissions: Array<Promise<unknown>> = [];
+    try {
+      if (active) await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "ordered", turnId: "active", turn: { id: "active" } } } });
+      const first = registry.submitTurn({ backend: "codex", threadId: "ordered", queueEntryId: "first-image", input: [image],
+        ...(origin === "agent" ? { messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "order-source" } } } : {}),
+      });
+      submissions.push(first);
+      await retentionEntered.promise;
+      const second = registry.submitTurn({ backend: "codex", threadId: "ordered", queueEntryId: "second-text", input: [{ type: "text", text: "Use the previous image" }] });
+      submissions.push(second);
+      await registry.submitHeldTurn({ backend: "codex", threadId: "unrelated", queueEntryId: "independent", input: [{ type: "text", text: "Other thread" }], holdReason: "fixture" });
+      expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "ordered")] ?? []).toEqual([]);
+      retentionRelease.resolve();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(secondResult.status).toBe("queued");
+      expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "ordered")]?.map((entry) => entry.queueEntryId)).toEqual(active ? ["first-image", "second-text"] : ["second-text"]);
+      if (!active) {
+        expect(firstResult.status).toBe("started");
+        expect(client.lastStartTurnParams?.input).toContainEqual(expect.objectContaining({ type: "localImage" }));
+      }
+    } finally {
+      retentionRelease.resolve();
+      await Promise.allSettled(submissions);
+      retain.mockRestore();
+      await registry.close();
+    }
+  });
+
+  it("admits the next submission before a starting provider responds", async () => {
+    const providerEntered = createDeferred<void>();
+    const providerRelease = createDeferred<void>();
+    const client = new MockBackendClient({ initializeResult: { methods: ["turn/start"] }, startTurnDelay: providerRelease.promise });
+    const start = client.startTurn.bind(client);
+    vi.spyOn(client, "startTurn").mockImplementation((params) => { providerEntered.resolve(); return start(params); });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const submissions: Array<Promise<unknown>> = [];
+    try {
+      const first = registry.submitTurn({ backend: "codex", threadId: "starting-order", input: [{ type: "text", text: "Start" }] });
+      submissions.push(first);
+      await providerEntered.promise;
+      const second = registry.submitTurn({ backend: "codex", threadId: "starting-order", queueEntryId: "next", input: [{ type: "text", text: "Next" }] });
+      submissions.push(second);
+      await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "starting-order")]?.length === 1);
+      await expect(second).resolves.toMatchObject({ status: "queued" });
+    } finally {
+      providerRelease.resolve();
+      await Promise.allSettled(submissions);
+      await registry.close();
+    }
+  });
+
+  it("owns queued attachments before source deletion and retains assets when archiving", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-owned-queue-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["turn/start"] } }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    try {
+      const original = await stageTurnInputAttachment({
+        type: "localImage", name: "queued.png", data: Buffer.from([1, 2, 3]),
+      }, { backend: "codex", threadId: "asset-source" });
+      await registry.submitHeldTurn({
+        queueEntryId: "owned-image", backend: "codex", threadId: "asset-recipient",
+        input: [original], holdReason: "fixture",
+      });
+      const queued = await registry.readQueuedTurn({ backend: "codex", threadId: "asset-recipient", queueEntryId: "owned-image" });
+      const image = queued.input[0];
+      if (image?.type !== "localImage") throw new Error("Expected an owned queued image.");
+      expect(image.path).toContain(path.join("thread-assets", "codex", "asset-recipient"));
+      expect(image.path).not.toBe(original.path);
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "asset-source" } } });
+      await expect(readFile(original.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/deleted", params: { threadId: "asset-source" } } });
+      await expect(stat(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(image.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+      registry.cancelQueuedTurn("owned-image");
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/deleted", params: { threadId: "asset-recipient" } } });
+      await expect(stat(image.path)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await registry.close();
+      if (previousHome === undefined) delete process.env.PWRAGENT_HOME;
+      else process.env.PWRAGENT_HOME = previousHome;
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["replace", "steer"] as const)("owns %s attachments before they wait in the recipient queue", async (operation) => {
+    const original = await stageTurnInputAttachment({
+      type: "localImage", name: `${operation}.png`, data: Buffer.from([1, 2, 3]),
+    }, { backend: "codex", threadId: `source-${operation}` });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: `source-${operation}` } };
+    let release!: () => void;
+    const blockedSteer = new Promise<void>((resolve) => { release = resolve; });
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) => {
+      if (steers.mock.calls.length === 1) await blockedSteer;
+      return { threadId: params.threadId, turnId: params.expectedTurnId };
+    });
+    try {
+      await discoverCodexBackendForTest(registry);
+      const target = { backend: "codex" as const, threadId: `recipient-${operation}` };
+      let queueEntryId: string;
+      if (operation === "replace") {
+        queueEntryId = "replace-image";
+        await registry.submitHeldTurn({ ...target, queueEntryId, input: [{ type: "text", text: "Initial" }], holdReason: "fixture", messageOrigin });
+        await registry.replaceQueuedAgentMessage({ ...target, queueEntryId, input: [{ type: "text", text: "Replacement" }, original], messageOrigin });
+      } else {
+        await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started", params: { threadId: target.threadId, turnId: "active", turn: { id: "active" } },
+        } });
+        await registry.submitTurn({ ...target, input: [{ type: "text", text: "Already dispatching" }], messageOrigin });
+        await waitForCondition(() => steers.mock.calls.length === 1);
+        const result = await registry.controlActiveTurn({ ...target, operation: "steer", requestId: "image-steer", expectedTurnId: "active", input: [original], messageOrigin });
+        if (!result.ok) throw new Error("Expected queued steering.");
+        queueEntryId = result.turnId;
+      }
+      const queued = await registry.readQueuedTurn({ ...target, queueEntryId });
+      const image = queued.input.find((item) => item.type === "localImage");
+      if (image?.type !== "localImage") throw new Error("Expected a queued image.");
+      expect(image.path).toContain(path.join("thread-assets", "codex", target.threadId));
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/deleted", params: { threadId: `source-${operation}` } } });
+      await expect(readFile(image.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+      registry.cancelQueuedTurn(queueEntryId);
+    } finally {
+      release();
+      await registry.close();
+    }
+  });
+
   it("materializes data URL images before starting Codex turns", async () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-turn-"));
     const previousHome = process.env.PWRAGENT_HOME;
@@ -27906,7 +28324,7 @@ command = "pnpm dev"
       expect(input).toHaveLength(1);
       expect(input?.[0]).toMatchObject({ type: "localImage" });
       const imagePath = input?.[0]?.type === "localImage" ? input[0].path : "";
-      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(imagePath).toContain(path.join("state", "thread-assets", "codex", "thread-image"));
       expect(path.basename(path.dirname(imagePath))).toBe(
         "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
       );
@@ -27957,7 +28375,7 @@ command = "pnpm dev"
       });
       const imageInput = codexClient.lastStartTurnParams?.input[1];
       const imagePath = imageInput?.type === "localImage" ? imageInput.path : "";
-      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(imagePath).toContain(path.join("state", "thread-assets", "codex", "thread-image"));
       expect(imagePath).not.toBe(sourcePath);
 
       await codexClient.emit({
@@ -33871,6 +34289,55 @@ command = "pnpm dev"
     },
   );
 
+  it.each(["thread-parent", "thread-review"])(
+    "delivers grouped agent guidance after a native review without holding the queue (%s)",
+    async (reviewThreadId) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "turn/steer", "review/start"] },
+        startReviewResult: { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+      await discoverCodexBackendForTest(registry);
+      const steer = vi.spyOn(registry, "steerTurn");
+      await registry.startReview({
+        backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" },
+      });
+      const first = await registry.submitTurn({
+        backend: "codex", threadId: "thread-parent", input: [{ type: "text", text: "Alice evidence" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "alice" } },
+      });
+      const second = await registry.submitTurn({
+        backend: "codex", threadId: "thread-parent", input: [{ type: "text", text: "Bob evidence" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } },
+      });
+      await registry.submitTurn({ backend: "codex", threadId: "thread-parent", queueEntryId: "operator-next",
+        input: [{ type: "text", text: "Operator follow-up" }],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(first.status).toBe("queued");
+      expect(second.entry.id).toBe(first.entry.id);
+      expect(steer).not.toHaveBeenCalled();
+      expect(codexClient.startTurnCallCount).toBe(0);
+      const entries = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "thread-parent")];
+      expect(entries?.map((entry) => entry.queueEntryId)).toEqual([first.entry.id, "operator-next"]);
+      expect(entries?.some((entry) => entry.manualReleaseRequired)).toBe(false);
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: reviewThreadId, turnId: "review-turn", turn: { id: "review-turn", status: "completed", output: [] },
+      } });
+      await waitForCondition(() => codexClient.startTurnCallCount === 1);
+      const delivered = codexClient.lastStartTurnParams?.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+      expect(delivered).toContain("Alice evidence");
+      expect(delivered).toContain("Bob evidence");
+      expect(steer).not.toHaveBeenCalled();
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-parent", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } });
+      await waitForCondition(() => codexClient.startTurnCallCount === 2);
+      expect(codexClient.lastStartTurnParams?.input).toEqual([{ type: "text", text: "Operator follow-up" }]);
+    },
+  );
+
   it("holds the parent queue after a distinct native review fails", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
@@ -34766,6 +35233,9 @@ command = "pnpm dev"
     } as AppServerPendingRequestNotification;
     const responsePromise = codexClient.emitRequest(request);
     await waitForCondition(() => events.length === 1);
+    expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toEqual(request);
+    expect(registry.getPendingRequestForThread({ backend: "acp:grok", threadId: "thread-1" })).toBeUndefined();
+    expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-2" })).toBeUndefined();
 
     await registry.submitServerRequest({
       backend: "codex",
@@ -34776,6 +35246,7 @@ command = "pnpm dev"
     });
 
     await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+    expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
     expect(events.map((event) => event.notification.method)).toEqual([
       "item/commandExecution/requestApproval",
       "serverRequest/resolved",
@@ -36119,7 +36590,7 @@ command = "pnpm dev"
     expect(remembered).toEqual([expect.objectContaining({
       type: "localImage",
       name: "migration.png",
-      path: expect.stringContaining("turn-input-attachments"),
+      path: expect.stringContaining(path.join("thread-assets", "acp%3Akimi", "kimi-parent")),
     })]);
     expect(JSON.stringify(remembered)).not.toContain("base64");
     await registry.publishLocalEvent({
@@ -36167,7 +36638,7 @@ command = "pnpm dev"
         expect.objectContaining({
           type: "localImage",
           name: "migration.png",
-          path: expect.stringContaining("image-inputs"),
+          path: expect.stringContaining(path.join("thread-assets", "codex", "thread-1")),
         }),
       ],
     });
@@ -36821,7 +37292,7 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
-  it("exposes in-progress handoffs and creates one child for a repeated call id", async () => {
+  it.each(["terminal", "idle"] as const)("keeps one child for a repeated call id until the %s boundary ends the turn", async (boundary) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-pending-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "worktree");
@@ -37069,17 +37540,54 @@ script = "printf setup"
     );
     expect(changedArgumentsPayload).toMatchObject({ code: "invalid_arguments" });
 
-    await registry.publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "turn/completed",
-        params: {
-          threadId: "ordinary-thread",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed", output: [] },
+    const internals = registry as unknown as {
+      acceptedDynamicToolCalls: Map<string, unknown>;
+      acceptedHandoffTaskRequests: Map<string, unknown>;
+      flushLiveThreadUsageLines: () => Promise<void>;
+    };
+    expect(internals.acceptedDynamicToolCalls.size).toBeGreaterThan(0);
+    expect(internals.acceptedHandoffTaskRequests.size).toBe(1);
+    if (boundary === "terminal") {
+      const cleanupStarted = createDeferred<void>();
+      const cleanupRelease = createDeferred<void>();
+      const flush = vi.spyOn(internals, "flushLiveThreadUsageLines")
+        .mockImplementationOnce(async () => {
+          cleanupStarted.resolve();
+          await cleanupRelease.promise;
+        });
+      const terminal = registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [] },
+          },
         },
-      },
-    });
+      });
+      try {
+        await cleanupStarted.promise;
+        // Terminal persistence still yields while the live-turn marker is set.
+        // A redelivery in that interval must reuse the original child.
+        await expect(codexClient.emitRequest(handoffCall)).resolves.toEqual(handoffResponse);
+        expect(commandRunner).toHaveBeenCalledTimes(1);
+      } finally {
+        cleanupRelease.resolve();
+        await terminal;
+        flush.mockRestore();
+      }
+    } else {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId: "ordinary-thread", status: { type: "idle" } },
+        },
+      });
+    }
+    expect(internals.acceptedDynamicToolCalls.size).toBe(0);
+    expect(internals.acceptedHandoffTaskRequests.size).toBe(0);
     const staleResponse = await codexClient.emitRequest(handoffCall);
     expect(staleResponse).toMatchObject({ success: false });
     const stalePayload = JSON.parse(
@@ -37087,6 +37595,8 @@ script = "printf setup"
     );
     expect(stalePayload).toMatchObject({ code: "forbidden" });
     expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(internals.acceptedDynamicToolCalls.size).toBe(0);
+    expect(internals.acceptedHandoffTaskRequests.size).toBe(0);
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
@@ -41131,10 +41641,342 @@ script = "printf setup"
     await registry.submitHeldTurn({ backend, threadId: "recipient", queueEntryId: "held-one", input, holdReason: "Fixture hold" });
     await registry.submitTurn({ backend, threadId: "recipient", queueEntryId: "held-two", input: [{ type: "text", text: "Next" }] });
     const content = await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" });
-    expect(content.input).toEqual(input);
+    const ownedInput = [input[0], {
+      type: "localFile", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3,
+      path: expect.stringContaining(path.join("thread-assets", encodeURIComponent(backend), "recipient")),
+    }];
+    expect(content.input).toEqual(ownedInput);
+    const retainedFile = content.input[1];
+    if (retainedFile?.type !== "localFile") throw new Error("Expected owned queued notes.");
+    await expect(readFile(retainedFile.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
     content.input.splice(0);
-    expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" })).input).toEqual(input);
+    expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" })).input).toEqual(ownedInput);
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")]?.map((entry) => entry.queueEntryId)).toEqual(["held-one", "held-two"]);
+  });
+
+  it("groups cross-thread send and steer admissions while a previous steer is dispatching", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient" } },
+    } });
+    let release!: () => void;
+    const dispatch = new Promise<void>((resolve) => { release = resolve; });
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) => {
+      if (steers.mock.calls.length === 1) await dispatch;
+      return { threadId: params.threadId, turnId: params.expectedTurnId };
+    });
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", input: [{ type: "text", text: "Already dispatching" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "first" } },
+    });
+    await waitForCondition(() => steers.mock.calls.length === 1);
+    const sends = await Promise.all(Array.from({ length: 20 }, async (_, index) => {
+      const source = { backend: "codex" as const, threadId: `sender-${index}` };
+      const input: AppServerTurnInputItem[] = [{ type: "text", text: `Evidence ${index}` }];
+      correspondenceStore.record({ id: `message-${index}`, source, destination: { backend: "codex", threadId: "recipient" }, input, createdAt: 1_000 + index, state: "sending" });
+      const messageOrigin = { kind: "agent" as const, sourceThread: { ...source, title: `Sender ${index}`, messageId: `message-${index}` } };
+      return index % 2 === 0
+        ? await registry.submitTurn({ backend: "codex", threadId: "recipient", input, messageOrigin })
+        : await registry.controlActiveTurn({ operation: "steer", backend: "codex", threadId: "recipient", requestId: `request-${index}`, expectedTurnId: "active-recipient", input, messageOrigin });
+    }));
+    const snapshot = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")];
+    expect(snapshot).toHaveLength(1);
+    const queueEntryId = snapshot![0]!.queueEntryId;
+    expect(sends).toHaveLength(20);
+    const queued = await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId });
+    const text = queued.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    for (let index = 0; index < 20; index += 1) {
+      expect(text).toContain(`Evidence ${index}`);
+      expect(text).toContain(`Sender ${index}`);
+    }
+    await registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
+      input: [{ type: "text", text: "Sender 7 consolidated evidence" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
+    });
+    expect(steers.mock.calls[0]![0].input).toEqual([{ type: "text", text: "Already dispatching" }]);
+    release();
+    await waitForCondition(() => steers.mock.calls.length === 2);
+    await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.length === 0);
+    expect(codexClient.startTurnCallCount).toBe(0);
+    const delivered = steers.mock.calls[1]![0].input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    expect(delivered).toContain("Sender 7 consolidated evidence");
+    expect(delivered).not.toContain("Evidence 7");
+    expect(delivered).toContain("Evidence 19");
+    for (let index = 0; index < 20; index += 1) {
+      expect(correspondenceStore.message({ backend: "codex", threadId: `sender-${index}` }, `message-${index}`)?.text).toContain("Receiving thread started work");
+    }
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn", delivery: "new_turn",
+      input: [{ type: "text", text: "Start separate work" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(steers).toHaveBeenCalledTimes(2);
+    expect((await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn" })).input)
+      .toEqual([{ type: "text", text: "Start separate work" }]);
+    await codexClient.emit({
+      method: "turn/completed", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient", status: "completed", output: [] } },
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+  });
+
+  it("titles a long queued message once and drops a title the input outgrew", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "recipient", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const helperTurns: Array<{ prompt: string; resolve: (title: string) => void }> = [];
+    (
+      codexClient as unknown as {
+        generateStructuredObject: (request: { prompt: string }) => Promise<unknown>;
+      }
+    ).generateStructuredObject = (request) => new Promise((resolve) => {
+      helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const longText = "Docs child: the migration guide now covers the renamed config keys and the new default port.";
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "short", input: [{ type: "text", text: "bump the lint config" }] });
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "long", input: [{ type: "text", text: longText }] });
+    const snapshot = () => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")];
+
+    await waitForCondition(() => helperTurns.length === 1);
+    expect(helperTurns[0]!.prompt).toContain(JSON.stringify(longText));
+    // The edit lands while the first helper turn is still out, so its title
+    // names text the entry no longer holds.
+    registry.updateQueuedTurnInput("long", [{ type: "text", text: `${longText}\nAlso moved the upgrade notes.` }]);
+    helperTurns[0]!.resolve("Migration guide covers renamed keys.");
+    await waitForCondition(() => helperTurns.length === 2);
+    expect(snapshot()?.find((entry) => entry.queueEntryId === "long")?.title).toBeUndefined();
+    helperTurns[1]!.resolve("Migration guide and upgrade notes");
+    await registry.queuedMessageTitlesIdle();
+
+    expect(helperTurns).toHaveLength(2);
+    expect(snapshot()?.map((entry) => [entry.queueEntryId, entry.title])).toEqual([
+      ["short", undefined],
+      ["long", "Migration guide and upgrade notes"],
+    ]);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.title !== undefined));
+    const titled = events.filter((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.title !== undefined);
+    expect(titled).toEqual([expect.objectContaining({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: expect.objectContaining({
+          threadId: "recipient",
+          queueEntryId: "long",
+          status: "queued",
+          title: "Migration guide and upgrade notes",
+        }),
+      },
+    })]);
+  });
+
+  it("shows queued-message titles on one Sub-agents row and charges them to the thread", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-queued-message-titles-");
+    const db = StateDb.open(temp.dbPath);
+    const overlayStore = new SqliteOverlayStore(db);
+    onTestFinished(() => {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "recipient", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const helperTurns: Array<{ prompt: string; resolve: (title: string) => void }> = [];
+    (
+      codexClient as unknown as {
+        generateStructuredObject: (request: { prompt: string }) => Promise<unknown>;
+      }
+    ).generateStructuredObject = (request) => new Promise((resolve) => {
+      const run = helperTurns.length + 1;
+      helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({
+        status: "ok",
+        object: { title },
+        helperThreadId: `queued-title-helper-${run}`,
+        helperTurnId: `queued-title-turn-${run}`,
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        tokenUsage: { inputTokens: 100 * run, cachedInputTokens: 20, outputTokens: 10, totalTokens: 100 * run + 10 },
+      }) });
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const firstText = "Docs child: the migration guide now covers the renamed config keys and the new default port.";
+    const secondText = "Tests child: the flaky upload spec now waits for the server ack before it asserts the row.";
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "first", input: [{ type: "text", text: firstText }] });
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "second", input: [{ type: "text", text: secondText }] });
+    await waitForCondition(() => helperTurns.length === 1);
+    const monitorId = "system:queued-message-titles:codex:recipient";
+    const readRow = async () =>
+      (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "recipient" }))
+        ?.subAgents?.filter((subAgent) => subAgent.monitorId.startsWith("system:queued-message-titles:"));
+
+    // Three runs: one lands, one is outgrown by an edit, one lands the edit.
+    const { writes } = await measureSqliteWrites(async () => {
+      helperTurns[0]!.resolve("Migration guide covers renamed keys");
+      await waitForCondition(() => helperTurns.length === 2);
+      registry.updateQueuedTurnInput("second", [{ type: "text", text: `${secondText}\nAlso retried the export spec.` }]);
+      helperTurns[1]!.resolve("Upload spec waits for ack");
+      await waitForCondition(() => helperTurns.length === 3);
+      helperTurns[2]!.resolve("Upload and export specs fixed");
+      await registry.queuedMessageTitlesIdle();
+    });
+    expectSqliteWriteBudget({ scenario: "queued-message-title-helper-row", writes,
+      note: "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200" });
+
+    expect(await readRow()).toEqual([expect.objectContaining({
+      monitorId,
+      task: "Name queued messages",
+      status: "success",
+      outcome: "success",
+      backend: "codex",
+      agentName: "PwrAgent",
+      preferredModel: "gpt-5.6-luna",
+      preferredReasoningEffort: "low",
+      monitorThreadId: "queued-title-helper-3",
+      monitorTurnId: "queued-title-turn-3",
+      lastMessage: "Named 2 queued messages. Latest: Upload and export specs fixed",
+      monitorUsage: expect.objectContaining({
+        model: "gpt-5.6-luna",
+        tokenUsage: expect.objectContaining({
+          inputTokens: 600,
+          cachedInputTokens: 60,
+          uncachedInputTokens: 540,
+          outputTokens: 30,
+          totalTokens: 630,
+        }),
+      }),
+    })]);
+    const pricing = await overlayStore.readThreadPricing({ backend: "codex", threadId: "recipient" });
+    expect(pricing.lines.map((line) => [line.sourceItemId, line.scope, line.parentThreadId, line.threadId, line.inputTokens]))
+      .toEqual(expect.arrayContaining([
+        [monitorId, "monitor", "recipient", "queued-title-helper-1", 100],
+        [monitorId, "monitor", "recipient", "queued-title-helper-2", 200],
+        [monitorId, "monitor", "recipient", "queued-title-helper-3", 300],
+      ]));
+    expect(pricing.lines).toHaveLength(3);
+    expect(pricing.lines.every((line) => line.priceStatus === "priced")).toBe(true);
+    // The Pricing rail counts helpers, not runs: three runs are one system helper.
+    expect(buildPricingSpendByModel({ lines: pricing.lines }).flatMap((provider) => provider.models))
+      .toEqual([expect.objectContaining({ model: "gpt-5.6-luna", systemHelperCount: 1, subAgentCount: 0 })]);
+    expect(events.filter((event) => event.notification.method === "thread/subAgents/updated"))
+      .toHaveLength(3);
+    expect(events.some((event) =>
+      event.notification.method === "thread/subAgents/updated"
+      && event.notification.params.threadId === "recipient")).toBe(true);
+  });
+
+  it("records a failed queued-message title and skips a helper that never ran", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "recipient", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const results: unknown[] = [
+      { status: "unavailable", reason: "codex_structured_generation_unavailable" },
+      { status: "failed", reason: "helper turn timed out" },
+    ];
+    (
+      codexClient as unknown as { generateStructuredObject: () => Promise<unknown> }
+    ).generateStructuredObject = async () => results.shift();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const longText = "Docs child: the migration guide now covers the renamed config keys and the new default port.";
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "unavailable", input: [{ type: "text", text: longText }] });
+    await registry.queuedMessageTitlesIdle();
+    expect(upsertSubAgentSpy).not.toHaveBeenCalled();
+
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "failed", input: [{ type: "text", text: `${longText} Again.` }] });
+    await registry.queuedMessageTitlesIdle();
+    expect(upsertSubAgentSpy.mock.calls.map(([call]) => call.subAgent)).toEqual([expect.objectContaining({
+      monitorId: "system:queued-message-titles:codex:recipient",
+      task: "Name queued messages",
+      status: "failed",
+      outcome: "failure",
+      lastMessage: "Latest title failed: helper turn timed out",
+    })]);
+    expect(upsertUsageLineSpy).not.toHaveBeenCalled();
+  });
+
+  it("still titles a queued message whose start was refused and held", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnErrors: [new Error("start refused")],
+      threads: ["busy", "held"].map((id) => ({
+        id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
+      })),
+    });
+    const helperTurns: Array<{ prompt: string; resolve: (title: string) => void }> = [];
+    (
+      codexClient as unknown as {
+        generateStructuredObject: (request: { prompt: string }) => Promise<unknown>;
+      }
+    ).generateStructuredObject = (request) => new Promise((resolve) => {
+      helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    for (const threadId of ["busy", "held"]) {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId, turnId: `active-${threadId}`, turn: { id: `active-${threadId}` } },
+      } });
+    }
+    const busyText = "Busy child: the release notes now list every renamed setting and its replacement key.";
+    const heldText = "Held child: the import script skips archived rows and reports how many it left behind.";
+    await registry.submitTurn({ backend: "codex", threadId: "busy", queueEntryId: "busy-entry", input: [{ type: "text", text: busyText }] });
+    await registry.submitTurn({ backend: "codex", threadId: "held", queueEntryId: "held-entry", input: [{ type: "text", text: heldText }] });
+    await waitForCondition(() => helperTurns.length === 1);
+
+    // The held thread's message is still waiting behind the busy one's helper
+    // turn when its release is refused. `blocked` forgets the request; the
+    // `held` that follows for the same entry must ask again.
+    await codexClient.emit({
+      method: "turn/completed", params: { threadId: "held", turnId: "active-held", turn: { id: "active-held", status: "completed", output: [] } },
+    });
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.status === "blocked"));
+    helperTurns[0]!.resolve("Release notes list renamed settings");
+
+    await waitForCondition(() => helperTurns.length === 2);
+    expect(helperTurns[1]!.prompt).toContain(JSON.stringify(heldText));
+    helperTurns[1]!.resolve("Import script skips archived rows");
+    await registry.queuedMessageTitlesIdle();
+    expect(
+      registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "held")]
+        ?.find((entry) => entry.queueEntryId === "held-entry")?.title,
+    ).toBe("Import script skips archived rows");
   });
 
   it("consolidates only the sender's queued message without adding a turn", async () => {
@@ -41172,10 +42014,10 @@ script = "printf setup"
       { backend: "codex" as const, threadId: "other" },
       { backend: "codex" as const, threadId: "sender", instanceId: "other-machine" },
     ]) {
-      expect(() => registry.replaceQueuedAgentMessage({ ...target, input, messageOrigin: { kind: "agent", sourceThread } })).toThrow("Only the sending thread");
+      await expect(registry.replaceQueuedAgentMessage({ ...target, input, messageOrigin: { kind: "agent", sourceThread } })).rejects.toThrow("Only the sending thread");
     }
-    expect(() => registry.replaceQueuedAgentMessage({ ...target, queueEntryId: "operator-next", input, messageOrigin: original.messageOrigin })).toThrow("Only the sending thread");
-    expect(() => registry.replaceQueuedAgentMessage({ ...target, threadId: "sender", input, messageOrigin: original.messageOrigin })).toThrow("not found or already started");
+    await expect(registry.replaceQueuedAgentMessage({ ...target, queueEntryId: "operator-next", input, messageOrigin: original.messageOrigin })).rejects.toThrow("Only the sending thread");
+    await expect(registry.replaceQueuedAgentMessage({ ...target, threadId: "sender", input, messageOrigin: original.messageOrigin })).rejects.toThrow("not found or already started");
     const replacement = await send("Complete consolidated findings", queueEntryId);
     expect(replacement.response).toMatchObject({ success: true });
     expect(replacement.payload).toMatchObject({ queueStatus: "queued", queueEntryId });
@@ -41506,7 +42348,7 @@ script = "printf setup"
       expect(remembered).toEqual([expect.objectContaining({
         type: "localImage",
         name: "screen.png",
-        path: expect.stringContaining("turn-input-attachments"),
+        path: expect.stringContaining(path.join("thread-assets", "codex", "source-thread")),
       })]);
       expect(JSON.stringify(remembered)).not.toContain("base64");
 
@@ -41547,6 +42389,7 @@ script = "printf setup"
           input: expectedInput,
         }));
       } else {
+        if (tool === "steer_thread") await waitForCondition(() => codexClient.lastSteerTurnParams !== undefined);
         const delivered = tool === "steer_thread"
           ? codexClient.lastSteerTurnParams
           : codexClient.lastStartTurnParams;
@@ -41716,11 +42559,12 @@ script = "printf setup"
         backend: "codex",
         threadId: "target-thread",
         requestId: "steer-request-1",
-        turnId: "target-turn",
-        disposition: "steered",
+        turnId: expect.stringMatching(/^thread-turn:/),
+        disposition: "queued",
         promptPreview: "Use the smaller fixture before continuing.",
       },
     });
+    await waitForCondition(() => codexClient.lastSteerTurnParams !== undefined);
     expect(codexClient.lastSteerTurnParams).toEqual({
       threadId: "target-thread",
       expectedTurnId: "target-turn",
@@ -42098,11 +42942,11 @@ script = "printf setup"
         backend: "codex",
         threadId: "target-thread",
         requestId: "steer-race",
-        turnId: "turn-1",
-        disposition: "started",
-        fallbackReason: "no_active_turn",
+        turnId: expect.stringMatching(/^thread-turn:/),
+        disposition: "queued",
       },
     });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "target-thread",
       input: [{
@@ -42121,7 +42965,7 @@ script = "printf setup"
     });
     expect(replay).toMatchObject({
       structuredContent: {
-        disposition: "started",
+        disposition: "queued",
         idempotentReplay: true,
         requestId: "steer-race",
       },
@@ -46712,19 +47556,20 @@ script = "printf setup"
           ? { archivedThreads: options.archivedThreads }
           : {}),
       });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+          "codex:target-thread": {
+            backend: "codex",
+            threadId: "target-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      });
       const registry = new DesktopBackendRegistry({
         codexClient,
-        overlayStore: createOverlayStoreMock({
-          overlays: {
-            "codex:agent-thread": createAgentOverlay(),
-            "codex:target-thread": {
-              backend: "codex",
-              threadId: "target-thread",
-              executionMode: "default",
-              extraLinkedDirectories: [],
-            },
-          },
-        }),
+        overlayStore,
       });
       const archiver = vi.fn(async (request: ArchiveThreadRequest) => ({
         backend: request.backend,
@@ -46804,11 +47649,51 @@ script = "printf setup"
         codexClient,
         handoff,
         markThreadSeen,
+        overlayStore,
         registry,
         restore,
         setThreadPin,
       };
     }
+
+    it("locks a thread with a note as the agent tool, and unlocks it", async () => {
+      const { call, overlayStore, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+
+      const locked = await call({ lockNote: "Worktree handed to the repair thread." });
+      expect(locked.success).toBe(true);
+      expect(locked.payload.mutation.changes).toEqual([
+        { field: "locked", status: "applied", to: true },
+        { field: "lock_note", status: "applied", to: "Worktree handed to the repair thread." },
+      ]);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toMatchObject({
+        note: "Worktree handed to the repair thread.",
+        source: "agent_tool",
+      });
+
+      const unlocked = await call({ locked: false });
+      expect(unlocked.payload.mutation.changes).toEqual([
+        { field: "locked", status: "applied", to: false },
+      ]);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toBeUndefined();
+      await registry.close();
+    });
+
+    it("refuses a lock note beside an unlock, and previews a lock without making it", async () => {
+      const { call, overlayStore, registry } = await setup();
+
+      const refused = await call({ locked: false, lockNote: "Parked" });
+      expect(refused.success).toBe(false);
+      expect(refused.payload.code).toBe("invalid_arguments");
+
+      const preview = await call({ locked: true, dryRun: true });
+      expect(preview.payload.mutation.changes).toEqual([
+        { field: "locked", status: "would_apply", to: true },
+      ]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "target-thread" }))?.lock)
+        .toBeUndefined();
+      await registry.close();
+    });
 
     it("archives a local thread through the app's own archive path", async () => {
       const { archiver, call, registry } = await setup();
@@ -47069,6 +47954,48 @@ script = "printf setup"
         message: "Select a Git project checkout or worktree as the destination.",
       });
       expect(codexClient.lastRenameThreadParams).toBeUndefined();
+      await registry.close();
+    });
+
+    it("puts an unlocked lock back as it was when the move is refused", async () => {
+      const { call, handoff, overlayStore, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+      const { lock } = await registry.setThreadLock({ ...target, locked: true, note: "Parked" }, { source: "operator" });
+      handoff.mockRejectedValueOnce(
+        new Error("Select a Git project checkout or worktree as the destination."),
+      );
+
+      const result = await call({ locked: false, projectPath: "/tmp/not-a-repo" });
+
+      expect(result.success).toBe(false);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toEqual(lock);
+      await registry.close();
+    });
+
+    it("resumes what the lock held only after an unlock's move lands", async () => {
+      const { call, codexClient, handoff, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+      const { lock } = await registry.setThreadLock({ ...target, locked: true, note: "Parked" }, { source: "operator" });
+      await registry.submitHeldTurn({
+        ...target,
+        input: [{ type: "text", text: "Held while parked" }],
+        queueEntryId: "held-while-parked",
+        holdReason: threadLockRefusalMessage(lock!),
+      });
+      let startsDuringMove: number | undefined;
+      handoff.mockImplementationOnce(async () => {
+        // Give a drain scheduled by the unlock every chance to run.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        startsDuringMove = codexClient.startTurnCallCount;
+        return {} as HandoffThreadWorkspaceResponse;
+      });
+
+      const result = await call({ locked: false, projectPath: "/Users/fixture-user/repos/app" });
+
+      expect(result.success).toBe(true);
+      expect(startsDuringMove).toBe(0);
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
       await registry.close();
     });
 
@@ -48368,6 +49295,26 @@ script = "printf setup"
       ],
     });
 
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: {
+            id: `${monitorId}:created`,
+            type: "taskMonitorCreated",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              parentTurnId: "turn-1",
+              task: "Watch PR #123 checks until they finish.",
+            },
+          },
+        },
+      },
+    }));
+
     const progressEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
@@ -48452,6 +49399,19 @@ script = "printf setup"
 
     expect(completionResponse).toMatchObject({ success: true });
     expect(codexClient.injectedThreadItems).toHaveLength(0);
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: expect.objectContaining({
+            type: "taskMonitorCompletion",
+            data: expect.objectContaining({ monitorId, parentTurnId: "turn-1", outcome: "failure" }),
+          }),
+        }),
+      }),
+    }));
     const completionUsageEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
@@ -48737,6 +49697,82 @@ script = "printf setup"
       ],
     });
     await registry.close();
+  });
+
+  it("holds a task monitor's result for a locked parent and delivers it on unlock", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(() => registry.close());
+    const turnEvent = async (method: "turn/started" | "turn/completed") =>
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method,
+          params: {
+            threadId: "thread-1",
+            turnId: "parent-turn",
+            turn: method === "turn/started"
+              ? { id: "parent-turn" }
+              : { id: "parent-turn", status: "completed", output: [] },
+          },
+        },
+      } as AgentEvent);
+    const toolCall = async (threadId: string, tool: string, args: Record<string, unknown>) => {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId,
+          turnId: threadId === "thread-1" ? "parent-turn" : "turn-1",
+          callId: `call-${tool}`,
+          requestId: `call-${tool}`,
+          namespace: "pwragent_task_monitors",
+          tool,
+          arguments: args,
+        },
+      } as AppServerPendingRequestNotification);
+      return {
+        response,
+        payload: JSON.parse(
+          (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+        ) as Record<string, unknown>,
+      };
+    };
+    await turnEvent("turn/started");
+    const created = await toolCall("thread-1", "create_monitor_delegation", {
+      task: "Watch an asynchronous task until it finishes.",
+    });
+    await turnEvent("turn/completed");
+    await registry.setThreadLock({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+      note: "Worktree handed to the repair thread.",
+    }, { source: "operator" });
+
+    const completed = await toolCall("monitor-thread", "complete_monitoring", {
+      monitorId: created.payload.monitorId,
+      outcome: "success",
+      summary: "The monitored task finished.",
+    });
+
+    expect(completed.response).toMatchObject({ success: true });
+    expect(completed.payload).toMatchObject({ parentTurn: { status: "queued", position: 1 } });
+    // Only the monitor's own turn has started.
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.setThreadLock({ backend: "codex", threadId: "thread-1", locked: false }, { source: "operator" });
+    await expect.poll(() => codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [{ type: "text", text: expect.stringContaining("The monitored task finished.") }],
+    });
   });
 
   it("lets only the active parent cancel a managed monitor without waking another turn", async () => {
@@ -51452,6 +52488,56 @@ script = "printf setup"
     await registry.close();
   });
 
+  it.each([true, false])("cleans every deleted descendant before forgetting family archive states: provider success=%s", async (succeeds) => {
+    const day = 86_400_000;
+    const family: AppServerThreadSummary[] = ["family-root", "family-child", "family-grandchild"].map((id, index, ids) => ({
+      id, title: id, titleSource: "explicit", source: "codex", threadStatus: "notLoaded", linkedDirectories: [],
+      updatedAt: Date.now() - 40 * day, archivedAt: Date.now() - 31 * day,
+      ...(index > 0 ? { codexNativeSubAgent: { parentThreadId: ids[index - 1]! } } : {}),
+    }));
+    let states: ThreadOverlayState[] = family.map((thread) => ({ backend: "codex", threadId: thread.id, extraLinkedDirectories: [], archiveRetentionStartedAt: Date.now() - 31 * day }));
+    const overlays = Object.fromEntries(states.map((state) => [buildThreadIdentityKey(state.backend, state.threadId), state]));
+    const assets: string[] = [];
+    const previews: string[] = [];
+    for (const thread of family) {
+      const asset = await stageTurnInputAttachment({ type: "localImage", name: "image.png", data: Buffer.from([1, 2, 3]) }, { backend: thread.source, threadId: thread.id });
+      assets.push(asset.path);
+      const preview = resolveActiveProfilePath(`state/thread-images/codex/${thread.id}/preview.png`);
+      await mkdir(path.dirname(preview), { recursive: true });
+      await writeFile(preview, Buffer.from([1, 2, 3]));
+      previews.push(preview);
+    }
+    const overlayStore = Object.assign(createOverlayStoreMock({ overlays }), {
+      listThreadArchiveStates: vi.fn(async () => states), observeArchivedThreads: vi.fn(async () => {}),
+      forgetThreadArchiveStates: vi.fn(async () => {
+        for (const asset of [...assets, ...previews]) await expect(stat(asset)).rejects.toMatchObject({ code: "ENOENT" });
+        states = [];
+      }),
+    });
+    const client = Object.assign(new MockBackendClient({ threads: [], archivedThreads: [family[0]!] }), {
+      deleteThread: vi.fn(async () => {
+        if (!succeeds) throw new Error("Fixture provider deletion failed.");
+        return { threadId: family[0]!.id };
+      }),
+      readThreadSummary: vi.fn(async (id: string) => family.find((thread) => thread.id === id)!),
+    });
+    vi.spyOn(client, "listNativeSubAgentThreads").mockImplementation(async (params) => (params as { archived?: boolean })?.archived ? family.slice(1) : []);
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, enabled: false, retentionDays: 30 }),
+    });
+    try {
+      await registry.sweepInactiveThreads();
+      expect(client.deleteThread).toHaveBeenCalledExactlyOnceWith({ threadId: family[0]!.id });
+      if (succeeds) {
+        for (const asset of [...assets, ...previews]) await expect(stat(asset)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(states).toEqual([]);
+      } else {
+        for (const asset of [...assets, ...previews]) await expect(readFile(asset)).resolves.toEqual(Buffer.from([1, 2, 3]));
+        expect(overlayStore.forgetThreadArchiveStates).not.toHaveBeenCalled();
+      }
+    } finally { await registry.close(); }
+  });
+
   it.each(["delete", "pin", "view", "restore", "activity", "policy"])("revalidates expired archive deletion at the provider boundary: %s", async (action) => {
     const day = 86_400_000;
     const thread: AppServerThreadSummary = {
@@ -51538,6 +52624,38 @@ script = "printf setup"
       await registry.sweepInactiveThreads();
       expect(archive).toHaveBeenCalledTimes(1);
     } finally { await registry.close(); }
+  });
+
+  it("counts scratch projects against one shared project limit", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-scratch-")));
+    const projects = path.join(root, ".pwragent", "profiles", "default", "projects");
+    const threads: AppServerThreadSummary[] = [];
+    for (const [index, suffix] of ["aaaaaa", "bbbbbb", "cccccc"].entries()) {
+      // Real directories outside any Git repository, like created scratch projects.
+      const cwd = path.join(projects, `2026-01-0${index + 1}-${suffix}`);
+      await mkdir(cwd, { recursive: true });
+      threads.push({
+        id: `scratch-${suffix}`, title: `Scratch ${suffix}`, titleSource: "explicit", source: "codex",
+        threadStatus: "notLoaded", updatedAt: Date.now() - (40 - index) * 86_400_000,
+        linkedDirectories: [{ id: cwd, kind: "local", label: path.basename(cwd), path: cwd }],
+      });
+    }
+    const client = Object.assign(new MockBackendClient({ threads, archivedThreads: [] }), {
+      readThreadSummary: vi.fn(async (threadId: string) => threads.find((thread) => thread.id === threadId)!),
+    });
+    const registry = new DesktopBackendRegistry({
+      getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "count", keepPerProject: 1 }),
+      codexClient: client, overlayStore: createOverlayStoreMock(),
+    });
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.sweepInactiveThreads();
+      expect(archive.mock.calls.map(([request]) => request.threadId).sort()).toEqual(["scratch-aaaaaa", "scratch-bbbbbb"]);
+      expect(registry.getThreadArchiveSweepStatus()).toEqual(expect.objectContaining({ archived: 2, failed: 0 }));
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("auto archives a clean local branch worktree, retains its snapshot, and restores its files", async () => {
@@ -59744,4 +60862,70 @@ it("serves owner display panels without replaying the provider transcript", asyn
     if (resource === "subagents") expect(result.display?.subAgents?.[0]?.task).toBe("A displayed task");
   }
   expect(codexClient.readThreadCalls).toEqual([]);
+});
+
+describe("mark_project_read dynamic tool", () => {
+  async function setup() {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
+    });
+    onTestFinished(() => registry.close());
+    const markProjectRead = vi.fn(async () => ({
+      projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140,
+    }));
+    registry.setAgentThreadActions({ markProjectRead, archiveThread: vi.fn(), setThreadPin: vi.fn(), markThreadSeen: vi.fn() });
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+      threadId: "agent-thread", turnId: "turn-1", turn: { id: "turn-1" },
+    } } });
+    const call = async (args: Record<string, unknown>, turnId = "turn-1") => {
+      const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "agent-thread", turnId, callId: "bulk-call", requestId: "bulk-call",
+        namespace: "pwragent", tool: "mark_project_read", arguments: args,
+      } } as AppServerPendingRequestNotification) as { success: boolean; contentItems: Array<{ text: string }> };
+      return { success: response.success, payload: JSON.parse(response.contentItems[0]!.text) };
+    };
+    return { registry, call, markProjectRead };
+  }
+
+  it("dispatches one project action without enumerating target threads", async () => {
+    const { call, markProjectRead } = await setup();
+    expect(await call({ projectKey: "directory:/repo" })).toEqual({ success: true, payload: { projectRead: {
+      projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140,
+    } } });
+    expect(markProjectRead).toHaveBeenCalledExactlyOnceWith({ projectKey: "directory:/repo" });
+  });
+
+  it.each([{}, { projectKey: " " }, { projectKey: 1 }, { projectKey: "directory:/repo", instanceId: " " },
+    { projectKey: "directory:/repo", archive: true }])("rejects invalid project arguments %j without mutations", async (args) => {
+    const { call, markProjectRead } = await setup();
+    expect(await call(args)).toMatchObject({ success: false, payload: { code: "invalid_arguments" } });
+    expect(markProjectRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects a call outside the active turn", async () => {
+    const { call, markProjectRead } = await setup();
+    expect(await call({ projectKey: "directory:/repo" }, "stale-turn")).toMatchObject({ success: false });
+    expect(markProjectRead).not.toHaveBeenCalled();
+  });
+
+  it("enforces the messaging permission gate before applying the bulk action", async () => {
+    const { registry, call, markProjectRead } = await setup();
+    const checkDynamicToolPermission = vi.fn(() => ({ owns: true, allowed: false, permission: "thread.control.organize" }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
+    expect(await call({ projectKey: "directory:/repo", instanceId: "peer" })).toMatchObject({ success: false });
+    expect(checkDynamicToolPermission).toHaveBeenCalledWith(expect.objectContaining({
+      category: "thread_inspection", tool: "mark_project_read", arguments: { projectKey: "directory:/repo", instanceId: "peer" },
+    }));
+    expect(markProjectRead).not.toHaveBeenCalled();
+  });
+
+  it("returns an owner error without another attempt", async () => {
+    const { call, markProjectRead } = await setup();
+    markProjectRead.mockRejectedValue(new Error("Owner directory membership is still checking"));
+    expect(await call({ projectKey: "directory:/repo" })).toMatchObject({ success: false, payload: {
+      code: "internal_error", message: "Owner directory membership is still checking",
+    } });
+    expect(markProjectRead).toHaveBeenCalledTimes(1);
+  });
 });

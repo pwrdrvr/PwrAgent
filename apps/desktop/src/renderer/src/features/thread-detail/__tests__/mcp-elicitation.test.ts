@@ -5,6 +5,7 @@ import {
   canAcceptMcpElicitation,
   createMcpElicitationState,
   redactDisplayValue,
+  readMcpApprovalPersistence,
   updateMcpFieldValue,
 } from "../mcp-elicitation";
 
@@ -31,6 +32,70 @@ function buildRequest(
 }
 
 describe("MCP elicitation helpers", () => {
+  it.each(["session", "always"] as const)("returns the advertised %s approval grant to the server", (persist) => {
+    const state = createMcpElicitationState(buildRequest({
+      serverName: "cua_repl",
+      _meta: {
+        codex_approval_kind: "mcp_tool_call",
+        connector_id: "computer-use",
+        tool_params: { app: "Electron" },
+        persist: ["session", "always"],
+      },
+    }))!;
+
+    expect(buildMcpElicitationResponse(state, "accept", persist)).toEqual({
+      action: "accept",
+      content: {},
+      _meta: { persist },
+    });
+    expect(buildMcpElicitationResponse(state, "decline", persist)._meta).toBeNull();
+    expect(buildMcpElicitationResponse(state, "cancel", persist)._meta).toBeNull();
+  });
+
+  it("rejects persistence the approval did not advertise", () => {
+    const state = createMcpElicitationState(buildRequest({
+      _meta: { codex_approval_kind: "mcp_tool_call", persist: "session" },
+    }))!;
+    expect(() => buildMcpElicitationResponse(state, "accept", "always")).toThrow(/persistence/);
+  });
+
+  it.each([
+    { persist: "session", expected: ["session"] },
+    { persist: "always", expected: ["always"] },
+    { persist: ["session", "always"], expected: ["session", "always"] },
+    { persist: ["session", "unrestricted"], expected: [] },
+    { persist: [], expected: [] },
+    { persist: true, expected: [] },
+    { persist: undefined, expected: [] },
+  ])("offers only valid advertised scopes: $persist", ({ persist, expected }) => {
+    const state = createMcpElicitationState(buildRequest({
+      _meta: { codex_approval_kind: "mcp_tool_call", persist },
+    }))!;
+    expect(readMcpApprovalPersistence(state)).toEqual(expected);
+  });
+
+  it.each([
+    { _meta: { persist: "always" } },
+    { mode: "url" as const, url: "https://example.com/login", elicitationId: "login" },
+    { requestedSchema: { type: "object" as const, properties: { approved: { type: "boolean" } } } },
+  ])("keeps questions and login requests interactive without remembered grants", (params) => {
+    const state = createMcpElicitationState(buildRequest({
+      _meta: { codex_approval_kind: "mcp_tool_call", persist: "always" },
+      ...params,
+    }))!;
+    expect(readMcpApprovalPersistence(state)).toEqual([]);
+    expect(() => buildMcpElicitationResponse(state, "accept", "always")).toThrow(/persistence/);
+  });
+
+  it("supports the browser origin approval metadata without approving other servers", () => {
+    const request = buildRequest({
+      serverName: "browser-use", _meta: { origin: "https://example.com", persist: "always" },
+    });
+    expect(readMcpApprovalPersistence(createMcpElicitationState(request)!)).toEqual(["always"]);
+    request.params.serverName = "unrelated-form";
+    expect(readMcpApprovalPersistence(createMcpElicitationState(request)!)).toEqual([]);
+  });
+
   it("accepts empty-schema form approvals with MCP response shape", () => {
     const state = createMcpElicitationState(buildRequest({}));
 

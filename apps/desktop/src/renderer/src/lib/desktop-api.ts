@@ -43,6 +43,7 @@ import type {
 } from "../../../shared/github-pr-access";
 import type {
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalErrorEvent,
@@ -243,6 +244,8 @@ import type {
   SetDirectoryThreadsCollapsedResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -366,6 +369,8 @@ import type {
   ListWorktreeUnpublishedCommitsResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
+  ReadWorktreeImageRequest,
+  ReadWorktreeImageResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -448,6 +453,8 @@ import type {
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
   DesktopMessagingContactLookupRequest,
@@ -1204,6 +1211,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;
+  showIntegratedTerminalContextMenu?: (
+    request: IntegratedTerminalContextMenuRequest,
+  ) => Promise<void>;
   writeIntegratedTerminal?: (
     request: IntegratedTerminalWriteRequest,
   ) => Promise<void>;
@@ -1253,6 +1263,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadReaction?: (
     request: SetThreadReactionRequest
   ) => Promise<SetThreadReactionResponse>;
+  setThreadLock?: (
+    request: SetThreadLockRequest,
+  ) => Promise<SetThreadLockResponse>;
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;
@@ -1376,6 +1389,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getWorktreeUnpublishedCommitDiff?: (
     request: GetWorktreeUnpublishedCommitDiffRequest
   ) => Promise<GetWorktreeUnpublishedCommitDiffResponse>;
+  /** One side of an image diff, for the Edits rail's previews and lightbox. */
+  readWorktreeImage?: (
+    request: ReadWorktreeImageRequest
+  ) => Promise<ReadWorktreeImageResponse>;
   getGlabStatus?: (request?: GetGlabStatusRequest) => Promise<GlabStatus>;
   pickGlabCommand?: () => Promise<PickGhCommandResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
@@ -1513,6 +1530,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onAppearanceChanged?: (
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
+      darkTheme: DesktopDarkTheme;
+      lightTheme: DesktopLightTheme;
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;

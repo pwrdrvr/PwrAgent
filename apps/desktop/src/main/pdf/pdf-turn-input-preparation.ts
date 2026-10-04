@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { normalizeExplicitLocalFileReferencePath } from "../explicit-local-file-reference";
 import type {
   AppServerFileInputItem,
   AppServerLocalFileInputItem,
@@ -410,7 +409,7 @@ function redactConsumedLocalPdfReferences(
       text: item.text.replace(
         /\[@([^\]]+)\]\(([^)]*)\)/gu,
         (reference, name: string, value: string) => {
-          const referencePath = normalizeExplicitLocalReferencePath(value);
+          const referencePath = normalizeExplicitLocalFileReferencePath(value);
           return referencePath && consumedLocalPdfPaths.has(referencePath)
             ? `@${name}`
             : reference;
@@ -420,37 +419,8 @@ function redactConsumedLocalPdfReferences(
   });
 }
 
-function normalizeExplicitLocalReferencePath(value: string): string | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.startsWith("file://")) {
-    try {
-      return normalizeLocalPdfPath(fileURLToPath(trimmed));
-    } catch {
-      return undefined;
-    }
-  }
-  const decoded = decodeUriComponentOrOriginal(trimmed);
-  const expanded = decoded === "~"
-    ? homedir()
-    : decoded.startsWith("~/")
-      ? path.join(homedir(), decoded.slice(2))
-      : decoded;
-  return path.isAbsolute(expanded) ? normalizeLocalPdfPath(expanded) : undefined;
-}
-
 function normalizeLocalPdfPath(value: string): string {
   return path.resolve(value);
-}
-
-function decodeUriComponentOrOriginal(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
 }
 
 function insertPdfNotes(

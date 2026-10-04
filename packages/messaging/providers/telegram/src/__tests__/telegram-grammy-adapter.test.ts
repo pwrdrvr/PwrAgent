@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { InputFile } from "grammy";
 import {
   adaptGrammyBot,
   TelegramAdapter,
@@ -9,6 +10,7 @@ import {
   type TelegramSendChatActionRequest,
   type TelegramSendDocumentRequest,
   type TelegramSendMessageRequest,
+  type TelegramSendRichMessageRequest,
   type TelegramSendPhotoRequest,
   type TelegramUnpinChatMessageRequest,
 } from "../telegram-adapter.ts";
@@ -23,6 +25,31 @@ import {
 } from "@pwragent/messaging-interface";
 
 describe("adaptGrammyBot", () => {
+  it("uploads rich media through grammY InputFile for both sends and edits", async () => {
+    const grammyBot = createGrammyBot();
+    grammyBot.api.sendRichMessage = vi.fn(async () => ({ chat: { id: 42, type: "private" as const }, message_id: 9 }));
+    const bot = adaptGrammyBot(grammyBot);
+    const rich = {
+      html: '<img src="tg://photo?id=photo"/><tg-document src="tg://document?id=file"></tg-document>',
+      media: [
+        { id: "photo", media: { type: "photo" as const, media: new Uint8Array([1, 2]), filename: "screenshot.png" } },
+        { id: "file", media: { type: "document" as const, media: new Uint8Array([3, 4]), filename: "report.csv" } },
+        { id: "remote", media: { type: "photo" as const, media: "https://example.com/chart.png" } },
+      ],
+    };
+    await bot.api.sendRichMessage!({ chat_id: 42, rich_message: rich });
+    await bot.api.editMessageText({ chat_id: 42, message_id: 9, text: "Fallback", rich_message: rich });
+    for (const request of [grammyBot.api.sendRichMessage.mock.calls[0]?.[1], grammyBot.api.editMessageText.mock.calls[0]?.[2]]) {
+      expect(request).toMatchObject({ html: rich.html });
+      const media = (request as { media: Array<{ media: { media: unknown } }> }).media;
+      expect(media[0]?.media.media).toBeInstanceOf(InputFile);
+      expect(media[0]?.media.media).toMatchObject({ filename: "screenshot.png" });
+      expect(media[1]?.media.media).toBeInstanceOf(InputFile);
+      expect(media[1]?.media.media).toMatchObject({ filename: "report.csv" });
+      expect(media[2]?.media.media).toBe("https://example.com/chart.png");
+    }
+  });
+
   it("maps object-shaped adapter calls to grammY positional API calls", async () => {
     const grammyBot = createGrammyBot();
     const bot = adaptGrammyBot(grammyBot);
@@ -41,6 +68,13 @@ describe("adaptGrammyBot", () => {
       parse_mode: "HTML",
       text: "Choose a thread",
     });
+    await bot.api.sendRichMessage!({
+      chat_id: 42,
+      message_thread_id: 9,
+      disable_notification: true,
+      reply_parameters: { message_id: 200 },
+      rich_message: { html: "<h1>Stats</h1>" },
+    });
     await bot.api.createForumTopic({
       chat_id: 42,
       name: "Thread topic",
@@ -57,12 +91,19 @@ describe("adaptGrammyBot", () => {
       chat_id: 42,
       message_thread_id: 9,
     });
+    await bot.api.deleteMessage!({ chat_id: 42, message_id: 8 });
     await bot.api.getChatMember(42, 123);
     await bot.api.editMessageText({
       chat_id: 42,
       message_id: 7,
       parse_mode: "HTML",
       text: "Binding active",
+    });
+    await bot.api.editMessageText({
+      chat_id: 42,
+      message_id: 7,
+      text: "Readable API fallback",
+      rich_message: { html: "<h1>Stats</h1>" },
     });
     await bot.api.editForumTopic({
       chat_id: 42,
@@ -113,6 +154,11 @@ describe("adaptGrammyBot", () => {
         parse_mode: "HTML",
       },
     );
+    expect(grammyBot.api.sendRichMessage).toHaveBeenCalledWith(
+      42,
+      { html: "<h1>Stats</h1>" },
+      { message_thread_id: 9, disable_notification: true, reply_parameters: { message_id: 200 } },
+    );
     expect(grammyBot.api.createForumTopic).toHaveBeenCalledWith(
       42,
       "Thread topic",
@@ -120,6 +166,7 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.closeForumTopic).toHaveBeenCalledWith(42, 9);
     expect(grammyBot.api.reopenForumTopic).toHaveBeenCalledWith(42, 9);
     expect(grammyBot.api.deleteForumTopic).toHaveBeenCalledWith(42, 9);
+    expect(grammyBot.api.deleteMessage).toHaveBeenCalledWith(42, 8);
     expect(grammyBot.api.getChatMember).toHaveBeenCalledWith(42, 123);
     expect(grammyBot.api.editMessageText).toHaveBeenCalledWith(
       42,
@@ -155,6 +202,7 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.answerCallbackQuery).toHaveBeenCalledWith("callback-1", {
       text: "Done",
     });
+    expect(grammyBot.api.editMessageText).toHaveBeenCalledWith(42, 7, { html: "<h1>Stats</h1>" }, {});
     expect(grammyBot.api.pinChatMessage).toHaveBeenCalledWith(42, 7, {
       disable_notification: true,
     });
@@ -162,6 +210,708 @@ describe("adaptGrammyBot", () => {
       message_thread_id: 9,
     });
     expect(grammyBot.api.unpinChatMessage).toHaveBeenCalledWith(42, 7, {});
+  });
+});
+
+describe("TelegramAdapter rich messages", () => {
+  const adapters: TelegramAdapter[] = [];
+  afterEach(async () => {
+    await Promise.all(adapters.splice(0).map((adapter) => adapter.stop()));
+    vi.useRealTimers();
+  });
+  const markdown = "# Downloads\n\n| Asset | Count |\n| --- | ---: |\n| ZIP | **177** |\n\n- [x] Reported";
+  const intent = {
+    id: "stats", kind: "message" as const, createdAt: 1,
+    role: "assistant" as const,
+    parts: [{ type: "text" as const, text: markdown, markdown: "markdown" as const }],
+    audit: {
+      actor: { platformUserId: "42" },
+      channel: {
+        channel: "telegram" as const,
+        conversation: { id: "77", kind: "topic" as const, parentId: "-100123" },
+      },
+      occurredAt: 1,
+    },
+  };
+
+  function harness(now?: () => number) {
+    const api = fakeTelegramApi();
+    const send = vi.spyOn(api, "sendMessage");
+    const edit = vi.spyOn(api, "editMessageText");
+    const rich = vi.fn(async (_request: TelegramSendRichMessageRequest) => ({
+      chat: { id: -100123, type: "supergroup" as const }, message_id: 300,
+    }));
+    api.sendRichMessage = rich;
+    const adapter = new TelegramAdapter({
+      api,
+      config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
+      now,
+      store: fakeCallbackStore(),
+    });
+    adapters.push(adapter);
+    return { api, adapter, send, edit, rich };
+  }
+
+  it("combines text, photos, documents and a native footer in content order", async () => {
+    const { api, adapter, rich, send } = harness();
+    const photo = vi.spyOn(api, "sendPhoto");
+    const file = vi.spyOn(api, "sendDocument");
+    const imageBytes = new Uint8Array([1, 2, 3]);
+    const fileBytes = new Uint8Array([4, 5]);
+    const result = await adapter.deliver({
+      ...intent, attribution: { label: "Agent: Reporter" },
+      parts: [
+        { type: "text", text: "Evidence **below**", markdown: "markdown" },
+        { type: "image", url: "", data: imageBytes, mimeType: "image/png", name: "chart.png", alt: "Chart <caption>" },
+        { type: "text", text: "Download the data:", markdown: "plain" },
+        { type: "file", name: "stats.csv", data: fileBytes, description: "Raw & complete" },
+      ],
+    });
+    expect(result.outcome).toBe("presented");
+    expect(result.surface?.id).toBe("300");
+    expect(rich).toHaveBeenCalledTimes(1);
+    const message = rich.mock.calls[0]![0].rich_message;
+    expect(message.html).toBe('<p>Evidence <b>below</b></p>\n<figure><img src="tg://photo?id=part_1"/><figcaption>Chart &lt;caption&gt;</figcaption></figure>\n<p>Download the data:</p>\n<figure><tg-document src="tg://document?id=part_3"></tg-document><figcaption>stats.csv — Raw &amp; complete</figcaption></figure>\n<footer><i>Agent: Reporter</i></footer>');
+    expect(message.media).toEqual([
+      { id: "part_1", media: { type: "photo", media: imageBytes, filename: "chart.png" } },
+      { id: "part_3", media: { type: "document", media: fileBytes, filename: "stats.csv" } },
+    ]);
+    expect(send).not.toHaveBeenCalled();
+    expect(photo).not.toHaveBeenCalled();
+    expect(file).not.toHaveBeenCalled();
+  });
+
+  it("falls back with every mixed attachment after definite rich rejection", async () => {
+    const { api, adapter, rich, send } = harness();
+    const photo = vi.spyOn(api, "sendPhoto");
+    const file = vi.spyOn(api, "sendDocument");
+    rich.mockRejectedValue({ error_code: 400, description: "Rich uploads unsupported" });
+    const result = await adapter.deliver({
+      ...intent,
+      parts: [
+        { type: "text", text: "**Evidence**", markdown: "markdown" },
+        { type: "image", url: "data:image/png;base64,AQID", name: "chart.png" },
+        { type: "file", name: "report.csv", data: new Uint8Array([4, 5]), description: "Full & raw" },
+        { type: "image", url: "https://example.com/second.png" },
+      ],
+    });
+    expect(result.outcome).toBe("presented");
+    expect(send).not.toHaveBeenCalled();
+    expect(photo).toHaveBeenCalledTimes(2);
+    expect(file).toHaveBeenCalledTimes(1);
+    expect(photo.mock.calls[0]?.[0]).toMatchObject({ caption: "<b>Evidence</b>\n\nreport.csv: Full &amp; raw", filename: "chart.png", photo: new Uint8Array([1, 2, 3]) });
+    expect(file.mock.calls[0]?.[0]).toMatchObject({ filename: "report.csv", document: new Uint8Array([4, 5]) });
+    expect(photo.mock.invocationCallOrder[0]).toBeLessThan(file.mock.invocationCallOrder[0]!);
+    expect(file.mock.invocationCallOrder[0]).toBeLessThan(photo.mock.invocationCallOrder[1]!);
+  });
+
+  it("keeps standalone media regular and declines oversized media bundles", async () => {
+    const { api, adapter, rich } = harness();
+    const photo = vi.spyOn(api, "sendPhoto");
+    await adapter.deliver({ ...intent, parts: [{ type: "image", url: "https://example.com/one.png", alt: "Standalone" }] });
+    await adapter.deliver({ ...intent, parts: [
+      { type: "text", text: "Collection" },
+      ...Array.from({ length: 51 }, (_, index) => ({ type: "image" as const, url: `https://example.com/${index}.png` })),
+    ] });
+    expect(rich).not.toHaveBeenCalled();
+    expect(photo).toHaveBeenCalledTimes(52);
+  });
+
+  it("sends one rich message directly in the same topic and pins its surface", async () => {
+    const { api, adapter, send, rich } = harness();
+    const pin = vi.spyOn(api, "pinChatMessage");
+    const result = await adapter.deliver({ ...intent, delivery: { pin: true } });
+    expect(result.outcome).toBe("pinned");
+    expect(result.surface?.id).toBe("300");
+    expect(send).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(rich).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: -100123, message_thread_id: 77,
+      rich_message: { html: expect.stringContaining("<table bordered striped compact>") },
+    }));
+    expect(rich.mock.calls[0]?.[0]).not.toHaveProperty("reply_parameters");
+    expect(rich.mock.calls[0]?.[0]).not.toHaveProperty("disable_notification");
+    expect(pin).toHaveBeenCalledWith(expect.objectContaining({ message_id: 300 }));
+  });
+
+  it.each([400, 404, 501])("sends readable text only after rich API rejection %s", async (errorCode) => {
+    const { adapter, send, rich } = harness();
+    rich.mockRejectedValue({ error_code: errorCode, description: "Unsupported rich message" });
+    const result = await adapter.deliver({ ...intent, attribution: { label: "Agent: Downloads" } });
+    expect(result.outcome).toBe("presented");
+    expect(result.surface?.id).toBe("200");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(rich.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]!);
+    expect(send.mock.calls[0]?.[0].text).toBe("<b>Downloads</b>\n\n• ZIP\n  Count: <b>177</b>\n\n☑ Reported\n\n<i>Agent: Downloads</i>");
+  });
+
+  it("includes bound Agent attribution in a single rich DM response", async () => {
+    const { adapter, send, rich } = harness();
+    await adapter.deliver({
+      ...intent, attribution: { label: "Agent: Messaging helper" },
+      audit: {
+        ...intent.audit,
+        channel: { channel: "telegram", conversation: { id: "42", kind: "dm" } },
+      },
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 42, message_thread_id: undefined,
+      rich_message: { html: expect.stringContaining("<footer><i>Agent: Messaging helper</i></footer>") },
+    }));
+  });
+
+  it("reports failure when both rich and regular fallback delivery fail", async () => {
+    const { adapter, send, rich } = harness();
+    send.mockRejectedValue(new Error("fallback failed"));
+    rich.mockRejectedValue({ error_code: 400, description: "Unsupported rich message" });
+    expect((await adapter.deliver(intent)).outcome).toBe("failed");
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("honours rich retry_after without immediately sending a second request", async () => {
+    const { adapter, send, rich } = harness(() => 1000);
+    const onRateLimit = vi.fn();
+    adapter.onRateLimit(onRateLimit);
+    rich.mockRejectedValue({ error_code: 429, parameters: { retry_after: 2 } });
+    expect((await adapter.deliver(intent)).outcome).toBe("failed");
+    expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: false }));
+    const update = await adapter.deliver({
+      id: "next-stream", kind: "stream_update", createdAt: 1,
+      audit: intent.audit, text: "Working", markdown: "markdown",
+      stream: { key: "next-stream", sequence: 1, isFinal: false },
+    });
+    expect(update.outcome).toBe("discarded");
+    expect(send).not.toHaveBeenCalled();
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not duplicate an ambiguously delivered rich message after a timeout", async () => {
+    const { adapter, send, rich } = harness();
+    rich.mockRejectedValue(new Error("Request timed out after sending"));
+    expect((await adapter.deliver(intent)).outcome).toBe("failed");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("supports injected older APIs without the rich endpoint", async () => {
+    const { api, adapter, send, rich } = harness();
+    delete api.sendRichMessage;
+    expect((await adapter.deliver(intent)).outcome).toBe("presented");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("leaves ordinary formatting and oversized structured messages on the regular path", async () => {
+    const { adapter, send, rich } = harness();
+    await adapter.deliver({ ...intent, parts: [{ type: "text", text: "**bold** and `code`", markdown: "markdown" }] });
+    await adapter.deliver({ ...intent, parts: [{ type: "text", text: `# Large\n\n${"x".repeat(32768)}`, markdown: "markdown" }] });
+    expect(send.mock.calls.length).toBeGreaterThan(2);
+    expect(send.mock.calls.every(([request]) => Buffer.byteLength(request.text, "utf8") <= 4096)).toBe(true);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("delivers 32768 Unicode characters in one rich message", async () => {
+    const { adapter, send, rich } = harness();
+    const text = "🙂".repeat(32768);
+    const result = await adapter.deliver({ ...intent, parts: [{ type: "text", text: `# ${text}`, markdown: "markdown" }] });
+    expect(result.outcome).toBe("presented");
+    expect(rich).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rich_message: { html: `<h1>${text}</h1>` } }));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("delivers a long regular response without attempting an empty trailing chunk", async () => {
+    const { adapter, send } = harness();
+    send.mockImplementation(async (request) => {
+      if (!request.text.trim()) throw new Error("Telegram rejects empty text.");
+      return { chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: 200 };
+    });
+    const result = await adapter.deliver({
+      ...intent, parts: [{ type: "text", text: `${"x".repeat(4090)}\n${" ".repeat(30)}`, markdown: "plain" }],
+    });
+    expect(result.outcome).toBe("presented");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates the rich surface without sending another bubble", async () => {
+    const { adapter, edit, rich } = harness();
+    const result = await adapter.deliver(intent);
+    await adapter.deliver({ ...intent, targetSurface: result.surface, delivery: { mode: "update" } });
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      message_id: 300,
+      rich_message: { html: expect.stringContaining("<table bordered striped compact>") },
+    }));
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces the partial stream with final rich content in the same bubble", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const stream = {
+      id: "stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: markdown, markdown: "markdown" as const,
+      stream: { key: "stats-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+    const result = await adapter.deliver({
+      ...stream, text: `${markdown}\n\nComplete.`,
+      attribution: { label: "Bound thread: Downloads" },
+      stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result.surface?.id).toBe("200");
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+    expect(edit.mock.calls[0]?.[0].text).not.toContain("|");
+    expect(edit.mock.calls[0]?.[0].text).toContain("<i>Bound thread: Downloads</i>");
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<footer><i>Bound thread: Downloads</i></footer>");
+  });
+
+  it("finalizes 32768 Unicode characters in the existing stream bubble", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const stream = {
+      id: "long-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "Starting", markdown: "markdown" as const,
+      stream: { key: "long-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const text = "界".repeat(32768);
+    const result = await adapter.deliver({ ...stream, text, stream: { ...stream.stream, sequence: 2, isFinal: true } });
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(edit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message_id: 200, rich_message: { html: `<p>${text}</p>` } }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("uses one request for rich final content in the last group stream budget slot", async () => {
+    const { adapter, send, rich } = harness(() => 1000);
+    for (let index = 0; index < 20; index += 1) {
+      const result = await adapter.deliver({
+        id: `stream-${index}`, kind: "stream_update", createdAt: 1,
+        audit: intent.audit, text: index === 19 ? markdown : "Complete.", markdown: "markdown",
+        stream: { key: `stream-${index}`, sequence: 1, isFinal: true },
+      });
+      expect(result.outcome).toBe("presented");
+    }
+    expect(send).toHaveBeenCalledTimes(19);
+    expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends final rich content directly when no partial stream was delivered", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const result = await adapter.deliver({
+      id: "final-only", kind: "stream_update", createdAt: 1,
+      audit: intent.audit, text: markdown, markdown: "markdown",
+      stream: { key: "final-only", sequence: 1, isFinal: true },
+    });
+    expect(result.surface?.id).toBe("300");
+    expect(rich).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it("waits for the hard group budget before regular fallback after a rejected rich call", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    try {
+      const { adapter, send, rich } = harness(() => Date.now());
+      rich.mockRejectedValue({ error_code: 400, description: "Unsupported rich message" });
+      for (let index = 0; index < 19; index += 1) {
+        await adapter.deliver({
+          id: `budget-${index}`, kind: "stream_update", createdAt: 1,
+          audit: intent.audit, text: "Complete.", markdown: "markdown",
+          stream: { key: `budget-${index}`, sequence: 1, isFinal: true },
+        });
+      }
+      const pending = adapter.deliver({
+        id: "budget-fallback", kind: "stream_update", createdAt: 1,
+        audit: intent.audit, text: markdown, markdown: "markdown",
+        stream: { key: "budget-fallback", sequence: 1, isFinal: true },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rich).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(19);
+      await vi.advanceTimersToNextTimerAsync();
+      expect((await pending).outcome).toBe("presented");
+      expect(send).toHaveBeenCalledTimes(20);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the same partial bubble when a final rich edit needs regular fallback", async () => {
+    const { adapter, send, edit, rich } = harness();
+    const stream = {
+      id: "fallback-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "Working", markdown: "plain" as const,
+      stream: { key: "fallback-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    edit.mockRejectedValueOnce({ error_code: 400, description: "Unsupported rich message" });
+    const result = await adapter.deliver({
+      ...stream, text: markdown, markdown: "markdown",
+      stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(edit).toHaveBeenCalledTimes(2);
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
+    expect(edit.mock.calls[1]?.[0]).toMatchObject({ message_id: 200, parse_mode: "HTML" });
+    expect(edit.mock.calls[1]?.[0]).not.toHaveProperty("rich_message");
+    expect(edit.mock.calls[1]?.[0].text).not.toContain("|");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it("preserves successful rich final delivery and retries cleanup without another final update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit, rich } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "rich-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: `# Downloads\n\n${"x".repeat(4200)}`, markdown: "markdown" as const,
+      stream: { key: "rich-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const final = { ...stream, stream: { ...stream.stream, sequence: 2, isFinal: true } };
+    const result = await adapter.deliver(final);
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(result.errorMessage).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<h1>Downloads</h1>");
+    expect(rich).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("deletes obsolete streamed messages when a link completes (final=%s)", async (isFinal) => {
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" },
+      message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true);
+    api.deleteMessage = remove;
+    const text = `${"x".repeat(4080)}\n\n[file](${"f".repeat(100)}`;
+    const stream = {
+      id: "contracting-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text, markdown: "markdown" as const,
+      stream: { key: "contracting-stream", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    expect(send).toHaveBeenCalledTimes(2);
+    now += 5000;
+    const result = await adapter.deliver({
+      ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal },
+    });
+    expect(result.outcome).toBe("updated");
+    expect(result.surface?.id).toBe("200");
+    expect(remove).toHaveBeenCalledExactlyOnceWith({ chat_id: -100123, message_id: 201 });
+    expect(edit.mock.calls.at(-1)?.[0]).toMatchObject({ message_id: 200, text: `${"x".repeat(4080)}\n\nfile` });
+    if (!isFinal) {
+      now += 5000;
+      await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
+    }
+  });
+
+  it.each([false, true])("preserves successful regular final delivery while cleanup retries (already absent=%s)", async (alreadyAbsent) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    if (alreadyAbsent) remove.mockRejectedValueOnce({ description: "Bad Request: message to delete not found" });
+    api.deleteMessage = remove;
+    const text = `${"x".repeat(4080)}\n\n[file](${"f".repeat(100)}`;
+    const stream = {
+      id: "retry-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text, markdown: "markdown" as const,
+      stream: { key: "retry-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const final = { ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true } };
+    const result = await adapter.deliver(final);
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    expect(result.errorMessage).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a message owned by deferred cleanup when a partial response regrows", async () => {
+    vi.useFakeTimers();
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "regrowth-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "regrowth-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    now += 5000;
+    expect((await adapter.deliver({
+      ...stream, text: "Short", stream: { ...stream.stream, sequence: 2 },
+    })).outcome).toBe("updated");
+    now += 5000;
+    await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+  });
+
+  it("returns the finalized answer before cleanup and honors the hard budget before each deletion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => {
+      const id = messageId++;
+      if (id === 200) vi.setSystemTime(2000);
+      return { chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: id };
+    });
+    const remove = vi.fn(async () => true);
+    api.deleteMessage = remove;
+    const stream = {
+      id: "budget-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
+      stream: { key: "budget-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    for (let index = 0; index < 16; index += 1) {
+      await adapter.deliver({
+        ...stream, text: "Complete.",
+        stream: { key: `budget-fill-${index}`, sequence: 1, isFinal: true },
+      });
+    }
+    const result = await adapter.deliver({
+      ...stream, text: markdown, markdown: "markdown",
+      stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
+    expect(remove).not.toHaveBeenCalled();
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove).toHaveBeenCalledExactlyOnceWith({ chat_id: -100123, message_id: 202 });
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 202 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+    expect(send).toHaveBeenCalledTimes(19);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels cleanup timers on stop and resumes pending cleanup on start", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "stopped-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "stopped-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    await adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    await adapter.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await adapter.start(async () => undefined);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves final delivery and honors cleanup retry_after without retrying the answer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce({ error_code: 429, parameters: { retry_after: 2 } });
+    api.deleteMessage = remove;
+    const onRateLimit = vi.fn();
+    adapter.onRateLimit(onRateLimit);
+    const stream = {
+      id: "limited-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "limited-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    expect(result.rateLimit).toBeUndefined();
+    expect(result.errorMessage).toBeUndefined();
+    expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: false }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries cleanup through an older edit-only API without changing final delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    let cleanupAttempts = 0;
+    edit.mockImplementation(async (request) => {
+      if (request.message_id === 201) {
+        cleanupAttempts += 1;
+        if (cleanupAttempts === 1) throw new Error("Cleanup edit failed.");
+        throw new Error("Bad Request: message is not modified");
+      }
+      return { chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: request.message_id };
+    });
+    const stream = {
+      id: "edit-only-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "edit-only-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(edit.mock.calls.filter(([request]) => request.message_id === 200)).toHaveLength(1);
+    expect(edit.mock.calls.filter(([request]) => request.message_id === 201)).toHaveLength(2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops issuing cleanup requests after shutdown during an in-flight deletion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    let releaseDelete!: (value: boolean) => void;
+    const remove = vi.fn(() => new Promise<boolean>((resolve) => { releaseDelete = resolve; }));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "in-flight-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
+      stream: { key: "in-flight-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const final = adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+    releaseDelete(true);
+    expect((await final).outcome).toBe("updated");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears stale text through the edit seam when an injected API cannot delete messages", async () => {
+    let now = 1000;
+    const { adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const text = `${"x".repeat(4080)}\n\n[file](${"f".repeat(100)}`;
+    const stream = {
+      id: "edit-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text, markdown: "markdown" as const,
+      stream: { key: "edit-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    now += 5000;
+    const result = await adapter.deliver({
+      ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result.outcome).toBe("updated");
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({ message_id: 201, text: "Response updated above." }));
+  });
+
+  it.each([false, true])("removes all previous stream messages when the response becomes blank (final=%s)", async (isFinal) => {
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true);
+    api.deleteMessage = remove;
+    const stream = {
+      id: "blank-stream", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "blank-stream", sequence: 1, isFinal: false },
+    };
+    const first = await adapter.deliver(stream);
+    now += 5000;
+    const result = await adapter.deliver({
+      ...stream, text: " \n\t", targetSurface: first.surface,
+      stream: { ...stream.stream, sequence: 2, isFinal },
+    });
+    expect(result).toMatchObject({ outcome: "updated" });
+    expect(result.surface).toBeUndefined();
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 200 }],
+    ]);
+    expect(edit).not.toHaveBeenCalled();
+    if (!isFinal) {
+      now += 5000;
+      const resumed = await adapter.deliver({
+        ...stream, text: "Fresh content", targetSurface: first.surface,
+        stream: { ...stream.stream, sequence: 3, isFinal: false },
+      });
+      expect(resumed.surface?.id).toBe("202");
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(edit).not.toHaveBeenCalled();
+    }
   });
 });
 
@@ -818,6 +1568,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     createForumTopic: ReturnType<typeof vi.fn>;
     deleteWebhook: ReturnType<typeof vi.fn>;
     deleteForumTopic: ReturnType<typeof vi.fn>;
+    deleteMessage: ReturnType<typeof vi.fn>;
     editForumTopic: ReturnType<typeof vi.fn>;
     editMessageText: ReturnType<typeof vi.fn>;
     getFile: ReturnType<typeof vi.fn>;
@@ -828,6 +1579,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     sendChatAction: ReturnType<typeof vi.fn>;
     sendDocument: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
+    sendRichMessage: ReturnType<typeof vi.fn>;
     sendPhoto: ReturnType<typeof vi.fn>;
     reopenForumTopic: ReturnType<typeof vi.fn>;
     setMyCommands: ReturnType<typeof vi.fn>;
@@ -844,12 +1596,13 @@ function createGrammyBot(): TelegramGrammyBotLike & {
       })),
       deleteWebhook: vi.fn(async () => true),
       deleteForumTopic: vi.fn(async () => true),
+      deleteMessage: vi.fn(async () => true),
       editForumTopic: vi.fn(async () => true),
       editMessageText: vi.fn(
         async (
           chatId: number | string,
           messageId: number,
-          _text: string,
+          _text: Parameters<TelegramGrammyBotLike["api"]["editMessageText"]>[2],
           _other?: Omit<
             TelegramEditMessageTextRequest,
             "chat_id" | "message_id" | "text"
@@ -913,6 +1666,9 @@ function createGrammyBot(): TelegramGrammyBotLike & {
           message_id: 200,
         }),
       ),
+      sendRichMessage: vi.fn(async (chatId: number | string) => ({
+        chat: { id: Number(chatId), type: "private" as const }, message_id: 300,
+      })),
       sendPhoto: vi.fn(
         async (
           chatId: number | string,

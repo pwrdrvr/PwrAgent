@@ -114,21 +114,19 @@ jobs:
         with:
           sparse-checkout: |
             **/package.json
-            .npmrc
             .pnpmfile.cjs
             patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
           lookup-only: "true"
 
@@ -143,10 +141,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
 
       - name: License metadata
@@ -211,10 +209,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
 
       - name: Build
@@ -232,10 +230,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
 
       - name: Install ripgrep
@@ -258,21 +256,19 @@ jobs:
         with:
           sparse-checkout: |
             **/package.json
-            .npmrc
             .pnpmfile.cjs
             patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           working-directory: .
           cache-electron: "true"
           lookup-only: "true"
@@ -289,10 +285,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           working-directory: .
           cache-electron: "true"
 
@@ -320,10 +316,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           working-directory: .
           cache-electron: "true"
 
@@ -334,15 +330,19 @@ jobs:
         # mount initialization (fatal add_item, errno 1).
         # https://github.com/git-for-windows/git/issues/1135#issuecomment-4757184373
         shell: bash
-        # The deploy-isolation test launches pnpm's JS entry directly to avoid
-        # Windows .cmd handoffs. pnpm run supplies npm_execpath; exec does not.
+        # The deploy-isolation test launches pnpm's native executable directly
+        # to avoid Windows .cmd handoffs; pnpm supplies it in npm_execpath.
         run: pnpm test --project desktop-main --shard=${{ matrix.lane }}/2
 
   windows-renderer-packages:
-    name: Windows renderer + packages
+    name: Windows renderer + packages (lane ${{ matrix.lane }} of 2)
     runs-on: windows-latest
     needs: [changes, windows-install-deps]
     if: needs.changes.outputs.code_impacting == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [1, 2]
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -350,10 +350,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           working-directory: .
           cache-electron: "true"
 
@@ -368,18 +368,16 @@ jobs:
           --project desktop-renderer
           --project messaging
           --project shared
+          --shard=${{ matrix.lane }}/2
 
   windows-package:
     name: Windows installer (label-gated)
     # Opt-in only: add the `ci:windows-package` label to a PR to validate the
     # Windows NSIS installer build. Off by default — never runs on normal
-    # PRs/pushes, so the ~15-minute packaging cost is paid only on demand.
+    # PRs/pushes, so the packaging cost is paid only on demand.
     needs: changes
     if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:windows-package') }}
-    # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
-    # not recognize Visual Studio 2026 on windows-latest/windows-2025.
-    # Keep installer packaging on VS 2022 until that toolchain catches up.
-    runs-on: windows-2022
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -387,10 +385,10 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 15
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           working-directory: .
           cache-electron: "true"
 
@@ -461,10 +459,10 @@ jobs:
           lfs: true
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
 
       - name: Install Linux window manager
@@ -598,21 +596,19 @@ jobs:
         with:
           sparse-checkout: |
             **/package.json
-            .npmrc
             .pnpmfile.cjs
             patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
           lookup-only: "true"
 
@@ -668,10 +664,10 @@ jobs:
         run: git lfs pull
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
 
       - name: Clear leftover Electron state from previous jobs
@@ -751,9 +747,9 @@ jobs:
         # `visual-regression.spec.ts` skips off darwin/arm64.
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           working-directory: .
           cache-electron: "true"
 

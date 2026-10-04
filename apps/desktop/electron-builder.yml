@@ -6,13 +6,26 @@ copyright: "Copyright © 2026 PwrDrvr LLC."
 # privacy, and sign the nested Dock tile plug-in before electron-builder
 # seals the parent PwrAgent.app for notarization.
 afterPack: "scripts/afterpack-sign-dock-tile-plugin.mjs"
+# Stages each architecture's bundled Git and native-module prebuilds into the
+# deploy stage before electron-builder collects files.
 beforePack: "scripts/beforepack-bundled-git.mjs"
+
+# better-sqlite3 and node-pty ship Node-API prebuilds for every target, which
+# beforePack copies to build/Release for the architecture being packed.
+# electron-builder's default rebuild would compile both from source for each
+# architecture instead, and fails on a Visual Studio its node-gyp does not
+# recognize.
+npmRebuild: false
+# beforePack rewrites the shared deploy stage's native files for each
+# architecture. Never package architectures concurrently against it.
+concurrency:
+  jobs: 1
 
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
 # and is therefore not present in the deploy stage's node_modules.
 # Keep this in sync with the apps/desktop Electron version resolved in
 # pnpm-lock.yaml. CI enforces the exact packaged/runtime match.
-electronVersion: 41.10.7
+electronVersion: 44.4.5
 
 # Bundle layout
 asar: true
@@ -59,17 +72,16 @@ files:
   - "!**/.eslintrc*"
   - "!**/.prettierrc*"
   - "!**/.github/**"
-  # Dev-only Electron native prebuilds are single-arch. electron-builder
-  # rebuilds build/Release for each target arch before creating the universal
-  # app, so including electron-native would break universal merge.
-  - "!**/electron-native/**"
-  # node-pty ships every platform's native prebuild in its package tarball.
-  # Keep those out of app.asar.unpacked so macOS universal merging only sees
-  # electron-builder's rebuilt current-arch binary under build/Release.
+  # better-sqlite3 and node-pty ship every platform's prebuild in their package
+  # tarballs. Keep those out of app.asar.unpacked so macOS universal merging
+  # only sees the current-arch binaries beforePack staged under build/Release.
+  - "!**/node_modules/better-sqlite3/prebuilds/**"
   - "!**/node_modules/node-pty/prebuilds/**"
-  # SQLite's amalgamated C source and header are build inputs only. Keep the
-  # compiled better_sqlite3.node binding; omit roughly 10 MB of unused sources.
-  - "!**/node_modules/better-sqlite3/deps/sqlite3/*.{c,h}"
+  # Nothing compiles at package time, so their C/C++ sources, gyp files, and
+  # install scripts are dead weight. node-addon-api is headers for node-gyp.
+  - "!**/node_modules/better-sqlite3/{binding.gyp,deps/**,src/**}"
+  - "!**/node_modules/node-pty/{binding.gyp,scripts/**,src/**,third_party/**}"
+  - "!**/node_modules/node-addon-api/**"
   # Our own workspace package metadata is unused at runtime — vite inlines.
   - "!**/node_modules/@pwragent/*/AGENTS.md"
   - "!**/node_modules/@pwragent/*/src/**"
@@ -87,6 +99,9 @@ extraResources:
     to: CHANGELOG.md
   - from: build/icon.png
     to: pwragent-app-icon.png
+  # Themed Dock icons for a running instance (src/main/themed-dock-icon.ts).
+  - from: build/dock-icons
+    to: dock-icons
   - from: src/renderer/src/assets/pwrsnap/pwrsnap-app-icon.png
     to: pwrsnap-app-icon.png
   - from: src/renderer/src/assets/pwrgit/pwrgit-app-icon.png
@@ -147,7 +162,9 @@ mac:
     NSLocalNetworkUsageDescription: "PwrAgent connects to Federation gateways and other services you configure on your local network."
     NSDownloadsFolderUsageDescription: "PwrAgent saves incoming Federation files in your Downloads folder when you enable incoming files."
     NSUserNotificationAlertStyle: alert
-    LSMinimumSystemVersion: "12.0"
+    # Electron 44 dropped macOS 12. scripts/assemble-mac-release.mjs publishes
+    # the matching Darwin kernel floor in latest-mac.yml.
+    LSMinimumSystemVersion: "13.0"
     LSApplicationCategoryType: public.app-category.developer-tools
     NSDockTilePlugIn: PwrAgentDockTilePlugin.plugin
   target:

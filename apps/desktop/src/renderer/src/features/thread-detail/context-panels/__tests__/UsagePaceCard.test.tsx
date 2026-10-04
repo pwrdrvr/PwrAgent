@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReadUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { UsagePaceCard } from "../UsagePaceCard";
@@ -31,7 +31,9 @@ describe("UsagePaceCard", () => {
     const readUsageActivity = reader({});
     render(<UsagePaceCard desktopApi={{ openUsageActivity, readUsageActivity }} />);
 
-    await vi.waitFor(() => expect(readUsageActivity).toHaveBeenCalled());
+    await act(async () => {
+      await vi.waitFor(() => expect(readUsageActivity).toHaveBeenCalled());
+    });
     fireEvent.click(screen.getByRole("button", { name: /Usage Activity/ }));
 
     expect(openUsageActivity).toHaveBeenCalledTimes(1);
@@ -106,6 +108,84 @@ describe("UsagePaceCard", () => {
     expect(await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 42% used." })).toBeInTheDocument();
   });
 
+  it("shows the same account's chart immediately after switching threads with changed limits", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const readUsageActivity = reader({ limitObservation: reading(41) });
+      const backends = (usedPercent: number) => [{ kind: "codex", rateLimits: [{ ...WEEKLY, usedPercent }], account: { type: "chatgpt", email: "same@example.invalid" } }] as never;
+      const desktopApi = { openUsageActivity: vi.fn(), readUsageActivity };
+      const first = render(<UsagePaceCard backends={backends(41)} desktopApi={desktopApi} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 41% used." })).toBeInTheDocument();
+      first.unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      readUsageActivity.mockResolvedValue({ rows: [], readAt: NOW + 60_000, rateLimits: [], truncated: false, limitObservation: reading(42, NOW + 60_000) });
+      render(<UsagePaceCard backends={backends(42)} desktopApi={desktopApi} />);
+      // The refresh budget remains one read per minute; presentation is immediate.
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 41% used." })).toBeInTheDocument();
+      expect(readUsageActivity).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(readUsageActivity).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 42% used." })).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("clears another account's chart and reads the new account immediately", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const readUsageActivity = reader({ limitObservation: reading(41) });
+      const backends = (email: string) => [{ kind: "codex", rateLimits: [{ ...WEEKLY, usedPercent: 41 }], account: { type: "chatgpt", email } }] as never;
+      const desktopApi = { openUsageActivity: vi.fn(), readUsageActivity };
+      const view = render(<UsagePaceCard backends={backends("first@example.invalid")} desktopApi={desktopApi} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 41% used." })).toBeInTheDocument();
+      readUsageActivity.mockResolvedValue({ rows: [], readAt: NOW, rateLimits: [], truncated: false, limitObservation: { ...reading(85), accountKey: "second" } });
+      view.rerender(<UsagePaceCard backends={backends("second@example.invalid")} desktopApi={desktopApi} />);
+      expect(screen.queryByRole("button", { name: "Open Usage Activity. Weekly limit 41% used." })).not.toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(readUsageActivity).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 85% used." })).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("ignores an old account response that arrives after the new account's chart", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const resolves: Array<(response: ReadUsageActivityResponse) => void> = [];
+      const readUsageActivity = vi.fn(() => new Promise<ReadUsageActivityResponse>((resolve) => { resolves.push(resolve); }));
+      const backends = (email: string) => [{ kind: "codex", account: { type: "chatgpt", email } }] as never;
+      const desktopApi = { openUsageActivity: vi.fn(), readUsageActivity };
+      const view = render(<UsagePaceCard backends={backends("first@example.invalid")} desktopApi={desktopApi} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      view.rerender(<UsagePaceCard backends={backends("second@example.invalid")} desktopApi={desktopApi} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(readUsageActivity).toHaveBeenCalledTimes(2);
+      await act(async () => resolves[1]({ rows: [], readAt: NOW, rateLimits: [], truncated: false, limitObservation: { ...reading(85), accountKey: "second" } }));
+      await act(async () => resolves[0]({ rows: [], readAt: NOW, rateLimits: [], truncated: false, limitObservation: reading(41) }));
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 85% used." })).toBeInTheDocument();
+      view.unmount();
+      render(<UsagePaceCard backends={backends("second@example.invalid")} desktopApi={desktopApi} />);
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 85% used." })).toBeInTheDocument();
+      expect(readUsageActivity).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not throttle a first chart after an earlier read had no account limits", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const readUsageActivity = reader({});
+      const desktopApi = { openUsageActivity: vi.fn(), readUsageActivity };
+      const first = render(<UsagePaceCard desktopApi={desktopApi} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      first.unmount();
+      readUsageActivity.mockResolvedValue({ rows: [], readAt: NOW, rateLimits: [], truncated: false, limitObservation: reading(41) });
+      render(<UsagePaceCard desktopApi={desktopApi} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(readUsageActivity).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 41% used." })).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("rereads when Codex reports new limits, at most once a minute", async () => {
     vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
@@ -117,22 +197,32 @@ describe("UsagePaceCard", () => {
       const { rerender } = render(
         <UsagePaceCard backends={backends(41)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />,
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(1);
 
       // A fraction of a percent is not a new reading.
       rerender(<UsagePaceCard backends={backends(41.2)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
-      await vi.advanceTimersByTimeAsync(120_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(1);
 
       rerender(<UsagePaceCard backends={backends(42)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
       rerender(<UsagePaceCard backends={backends(43)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
-      await vi.advanceTimersByTimeAsync(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(2);
       rerender(<UsagePaceCard backends={backends(44)} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
-      await vi.advanceTimersByTimeAsync(30_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(30_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
       expect(readUsageActivity).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();

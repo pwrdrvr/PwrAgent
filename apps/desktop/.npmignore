@@ -2,3 +2,4 @@
 # a previously prepared sibling may become input to another release stage.
 /release-stage/
 /release-stage-arm64/
+/.local/

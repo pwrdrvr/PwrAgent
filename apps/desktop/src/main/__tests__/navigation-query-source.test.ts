@@ -110,6 +110,36 @@ describe("owner index source event admission", () => {
     }
   });
 
+  it("shares one replacement across durable revisions while an owner scan is pending", async () => {
+    const source = createSource();
+    const reads = [source.read()];
+    try {
+      await Promise.resolve();
+      for (let revision = 1; revision <= 12; revision++) {
+        mocks.store.readNavigationSourceVersion.mockReturnValue(`revision-${revision}`);
+        const read = source.read();
+        void read.catch(() => undefined);
+        reads.push(read);
+        await Promise.resolve();
+      }
+      source.finish();
+      const results = await Promise.allSettled(reads);
+      expect(results).toEqual(reads.map(() => expect.objectContaining({ status: "fulfilled" })));
+      expect(source.listThreads).toHaveBeenCalledTimes(2);
+      const first = await reads[0];
+      for (const read of reads) expect(await read).toBe(first);
+      expect(await source.read()).toBe(first);
+      expect(source.listThreads).toHaveBeenCalledTimes(2);
+      expect(source.listeners.size).toBe(1);
+    } finally {
+      source.finish();
+      mocks.store.readNavigationSourceVersion.mockReturnValue("unchanged");
+      source.emit("thread/name/updated");
+      await Promise.allSettled(reads);
+    }
+    expect(source.listeners.size).toBe(0);
+  });
+
   it("does not share owner work across registries or provider scopes", async () => {
     const first = createSource();
     const second = createSource();

@@ -133,7 +133,7 @@ test("bounds throttling retries, honors server delays, isolates reads and hides 
 });
 
 test("paginates release history, selects numeric promoted stable independently of GitHub Latest", async () => {
-  const { auditChannels, publishedReleases } = await lib;
+  const { auditChannels, publishedReleases, previousRelease } = await lib;
   const hundred = Array.from({ length: 100 }, () => ({ ...release, tag_name: "v9.0.0-beta.1", prerelease: true }));
   const higher = { ...release, tag_name: "v1.10.0" };
   const api = fixture({}, false, (endpoint) => endpoint.includes("releases?per_page=100&page=1") ? hundred
@@ -142,6 +142,7 @@ test("paginates release history, selects numeric promoted stable independently o
   const audit = auditChannels(api);
   assert.equal(audit.stable.version, "1.1.4");
   assert.equal(audit.highestPromotedStable.version, "1.10.0");
+  assert.equal(previousRelease("1.11.0", (endpoint) => endpoint.endsWith("/releases/tags/v1.10.0") ? higher : api(endpoint)).tag_name, "v1.10.0");
   assert.throws(() => publishedReleases(() => hundred), /pagination limit/);
 });
 
@@ -173,6 +174,11 @@ process.exitCode = body === null ? 1 : 0;
     const audit = spawnSync(process.execPath, [resolve(__dirname, "package-manager-release.mjs"), "--audit"], { encoding: "utf8", env });
     assert.equal(audit.status, 1);
     assert.equal(JSON.parse(audit.stdout).status, "blocked");
+    const plan = spawnSync(process.execPath, [resolve(__dirname, "package-manager-release-plan.mjs"), "plan", dir], { encoding: "utf8", env });
+    assert.equal(plan.status, 1);
+    assert.equal(JSON.parse(plan.stdout).status, "blocked");
+    const { readFile } = await import("node:fs/promises");
+    assert.equal(JSON.parse(await readFile(join(dir, "preflight.json"), "utf8")).status, "blocked");
     const submission = spawnSync(process.execPath, [resolve(__dirname, "submit-package-manager-release.mjs"), dir], { encoding: "utf8", env });
     assert.equal(submission.status, 1);
     assert.match(submission.stderr, /Channel audit blocked: .*reconcile ownership.*do not submit/);

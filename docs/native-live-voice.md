@@ -1,12 +1,19 @@
 # Native live voice
 
 Opt-in experimental voice runs on Codex `thread/realtime/start`. It has two
-modes. Both use the same realtime session, and only one session runs at a time.
+backend modes. Only director voice has a visible start control. Both modes use
+the same realtime session, and only one session runs at a time.
 
 ## Thread voice
 
-Thread voice talks to one local Codex coding thread. The **Voice** mic toggle in
-that thread's composer starts it. While it runs, a bar docked above the composer
+Thread voice talks to one local Codex coding thread. Its composer mic is hidden
+until a transcription-only path can fill the draft without starting agent work
+or speaking an assistant reply. Composers on launchpads, peer threads, and other
+providers also omit their director voice fallback mic. Start director voice from
+the window actions or its keyboard shortcut instead.
+
+The composer retains controls for an already-open thread voice session, including
+a session whose stop failed. While it runs, a bar docked above the composer
 shows an accent **Microphone live** state with a level meter, the session
 clock, the last line spoken, the microphone toggle, **Transcript**, and **End
 voice**. **Transcript** opens the
@@ -19,16 +26,9 @@ Leaving the thread ends its voice. A failed stop stays visible on the composer
 the window lands on, so **End voice** can be retried there.
 
 Thread voice runs on this machine's Codex App Server, and its handoffs run
-turns in that thread, so it opens only on a local Codex thread. Everywhere else
-the composer's **Voice** mic starts director voice instead, and its tooltip says
-what that will do:
-
-- On a new-thread launchpad, say what the thread should do. Director voice
-  creates the thread in that project, on the launchpad's machine, with the
-  settings the composer shows. Those settings are the launchpad's saved draft,
-  which `create_instance_thread` applies.
-- On a peer's thread, or a thread on another provider, director voice talks to
-  that thread through the thread tools.
+turns in that thread. It is conversational voice, not composer dictation.
+Director voice can create a thread from the focused launchpad's settings or
+talk to a peer's thread or another provider through the thread tools.
 
 ## Director voice
 
@@ -261,18 +261,37 @@ for the effective model, effort, service tier, approval and sandbox settings.
 proof of the selected effort. The fresh director's generic discovery catalog
 is sufficient; eager director tools optimize latency but do not add authority.
 
-An App Server reset, a coding turn, thread closure or catalog refresh
-invalidates this proof. A persisted thread or changed catalog/environment
-still requires negotiated refresh. If the runtime lacks that extension,
-select a supported PwrAgent managed Codex runtime in Settings. Restarting the
-app or recreating the manager cannot add refresh support. Active coding
-threads keep their existing catalog ownership path.
+Owned realtime handoffs retain admitted catalog proof for another voice
+session in the same process. An App Server reset, an unowned coding turn,
+thread closure, catalog refresh, or local turn/review mutation revokes it.
+Revocation precedes resume, even if settings or inference later fail.
+
+The remembered Voice manager uses ordinary `thread/resume` on stock Codex
+when current-process proof is unavailable. Codex restores the tools registered
+at creation; PwrAgent awaits current model, effort, service tier, workspace,
+approval and sandbox settings before opening voice. This preserves the
+manager's thread and history across app restarts. With discovery enabled,
+the registered `tool_search` bootstrap returns current PwrAgent definitions;
+tool dispatch still checks live turn ownership and current permissions.
+Resume does not replace the persisted catalog or establish proof that it
+equals the current catalog. New wire tools or changed schemas can still need
+a supported managed runtime's refresh extension. A manager with a custom
+execution environment, or any other idle thread with unknown/drifted catalog
+ownership, retains the verified-refresh requirement. Active coding threads
+keep their existing catalog ownership path.
 
 A separate local stock 0.160.0 process acknowledged an ephemeral
 `thread/start` with a contrived dynamic tool and a subsequent
 `thread/settings/update` with model, effort, approval and sandbox settings.
 Its `server/capabilities/read` call returned an unsupported-method error.
 This probe sent no inference, realtime or microphone request.
+
+A second stock 0.160.0 probe used an isolated Codex home and a loopback
+Responses fixture. After process exit, ordinary resume restored the exact
+creation-time discovery schema in the next model request, and the settings
+update was acknowledged. Both contrived turns completed. This probe used no
+cloud inference, realtime session or microphone; a spoken session after an
+app restart remains an operator validation step.
 
 ## Validation
 

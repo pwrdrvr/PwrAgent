@@ -1,4 +1,5 @@
 import { BrowserWindow, nativeTheme } from "electron";
+import type { DesktopColorTheme } from "@pwragent/shared";
 import type { BootstrapAppearance } from "./settings/appearance-bootstrap";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
 
@@ -23,6 +24,29 @@ export const WINDOW_BG_LIGHT = "#fdfcfa";
 export const TITLE_BAR_BG_DARK = "#050505";
 export const TITLE_BAR_BG_LIGHT = "#f7f4ef";
 
+/**
+ * Window fill and title-strip fill for every color theme: `--bg-app` and
+ * `--bg-sidebar` from its `:root[data-color-theme="<id>"]` block in app.css.
+ * Tangerine keeps the constants above. A test reads app.css and fails when
+ * a row drifts from its block.
+ */
+export const COLOR_THEME_WINDOW_COLORS: Record<
+  DesktopColorTheme,
+  { window: string; titleBar: string }
+> = {
+  "tangerine-dark": { window: WINDOW_BG_DARK, titleBar: TITLE_BAR_BG_DARK },
+  "tangerine-light": { window: WINDOW_BG_LIGHT, titleBar: TITLE_BAR_BG_LIGHT },
+  "catppuccin-mocha": { window: "#1e1e2e", titleBar: "#181825" },
+  "catppuccin-latte": { window: "#eff1f5", titleBar: "#e6e9ef" },
+  "solarized-dark": { window: "#002b36", titleBar: "#073642" },
+  "solarized-light": { window: "#fdf6e3", titleBar: "#eee8d5" },
+  "gray-dark": { window: "#2b2b2e", titleBar: "#252528" },
+  "gray-light": { window: "#ebebed", titleBar: "#e2e2e5" },
+  "blue-dark": { window: "#0f1724", titleBar: "#0b121d" },
+  "phosphor-dark": { window: "#050a06", titleBar: "#030704" },
+  "blue-light": { window: "#f3f7fc", titleBar: "#e8eff8" },
+};
+
 // Keep in sync with `--win-titlebar-h` in app.css so the OS caption buttons
 // and the painted menu bar share one line.
 export const TITLE_BAR_OVERLAY_HEIGHT = 40;
@@ -36,15 +60,22 @@ function resolvedNativeTheme(
   return nativeTheme.shouldUseDarkColors ? "dark" : "light";
 }
 
+/** The color theme the window renders in: the operator's dark or light
+ *  theme, chosen by the resolved scheme (the renderer's
+ *  `resolveColorTheme`). */
+function resolvedColorTheme(appearance: BootstrapAppearance): DesktopColorTheme {
+  return resolvedNativeTheme(appearance) === "light"
+    ? appearance.lightTheme
+    : appearance.darkTheme;
+}
+
 /** Pick the right `backgroundColor` for an Electron `BrowserWindow`.
  *  The main process can resolve "system" synchronously through
  *  `nativeTheme`, matching the renderer's `prefers-color-scheme`. */
 export function themedWindowBackgroundColor(
   appearance: BootstrapAppearance,
 ): string {
-  return resolvedNativeTheme(appearance) === "light"
-    ? WINDOW_BG_LIGHT
-    : WINDOW_BG_DARK;
+  return COLOR_THEME_WINDOW_COLORS[resolvedColorTheme(appearance)].window;
 }
 
 /**
@@ -59,7 +90,7 @@ export function themedTitleBarOverlay(appearance: BootstrapAppearance): {
 } {
   const light = resolvedNativeTheme(appearance) === "light";
   return {
-    color: light ? TITLE_BAR_BG_LIGHT : TITLE_BAR_BG_DARK,
+    color: COLOR_THEME_WINDOW_COLORS[resolvedColorTheme(appearance)].titleBar,
     symbolColor: light ? "#3a3a3a" : "#c8ccd4",
     height: TITLE_BAR_OVERLAY_HEIGHT,
   };

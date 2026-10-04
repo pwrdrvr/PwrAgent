@@ -2,8 +2,7 @@ import { useCallback, useEffect } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { getDesktopApi, useDesktopApi } from "../../lib/desktop-api";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
-import { useComposerDraftStore } from "../composer/useComposerDraftStore";
-import { useDurableComposerDraftStore } from "../composer/useDurableComposerDraftStore";
+import { useRecoverableComposerDraftStore } from "../../lib/RendererRecoveryState";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { StarMapScreen } from "./StarMapScreen";
 import { BrandLockup } from "../chrome/BrandLockup";
@@ -29,11 +28,7 @@ export function StarMapWindow() {
   // No selected thread in this window — the hook only contributes its
   // event-derived approval/input/thinking key maps to the map's cards.
   const session = useThreadSessionState({ desktopApi });
-  const baseComposerDraftStore = useComposerDraftStore();
-  const composerDraftStore = useDurableComposerDraftStore(
-    baseComposerDraftStore,
-    desktopApi,
-  );
+  const composerDraftStore = useRecoverableComposerDraftStore(desktopApi);
   const reportUserRepliedToThread = useCallback(
     async (thread: NavigationThreadSummary): Promise<void> => {
       await desktopApi?.markThreadSeen?.({

@@ -175,10 +175,13 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
       "border-left-color",
       /^(?:rgba\(255, 138, 31, 0\.42\)|color\(srgb 1 0\.541176 0\.121569 \/ 0\.42\))$/,
     );
-    expect(await computedPseudoStyle(selectedRow, "::before", "background-color")).toBe(
-      "rgb(255, 138, 31)"
+    // The selected-row marker is an inset accent edge on the row itself,
+    // not a ::before bar inside it.
+    await expect(selectedRow).toHaveCSS(
+      "box-shadow",
+      "rgb(255, 138, 31) 2px 0px 0px 0px inset",
     );
-    expect(await computedPseudoStyle(selectedRow, "::before", "width")).toBe("3px");
+    expect(await computedPseudoStyle(selectedRow, "::before", "content")).toBe("none");
 
     await assertReadableText({
       background: sidebar,

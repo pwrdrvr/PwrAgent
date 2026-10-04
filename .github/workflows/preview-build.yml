@@ -20,9 +20,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.21.0"
           cache-electron: "true"
 
       - name: Compute preview version
@@ -62,4 +62,16 @@ jobs:
         with:
           name: PwrAgent-${{ steps.version.outputs.version }}-preview
           path: apps/desktop/release-stage/dist/*.dmg
+          retention-days: 14
+
+      - name: Upload exact-build preview debug artifact
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: PwrAgent-${{ steps.version.outputs.version }}-preview-debug
+          path: |
+            apps/desktop/.local/debug-artifacts/*-darwin-universal-debug.tar.gz
+            apps/desktop/.local/debug-artifacts/*-darwin-universal-debug.tar.gz.sha256
+          if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14

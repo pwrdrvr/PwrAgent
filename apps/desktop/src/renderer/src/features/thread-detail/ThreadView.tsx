@@ -4,6 +4,7 @@ import { useEventCallback } from "../../lib/useEventCallback";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import {
+  Fragment,
   useCallback,
   useEffect,
   lazy,
@@ -11,6 +12,7 @@ import {
   useRef,
   useState,
   Suspense,
+  type ComponentProps,
   type CSSProperties,
 } from "react";
 import type {
@@ -63,12 +65,20 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   resolveThreadTerminalCwd,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { CelestialWatermark } from "../../components/CelestialWatermark";
+import {
+  composerSlotKey,
+  launchpadComposerScope,
+  nextComposerSlotLineage,
+  threadComposerScope,
+  type ComposerSlotLineage,
+} from "./composer-slot";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import type {
@@ -80,10 +90,12 @@ import type { PendingForkEnvironmentSetup, PendingLaunchpadCreation } from "../.
 import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
-import { Composer } from "../composer/Composer";
+import { Composer, type ComposerProps } from "../composer/Composer";
+import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
   type LaunchpadMachineControl,
+  type MachineChipValue,
 } from "../composer/LaunchpadMachineChip";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
@@ -137,6 +149,7 @@ import {
 import {
   buildMcpElicitationResponse,
   type PendingMcpInteractionState,
+  type McpApprovalPersistence,
 } from "./mcp-elicitation";
 import {
   mergeActivityDetails,
@@ -144,6 +157,8 @@ import {
   summarizeActivityStatus,
 } from "./live-transcript-activity";
 import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
+import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
+import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
 import {
   collectThreadImageGallery,
@@ -203,6 +218,36 @@ function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): {
     label: "Failed",
     tone: "failed",
   };
+}
+
+/**
+ * Where a setup run stands, for the composer band's setup row. A clean exit
+ * retires the row (the environment chip already shows the result), so only
+ * a live run and a failure have a state.
+ */
+function describeSetupProgressRowStatus(
+  progress?: LaunchpadEnvironmentSetupProgress,
+): EnvironmentSetupRowModel["status"] | undefined {
+  if (!progress) {
+    return undefined;
+  }
+  const { tone } = formatSetupStatus(progress);
+  return tone === "success" ? undefined : tone;
+}
+
+/** The fields a setup row reads straight off a progress stream. */
+function setupRowFieldsFromProgress(progress: LaunchpadEnvironmentSetupProgress) {
+  return {
+    environmentId: progress.environmentId,
+    environmentName: progress.environmentName,
+    command: progress.command,
+    cwd: progress.cwd,
+    output: progress.output,
+    error: progress.error,
+    exitCode: progress.exitCode,
+    durationMs: progress.durationMs,
+    startedAt: progress.startedAt,
+  } satisfies Partial<EnvironmentSetupRowModel>;
 }
 
 function LaunchpadEnvironmentSetupPending(props: {
@@ -340,107 +385,6 @@ function LaunchpadMaterializeFailure(props: {
             <code>{props.error}</code>
           </pre>
         </div>
-      </div>
-    </section>
-  );
-}
-
-function EnvironmentSetupFailureChoice(props: {
-  archiving: boolean;
-  continuing: boolean;
-  disabled?: boolean;
-  command?: string;
-  cwd?: string;
-  error?: string;
-  environmentName: string;
-  exitCode?: number;
-  hasWorktree: boolean;
-  output?: string;
-  phase: "setup" | "action";
-  onCleanup: () => void;
-  onContinue: () => void | Promise<void>;
-}) {
-  const label =
-    props.phase === "action" ? "Environment action failed" : "Environment setup failed";
-  const commandLabel = props.phase === "action" ? "action command" : "setup command";
-  const trimmedOutput = props.output?.trim();
-  const hasDetails =
-    Boolean(props.command?.trim()) ||
-    Boolean(trimmedOutput) ||
-    typeof props.exitCode === "number";
-  const bodyRef = useRef<HTMLDivElement>(null);
-  // The body is the panel's scroll container, and the Continue failure renders
-  // at the top of it. An operator who scrolled down to read the tail of the
-  // output before clicking would otherwise get the error off-screen and a
-  // re-enabled button with no visible feedback.
-  useEffect(() => {
-    if (props.error) {
-      bodyRef.current?.scrollTo({ top: 0 });
-    }
-  }, [props.error]);
-  return (
-    <section className="environment-setup-choice" aria-label={label}>
-      <div className="environment-setup-choice__body" ref={bodyRef}>
-        <div className="environment-setup-choice__heading">
-          <p className="eyebrow">{label}</p>
-          <h3>{props.environmentName}</h3>
-          <p>
-            {props.hasWorktree
-              ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
-              : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
-          </p>
-          {props.error ? (
-            <p className="environment-setup-choice__error">{props.error}</p>
-          ) : null}
-        </div>
-        {hasDetails ? (
-          <details className="environment-setup-choice__details" open>
-            <summary>
-              Show command output
-              {typeof props.exitCode === "number" ? ` (exit ${props.exitCode})` : ""}
-            </summary>
-            {props.command?.trim() ? (
-              <div className="environment-setup-choice__field">
-                <div className="environment-setup-choice__field-label">Command</div>
-                <pre className="environment-setup-choice__pre">
-                  <code>{`$ ${props.command.trim()}`}</code>
-                </pre>
-              </div>
-            ) : null}
-            {props.cwd?.trim() ? (
-              <div className="environment-setup-choice__field">
-                <div className="environment-setup-choice__field-label">Path</div>
-                <code className="environment-setup-choice__path">{props.cwd}</code>
-              </div>
-            ) : null}
-            <div className="environment-setup-choice__field">
-              <div className="environment-setup-choice__field-label">Output</div>
-              <pre className="environment-setup-choice__pre environment-setup-choice__pre--output">
-                <code>{trimmedOutput || "(no output captured)"}</code>
-              </pre>
-            </div>
-          </details>
-        ) : null}
-      </div>
-      <div className="environment-setup-choice__actions">
-        <button
-          className="composer__action-button composer__action-button--danger"
-          disabled={props.disabled || props.archiving || props.continuing}
-          type="button"
-          onClick={props.onCleanup}
-        >
-          {props.hasWorktree ? "Delete worktree and close" : "Close thread"}
-        </button>
-        <button
-          className="composer__action-button"
-          disabled={props.disabled || props.archiving || props.continuing}
-          type="button"
-          onClick={() => {
-            void props.onContinue();
-          }}
-        >
-          {props.continuing ? "Continuing..." : "Continue anyway"}
-        </button>
       </div>
     </section>
   );
@@ -817,6 +761,9 @@ export type ThreadViewProps = {
   initialLoadDurationMs?: number;
   launchpadError?: string;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  onForkThread?: ComposerProps["onForkThread"];
+  onCreateSubthread?: ComposerProps["onCreateSubthread"];
+  readThreadWorktreeAvailability?: ComposerProps["readThreadWorktreeAvailability"];
   onProviderSelected?: (
     backend: NavigationLaunchpadDraft["backend"],
   ) => BackendSummary | undefined | Promise<BackendSummary | undefined>;
@@ -858,6 +805,8 @@ export type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   launchpadMachine?: LaunchpadMachineControl;
+  /** The selected thread's machine, for the header; see `ThreadHeader`. */
+  threadMachine?: MachineChipValue;
   selectedThread?: NavigationThreadSummary;
   threads?: NavigationThreadSummary[];
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
@@ -988,6 +937,10 @@ export type ThreadViewProps = {
     scheduledFor?: number,
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
+  /** See `Composer`'s prop of the same name. */
+  launchpadCancelRequest?: { directoryKey: string; id: number };
+  onDetachLaunchpadParent?: (directoryKey: string) => void;
+  onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onPendingStatusChange?: (status?: string) => void;
   /**
    * Called when the operator sends or steers a turn on a thread. The
@@ -1022,6 +975,8 @@ export type ThreadViewProps = {
     >
   ) => Promise<void>;
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** Locks (or re-notes) the selected thread when `locked`, else unlocks it. */
+  onSetThreadLock?: (locked: boolean, note?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
   onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   onArchiveWorktree?: (
@@ -1413,6 +1368,12 @@ export function ThreadView(props: ThreadViewProps) {
       ? selectedThread.federation.ref.target.instanceId
       : undefined,
   );
+  // A launchpad, or a fork still in setup, has no thread yet. It belongs to
+  // the machine it will start on: App's active federation target is the
+  // chosen peer, else this window's owner, else undefined for the local mark.
+  const launchpadWatermarkIcon = celestialIcons.iconFor(
+    props.activeFederationTarget?.instanceId,
+  );
   // The pending line's scanner goes neutral for a peer's turn on the same
   // predicate the thread row uses, so the transcript, the row and the
   // Attention tab colour one turn the same way.
@@ -1421,9 +1382,11 @@ export function ThreadView(props: ThreadViewProps) {
   const envActionRuns = readCodexEnvironmentActionRuns(
     selectedThread?.codexEnvironmentRuntime,
   );
-  const visibleEnvActionRuns = envActionRuns.filter(
-    (run) => !dismissedEnvActionRunIds.has(run.runId),
-  );
+  // Superseded first, then dismissed: dismissing the newest result must not
+  // bring back the one it replaced.
+  const visibleEnvActionRuns = withoutSupersededCodexEnvironmentActionRuns(
+    envActionRuns,
+  ).filter((run) => !dismissedEnvActionRunIds.has(run.runId));
   const selectedThreadBackend = useMemo(
     () =>
       selectedThread
@@ -1433,6 +1396,49 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const selectedLaunchpad = props.selectedLaunchpad;
   const pendingForkEnvironmentSetup = props.pendingForkEnvironmentSetup;
+  // Which view renders: a fork still in setup, the empty state, a launchpad
+  // (`composerLaunchpad` is set), or a thread. Only a launchpad and a thread
+  // have a composer. A launchpad whose directory row has not loaded has no
+  // view of its own and, without a thread, shows the empty state: the thread
+  // view needs a thread.
+  const composerLaunchpad =
+    !pendingForkEnvironmentSetup && props.selectedDirectory
+      ? selectedLaunchpad
+      : undefined;
+  const emptyView =
+    !pendingForkEnvironmentSetup && !composerLaunchpad && !selectedThread;
+  const composerView = !pendingForkEnvironmentSetup && !emptyView;
+  const threadView = composerView && !composerLaunchpad;
+  const threadLock = threadView ? selectedThread?.lock : undefined;
+  // Keyed to the thread, so switching threads never carries the editor over.
+  const [lockNoteEditorThreadId, setLockNoteEditorThreadId] = useState<string>();
+  // The composer slot's key: the thread a launchpad becomes keeps the
+  // composer being typed in, and every other switch mounts a fresh one. See
+  // `composer-slot.ts`.
+  const composerSlotView = composerLaunchpad
+    ? {
+        launchpadScope: launchpadComposerScope(
+          composerLaunchpad.directoryKey,
+          props.pendingLaunchpadCreation?.composerScopeKey,
+        ),
+      }
+    : threadView && selectedThread
+      ? { threadScope: threadComposerScope(selectedThread) }
+      : {};
+  const [composerSlotLineage, setComposerSlotLineage] =
+    useState<ComposerSlotLineage>({});
+  const nextSlotLineage = nextComposerSlotLineage(
+    composerSlotLineage,
+    composerSlotView,
+    props.composerDraftStore,
+  );
+  if (nextSlotLineage !== composerSlotLineage) {
+    setComposerSlotLineage(nextSlotLineage);
+  }
+  const composerSlot = composerSlotKey(nextSlotLineage, composerSlotView);
+  // The launchpad header's slot for the composer's machine chip.
+  const [launchpadMachineSlot, setLaunchpadMachineSlot] =
+    useState<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     const directoryKey =
@@ -1727,6 +1733,13 @@ export function ThreadView(props: ThreadViewProps) {
       });
     },
     [],
+  );
+  const onSetThreadLock = props.onSetThreadLock;
+  const lockThreadFromComposer = useMemo(
+    () => onSetThreadLock
+      ? async (note: string) => await onSetThreadLock(true, note)
+      : undefined,
+    [onSetThreadLock],
   );
   const onLoadOlder = props.onLoadOlder;
   const onRenderedTranscriptEntryLimitChange =
@@ -2092,6 +2105,175 @@ export function ThreadView(props: ThreadViewProps) {
       setSetupFailureContinuing(false);
     }
   };
+
+  // Environment setup, as one row in the composer band. It covers a live run
+  // on this thread, the failure that run left behind, and, for a thread with
+  // no turns yet, the keep-or-close decision a failed launch still needs.
+  // Memoized because the Composer is: a fresh model on every streamed event
+  // would re-render it for the life of an undismissed failure.
+  const selectedThreadSetupProgress =
+    selectedThread
+    && launchpadSetupProgress?.directoryKey
+      === `thread:${selectedThread.source}:${selectedThread.id}`
+      ? launchpadSetupProgress
+      : undefined;
+  const selectedThreadSetupProgressStatus = describeSetupProgressRowStatus(
+    selectedThreadSetupProgress,
+  );
+  // A failed run belongs to the environment it ran for. Choosing another
+  // environment (or none) emits no progress when it has no setup script, so
+  // nothing would replace the failure: the row would keep describing — and
+  // Retry would re-select — an environment the operator has left. The runtime
+  // update for the failed selection itself names the same environment and
+  // arrives after the `failed` event, so it keeps the row.
+  const selectedThreadProgressKey = selectedThread
+    ? `thread:${selectedThread.source}:${selectedThread.id}`
+    : undefined;
+  const selectedThreadEnvironmentId =
+    selectedThread?.codexEnvironmentRuntime?.environmentId;
+  useEffect(() => {
+    setLaunchpadSetupProgress((current) =>
+      current
+      && current.directoryKey === selectedThreadProgressKey
+      && describeSetupProgressRowStatus(current) !== "running"
+      && current.environmentId !== selectedThreadEnvironmentId
+        ? undefined
+        : current);
+  }, [selectedThreadEnvironmentId, selectedThreadProgressKey]);
+  const cleanupAfterSetupFailure = useEventCallback(() => {
+    if (!selectedThread || !props.onArchiveThread) {
+      return;
+    }
+    setSetupFailureArchiving(true);
+    void props.onArchiveThread(selectedThread).finally(() => {
+      setSetupFailureArchiving(false);
+    });
+  });
+  const continueAfterSetupFailureEvent = useEventCallback(() => {
+    void continueAfterSetupFailure();
+  });
+  const dismissSelectedThreadSetupProgress = useEventCallback(() => {
+    setLaunchpadSetupProgress(undefined);
+  });
+  const selectedThreadRuntime = selectedThread?.codexEnvironmentRuntime;
+  const selectedThreadEnvironmentSetup = useMemo<
+    EnvironmentSetupRowModel | undefined
+  >(() => {
+    const progress = selectedThreadSetupProgress;
+    if (progress && selectedThreadSetupProgressStatus === "running") {
+      return {
+        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
+        phase: "setup",
+        status: "running",
+        ...setupRowFieldsFromProgress(progress),
+      };
+    }
+    if (showSetupFailureChoice && selectedThreadKey) {
+      const phase = selectedThreadEnvironmentFailurePhase;
+      return {
+        key: `decision:${selectedThreadKey}:${phase}`,
+        phase,
+        status: "failed",
+        environmentId: selectedThreadRuntime?.environmentId,
+        environmentName:
+          selectedThreadRuntime?.environmentName ?? progress?.environmentName,
+        command:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.command
+            : selectedThreadRuntime?.setupCommand ?? progress?.command,
+        cwd: selectedThreadRuntime?.cwd ?? progress?.cwd,
+        output:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.output
+            : selectedThreadRuntime?.setupOutput ?? progress?.output,
+        exitCode:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.exitCode
+            : selectedThreadRuntime?.setupExitCode ?? progress?.exitCode,
+        durationMs: phase === "action" ? undefined : progress?.durationMs,
+        decision: {
+          busy: setupFailureArchiving || setupFailureContinuing,
+          continuing: setupFailureContinuing,
+          disabled: props.composerDisabled,
+          // Archive failures go to the durable notice stack (they can also
+          // originate from a context menu with nothing left on screen), so
+          // this reports only the Continue button's own failure.
+          error: setupFailureContinueError,
+          hasWorktree: Boolean(selectedThreadWorktree),
+          onCleanup: cleanupAfterSetupFailure,
+          onContinue: continueAfterSetupFailureEvent,
+        },
+      };
+    }
+    if (progress && selectedThreadSetupProgressStatus === "failed") {
+      return {
+        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
+        phase: "setup",
+        status: "failed",
+        ...setupRowFieldsFromProgress(progress),
+        onDismiss: dismissSelectedThreadSetupProgress,
+      };
+    }
+    return undefined;
+  }, [
+    cleanupAfterSetupFailure,
+    continueAfterSetupFailureEvent,
+    dismissSelectedThreadSetupProgress,
+    props.composerDisabled,
+    selectedThreadEnvironmentFailurePhase,
+    selectedThreadKey,
+    selectedThreadLatestFailedActionRun,
+    selectedThreadRuntime,
+    selectedThreadSetupProgress,
+    selectedThreadSetupProgressStatus,
+    selectedThreadWorktree,
+    setupFailureArchiving,
+    setupFailureContinueError,
+    setupFailureContinuing,
+    showSetupFailureChoice,
+  ]);
+
+  // The launchpad's setup command rides in its composer's band, collapsed,
+  // while the transcript slot keeps the short placeholder. A failure here has
+  // no actions: the thread it creates opens next, and its own row carries the
+  // keep-or-close decision. Memoized for the same reason as the thread's row.
+  const launchpadEnvironmentSetup = useMemo<
+    EnvironmentSetupRowModel | undefined
+  >(() => {
+    if (!selectedLaunchpad || !launchpadMaterializing || launchpadMaterializeError) {
+      return undefined;
+    }
+    const environment = selectedLaunchpad.codexEnvironmentOptions?.find(
+      (option) => option.id === selectedLaunchpad.codexEnvironmentId,
+    );
+    if (!environment?.setupScript) {
+      return undefined;
+    }
+    const status = launchpadSetupProgress
+      ? describeSetupProgressRowStatus(launchpadSetupProgress)
+      : "running";
+    if (!status) {
+      return undefined;
+    }
+    const fields = launchpadSetupProgress
+      ? setupRowFieldsFromProgress(launchpadSetupProgress)
+      : undefined;
+    return {
+      key: `launchpad:${selectedLaunchpad.directoryKey}`,
+      phase: "setup",
+      status,
+      ...fields,
+      environmentId: fields?.environmentId ?? environment.id,
+      environmentName: fields?.environmentName ?? environment.name,
+      command: fields?.command ?? environment.setupScript,
+      cwd: fields?.cwd ?? selectedLaunchpad.directoryPath,
+    };
+  }, [
+    launchpadMaterializeError,
+    launchpadMaterializing,
+    launchpadSetupProgress,
+    selectedLaunchpad,
+  ]);
 
   const branchDriftRetentionKey = (
     thread: NavigationThreadSummary,
@@ -3288,7 +3470,8 @@ export function ThreadView(props: ThreadViewProps) {
 
   async function submitPendingMcpInteraction(
     pendingMcpInteraction: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
+    persist?: McpApprovalPersistence,
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
@@ -3309,7 +3492,7 @@ export function ThreadView(props: ThreadViewProps) {
             ? pendingMcpInteraction.turnId
             : undefined,
         requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action),
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist),
       });
       props.clearPendingRequest(
         pendingMcpInteraction.requestId,
@@ -3360,110 +3543,6 @@ export function ThreadView(props: ThreadViewProps) {
   const showLaunchpadMcpAccess = useCallback(() => setLaunchpadMcpAccessOpen(true), []);
   const showThreadMcpAccess = useCallback(() => setThreadMcpAccessOpen(true), []);
 
-  if (pendingForkEnvironmentSetup) {
-    return (
-      <section
-        className="thread-view thread-view--launchpad"
-        style={
-          {
-            "--context-rail-width": `${contextRailWidth}px`,
-          } as CSSProperties
-        }
-      >
-        <ThreadPlaceholderHeader
-          backendLabel={formatBackendLabel(
-            pendingForkEnvironmentSetup.backend,
-            props.backends,
-          )}
-          desktopApi={props.desktopApi}
-          projectLabel={pendingForkEnvironmentSetup.directoryLabel}
-          title="Forking thread"
-          onOpenMessagingActivity={props.onOpenMessagingActivity}
-          onOpenMessagingSettings={props.onOpenMessagingSettings}
-          layout={{
-            sidebarOpen: !sidebarHidden,
-            railOpen: contextRailPinned,
-            onToggleSidebar,
-            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
-          }}
-          masthead={props.mastheadActions}
-          history={props.historyNav}
-          starMap={props.starMap}
-        />
-
-        <div
-          className={`thread-view__layout${
-            contextRailPinned ? " has-pinned-context-rail" : ""
-          }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
-        >
-          <div className="thread-view__primary">
-            <div className="thread-view__launchpad-composer">
-              <LaunchpadEnvironmentSetupPending
-                command={
-                  launchpadSetupProgress?.command ??
-                  pendingForkEnvironmentSetup.command
-                }
-                confirmedCwd={launchpadSetupProgress?.cwd}
-                cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
-                desktopApi={props.desktopApi}
-                directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
-                environmentName={
-                  launchpadSetupProgress?.environmentName ??
-                  pendingForkEnvironmentSetup.environmentName
-                }
-                progress={launchpadSetupProgress}
-              />
-            </div>
-          </div>
-          <ThreadContextPanel
-            activeTab={activeContextTab}
-            backendError={props.backendError}
-            backends={props.backends}
-            desktopApi={props.desktopApi}
-            onOpenAutomations={props.onOpenAutomations}
-            onActiveTabChange={onActiveContextTabChange}
-            onResizingChange={setContextRailResizing}
-            onWidthChange={setContextRailWidth}
-            width={contextRailWidth}
-            pinned={contextRailPinned}
-          />
-        </div>
-      </section>
-    );
-  }
-
-  if (!selectedThread && !selectedLaunchpad) {
-    return (
-      <section className="thread-view thread-view--empty">
-        <ThreadPlaceholderHeader
-          desktopApi={props.desktopApi}
-          title="Pick a Thread"
-          onOpenMessagingActivity={props.onOpenMessagingActivity}
-          onOpenMessagingSettings={props.onOpenMessagingSettings}
-          layout={{
-            sidebarOpen: !sidebarHidden,
-            railOpen: contextRailPinned,
-            onToggleSidebar,
-            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
-          }}
-          masthead={props.mastheadActions}
-          history={props.historyNav}
-          starMap={props.starMap}
-        />
-        <div className="thread-empty-state">
-          <div className="thread-empty-state__content">
-            <p className="eyebrow">Thread detail</p>
-            <h2>Select a thread</h2>
-            <p>
-              Inbox stays above every other lens. Pick a thread to read the full
-              transcript, or open a project launchpad from Directories.
-            </p>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
   const imageLightbox = expandedImage && expandedGallery ? (
     <ImageLightbox
       src={expandedImage.url}
@@ -3499,278 +3578,722 @@ export function ThreadView(props: ThreadViewProps) {
     />
   ) : null;
 
-  if (selectedLaunchpad && props.selectedDirectory) {
-    const launchpadBackend = props.backends.find(
-      (backend) => backend.kind === selectedLaunchpad.backend
+  const launchpadBackend = composerLaunchpad
+    ? props.backends.find(
+        (backend) => backend.kind === composerLaunchpad.backend
+      )
+    : undefined;
+  const launchpadMachineOffline = composerLaunchpad
+    ? describeLaunchpadMachineOffline(props.launchpadMachine)
+    : undefined;
+  const selectedLaunchpadCodexEnvironment =
+    composerLaunchpad?.codexEnvironmentOptions?.find(
+      (environment) => environment.id === composerLaunchpad.codexEnvironmentId,
     );
-    const launchpadMachineOffline = describeLaunchpadMachineOffline(
-      props.launchpadMachine,
-    );
-    const selectedLaunchpadCodexEnvironment =
-      selectedLaunchpad.codexEnvironmentOptions?.find(
-        (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
-      );
-    const launchpadRunningCodexEnvironmentSetup = Boolean(
-      selectedLaunchpadCodexEnvironment?.setupScript,
-    );
-
-    return (
-      <section
-        className="thread-view thread-view--launchpad"
-        style={
-          {
-            "--context-rail-width": `${contextRailWidth}px`,
-          } as CSSProperties
+  const launchpadRunningCodexEnvironmentSetup = Boolean(
+    selectedLaunchpadCodexEnvironment?.setupScript,
+  );
+  // What only one mode's composer receives. Everything both modes receive is
+  // written once on the `<Composer>` below, so the two cannot drift apart.
+  const composerModeProps: Partial<ComponentProps<typeof Composer>> =
+    composerLaunchpad
+      ? {
+          providerModelDefaults: props.providerModelDefaults,
+          onProviderSelected: props.onProviderSelected,
+          launchpad: composerLaunchpad,
+          launchpadMachine: props.launchpadMachine,
+          launchpadMachineChipHost: launchpadMachineSlot,
+          launchpadComposerScopeKey: props.pendingLaunchpadCreation?.composerScopeKey,
+          launchpadMaterializing,
+          launchpadError: props.launchpadError,
+          launchpadConfigurationError: props.launchpadConfigurationError,
+          onReloadLaunchpadConfiguration: props.onReloadLaunchpadConfiguration,
+          onMaterializeLaunchpad: handleMaterializeLaunchpad,
+          onCancelLaunchpad: props.onCancelLaunchpad,
+          launchpadCancelRequest: props.launchpadCancelRequest,
+          onDetachLaunchpadParent: props.onDetachLaunchpadParent,
+          onSelectLaunchpadParent: props.onSelectLaunchpadParent,
+          onUpdateLaunchpad: props.onUpdateLaunchpad,
+          onSelectDirectoryFromPicker: props.onSelectDirectoryFromPicker,
+          onSelectNoDirectoryFromPicker: props.onSelectNoDirectoryFromPicker,
+          onPickAndRegisterDirectory: props.onPickAndRegisterDirectory,
+          onPickAndAttachDirectoryToThread: props.onPickAndAttachDirectoryToThread,
+          onClearPickDirectoryError: props.onClearPickDirectoryError,
+          pickDirectoryError: props.pickDirectoryError,
+          pickingDirectory: props.pickingDirectory,
         }
-      >
-        <ThreadPlaceholderHeader
-          backendLabel={formatBackendLabel(
-            selectedLaunchpad.backend,
-            props.backends,
+      : {
+          activeTurnId: props.activeTurnId,
+          addOptimisticReviewEntry: props.addOptimisticReviewEntry,
+          addOptimisticUserMessage: props.addOptimisticUserMessage,
+          onForkThread: props.onForkThread,
+          onCreateSubthread: props.onCreateSubthread,
+          readThreadWorktreeAvailability: props.readThreadWorktreeAvailability,
+          onShowMcpInventory: showMcpInventory,
+          onLockThread: lockThreadFromComposer,
+          mcpConnectionCount: threadMcpConnectionCount,
+          replySubmission: asyncQuestionReply,
+          onReplySubmissionSettled: handleReplySubmissionSettled,
+          workspaceActionsBlocked: props.workspaceActionsBlocked,
+          contextWindow: props.contextWindow,
+          onActiveTurnIdChange: props.onActiveTurnIdChange,
+          onPendingStatusChange: props.onPendingStatusChange,
+          onUserRepliedToThread: props.onUserRepliedToThread,
+          onRefreshNavigation: props.onRefreshNavigation,
+          onHandoffThreadWorkspace: props.onHandoffThreadWorkspace,
+          onBeforeStartTurn:
+            selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
+              ? handleBeforeStartTurn
+              : undefined,
+          onBeforeSendTurn: handleBeforeSendTurn,
+          onMoveEnvActionsToSidebar:
+            actionRunsDock === "above" && envActionRuns.length > 0
+              ? moveActionRunsToSidebar
+              : undefined,
+          onDismissEnvActionRun: dismissEnvActionRun,
+          onStopEnvActionRun: stopEnvActionRun,
+          hiddenEnvActionRunIds: dismissedEnvActionRunIds,
+          showEnvActionAnchors: actionRunsDock === "above",
+          onSetExecutionMode: props.onSetExecutionMode,
+          onSetAcpRuntimeOption: props.onSetAcpRuntimeOption,
+          onCancelExecutionModeQueue: props.onCancelExecutionModeQueue,
+          onSetThreadModelSettings: props.onSetThreadModelSettings,
+          onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
+          onCancelThreadPrAutoDispatch: props.onCancelThreadPrAutoDispatch,
+          onSendThreadPrAutoDispatchNow: props.onSendThreadPrAutoDispatchNow,
+          backgroundPrPollingEnabled: props.backgroundPrPollingEnabled,
+          prAutoDispatchAllowed: props.prAutoDispatchAllowed,
+          onAttachDirectoryReferences: props.onAttachDirectoryReferences,
+          pendingRequestActive: Boolean(props.pendingRequest),
+          pendingUserInputActive: Boolean(
+            props.pendingUserInput || props.pendingMcpInteraction
+          ),
+          removeOptimisticMessage: props.removeOptimisticMessage,
+          setExecutionModeError: props.setExecutionModeError,
+          threadModelSettingsError: props.setThreadModelSettingsError,
+          thread: selectedThread,
+          threadBusy: props.threadBusy,
+          updatingExecutionMode: props.updatingExecutionMode,
+        };
+  // ThreadView's one composer: the launchpad's centred column, or a flex item
+  // of the thread's `.thread-view__primary` (the thread slot is
+  // `display: contents`). The key decides when the composer survives a move
+  // between a launchpad and a thread; see `composer-slot.ts`.
+  const composerSlotElement = composerView ? (
+    <div
+      key={composerSlot}
+      className={
+        composerLaunchpad
+          ? `thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`
+          : "thread-view__composer-slot"
+      }
+    >
+      {composerLaunchpad && launchpadMaterializing ? (
+        <div className="thread-view__launchpad-transcript">
+          <article className="launchpad-submitted-message" aria-label="Submitted message">
+            <div className="transcript-list__content">
+              <TranscriptMessage
+                applications={props.applications}
+                desktopApi={props.desktopApi}
+                message={launchpadSubmittedMessage}
+                parentThreadId=""
+                skills={props.skills}
+                onOpenImage={openImageGallery}
+              />
+            </div>
+          </article>
+          {launchpadMaterializeError ? (
+            <LaunchpadMaterializeFailure
+              directoryLabel={composerLaunchpad.directoryLabel}
+              error={launchpadMaterializeError}
+              onClose={() => {
+                setLaunchpadMaterializing(false);
+                setLaunchpadMaterializeError(undefined);
+              }}
+            />
+          ) : (
+            <section
+              className="transcript-panel transcript-panel--pending"
+              aria-label="Preparing transcript"
+            >
+              <div className="launchpad-pending">
+                <p className="eyebrow">Preparing transcript</p>
+                <h3>Starting {composerLaunchpad.directoryLabel}</h3>
+                <p>
+                  {launchpadRunningCodexEnvironmentSetup
+                    ? `Running the ${
+                        selectedLaunchpadCodexEnvironment?.name ?? "environment"
+                      } setup first. The transcript will appear here when the thread is ready.`
+                    : "Your prompt was sent. The transcript will appear here when the thread is ready."}
+                </p>
+              </div>
+            </section>
           )}
-          desktopApi={props.desktopApi}
-          contextLabel={
-            selectedLaunchpad.parentThreadTitle || selectedLaunchpad.parentThreadId
-              ? `Grouped under ${
-                  selectedLaunchpad.parentThreadTitle ??
-                  selectedLaunchpad.parentThreadId
-                }`
-              : undefined
-          }
-          projectLabel={selectedLaunchpad.directoryLabel}
-          title="New thread"
-          onOpenMessagingActivity={props.onOpenMessagingActivity}
-          onOpenMessagingSettings={props.onOpenMessagingSettings}
-          layout={{
-            sidebarOpen: !sidebarHidden,
-            railOpen: contextRailPinned,
-            onToggleSidebar,
-            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
-          }}
-          masthead={props.mastheadActions}
-          history={props.historyNav}
-          starMap={props.starMap}
-        />
+        </div>
+      ) : null}
+      {/* Second child in both modes, so React matches it by position when
+          the slot itself survives. */}
+      <Composer
+        backends={props.backends}
+        applications={props.applications}
+        codexFastAllowed={props.codexFastAllowed}
+        desktopApi={props.desktopApi}
+        onShowNotice={props.onShowNotice}
+        onShowMcpAccess={
+          props.activeFederationTarget
+            ? undefined
+            : composerLaunchpad
+              ? showLaunchpadMcpAccess
+              : showThreadMcpAccess
+        }
+        composerImplementation={props.composerImplementation}
+        draftStore={props.composerDraftStore}
+        directory={props.selectedDirectory}
+        directories={props.directories}
+        disabled={
+          composerLaunchpad
+            ? props.launchpadConfigurationReady === false
+              || !launchpadBackend?.available
+              || launchpadMachineOffline !== undefined
+            : props.composerDisabled
+        }
+        unavailableReason={
+          composerLaunchpad
+            ? launchpadMachineOffline ?? launchpadBackend?.unavailableReason
+            : selectedThreadBackend?.unavailableReason
+        }
+        environmentSetup={
+          composerLaunchpad
+            ? launchpadEnvironmentSetup
+            : selectedThreadEnvironmentSetup
+        }
+        fullAccessRiskWarningDismissed={
+          props.fullAccessRiskWarningDismissed
+        }
+        onDismissFullAccessRiskWarning={
+          props.onDismissFullAccessRiskWarning
+        }
+        onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+        onPickDirectoryForReference={props.onPickDirectoryForReference}
+        pastedImageMaxPatches={props.pastedImageMaxPatches}
+        pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+        tokenMiserEnabled={props.tokenMiserEnabled}
+        tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
+        monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
+        skillError={props.skillError}
+        skillLoading={props.skillLoading}
+        providerCommands={props.providerCommands ?? []}
+        skills={props.skills}
+        threads={props.threads}
+        {...composerModeProps}
+      />
+    </div>
+  ) : null;
 
+  // Everything below is the one view ThreadView renders. The fork setup,
+  // the empty state, the launchpad and the thread differ only in the parts
+  // chosen here, so the chrome they share is written once.
+  const headerChrome = {
+    desktopApi: props.desktopApi,
+    onOpenMessagingActivity: props.onOpenMessagingActivity,
+    onOpenMessagingSettings: props.onOpenMessagingSettings,
+    layout: {
+      sidebarOpen: !sidebarHidden,
+      railOpen: contextRailPinned,
+      onToggleSidebar,
+      onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+    },
+    masthead: props.mastheadActions,
+    history: props.historyNav,
+    starMap: props.starMap,
+  };
+  const header = pendingForkEnvironmentSetup ? (
+    <ThreadPlaceholderHeader
+      {...headerChrome}
+      backendLabel={formatBackendLabel(
+        pendingForkEnvironmentSetup.backend,
+        props.backends,
+      )}
+      projectLabel={pendingForkEnvironmentSetup.directoryLabel}
+      title="Forking thread"
+    />
+  ) : emptyView ? (
+    <ThreadPlaceholderHeader {...headerChrome} title="Pick a Thread" />
+  ) : composerLaunchpad ? (
+    <ThreadPlaceholderHeader
+      {...headerChrome}
+      backendLabel={formatBackendLabel(
+        composerLaunchpad.backend,
+        props.backends,
+      )}
+      projectLabel={composerLaunchpad.directoryLabel}
+      // The composer's source row names the parent; the breadcrumb only says
+      // what is being made.
+      title={composerLaunchpad.parentThreadId ? "New sub-thread" : "New thread"}
+      machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
+    />
+  ) : (
+    <ThreadHeader
+      {...headerChrome}
+      hasApprovalRequest={Boolean(props.pendingRequest)}
+      machine={props.threadMachine}
+      projectLabel={
+        props.selectedDirectory?.label
+        // A remote-pinned thread whose project has no local counterpart
+        // belongs to no local directory summary; the breadcrumb still
+        // shows the owner-reported project name.
+        ?? (selectedThread?.federation
+          ? selectedThread.linkedDirectories?.[0]?.label
+          : undefined)
+      }
+      thread={selectedThread!}
+      backends={props.backends}
+      onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
+      layout={{
+        ...headerChrome.layout,
+        terminalOpen: selectedThreadTerminalOpen,
+        terminalRunning: selectedThreadTerminalRunning,
+        terminalDisabledReason: selectedThreadTerminalDisabledReason,
+        onToggleTerminal: toggleSelectedThreadTerminal,
+      }}
+      rewind={
+        selectedThread?.source === "acp:grok"
+        && selectedThread.federation?.ref.target.scope !== "remote"
+          ? {
+              disabledReason: props.threadBusy
+                ? "Wait for the active Grok turn to finish before rewinding"
+                : undefined,
+              onOpen: () => {
+                void openRewindDialog();
+              },
+            }
+          : undefined
+      }
+      workflowBudget={
+        selectedThread?.source === "acp:grok"
+        && selectedThread.federation?.ref.target.scope !== "remote"
+          ? {
+              disabledReason: props.threadBusy
+                ? "Wait for the active Grok turn to finish before changing budgets"
+                : undefined,
+              onOpen: () => {
+                void openWorkflowBudgetDialog();
+              },
+            }
+          : undefined
+      }
+    />
+  );
+  // Each view's own part of the chat column, ahead of the composer slot. The
+  // fragments are keyed so React never matches one view's children against
+  // another's; only the composer slot, a sibling of these, crosses views.
+  const primaryContent = emptyView ? null : pendingForkEnvironmentSetup ? (
+    <div className="thread-view__launchpad-composer">
+      <LaunchpadEnvironmentSetupPending
+        command={
+          launchpadSetupProgress?.command ??
+          pendingForkEnvironmentSetup.command
+        }
+        confirmedCwd={launchpadSetupProgress?.cwd}
+        cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
+        desktopApi={props.desktopApi}
+        directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
+        environmentName={
+          launchpadSetupProgress?.environmentName ??
+          pendingForkEnvironmentSetup.environmentName
+        }
+        progress={launchpadSetupProgress}
+      />
+    </div>
+  ) : composerLaunchpad ? (
+    <Fragment key="launchpad">
+      <div
+        aria-label="PwrSuite connections"
+        className="thread-view__connections"
+        role="group"
+        tabIndex={0}
+      >
+        <div className="pwrsuite-tiles">
+          {!launchpadMaterializing ? (
+            <PwrGitConnectionPrompt
+              backend={composerLaunchpad.backend}
+              desktopApi={props.desktopApi}
+              enabled={
+                composerLaunchpad.mcpConnectionIds?.includes(
+                  PWRGIT_MCP_CONNECTION_ID,
+                ) === true
+              }
+              remoteOwnerLabel={
+                props.activeFederationTarget
+                  ? props.activeFederationOwnerLabel ?? "the remote machine"
+                  : undefined
+              }
+              onEnabledChange={async (enabled) => {
+                await props.onUpdateLaunchpad?.(
+                  composerLaunchpad.directoryKey,
+                  {
+                    mcpConnectionIds: pwrGitConnectionIds(
+                      composerLaunchpad.mcpConnectionIds,
+                      enabled,
+                    ),
+                  },
+                );
+              }}
+            />
+          ) : null}
+          {/* Both PwrSuite apps get a card, so each can be discovered,
+              downloaded, and paired from here; per-thread selection also
+              lives in the composer's MCP access panel, which reaches an
+              existing thread too. The remote card offers access from the
+              machine that owns the thread, and the local panel refuses to
+              edit a remote thread's selection. */}
+          {!launchpadMaterializing ? (
+            <PwrSnapConnectionPrompt
+              backend={composerLaunchpad.backend}
+              desktopApi={props.desktopApi}
+              enabled={
+                composerLaunchpad.mcpConnectionIds?.includes(
+                  PWRSNAP_MCP_CONNECTION_ID,
+                ) === true
+              }
+              remoteOwnerLabel={
+                props.activeFederationTarget
+                  ? props.activeFederationOwnerLabel ?? "the remote machine"
+                  : undefined
+              }
+              onEnabledChange={async (enabled) => {
+                await props.onUpdateLaunchpad?.(
+                  composerLaunchpad.directoryKey,
+                  {
+                    mcpConnectionIds: pwrSnapConnectionIds(
+                      composerLaunchpad.mcpConnectionIds,
+                      enabled,
+                    ),
+                  },
+                );
+              }}
+            />
+          ) : null}
+        </div>
+      </div>
+      {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
+        <McpAccessPanel
+          backend={composerLaunchpad.backend}
+          desktopApi={props.desktopApi}
+          selection={{
+            connectionIds: composerLaunchpad.mcpConnectionIds ?? [],
+            providerServersEnabled:
+              composerLaunchpad.mcpProviderServersEnabled !== false,
+          }}
+          onDismiss={() => setLaunchpadMcpAccessOpen(false)}
+          onOpenSettings={openMcpConnectionSettings}
+          onSelectionChange={async (selection) => {
+            await props.onUpdateLaunchpad?.(
+              composerLaunchpad.directoryKey,
+              {
+                mcpConnectionIds: selection.connectionIds,
+                mcpProviderServersEnabled:
+                  selection.providerServersEnabled,
+              },
+            );
+          }}
+        />
+      ) : null}
+    </Fragment>
+  ) : (
+    <Fragment key="thread">
+      {/* Inside the chat column, not the header: a conditional row in
+          the header moves `.thread-view__layout`, and the context rail
+          is anchored to it. See `ThreadWarnings`. */}
+      {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
+      {props.findOpen ? (
+        <ThreadFindBar
+          containerRef={transcriptPanelRef}
+          refreshKey={visibleTranscriptEntries}
+          initialQuery={props.findInitialQuery}
+          turnId={props.findTurnId}
+          focusNonce={props.findFocusNonce}
+          hasMoreHistory={hasMoreTranscriptHistory}
+          loadingMore={props.loadingMore}
+          onLoadOlder={loadOlderTranscript}
+          onClose={() => props.onFindOpenChange?.(false)}
+        />
+      ) : null}
+
+      <section
+        className="transcript-panel"
+        aria-label="Transcript"
+        ref={transcriptPanelRef}
+      >
+        <TranscriptList
+          entries={visibleTranscriptEntries}
+          permissionTransitions={selectedThread!.permissionTransitionLog}
+          messagingBindingTransitions={
+            selectedThread!.messagingBindingTransitionLog
+          }
+          questionnaireActivities={
+            selectedThread!.questionnaireActivityLog
+          }
+          turnFailures={selectedThread!.turnFailureLog}
+          activeTurnId={props.activeTurnId}
+          activeTurnStartedAt={props.activeTurnStartedAt}
+          applications={props.applications}
+          directoryPaths={threadDirectoryPaths(selectedThread!)}
+          desktopApi={props.desktopApi}
+          error={props.transcriptError}
+          fileViewerContext={fileViewerContext}
+          loading={props.loading}
+          loadingMore={props.loadingMore}
+          linkedMessageId={props.linkedMessageId}
+          linkedMessageRequestKey={props.linkedMessageRequestKey}
+          pagination={visibleTranscriptPagination}
+          parentThreadId={selectedThread!.id}
+          parentThreadBackend={selectedThread!.source}
+          threadLinkSource={transcriptThreadLinkSource}
+          // File-diff activity renders in the LiveWorkRail above
+          // the composer (issue #495). Generic tool activity has no
+          // rail body, so keep it in the transcript while the turn
+          // is live instead of collapsing the UI to a bare
+          // "Thinking" indicator.
+          pendingActivityEntry={pendingTranscriptActivityEntry}
+          pendingAssistantMessage={props.pendingAssistantMessage}
+          transientMessage={props.transientMessage}
+          transientMessages={props.transientMessages}
+          pendingPlanEntry={undefined}
+          pendingMcpInteraction={props.pendingMcpInteraction}
+          pendingRequest={props.pendingRequest}
+          pendingRequestBusy={pendingRequestBusy}
+          pendingUserInput={props.pendingUserInput}
+          pendingStatusText={props.pendingStatusText}
+          agentCommandsStatus={props.agentCommandsStatus}
+          onShowAgentCommands={showAgentCommands}
+          pendingRemoteWork={transcriptRemoteWork}
+          prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
+          runningTurnUsageText={props.runningTurnUsageText}
+          expandedActivityIds={props.expandedTranscriptActivityIds}
+          expandedWorkPhaseGroupIds={
+            props.expandedTranscriptWorkPhaseGroupIds
+          }
+          restoredViewport={props.transcriptViewport}
+          reglueRequestKey={transcriptReglueRequestKey}
+          skills={props.skills}
+          subAgents={selectedThread!.subAgents}
+          pendingProtocolActivityEntry={pendingProtocolActivityEntry}
+          pendingUsageActivityEntry={pendingUsageActivityEntry}
+          threadId={`${selectedThread!.source}:${selectedThread!.id}`}
+          onLoadOlder={loadOlderTranscript}
+          onLinkedMessageHandled={props.onLinkedMessageHandled}
+          onOpenImage={openImageGallery}
+          dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
+          sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
+          onAnswerAsyncQuestions={
+            props.composerDisabled ? undefined : handleAnswerAsyncQuestions
+          }
+          onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
+          onExpandedActivityIdsChange={
+            props.onExpandedTranscriptActivityIdsChange
+          }
+          onExpandedWorkPhaseGroupIdsChange={
+            props.onExpandedTranscriptWorkPhaseGroupIdsChange
+          }
+          onRespondToPendingRequest={respondToPendingRequest}
+          onPendingMcpInteractionChange={(state) => {
+            props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
+          }}
+          onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
+          onPendingUserInputChange={(state) => {
+            props.onUpdatePendingUserInput?.(state.requestId, () => state);
+          }}
+          onSubmitPendingUserInput={submitPendingUserInput}
+          onViewportChange={props.onTranscriptViewportChange}
+        />
+        {pendingRequestError ? (
+          <TranscriptError desktopApi={props.desktopApi} text={pendingRequestError} />
+        ) : null}
+      </section>
+
+      <LiveWorkRail
+        applications={props.applications}
+        changedFilesEntry={liveWorkRailChangedFilesEntry}
+        desktopApi={props.desktopApi}
+        editedFileGroups={
+          editedFilesDock === "above" ? editedFileGroups : undefined
+        }
+        editedFileCommitStates={editedFileCommitStates}
+        editedFilesWorktreeRoot={editedFilesWorktreeRoot}
+        onOpenEditedFile={handleOpenEditedFile}
+        onScrollToTurn={handleScrollToTurn}
+        pinned={!props.activeTurnId}
+        planEntry={
+          pendingPlanEntry ??
+          (props.activeTurnId ? undefined : lastCompletedPlanEntry)
+        }
+        onMoveEditedFilesToSidebar={
+          editedFilesDock === "above" ? moveEditedFilesToSidebar : undefined
+        }
+      />
+
+      {mcpInventoryRequest && selectedThread?.source === "codex" ? (
+        <McpInventoryPanel
+          desktopApi={props.desktopApi}
+          onDismiss={() => setMcpInventoryRequest(undefined)}
+          request={mcpInventoryRequest}
+          thread={selectedThread}
+        />
+      ) : null}
+
+      {/* Managed connections are local to the profile that runs the
+          thread, so a remote thread's selection belongs to its owner
+          and is not editable from here. */}
+      {threadMcpAccessOpen
+        && selectedThread
+        && !props.activeFederationTarget ? (
+        <ThreadMcpAccessPanel
+          backend={selectedThread.source}
+          desktopApi={props.desktopApi}
+          threadId={selectedThread.id}
+          onDismiss={() => setThreadMcpAccessOpen(false)}
+          onOpenSettings={openMcpConnectionSettings}
+        />
+      ) : null}
+    </Fragment>
+  );
+  // The rail's thread-only props. A launchpad or a fork in setup has no
+  // thread to describe.
+  const contextPanelThreadProps: Partial<ComponentProps<typeof ThreadContextPanel>> =
+    threadView
+      ? {
+          activeTurnId: props.activeTurnId,
+          editedFileGroups,
+          editedFileCommitStates,
+          editedFilesWorktreeRoot,
+          onOpenEditedFile: handleOpenEditedFile,
+          preferredEditor,
+          onScrollToTurn: handleScrollToTurn,
+          editedFilesDock,
+          onEditedFilesDockChange,
+          backgroundTerminals: props.backgroundTerminals,
+          actionRuns: visibleEnvActionRuns,
+          actionRunsDock,
+          actionRunsEnvironmentName:
+            selectedThread?.codexEnvironmentRuntime?.environmentName,
+          onActionRunsDockChange,
+          onShowActionRunsAboveComposer: showActionRunsAboveComposer,
+          onDismissEnvActionRun: dismissEnvActionRun,
+          onStopEnvActionRun: stopEnvActionRun,
+          onRefreshNavigation: props.onRefreshNavigation,
+          platform: props.platform,
+          thread: selectedThread,
+          pricing: props.pricing,
+          toolAccounting: props.toolAccounting,
+          toolCallEntries,
+          loadingToolCallDetailItemId:
+            pendingTranscriptTurnTarget?.intent === "tool-detail"
+              ? pendingTranscriptTurnTarget.itemId
+              : undefined,
+          onRequestToolCallDetails: handleRequestToolCallDetails,
+          onAnalyzeToolHistory: handleAnalyzeToolHistory,
+          onOpenToolOutputIncidentExplorer: handleOpenToolOutputIncidentExplorer,
+          pricingDisplayOptions: props.pricingDisplayOptions,
+          threadPricingSummaryEnabled,
+          threadToolAccountingEnabled,
+          worktreeArchiveError: props.worktreeArchiveError,
+          onRestoreWorktree: props.onRestoreWorktree,
+          initialLoadDurationMs: props.initialLoadDurationMs,
+        }
+      : {};
+
+  return (
+    <section
+      className={`thread-view${
+        emptyView
+          ? " thread-view--empty"
+          : threadView
+            ? ""
+            : " thread-view--launchpad"
+      }`}
+      style={
+        emptyView
+          ? undefined
+          : ({
+              "--context-rail-width": `${contextRailWidth}px`,
+            } as CSSProperties)
+      }
+    >
+      {header}
+
+      {emptyView ? (
+        <div className="thread-empty-state">
+          <div className="thread-empty-state__content">
+            <p className="eyebrow">Thread detail</p>
+            <h2>Select a thread</h2>
+            <p>
+              Inbox stays above every other lens. Pick a thread to read the full
+              transcript, or open a project launchpad from Directories.
+            </p>
+          </div>
+        </div>
+      ) : (
         <div
           className={`thread-view__layout${
             contextRailPinned ? " has-pinned-context-rail" : ""
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
-          <div className="thread-view__primary">
-            <div
-              aria-label="PwrSuite connections"
-              className="thread-view__connections"
-              role="group"
-              tabIndex={0}
-            >
-              <div className="pwrsuite-tiles">
-                {!launchpadMaterializing ? (
-                  <PwrGitConnectionPrompt
-                    backend={selectedLaunchpad.backend}
-                    desktopApi={props.desktopApi}
-                    enabled={
-                      selectedLaunchpad.mcpConnectionIds?.includes(
-                        PWRGIT_MCP_CONNECTION_ID,
-                      ) === true
+          <div className={`thread-view__primary${threadLock ? " thread-view__primary--locked" : ""}`}>
+            <CelestialWatermark
+              icon={threadView ? celestialWatermarkIcon : launchpadWatermarkIcon}
+            />
+            {primaryContent}
+            {composerSlotElement}
+            {threadLock ? (
+              <ThreadLockCard
+                lock={threadLock}
+                {...(props.onSetThreadLock
+                  ? {
+                      onUnlock: async () => await props.onSetThreadLock?.(false),
+                      onEditNote: () => setLockNoteEditorThreadId(selectedThread?.id),
                     }
-                    remoteOwnerLabel={
-                      props.activeFederationTarget
-                        ? props.activeFederationOwnerLabel ?? "the remote machine"
-                        : undefined
-                    }
-                    onEnabledChange={async (enabled) => {
-                      await props.onUpdateLaunchpad?.(
-                        selectedLaunchpad.directoryKey,
-                        {
-                          mcpConnectionIds: pwrGitConnectionIds(
-                            selectedLaunchpad.mcpConnectionIds,
-                            enabled,
-                          ),
-                        },
-                      );
-                    }}
-                  />
-                ) : null}
-                {/* Both PwrSuite apps get a card, so each can be discovered,
-                    downloaded, and paired from here; per-thread selection also
-                    lives in the composer's MCP access panel, which reaches an
-                    existing thread too. The remote card offers access from the
-                    machine that owns the thread, and the local panel refuses to
-                    edit a remote thread's selection. */}
-                {!launchpadMaterializing ? (
-                  <PwrSnapConnectionPrompt
-                    backend={selectedLaunchpad.backend}
-                    desktopApi={props.desktopApi}
-                    enabled={
-                      selectedLaunchpad.mcpConnectionIds?.includes(
-                        PWRSNAP_MCP_CONNECTION_ID,
-                      ) === true
-                    }
-                    remoteOwnerLabel={
-                      props.activeFederationTarget
-                        ? props.activeFederationOwnerLabel ?? "the remote machine"
-                        : undefined
-                    }
-                    onEnabledChange={async (enabled) => {
-                      await props.onUpdateLaunchpad?.(
-                        selectedLaunchpad.directoryKey,
-                        {
-                          mcpConnectionIds: pwrSnapConnectionIds(
-                            selectedLaunchpad.mcpConnectionIds,
-                            enabled,
-                          ),
-                        },
-                      );
-                    }}
-                  />
-                ) : null}
-              </div>
-            </div>
-            {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
-              <McpAccessPanel
-                backend={selectedLaunchpad.backend}
-                desktopApi={props.desktopApi}
-                selection={{
-                  connectionIds: selectedLaunchpad.mcpConnectionIds ?? [],
-                  providerServersEnabled:
-                    selectedLaunchpad.mcpProviderServersEnabled !== false,
-                }}
-                onDismiss={() => setLaunchpadMcpAccessOpen(false)}
-                onOpenSettings={openMcpConnectionSettings}
-                onSelectionChange={async (selection) => {
-                  await props.onUpdateLaunchpad?.(
-                    selectedLaunchpad.directoryKey,
-                    {
-                      mcpConnectionIds: selection.connectionIds,
-                      mcpProviderServersEnabled:
-                        selection.providerServersEnabled,
-                    },
-                  );
+                  : {})}
+              />
+            ) : null}
+            {threadLock && selectedThread && lockNoteEditorThreadId === selectedThread.id ? (
+              <ThreadLockDialog
+                initialNote={threadLock.note}
+                mode="edit"
+                threadTitle={selectedThread.title}
+                onCancel={() => setLockNoteEditorThreadId(undefined)}
+                onSubmit={async (note) => {
+                  await props.onSetThreadLock?.(true, note);
+                  setLockNoteEditorThreadId(undefined);
                 }}
               />
             ) : null}
-            <div className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}>
-              {launchpadMaterializing ? (
-                <div className="thread-view__launchpad-transcript">
-                  <article className="launchpad-submitted-message" aria-label="Submitted message">
-                    <div className="transcript-list__content">
-                      <TranscriptMessage
-                        applications={props.applications}
-                        desktopApi={props.desktopApi}
-                        message={launchpadSubmittedMessage}
-                        parentThreadId=""
-                        skills={props.skills}
-                        onOpenImage={openImageGallery}
-                      />
-                    </div>
-                  </article>
-                  {launchpadMaterializing && launchpadMaterializeError ? (
-                    <LaunchpadMaterializeFailure
-                      directoryLabel={selectedLaunchpad.directoryLabel}
-                      error={launchpadMaterializeError}
-                      onClose={() => {
-                        setLaunchpadMaterializing(false);
-                        setLaunchpadMaterializeError(undefined);
-                      }}
-                    />
-                  ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
-                    <LaunchpadEnvironmentSetupPending
-                      command={
-                        launchpadSetupProgress?.command ??
-                        selectedLaunchpadCodexEnvironment?.setupScript
-                      }
-                      confirmedCwd={launchpadSetupProgress?.cwd}
-                      cwd={
-                        launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
-                      }
-                      desktopApi={props.desktopApi}
-                      directoryLabel={selectedLaunchpad.directoryLabel}
-                      environmentName={
-                        launchpadSetupProgress?.environmentName ??
-                        selectedLaunchpadCodexEnvironment?.name
-                      }
-                      progress={launchpadSetupProgress}
-                    />
-                  ) : launchpadMaterializing ? (
-                    <section
-                      className="transcript-panel transcript-panel--pending"
-                      aria-label="Preparing transcript"
-                    >
-                      <div className="launchpad-pending">
-                        <p className="eyebrow">Preparing transcript</p>
-                        <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-                        <p>
-                          Your prompt was sent. The transcript will appear here when
-                          the thread is ready.
-                        </p>
-                      </div>
-                    </section>
-                  ) : null}
-                </div>
-              ) : null}
-              <Composer
-                backends={props.backends}
-                applications={props.applications}
-                codexFastAllowed={props.codexFastAllowed}
-                onShowMcpAccess={
-                  props.activeFederationTarget
-                    ? undefined
-                    : showLaunchpadMcpAccess
-                }
-                providerModelDefaults={props.providerModelDefaults}
-                desktopApi={props.desktopApi}
-                onShowNotice={props.onShowNotice}
-                onProviderSelected={props.onProviderSelected}
-                composerImplementation={props.composerImplementation}
-                draftStore={props.composerDraftStore}
-                directory={props.selectedDirectory}
-                directories={props.directories}
-                disabled={
-                  props.launchpadConfigurationReady === false
-                  || !launchpadBackend?.available
-                  || launchpadMachineOffline !== undefined
-                }
-                unavailableReason={launchpadMachineOffline ?? launchpadBackend?.unavailableReason}
-                launchpad={selectedLaunchpad}
-                launchpadMachine={props.launchpadMachine}
-                launchpadComposerScopeKey={props.pendingLaunchpadCreation?.composerScopeKey}
-                launchpadMaterializing={launchpadMaterializing}
-                launchpadError={props.launchpadError}
-                launchpadConfigurationError={props.launchpadConfigurationError}
-                onReloadLaunchpadConfiguration={props.onReloadLaunchpadConfiguration}
-                pastedImageMaxPatches={props.pastedImageMaxPatches}
-                pdfAnalysisEnabled={props.pdfAnalysisEnabled}
-                tokenMiserEnabled={props.tokenMiserEnabled}
-                tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
-                monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
-                fullAccessRiskWarningDismissed={
-                  props.fullAccessRiskWarningDismissed
-                }
-                onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-                onDismissFullAccessRiskWarning={
-                  props.onDismissFullAccessRiskWarning
-                }
-                onMaterializeLaunchpad={handleMaterializeLaunchpad}
-                onCancelLaunchpad={props.onCancelLaunchpad}
-                onUpdateLaunchpad={props.onUpdateLaunchpad}
-                onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
-                onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
-                onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
-                threads={props.threads}
-                onPickAndAttachDirectoryToThread={
-                  props.onPickAndAttachDirectoryToThread
-                }
-                onPickDirectoryForReference={props.onPickDirectoryForReference}
-                onClearPickDirectoryError={props.onClearPickDirectoryError}
-                pickDirectoryError={props.pickDirectoryError}
-                pickingDirectory={props.pickingDirectory}
-                skillError={props.skillError}
-                skillLoading={props.skillLoading}
-                providerCommands={props.providerCommands ?? []}
-                skills={props.skills}
-              />
-            </div>
+            {threadView ? terminals.panes.map((terminal) => {
+              const terminalVisible =
+                terminal.threadKey === selectedThreadKey &&
+                terminals.isPanelOpen(terminal.threadKey);
+              return (
+                <Suspense key={terminal.threadKey} fallback={null}>
+                  <LazyIntegratedTerminal
+                    desktopApi={props.desktopApi}
+                    threadKey={terminal.threadKey}
+                    cwd={terminal.cwd}
+                    remote={terminal.remote}
+                    height={terminals.heightByThread[terminal.threadKey] ?? 260}
+                    visible={terminalVisible}
+                    onHeightChange={(height) => {
+                      terminals.setHeight(terminal.threadKey, height);
+                    }}
+                    onClose={() => {
+                      terminals.closeTerminal(terminal);
+                    }}
+                    onExit={() => {
+                      terminals.handleExit(terminal.threadKey);
+                    }}
+                  />
+                </Suspense>
+              );
+            }) : null}
           </div>
           <ThreadContextPanel
             activeTab={activeContextTab}
@@ -3783,485 +4306,14 @@ export function ThreadView(props: ThreadViewProps) {
             onWidthChange={setContextRailWidth}
             width={contextRailWidth}
             pinned={contextRailPinned}
+            {...contextPanelThreadProps}
           />
         </div>
-        {imageLightbox}
-      </section>
-    );
-  }
+      )}
 
-  return (
-    <section
-      className="thread-view"
-      style={
-        {
-          "--context-rail-width": `${contextRailWidth}px`,
-        } as CSSProperties
-      }
-    >
-      <ThreadHeader
-        desktopApi={props.desktopApi}
-        hasApprovalRequest={Boolean(props.pendingRequest)}
-        projectLabel={
-          props.selectedDirectory?.label
-          // A remote-pinned thread whose project has no local counterpart
-          // belongs to no local directory summary; the breadcrumb still
-          // shows the owner-reported project name.
-          ?? (selectedThread?.federation
-            ? selectedThread.linkedDirectories?.[0]?.label
-            : undefined)
-        }
-        thread={selectedThread!}
-        backends={props.backends}
-        onOpenMessagingActivity={props.onOpenMessagingActivity}
-        onOpenMessagingSettings={props.onOpenMessagingSettings}
-        onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
-        layout={{
-          sidebarOpen: !sidebarHidden,
-          railOpen: contextRailPinned,
-          terminalOpen: selectedThreadTerminalOpen,
-          terminalRunning: selectedThreadTerminalRunning,
-          terminalDisabledReason: selectedThreadTerminalDisabledReason,
-          onToggleSidebar,
-          onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
-          onToggleTerminal: toggleSelectedThreadTerminal,
-        }}
-        masthead={props.mastheadActions}
-        history={props.historyNav}
-        starMap={props.starMap}
-        rewind={
-          selectedThread?.source === "acp:grok"
-          && selectedThread.federation?.ref.target.scope !== "remote"
-            ? {
-                disabledReason: props.threadBusy
-                  ? "Wait for the active Grok turn to finish before rewinding"
-                  : undefined,
-                onOpen: () => {
-                  void openRewindDialog();
-                },
-              }
-            : undefined
-        }
-        workflowBudget={
-          selectedThread?.source === "acp:grok"
-          && selectedThread.federation?.ref.target.scope !== "remote"
-            ? {
-                disabledReason: props.threadBusy
-                  ? "Wait for the active Grok turn to finish before changing budgets"
-                  : undefined,
-                onOpen: () => {
-                  void openWorkflowBudgetDialog();
-                },
-              }
-            : undefined
-        }
-      />
+      {composerView ? imageLightbox : null}
 
-      <div
-        className={`thread-view__layout${
-          contextRailPinned ? " has-pinned-context-rail" : ""
-        }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
-      >
-        <div className="thread-view__primary">
-          <CelestialWatermark icon={celestialWatermarkIcon} />
-          {/* Inside the chat column, not the header: a conditional row in
-              the header moves `.thread-view__layout`, and the context rail
-              is anchored to it. See `ThreadWarnings`. */}
-          {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
-          {selectedThread
-            && launchpadSetupProgress?.directoryKey === `thread:${selectedThread.source}:${selectedThread.id}`
-            && launchpadSetupProgress.status !== "completed" ? (
-            <div>
-              <LaunchpadEnvironmentSetupPending
-                command={launchpadSetupProgress.command}
-                confirmedCwd={launchpadSetupProgress.cwd}
-                cwd={launchpadSetupProgress.cwd}
-                desktopApi={props.desktopApi}
-                directoryLabel={props.selectedDirectory?.label ?? selectedThread.title}
-                environmentName={launchpadSetupProgress.environmentName}
-                progress={launchpadSetupProgress}
-              />
-              {launchpadSetupProgress.status === "failed" ? (
-                <button className="button button--ghost" onClick={() => setLaunchpadSetupProgress(undefined)} type="button">
-                  Dismiss setup output
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
-            <EnvironmentSetupFailureChoice
-              archiving={setupFailureArchiving}
-              continuing={setupFailureContinuing}
-              disabled={props.composerDisabled}
-              command={
-                selectedThreadEnvironmentFailurePhase === "action"
-                  ? selectedThreadLatestFailedActionRun?.command
-                  : selectedThread.codexEnvironmentRuntime?.setupCommand ??
-                    launchpadSetupProgress?.command
-              }
-              cwd={
-                selectedThread.codexEnvironmentRuntime?.cwd ??
-                launchpadSetupProgress?.cwd
-              }
-              environmentName={
-                selectedThread.codexEnvironmentRuntime?.environmentName ??
-                "Environment"
-              }
-              error={
-                // Archive failures go to the durable notice stack (they can
-                // also originate from a context menu with nothing left on
-                // screen), so this slot reports only the Continue button's
-                // own failure — one surface per error.
-                setupFailureContinueError
-              }
-              exitCode={
-                selectedThreadEnvironmentFailurePhase === "setup"
-                  ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
-                    launchpadSetupProgress?.exitCode
-                  : undefined
-              }
-              hasWorktree={Boolean(selectedThreadWorktree)}
-              output={
-                selectedThreadEnvironmentFailurePhase === "setup"
-                  ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
-                    launchpadSetupProgress?.output
-                  : undefined
-              }
-              phase={selectedThreadEnvironmentFailurePhase}
-              onCleanup={() => {
-                if (!props.onArchiveThread) {
-                  return;
-                }
-                setSetupFailureArchiving(true);
-                void props.onArchiveThread(selectedThread).finally(() => {
-                  setSetupFailureArchiving(false);
-                });
-              }}
-              onContinue={continueAfterSetupFailure}
-            />
-          ) : null}
-
-          {props.findOpen ? (
-            <ThreadFindBar
-              containerRef={transcriptPanelRef}
-              refreshKey={visibleTranscriptEntries}
-              initialQuery={props.findInitialQuery}
-              turnId={props.findTurnId}
-              focusNonce={props.findFocusNonce}
-              hasMoreHistory={hasMoreTranscriptHistory}
-              loadingMore={props.loadingMore}
-              onLoadOlder={loadOlderTranscript}
-              onClose={() => props.onFindOpenChange?.(false)}
-            />
-          ) : null}
-
-          <section
-            className="transcript-panel"
-            aria-label="Transcript"
-            ref={transcriptPanelRef}
-          >
-            <TranscriptList
-              entries={visibleTranscriptEntries}
-              permissionTransitions={selectedThread!.permissionTransitionLog}
-              messagingBindingTransitions={
-                selectedThread!.messagingBindingTransitionLog
-              }
-              questionnaireActivities={
-                selectedThread!.questionnaireActivityLog
-              }
-              turnFailures={selectedThread!.turnFailureLog}
-              activeTurnId={props.activeTurnId}
-              activeTurnStartedAt={props.activeTurnStartedAt}
-              applications={props.applications}
-              directoryPaths={threadDirectoryPaths(selectedThread!)}
-              desktopApi={props.desktopApi}
-              error={props.transcriptError}
-              fileViewerContext={fileViewerContext}
-              loading={props.loading}
-              loadingMore={props.loadingMore}
-              linkedMessageId={props.linkedMessageId}
-              linkedMessageRequestKey={props.linkedMessageRequestKey}
-              pagination={visibleTranscriptPagination}
-              parentThreadId={selectedThread!.id}
-              parentThreadBackend={selectedThread!.source}
-              threadLinkSource={transcriptThreadLinkSource}
-              // File-diff activity renders in the LiveWorkRail above
-              // the composer (issue #495). Generic tool activity has no
-              // rail body, so keep it in the transcript while the turn
-              // is live instead of collapsing the UI to a bare
-              // "Thinking" indicator.
-              pendingActivityEntry={pendingTranscriptActivityEntry}
-              pendingAssistantMessage={props.pendingAssistantMessage}
-              transientMessage={props.transientMessage}
-              transientMessages={props.transientMessages}
-              pendingPlanEntry={undefined}
-              pendingMcpInteraction={props.pendingMcpInteraction}
-              pendingRequest={props.pendingRequest}
-              pendingRequestBusy={pendingRequestBusy}
-              pendingUserInput={props.pendingUserInput}
-              pendingStatusText={props.pendingStatusText}
-              agentCommandsStatus={props.agentCommandsStatus}
-              onShowAgentCommands={showAgentCommands}
-              pendingRemoteWork={transcriptRemoteWork}
-              prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
-              runningTurnUsageText={props.runningTurnUsageText}
-              expandedActivityIds={props.expandedTranscriptActivityIds}
-              expandedWorkPhaseGroupIds={
-                props.expandedTranscriptWorkPhaseGroupIds
-              }
-              restoredViewport={props.transcriptViewport}
-              reglueRequestKey={transcriptReglueRequestKey}
-              skills={props.skills}
-              subAgents={selectedThread!.subAgents}
-              pendingProtocolActivityEntry={pendingProtocolActivityEntry}
-              pendingUsageActivityEntry={pendingUsageActivityEntry}
-              threadId={`${selectedThread!.source}:${selectedThread!.id}`}
-              onLoadOlder={loadOlderTranscript}
-              onLinkedMessageHandled={props.onLinkedMessageHandled}
-              onOpenImage={openImageGallery}
-              dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
-              sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
-              onAnswerAsyncQuestions={
-                props.composerDisabled ? undefined : handleAnswerAsyncQuestions
-              }
-              onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
-              onExpandedActivityIdsChange={
-                props.onExpandedTranscriptActivityIdsChange
-              }
-              onExpandedWorkPhaseGroupIdsChange={
-                props.onExpandedTranscriptWorkPhaseGroupIdsChange
-              }
-              onRespondToPendingRequest={respondToPendingRequest}
-              onPendingMcpInteractionChange={(state) => {
-                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
-              }}
-              onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
-              onPendingUserInputChange={(state) => {
-                props.onUpdatePendingUserInput?.(state.requestId, () => state);
-              }}
-              onSubmitPendingUserInput={submitPendingUserInput}
-              onViewportChange={props.onTranscriptViewportChange}
-            />
-            {pendingRequestError ? (
-              <TranscriptError desktopApi={props.desktopApi} text={pendingRequestError} />
-            ) : null}
-          </section>
-
-          <LiveWorkRail
-            applications={props.applications}
-            changedFilesEntry={liveWorkRailChangedFilesEntry}
-            desktopApi={props.desktopApi}
-            editedFileGroups={
-              editedFilesDock === "above" ? editedFileGroups : undefined
-            }
-            editedFileCommitStates={editedFileCommitStates}
-            editedFilesWorktreeRoot={editedFilesWorktreeRoot}
-            onOpenEditedFile={handleOpenEditedFile}
-            onScrollToTurn={handleScrollToTurn}
-            pinned={!props.activeTurnId}
-            planEntry={
-              pendingPlanEntry ??
-              (props.activeTurnId ? undefined : lastCompletedPlanEntry)
-            }
-            onMoveEditedFilesToSidebar={
-              editedFilesDock === "above" ? moveEditedFilesToSidebar : undefined
-            }
-          />
-
-          {mcpInventoryRequest && selectedThread?.source === "codex" ? (
-            <McpInventoryPanel
-              desktopApi={props.desktopApi}
-              onDismiss={() => setMcpInventoryRequest(undefined)}
-              request={mcpInventoryRequest}
-              thread={selectedThread}
-            />
-          ) : null}
-
-          {/* Managed connections are local to the profile that runs the
-              thread, so a remote thread's selection belongs to its owner
-              and is not editable from here. */}
-          {threadMcpAccessOpen
-            && selectedThread
-            && !props.activeFederationTarget ? (
-            <ThreadMcpAccessPanel
-              backend={selectedThread.source}
-              desktopApi={props.desktopApi}
-              threadId={selectedThread.id}
-              onDismiss={() => setThreadMcpAccessOpen(false)}
-              onOpenSettings={openMcpConnectionSettings}
-            />
-          ) : null}
-
-          <Composer
-            activeTurnId={props.activeTurnId}
-            addOptimisticReviewEntry={props.addOptimisticReviewEntry}
-            addOptimisticUserMessage={props.addOptimisticUserMessage}
-            backends={props.backends}
-            applications={props.applications}
-            codexFastAllowed={props.codexFastAllowed}
-            desktopApi={props.desktopApi}
-            onShowNotice={props.onShowNotice}
-            onShowMcpInventory={showMcpInventory}
-            onShowMcpAccess={
-              props.activeFederationTarget
-                ? undefined
-                : showThreadMcpAccess
-            }
-            mcpConnectionCount={threadMcpConnectionCount}
-            composerImplementation={props.composerImplementation}
-            draftStore={props.composerDraftStore}
-            replySubmission={asyncQuestionReply}
-            onReplySubmissionSettled={handleReplySubmissionSettled}
-            directory={props.selectedDirectory}
-            directories={props.directories}
-            disabled={props.composerDisabled}
-            workspaceActionsBlocked={props.workspaceActionsBlocked}
-            unavailableReason={selectedThreadBackend?.unavailableReason}
-            contextWindow={props.contextWindow}
-            fullAccessRiskWarningDismissed={
-              props.fullAccessRiskWarningDismissed
-            }
-            onActiveTurnIdChange={props.onActiveTurnIdChange}
-            onDismissFullAccessRiskWarning={
-              props.onDismissFullAccessRiskWarning
-            }
-            onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-            onPendingStatusChange={props.onPendingStatusChange}
-            onUserRepliedToThread={props.onUserRepliedToThread}
-            onRefreshNavigation={props.onRefreshNavigation}
-            onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
-            onBeforeStartTurn={
-              selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
-                ? handleBeforeStartTurn
-                : undefined
-            }
-            onBeforeSendTurn={handleBeforeSendTurn}
-            onMoveEnvActionsToSidebar={
-              actionRunsDock === "above" && envActionRuns.length > 0
-                ? moveActionRunsToSidebar
-                : undefined
-            }
-            onDismissEnvActionRun={dismissEnvActionRun}
-            onStopEnvActionRun={stopEnvActionRun}
-            hiddenEnvActionRunIds={dismissedEnvActionRunIds}
-            showEnvActionAnchors={actionRunsDock === "above"}
-            onSetExecutionMode={props.onSetExecutionMode}
-            onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
-            onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
-            onSetThreadModelSettings={props.onSetThreadModelSettings}
-            onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
-            onCancelThreadPrAutoDispatch={props.onCancelThreadPrAutoDispatch}
-            onSendThreadPrAutoDispatchNow={props.onSendThreadPrAutoDispatchNow}
-            backgroundPrPollingEnabled={props.backgroundPrPollingEnabled}
-            prAutoDispatchAllowed={props.prAutoDispatchAllowed}
-            onAttachDirectoryReferences={props.onAttachDirectoryReferences}
-            onPickDirectoryForReference={props.onPickDirectoryForReference}
-            pendingRequestActive={Boolean(props.pendingRequest)}
-            pendingUserInputActive={Boolean(
-              props.pendingUserInput || props.pendingMcpInteraction
-            )}
-            pastedImageMaxPatches={props.pastedImageMaxPatches}
-            pdfAnalysisEnabled={props.pdfAnalysisEnabled}
-            tokenMiserEnabled={props.tokenMiserEnabled}
-            tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
-            monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
-            removeOptimisticMessage={props.removeOptimisticMessage}
-            setExecutionModeError={props.setExecutionModeError}
-            threadModelSettingsError={props.setThreadModelSettingsError}
-            skillError={props.skillError}
-            skillLoading={props.skillLoading}
-            providerCommands={props.providerCommands ?? []}
-            skills={props.skills}
-            thread={selectedThread!}
-            threads={props.threads}
-            threadBusy={props.threadBusy}
-            updatingExecutionMode={props.updatingExecutionMode}
-          />
-
-          {terminals.panes.map((terminal) => {
-            const terminalVisible =
-              terminal.threadKey === selectedThreadKey &&
-              terminals.isPanelOpen(terminal.threadKey);
-            return (
-              <Suspense key={terminal.threadKey} fallback={null}>
-                <LazyIntegratedTerminal
-                  desktopApi={props.desktopApi}
-                  threadKey={terminal.threadKey}
-                  cwd={terminal.cwd}
-                  remote={terminal.remote}
-                  height={terminals.heightByThread[terminal.threadKey] ?? 260}
-                  visible={terminalVisible}
-                  onHeightChange={(height) => {
-                    terminals.setHeight(terminal.threadKey, height);
-                  }}
-                  onClose={() => {
-                    terminals.closeTerminal(terminal);
-                  }}
-                  onExit={() => {
-                    terminals.handleExit(terminal.threadKey);
-                  }}
-                />
-              </Suspense>
-            );
-          })}
-        </div>
-
-        <ThreadContextPanel
-          activeTab={activeContextTab}
-          activeTurnId={props.activeTurnId}
-          backendError={props.backendError}
-          backends={props.backends}
-          desktopApi={props.desktopApi}
-          onOpenAutomations={props.onOpenAutomations}
-          editedFileGroups={editedFileGroups}
-          editedFileCommitStates={editedFileCommitStates}
-          editedFilesWorktreeRoot={editedFilesWorktreeRoot}
-          onOpenEditedFile={handleOpenEditedFile}
-          preferredEditor={preferredEditor}
-          onScrollToTurn={handleScrollToTurn}
-          editedFilesDock={editedFilesDock}
-          onEditedFilesDockChange={onEditedFilesDockChange}
-          backgroundTerminals={props.backgroundTerminals}
-          actionRuns={visibleEnvActionRuns}
-          actionRunsDock={actionRunsDock}
-          actionRunsEnvironmentName={
-            selectedThread?.codexEnvironmentRuntime?.environmentName
-          }
-          onActionRunsDockChange={onActionRunsDockChange}
-          onShowActionRunsAboveComposer={showActionRunsAboveComposer}
-          onDismissEnvActionRun={dismissEnvActionRun}
-          onStopEnvActionRun={stopEnvActionRun}
-          onActiveTabChange={onActiveContextTabChange}
-          onRefreshNavigation={props.onRefreshNavigation}
-          onResizingChange={setContextRailResizing}
-          onWidthChange={setContextRailWidth}
-          width={contextRailWidth}
-          pinned={contextRailPinned}
-          platform={props.platform}
-          thread={selectedThread!}
-          pricing={props.pricing}
-          toolAccounting={props.toolAccounting}
-          toolCallEntries={toolCallEntries}
-          loadingToolCallDetailItemId={
-            pendingTranscriptTurnTarget?.intent === "tool-detail"
-              ? pendingTranscriptTurnTarget.itemId
-              : undefined
-          }
-          onRequestToolCallDetails={handleRequestToolCallDetails}
-          onAnalyzeToolHistory={handleAnalyzeToolHistory}
-          onOpenToolOutputIncidentExplorer={handleOpenToolOutputIncidentExplorer}
-          pricingDisplayOptions={props.pricingDisplayOptions}
-          threadPricingSummaryEnabled={threadPricingSummaryEnabled}
-          threadToolAccountingEnabled={threadToolAccountingEnabled}
-          worktreeArchiveError={props.worktreeArchiveError}
-          onRestoreWorktree={props.onRestoreWorktree}
-          initialLoadDurationMs={props.initialLoadDurationMs}
-        />
-      </div>
-
-      {imageLightbox}
-
-      {rewindDialog ? (
+      {threadView && rewindDialog ? (
         <div className="workspace-handoff-modal">
           <div
             ref={rewindDialogRef}
@@ -4357,7 +4409,7 @@ export function ThreadView(props: ThreadViewProps) {
         </div>
       ) : null}
 
-      {workflowBudgetDialog ? (
+      {threadView && workflowBudgetDialog ? (
         <div className="workspace-handoff-modal">
           <div
             ref={workflowBudgetDialogRef}
@@ -4469,7 +4521,7 @@ export function ThreadView(props: ThreadViewProps) {
         </div>
       ) : null}
 
-      {branchDriftDialog && selectedThread ? (
+      {threadView && branchDriftDialog && selectedThread ? (
         <div className="workspace-handoff-modal">
           <div
             ref={branchDriftDialogRef}

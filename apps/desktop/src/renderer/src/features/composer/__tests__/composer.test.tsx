@@ -4,8 +4,8 @@ import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode, useMemo, useState, type ComponentProps } from "react";
+import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -789,7 +789,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText("New thread")).toHaveValue("Keep this follow-up");
   });
 
-  it("keeps composer focus when handoff replaces the editor within the same component", async () => {
+  it("keeps the focused editor when its launchpad becomes the thread", async () => {
     const store = createComposerDraftStore();
     const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
     const view = render(<Composer backends={[backendSummary("codex")]}
@@ -807,8 +807,10 @@ describe("Composer", () => {
     view.rerender(<Composer backends={[backendSummary("codex")]}
       thread={thread} draftStore={store} skills={[]} />);
     const reply = screen.getByLabelText("Reply") as HTMLInputElement;
-    expect(reply).not.toBe(input);
-    await waitFor(() => expect(reply).toHaveFocus());
+    // Reconfigured, not replaced: a rebuilt editor drops the caret, and keys
+    // typed while it mounts land nowhere.
+    expect(reply).toBe(input);
+    expect(reply).toHaveFocus();
     expect(reply.selectionStart).toBe(6);
     expect(reply).toHaveValue("Still typing");
   });
@@ -886,7 +888,7 @@ describe("Composer", () => {
     expect(within(screen.getByLabelText("Queued message")).getByRole("button", {
       name: "Steer when ready",
     })).toBeEnabled();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Queued next");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Next");
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
   });
 
@@ -2075,6 +2077,81 @@ describe("Composer", () => {
     expect(onCancelLaunchpad).toHaveBeenCalledWith(
       "subthread:codex:thread-parent:local",
     );
+  });
+
+  it("runs a sub-thread draft row's Discard as its Cancel, once, for its own launchpad", () => {
+    // The row's menu lives in the sidebar, but the open composer holds the
+    // draft and would save it back on unmount, so the composer runs it.
+    const deleteDraft = vi.fn();
+    const recordHistory = vi.fn();
+    const draftStore: ComposerDraftStore = {
+      hydrationStatus: "memory-only",
+      getDraftScopeKeys: () => [],
+      getQueuedScopeKeys: () => [],
+      delete: deleteDraft,
+      recordHistory,
+      get: () => undefined,
+      popDraft: () => undefined,
+      pushDraft: vi.fn(),
+      deletePendingSteer: vi.fn(),
+      deleteQueuedTurn: vi.fn(),
+      getPendingSteer: () => undefined,
+      getQueuedTurn: () => undefined,
+      getQueuedTurns: () => [],
+      getQueuedTurnVersion: () => 0,
+      subscribeQueuedTurns: () => () => undefined,
+      hasDraftContent: () => false,
+      getDraftPresenceVersion: () => 0,
+      subscribeDraftPresence: () => () => undefined,
+      removeQueuedTurnAt: () => undefined,
+      removeQueuedTurnById: () => undefined,
+      shiftQueuedTurn: () => undefined,
+      setPendingSteer: vi.fn(),
+      setQueuedTurn: vi.fn(),
+      setQueuedTurns: vi.fn(),
+      set: vi.fn(),
+    };
+    const onCancelLaunchpad = vi.fn();
+    const directoryKey = "subthread:codex:thread-parent:local";
+    const props = {
+      backends: [backendSummary("codex")],
+      disabled: false,
+      draftStore,
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "media-service",
+        directoryPath: "/repo",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "Make a PR to swap all the icons",
+        workMode: "local" as const,
+        parentThreadId: "thread-parent",
+        parentThreadTitle: "Swap the icons",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      onCancelLaunchpad,
+      skills: [],
+    };
+
+    const view = render(
+      <Composer {...props} launchpadCancelRequest={{ directoryKey: "subthread:codex:other:local", id: 1 }} />,
+    );
+    expect(onCancelLaunchpad).not.toHaveBeenCalled();
+
+    view.rerender(<Composer {...props} launchpadCancelRequest={{ directoryKey, id: 2 }} />);
+    expect(recordHistory).toHaveBeenCalledWith(
+      `launchpad:${directoryKey}`,
+      expect.objectContaining({ draft: "Make a PR to swap all the icons" }),
+      "abandoned",
+    );
+    expect(deleteDraft).toHaveBeenCalledWith(`launchpad:${directoryKey}`);
+    expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
+    expect(onCancelLaunchpad).toHaveBeenCalledWith(directoryKey);
+
+    view.rerender(<Composer {...props} launchpadCancelRequest={{ directoryKey, id: 2 }} />);
+    expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
   });
 
   it("renders unavailable reason when provided", async () => {
@@ -4639,6 +4716,111 @@ describe("Composer", () => {
     );
   });
 
+  it("settles ordinary new-thread typing across persisted draft updates", async () => {
+    let commits = 0;
+    const commitsPerKey: number[] = [];
+    const savedPrompts: string[] = [];
+    const store = createComposerDraftStore();
+    function TypingLaunchpad() {
+      const [launchpad, setLaunchpad] = useState(
+        () => createRetargetingLaunchpad(retargetingPwrSnap, ""),
+      );
+      return (
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={retargetingPwrSnap}
+          draftStore={store}
+          launchpad={launchpad}
+          desktopApi={{ openUsageActivity: async () => undefined }}
+          onUpdateLaunchpad={async (_key, patch) => {
+            if (patch.prompt !== undefined) savedPrompts.push(patch.prompt);
+            setLaunchpad((current) => ({
+              ...current,
+              ...patch,
+              updatedAt: current.updatedAt + 1,
+            }));
+          }}
+          skills={[]}
+        />
+      );
+    }
+    render(
+      <StrictMode>
+        <Profiler id="new-thread-typing" onRender={() => { commits += 1; }}>
+          <TypingLaunchpad />
+        </Profiler>
+      </StrictMode>,
+    );
+    await flushReactUpdates();
+    const input = screen.getByRole("textbox", { name: "New thread" });
+    const editor = (input as HTMLElement & { editor: Editor }).editor;
+    const type = (text: string): void => {
+      for (const char of text) {
+        const before = commits;
+        act(() => editor.view.dispatch(editor.state.tr.insertText(char)));
+        commitsPerKey.push(commits - before);
+      }
+    };
+    const first = "Our fixture tools expose actions to project agents";
+    const rest = " (or all threads... perhaps) and allow ordinary typing";
+    type(first);
+    await waitFor(() => expect(savedPrompts).toContain(first));
+    type(rest);
+    await waitFor(() => expect(savedPrompts).toContain(first + rest));
+    expect(input).toHaveValue(first + rest);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(commitsPerKey).toEqual(Array.from(first + rest, () => 1));
+  });
+
+  it("keeps the open context card stable while typing without usage changes", async () => {
+    const phases: string[] = [];
+    render(
+      <Profiler id="context-card-typing" onRender={(_id, phase) => phases.push(phase)}>
+        <Composer
+          backends={[backendSummary("codex")]}
+          contextWindow={{
+            modelContextWindow: 128_000,
+            phase: 2,
+            remainingPercent: 75,
+            remainingTokens: 96_000,
+            totalTokens: 32_000,
+            usedPercent: 25,
+          }}
+          desktopApi={{ openUsageActivity: async () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "context-card-typing",
+            source: "codex",
+            title: "Typing fixture",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      </Profiler>,
+    );
+    await flushReactUpdates();
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /^Context window 25% full/ }));
+    await flushReactUpdates();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("25% full");
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    const editor = (input as HTMLElement & { editor: Editor }).editor;
+    const commitsPerKey: number[] = [];
+    const message = "Fixture ordinary typing without usage changes";
+    for (const char of message) {
+      const before = phases.length;
+      act(() => editor.view.dispatch(editor.state.tr.insertText(char)));
+      commitsPerKey.push(phases.length - before);
+    }
+    expect(input).toHaveValue(message);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("25% full");
+    // Editing the draft must not schedule a second commit to refresh an
+    // unchanged usage card through a newly created callback prop.
+    expect(commitsPerKey).toEqual(Array.from(message, () => 1));
+  });
+
   it("opens Usage Activity from the context moon when the app can", () => {
     const openUsageActivity = vi.fn(async () => undefined);
     render(
@@ -6427,7 +6609,7 @@ describe("Composer", () => {
     });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Queued next",
+      "Next",
     );
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Wait behind the active backend turn",
@@ -7141,7 +7323,7 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -7719,7 +7901,7 @@ describe("Composer", () => {
           input: [{ type: "text", text: "Follow up next" }],
         }),
       );
-      expect(screen.getByText("Queued next")).toBeInTheDocument();
+      expect(screen.getByText("Next")).toBeInTheDocument();
       expect(screen.getByText("Follow up next")).toBeInTheDocument();
     });
     expect(textarea).toHaveValue("");
@@ -8818,6 +9000,34 @@ describe("Composer", () => {
     expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
   });
 
+  it.each(["Edit", "Delete"])("runs a double-clicked owner-queued %s once", async (action) => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [{ id: "mirror", queueEntryId: "owner-entry", text: "queued words", imageAttachments: [], fileAttachments: [] }]);
+    const readQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "hash", input: [{ type: "text", text: "queued words" }] });
+    // The first cancel is held open; once the entry is gone the owner answers not_found.
+    let releaseCancel!: () => void;
+    const cancelQueuedTurn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseCancel = () => resolve({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
+      }))
+      .mockResolvedValue({ queueEntryId: "owner-entry", cancelled: false, disposition: "not_found" });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ readQueuedTurn, cancelQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const button = screen.getByRole("button", { name: action });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(cancelQueuedTurn).toHaveBeenCalled());
+    await act(async () => {
+      releaseCancel();
+    });
+    await waitFor(() => expect(draftStore.getQueuedTurns(scopeKey)).toHaveLength(0));
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("The queued turn is no longer waiting.")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue(action === "Edit" ? "queued words" : "");
+  });
+
   it("cancels the owning peer's queued turn before remote steering", async () => {
     const federationTarget = {
       scope: "remote" as const,
@@ -9360,7 +9570,7 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledTimes(1);
-      expect(screen.getByText("Queued next")).toBeInTheDocument();
+      expect(screen.getByText("Next")).toBeInTheDocument();
       expect(screen.getByText("1 image")).toBeInTheDocument();
       expect(
         screen.getByLabelText("Queued image attachments: 1"),
@@ -9927,6 +10137,122 @@ describe("Composer", () => {
     expect(
       draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"))?.scheduledActionId,
     ).toBeUndefined();
+  });
+
+  describe("steer chord by platform", () => {
+    type PwrWindow = Window & { pwragent?: { platform?: string } };
+    afterEach(() => {
+      delete (window as PwrWindow).pwragent;
+    });
+
+    function renderSteerable(platform: string) {
+      (window as PwrWindow).pwragent = { platform };
+      const steerTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "queue-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-1",
+      }));
+      const element = (activeTurnId: string | undefined) => (
+        <Composer
+          activeTurnId={activeTurnId}
+          backends={[
+            {
+              ...backendSummary("codex", {
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    label: "GPT-5.5",
+                    current: true,
+                    supportsReasoning: true,
+                    supportsSteering: true,
+                  },
+                ],
+              }),
+              capabilities: {
+                ...backendSummary("codex").capabilities,
+                steerTurn: true,
+              },
+            },
+          ]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+            steerTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Steerable thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+      const view = render(element("turn-1"));
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Change direction" } });
+      return {
+        endTurn: () => view.rerender(element(undefined)),
+        startTurn,
+        steerTurn,
+        textarea,
+      };
+    }
+
+    it("steers on Ctrl+Enter on Windows", async () => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("win32");
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "Change direction" }],
+        }));
+      });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("keeps Ctrl+Enter a plain queue on macOS", async () => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("darwin");
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledTimes(1);
+      });
+      expect(steerTurn).not.toHaveBeenCalled();
+    });
+
+    it("names the chord in Queue's tooltip", async () => {
+      renderSteerable("win32");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Queue after this turn · Ctrl+Enter to steer it in",
+      );
+    });
+
+    it("takes the tooltip down when the turn ends under the pointer", async () => {
+      const { endTurn } = renderSteerable("darwin");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+
+      endTurn();
+
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+    });
   });
 
   it("steers Command Enter during an active turn when supported", async () => {
@@ -11604,7 +11930,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "Pending steer draft" } });
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Queued follow-up")).toBeInTheDocument();
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(steerTurn).toHaveBeenCalledTimes(1);
@@ -11669,7 +11995,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued elsewhere" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
@@ -11793,7 +12119,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued preflight block" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     rerender(
       <Composer
@@ -12635,7 +12961,7 @@ describe("Composer", () => {
     expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(1);
     expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
     expect(startTurn).not.toHaveBeenCalled();
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
   });
 
@@ -12854,7 +13180,7 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(await screen.findByText("Queued next")).toBeInTheDocument();
+    expect(await screen.findByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
 
@@ -12901,7 +13227,7 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
   });
 
   it("starts a queued review without clearing the next live draft", async () => {
@@ -13018,7 +13344,7 @@ describe("Composer", () => {
     await clickButton("Queue");
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
     expect(screen.getByText("/review does not accept image attachments.")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("/review main");
     expect(screen.getByAltText("review-image.png")).toBeInTheDocument();
@@ -14716,6 +15042,255 @@ describe("Composer", () => {
     expect(within(commands).getByText(providerLabel)).toBeInTheDocument();
   });
 
+  describe("fork slash commands", () => {
+    const thread: NavigationThreadSummary = {
+      id: "fork-source",
+      title: "Fork source",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{ id: "repo", label: "Repo", path: "/fixture/repo", kind: "local" }],
+      inbox: { inInbox: false },
+    };
+    const backend: BackendSummary = {
+      kind: "codex",
+      label: "Codex",
+      available: true,
+      methods: [],
+      executionModes: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: true,
+        transcriptPagination: true,
+        toolUse: true,
+        approvalRequests: true,
+        multiDirectoryThreads: true,
+        forkThread: true,
+      },
+    };
+    function renderForkComposer(overrides: Partial<ComponentProps<typeof ProductionComposer>> = {}) {
+      const onForkThread = vi.fn(async () => true);
+      const onCreateSubthread = vi.fn(async () => true);
+      const startTurn = vi.fn();
+      const readThreadWorktreeAvailability = vi.fn(async () => true);
+      const props = {
+        backends: [backend],
+        disabled: false,
+        skills: [],
+        thread,
+        desktopApi: { startTurn, onAgentEvent: () => () => undefined },
+        onForkThread,
+        onCreateSubthread,
+        readThreadWorktreeAvailability,
+        ...overrides,
+      };
+      const view = render(<Composer {...props} />);
+      return { ...view, onForkThread, onCreateSubthread, startTurn, readThreadWorktreeAvailability };
+    }
+
+    it.each([
+      ["/fork", "local", false],
+      ["/fork --wt same", "local", false],
+      ["/fork --wt new", "new-worktree", false],
+      ["/fork --no-history", "local", true],
+      ["/fork --wt new --no-history", "new-worktree", true],
+      ["/fork --no-history --wt same", "local", true],
+    ] as const)("routes %s to the workspace action without starting a turn", async (text, mode, noHistory) => {
+      const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer({ activeTurnId: "running-turn" });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: text } });
+      expect(screen.queryByRole("button", { name: "Schedule send" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(noHistory ? onCreateSubthread : onForkThread).toHaveBeenCalledWith(thread, mode));
+      expect(noHistory ? onForkThread : onCreateSubthread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+      await waitFor(() => expect(input).toHaveValue(""));
+    });
+
+    it("defaults to the source worktree rather than the repository checkout", async () => {
+      const worktreeThread: NavigationThreadSummary = {
+        ...thread,
+        linkedDirectories: [{ id: "wt", label: "Repo", path: "/fixture/repo", worktreePath: "/fixture/wt", kind: "worktree" }],
+      };
+      const { onForkThread } = renderForkComposer({ thread: worktreeThread });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(worktreeThread, "same-worktree"));
+    });
+
+    it("offers one plain /fork entry and hints its parameters in the input", async () => {
+      const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      const tiptapInput = screen.getByTestId("composer-tiptap-input");
+      fireEvent.change(input, { target: { value: "/fo" } });
+      const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
+      expect(options).toHaveLength(1);
+      expect(options[0]).toHaveTextContent("/fork");
+      expect(options[0]).toHaveTextContent("Fork a new child thread, with or without history");
+      expect(options[0]).not.toHaveTextContent("--wt");
+      // The menu owns the row until it closes; no ghost text competes with it.
+      expect(tiptapInput).not.toHaveAttribute("data-inline-hint");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(input).toHaveValue("/fork ");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(onCreateSubthread).not.toHaveBeenCalled();
+      await flushReactUpdates();
+      expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+      expect(tiptapInput).toHaveClass("has-inline-hint");
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new] [--no-history]");
+      expect(tiptapInput.style.getPropertyValue("--composer-inline-hint"))
+        .toBe('"[--wt same|new] [--no-history]"');
+
+      fireEvent.change(input, { target: { value: "/fork --wt n" } });
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "ew [--no-history]");
+      fireEvent.change(input, { target: { value: "/fork --wt new --no-history" } });
+      expect(tiptapInput).not.toHaveAttribute("data-inline-hint");
+      expect(tiptapInput).not.toHaveClass("has-inline-hint");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "new-worktree"));
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["Tab", "ArrowRight", " "])("accepts the hinted completion with %j at the end of the draft", async (key) => {
+      const { onForkThread, onCreateSubthread } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      const tiptapInput = screen.getByTestId("composer-tiptap-input");
+      fireEvent.change(input, { target: { value: "/fork --no-" } });
+      expect(tiptapInput).toHaveAttribute("data-inline-completion", "history");
+      await flushReactUpdates();
+
+      const event = createEvent.keyDown(input, { key });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(true);
+      await waitFor(() => expect(input).toHaveValue("/fork --no-history "));
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new]");
+      expect(tiptapInput).not.toHaveAttribute("data-inline-completion");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(onCreateSubthread).not.toHaveBeenCalled();
+    });
+
+    it("leaves Tab alone when the hint has nothing literal to accept", async () => {
+      renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork --wt " } });
+      expect(screen.getByTestId("composer-tiptap-input")).toHaveAttribute("data-inline-hint", "same|new [--no-history]");
+      await flushReactUpdates();
+      const event = createEvent.keyDown(input, { key: "Tab" });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(input).toHaveValue("/fork --wt ");
+    });
+
+    it("sends /fork text as an ordinary turn when the composer has no fork action", async () => {
+      const { onForkThread, startTurn } = renderForkComposer({ onForkThread: undefined, onCreateSubthread: undefined });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork the release plan into two" } });
+      expect(screen.queryByRole("button", { name: "Fork" })).not.toBeInTheDocument();
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(startTurn).toHaveBeenCalled());
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Use \/fork/)).not.toBeInTheDocument();
+    });
+
+    it("draws no parameter hint for ordinary drafts", () => {
+      renderForkComposer();
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Please fork this later" } });
+      expect(screen.getByTestId("composer-tiptap-input")).not.toHaveAttribute("data-inline-hint");
+    });
+
+    it.each(["/fork --wt", "/fork --wt other", "/fork unexpected", "/fork --no-history --no-history"])("retains invalid command %s and never sends it to the agent", async (text) => {
+      const { onForkThread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("Use /fork [--wt same|new] [--no-history].")).toBeInTheDocument();
+      expect(input).toHaveValue(text);
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("retains the command when a new worktree is unavailable", async () => {
+      const { onForkThread } = renderForkComposer({ readThreadWorktreeAvailability: async () => false });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork --wt new" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("This thread cannot create a new worktree. Use /fork --wt same.")).toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("/fork --wt new");
+      expect(onForkThread).not.toHaveBeenCalled();
+    });
+
+    it("offers fresh sub-threads when history forks are unsupported", async () => {
+      const { onCreateSubthread, startTurn } = renderForkComposer({ backends: [{ ...backend, capabilities: { ...backend.capabilities, forkThread: false } }] });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork" } });
+      const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
+      expect(options).toHaveLength(1);
+      expect(options[0]).toHaveTextContent("Fork a new child thread, with or without history");
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("This provider cannot fork history. Use /fork --no-history to start a sub-thread.")).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "/fork --no-history" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "local"));
+    });
+
+    it("rejects attachments without losing the command or sending a turn", async () => {
+      const { onForkThread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.paste(input, {
+        clipboardData: {
+          files: [new File([new Uint8Array([1, 2, 3])], "fixture.png", { type: "image/png" })],
+          items: [],
+          getData: () => "",
+        },
+      });
+      await screen.findByRole("button", { name: "Remove fixture.png" });
+      fireEvent.change(input, { target: { value: "/fork" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("/fork does not accept attachments or skill references.")).toBeInTheDocument();
+      expect(input).toHaveValue("/fork");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("preserves a different thread's draft when fork navigation finishes", async () => {
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      const { result } = renderHook(() => useComposerDraftStore());
+      const draftStore = result.current;
+      const deleteDraft = vi.spyOn(draftStore, "delete");
+      const { rerender } = renderForkComposer({ onForkThread, draftStore });
+      // The trailing space closes the command menu, so Enter submits.
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork " } });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+      rerender(<Composer disabled={false} skills={[]} thread={{ ...thread, id: "child" }} draftStore={draftStore} />);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Child draft" } });
+      await act(async () => pending.resolve(true));
+      expect(screen.getByLabelText("Reply")).toHaveValue("Child draft");
+      expect(deleteDraft).toHaveBeenCalledWith(buildThreadComposerScopeKey("codex", thread.id));
+    });
+
+    it("keeps failed forks editable and prevents duplicate submissions while pending", async () => {
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      renderForkComposer({ onForkThread });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onForkThread).toHaveBeenCalledTimes(1);
+      await act(async () => pending.resolve(false));
+      expect(input).toHaveValue("/fork ");
+      expect(screen.getByRole("button", { name: "Fork" })).toBeEnabled();
+    });
+  });
+
   it("routes Codex compact slash commands to thread compaction", async () => {
     const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
       backend: request.backend,
@@ -14769,6 +15344,106 @@ describe("Composer", () => {
       });
     });
     expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("locks the thread from /lock with the rest of the line as its note", async () => {
+    const onLockThread = vi.fn(async () => undefined);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const thread = {
+      id: "thread-1",
+      title: "Lock me",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        onLockThread={onLockThread}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    const textarea = screen.getByLabelText("Reply");
+
+    fireEvent.change(textarea, { target: { value: "/lo" } });
+    expect(await screen.findByRole("option", { name: /\/lock/ })).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "/lock Worktree handed to the repair thread." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onLockThread).toHaveBeenCalledWith("Worktree handed to the repair thread."));
+    expect(startTurn).not.toHaveBeenCalled();
+    await waitFor(() => expect(textarea).toHaveValue(""));
+  });
+
+  it("does not offer /lock on a peer's thread whose owner withholds turn control", async () => {
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onLockThread={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Peer thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "pwr_owner" } },
+            instanceLabel: "Owner Mac",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation"],
+          } as never,
+        }}
+      />,
+    );
+
+    // "/" opens the menu with every local command, so /review proves it is open.
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/" } });
+    expect(await screen.findByRole("option", { name: /\/review/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/lock/ })).toBeNull();
+  });
+
+  it("keeps a /lock draft and shows why when the lock is refused", async () => {
+    const onLockThread = vi.fn(async () => {
+      throw new Error("Owner Mac is unreachable.");
+    });
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onLockThread={onLockThread}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Lock me",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const textarea = screen.getByLabelText("Reply");
+
+    fireEvent.change(textarea, { target: { value: "/lock" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onLockThread).toHaveBeenCalledWith(""));
+    expect(await screen.findByText("Owner Mac is unreachable.")).toBeInTheDocument();
+    expect(textarea).toHaveValue("/lock");
   });
 
   it("opens Codex MCP inventory locally instead of sending a turn", async () => {
@@ -15302,9 +15977,13 @@ describe("Composer", () => {
   });
 
   it("keeps Move to Project keyboard-contained, and gives Escape to its destination list first", async () => {
-    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
-      directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
-    }));
+    const projectPageReady = createDeferred<void>();
+    const getNavigationQueryPage = vi.fn(async (request) => {
+      await projectPageReady.promise;
+      return navigationQueryFixture(request, {
+        directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
+      });
+    });
     render(
       <Composer
         backends={[]}
@@ -15330,7 +16009,13 @@ describe("Composer", () => {
 
     const destination = within(dialog).getByRole("combobox", { name: "Destination project" });
     act(() => destination.focus());
-    await within(dialog).findByRole("option", { name: /Demo/ });
+    // A visible option does not guarantee its passive Escape layer has run.
+    // Settle the owner's page and its React effects before pressing the key.
+    await act(async () => {
+      projectPageReady.resolve();
+      await projectPageReady.promise;
+    });
+    expect(within(dialog).getByRole("option", { name: /Demo/ })).toBeInTheDocument();
     pressEscape();
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
@@ -16244,7 +16929,7 @@ describe("Composer", () => {
 
     const input = screen.getByLabelText("New thread");
     fireEvent.change(input, { target: { value: "/review" } });
-    await clickButton("Start thread");
+    await clickButton("Start sub-thread");
     expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -17730,6 +18415,51 @@ describe("Composer", () => {
       input: [{ type: "text", text: "Investigate [@DESKTOP-LAB / dev](pwragent://instance/windows-dev)" }],
     })));
     expect(attachDirectoryToThread).not.toHaveBeenCalled();
+  });
+
+  it("lists and inserts Federation instances by short name, with the full label on hover", async () => {
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+    render(<Composer
+      desktopApi={{
+        onAgentEvent: () => () => undefined,
+        startTurn,
+        readFederationHealth: async () => ({ health: {
+          enabled: true, role: "gateway", status: "connected",
+          peers: [
+            { id: "mini-1", label: "Lab-Mac-Mini-1", profileName: "default", shortLabel: "Mini 1",
+              role: "client", status: "connected", capabilities: [] },
+            { id: "mini-1-dev", label: "Lab-Mac-Mini-1", profileName: "dev", shortLabel: "Mini 1",
+              role: "client", status: "disconnected", capabilities: [] },
+          ],
+        } }),
+      }}
+      backends={[backendSummary("codex")]}
+      draftStore={createComposerDraftStore()}
+      skills={[]}
+      thread={{ id: "thread-1", title: "Work", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "Hand off to @mac" } });
+    const option = await screen.findByRole("option", { name: /Mini 1 \/ dev/ });
+    expect(screen.getByRole("option", { name: /Mini 1 \/ default/ })).toBeInTheDocument();
+    expect(option.textContent).not.toContain("Lab-Mac-Mini-1");
+    expect(option).toHaveAttribute("title", "Lab-Mac-Mini-1 / dev · disconnected");
+    // The 160px name column suits a folder beside its path; an instance's
+    // meta is a short status, so the name takes the row instead.
+    expect(option).toHaveClass("composer__autocomplete-option--instance");
+    fireEvent.click(option);
+    const chip = await waitFor(() => {
+      const found = screen.getByTestId("composer-tiptap-input")
+        .querySelector('[data-mention-kind="instance"]');
+      expect(found).toHaveTextContent("@Mini 1 / dev");
+      return found!;
+    });
+    expect(chip.getAttribute("data-tooltip")).toContain("Lab-Mac-Mini-1 / dev");
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: "Hand off to [@Mini 1 / dev](pwragent://instance/mini-1-dev)" }],
+    })));
   });
 
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {

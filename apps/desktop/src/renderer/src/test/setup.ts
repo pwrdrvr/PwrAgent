@@ -1,4 +1,13 @@
 import { act, fireEvent } from "@testing-library/react";
+import { aroundAll, aroundEach } from "vitest";
+import { getActWarningGuard } from "./act-warning-guard";
+
+const actWarningGuard = getActWarningGuard();
+actWarningGuard.install();
+// Vitest parses this parameter as fixture names and requires destructuring.
+// eslint-disable-next-line no-empty-pattern
+aroundAll((runSuite, {}, suite) => actWarningGuard.owners.run(suite, runSuite));
+aroundEach((runTest, { task }) => actWarningGuard.owners.run(task, runTest));
 
 /**
  * jsdom implements `getClientRects` on Element but not on Range, and

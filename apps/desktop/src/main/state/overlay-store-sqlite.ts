@@ -34,6 +34,7 @@ import type {
   ThreadExecutionMode,
   ThreadGitWorkingState,
   ThreadMessagingBindingTransition,
+  ThreadLock,
   ThreadOverlayState,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
@@ -1042,6 +1043,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
             'prs', json_extract(payload, '$.prs'),
             'reactions', json_extract(payload, '$.reactions'),
+            'lock', json_extract(payload, '$.lock'),
             'scheduledStart', json_extract(payload, '$.scheduledStart'),
             'prAutoDispatchEnabled', json(CASE json_type(payload, '$.prAutoDispatchEnabled') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
             'agent', CASE WHEN json_type(payload, '$.agent') = 'object'
@@ -3550,6 +3552,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
+   * Sets or clears a thread's lock. Passing a lock replaces any earlier one,
+   * so editing the note of a locked thread goes through here too. Returns the
+   * state unchanged, without a write, when the thread is already unlocked.
+   */
+  async setThreadLock(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    lock: ThreadLock | undefined;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    if (!params.lock && !current.lock) {
+      return current;
+    }
+    const { lock: _previousLock, ...rest } = current;
+    const nextState: ThreadOverlayState = params.lock ? { ...rest, lock: params.lock } : rest;
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  /**
    * Records the operator's disposition of this thread's tool-output incident.
    * `firstWarningAt` is written once and never moved forward, so the cost
    * window the notice reports stays anchored to the first warning even after
@@ -5905,12 +5933,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ownerId: string;
   }): Promise<
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
-    | { status: "disabled" | "stale" | "attempt-limit" }
+    | { status: "disabled" | "locked" | "stale" | "attempt-limit" }
   > {
     const begin = this.stateDb.raw.transaction(() => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      if (this.getThread(threadKey)?.prAutoDispatchEnabled !== true) {
+      const thread = this.getThread(threadKey);
+      if (thread?.prAutoDispatchEnabled !== true) {
         return { status: "disabled" as const };
+      }
+      // Checked before the claim moves, so a locked thread spends no attempt.
+      if (thread.lock) {
+        return { status: "locked" as const };
       }
       const claim = this.stateDb.raw
         .prepare(
@@ -9365,6 +9398,7 @@ export type OverlayStoreLike = Pick<
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
   | "setThreadReaction"
+  | "setThreadLock"
   | "setThreadArchiveTombstone"
   | "setThreadScheduledStart"
   | "setThreadPin"

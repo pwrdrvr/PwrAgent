@@ -96,6 +96,8 @@ import type {
   PwrSnapConnectionStatus,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
@@ -227,6 +229,7 @@ export type FederatedTranscriptImageResponse = {
 
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
+  delivery?: "new_turn";
 };
 
 export type FederationReplaceQueuedMessageRequest = {
@@ -432,6 +435,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
   setThreadReaction: "backend.setThreadReaction",
+  setThreadLock: "backend.setThreadLock",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
@@ -558,6 +562,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
+  // A lock refuses every turn on the owner's thread, so it takes the same
+  // capability as starting one.
+  [FEDERATION_BACKEND_METHODS.setThreadLock]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
@@ -744,6 +751,10 @@ export type FederationBackendOperations = {
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
+  setThreadLock(
+    request: SetThreadLockRequest,
+    options?: { requesterInstanceId?: string },
+  ): Promise<SetThreadLockResponse>;
   setThreadPin(request: SetThreadPinRequest): Promise<SetThreadPinResponse>;
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
@@ -1227,6 +1238,14 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setThreadReaction(
         envelope.params as SetThreadReactionRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadLock,
+    async (envelope) =>
+      await params.backend.setThreadLock(
+        envelope.params as SetThreadLockRequest,
+        { requesterInstanceId: envelope.sourceInstanceId },
       ),
   );
   params.router.registerHandler(
@@ -2147,6 +2166,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadReactionResponse> {
     return await this.rpc.request<SetThreadReactionResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadReaction,
+      params: request,
+    });
+  }
+
+  async setThreadLock(
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> {
+    return await this.rpc.request<SetThreadLockResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadLock,
       params: request,
     });
   }

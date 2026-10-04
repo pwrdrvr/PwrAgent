@@ -6,6 +6,7 @@ import type {
   AppServerBackendScope,
   AppServerBuiltinBackendKind,
   AppServerBackendKind,
+  AppServerPendingRequestNotification,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
@@ -249,6 +250,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
+  /** Present while the thread is locked against new turns. */
+  lock?: ThreadLock;
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
@@ -300,6 +303,12 @@ export type ThreadQueuedTurnSummary = {
   position: number;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /**
+   * Generated display title for a message too long to show as typed. Absent
+   * until the helper answers, and from owners that predate it; show
+   * `displayText` then.
+   */
+  title?: string;
 };
 
 /**
@@ -312,6 +321,7 @@ export type ThreadAdmissionState = {
     threadId: ThreadIdentifier;
     turnId: string;
   };
+  pendingRequest?: AppServerPendingRequestNotification;
   thread?: NavigationThreadSummary;
   threadStatus?: AppServerThreadStatus;
 };
@@ -343,6 +353,7 @@ export type TokenMiserSubAgentAccounting = {
   revealedParentTokens: number;
   revealedParentCostMicros: number;
   cachedRevealedTokens?: number;
+  /** Cached revealed cost includes full prompt replay overhead on retrieval requests. */
   cachedRevealedCostMicros?: number;
   savingsMicros: number;
 };
@@ -1355,6 +1366,69 @@ export type GetWorktreeUnpublishedCommitDiffResponse = {
   detail?: AppServerThreadActivityDetail;
 };
 
+/** Which revision of a worktree file to read image bytes from. */
+export type WorktreeImageRevision =
+  | { kind: "worktree" }
+  | { kind: "head" }
+  | { kind: "commit"; sha: string }
+  /** The commit's first parent: the "before" of a commit's change. */
+  | { kind: "commitParent"; sha: string };
+
+export type ReadWorktreeImageRequest = {
+  worktreePath: string;
+  /** Absolute path inside `worktreePath`. */
+  path: string;
+  revision: WorktreeImageRevision;
+};
+
+/**
+ * One side of an image diff. `missing` is the ordinary answer for the other
+ * side of an add or a delete, not an error, so callers can ask for both sides
+ * unconditionally.
+ */
+export type ReadWorktreeImageResponse =
+  | { kind: "image"; mediaType: string; bytes: Uint8Array }
+  | { kind: "missing" }
+  | { kind: "tooLarge"; sizeBytes: number }
+  | { kind: "lfsPointer" }
+  | { kind: "unsupported" };
+
+const WORKTREE_IMAGE_MEDIA_TYPES = new Map<string, string>([
+  ["apng", "image/apng"],
+  ["avif", "image/avif"],
+  ["bmp", "image/bmp"],
+  ["gif", "image/gif"],
+  ["ico", "image/x-icon"],
+  ["jfif", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["jpg", "image/jpeg"],
+  ["png", "image/png"],
+  ["webp", "image/webp"],
+]);
+
+/**
+ * Media type for a raster image path the renderer can preview, or undefined.
+ * Extension-based on purpose: git says a blob is binary, not what it is. SVG
+ * is left out — it is text, and its edits already read as a text diff.
+ */
+export function worktreeImageMediaType(filePath: string): string | undefined {
+  const name = filePath.slice(
+    Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1,
+  );
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) {
+    return undefined;
+  }
+  return WORKTREE_IMAGE_MEDIA_TYPES.get(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * Ceiling on one previewed side. The bytes are copied across IPC and decoded
+ * twice (thumbnail and pixel diff), so a repository's 200 MB PSD-like asset
+ * must not stall the renderer for a picture nobody can see anyway.
+ */
+export const WORKTREE_IMAGE_MAX_BYTES = 16 * 1024 * 1024;
+
 const ACP_BACKEND_ID_PREFIX = "acp:";
 const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -1729,6 +1803,7 @@ export type NavigationRow = {
   subthreadsCollapsed?: boolean;
   reactions?: string[];
   reactionsTruncated?: boolean;
+  lock?: ThreadLock;
   prs?: PrSummary[];
   prsTruncated?: boolean;
   messagingBindings?: MessagingThreadBindingSummary[];
@@ -2097,6 +2172,46 @@ export type SetThreadReactionResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   reactions: string[];
+};
+
+/** Who set a thread lock. `messaging` is a contact on a bound chat's status card. */
+export type ThreadLockSource = "operator" | "agent_tool" | "peer" | "messaging";
+
+/**
+ * A lock parks a thread: every path that starts or steers a turn refuses it
+ * until the thread is unlocked. The operator uses it when the thread's
+ * worktree has been handed to another agent, so nothing (a habitual reply,
+ * CI auto-repair, PR auto-fix, a queued message, messaging, a peer, or an
+ * agent tool) touches the worktree from here meanwhile. A running turn is not
+ * interrupted.
+ */
+export type ThreadLock = {
+  /** Why the thread is locked, shown on the thread and in the sidebar. */
+  note?: string;
+  /** Epoch milliseconds. */
+  lockedAt: number;
+  source: ThreadLockSource;
+  /** For `source: "peer"`: the instance that locked it. */
+  sourceInstanceId?: FederationInstanceId;
+};
+
+export type SetThreadLockRequest = {
+  backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** true locks the thread, or replaces the note of a locked thread; false unlocks it. */
+  locked: boolean;
+  /** Ignored when unlocking. Omitted keeps a locked thread's note; blank clears it. */
+  note?: string;
+};
+
+export type SetThreadLockResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Absent once unlocked. */
+  lock?: ThreadLock;
+  /** The lock an unlock removed, so a caller can put it back. */
+  previousLock?: ThreadLock;
 };
 
 export type SetThreadPinRequest = {
@@ -2726,6 +2841,8 @@ export type ThreadOverlayState = {
    * (e.g., "needs follow-up"), not multi-user voting.
    */
   reactions?: string[];
+  /** Present while the thread is locked against new turns. See {@link ThreadLock}. */
+  lock?: ThreadLock;
   /**
    * Consolidated tool-output incident state for this thread: when it first
    * warned, what the operator dismissed, and what they muted. Persisted so an

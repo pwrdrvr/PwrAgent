@@ -88,6 +88,10 @@
   --accent: #ff8a1f;
   --accent-strong: #ffa33d;
   --accent-bright: #ffb35c;
+  /* Accent under --button-text / --accent-on ink. A theme whose accent is
+     too light for text keeps its own color here. */
+  --accent-fill: var(--accent);
+  --accent-fill-strong: var(--accent-strong);
   /* Foreground for content sitting on a solid `--accent` fill (the orange
      "composing source" thread row). Near-black on the bright dark-theme
      accent for a strong AA-passing contrast. */
@@ -199,6 +203,15 @@
   --scrim-strong: color-mix(in srgb, var(--shadow-base) 62%, transparent);
   --scrim-opaque: color-mix(in srgb, var(--shadow-base) 88%, transparent);
 
+  /* Image diff legend. The pixel-diff worker bakes these exact values into
+     its PNG (`image-diff/pixel-diff-options.ts`), so they do not flip with
+     the theme: the swatch has to match the picture it explains. Magenta, not
+     pixelmatch's red, because game art and UI screenshots already carry red. */
+  --image-diff-changed: #ff2d9b;
+  --image-diff-aa: #ffe14d;
+  /* The dark square of the transparency checkerboard behind a preview. */
+  --image-diff-checker: color-mix(in srgb, var(--text-primary) 7%, transparent);
+
   /* Scrollbar tones — thumb + track for the native (`scrollbar-color`)
      thin scrollbars; no hover tone since the OS handles thumb hover. */
   --scrollbar-track: color-mix(in srgb, var(--text-primary) 5%, transparent);
@@ -290,6 +303,53 @@
      Labels (13px) and code (12px) deliberately stay fixed so the
      subordinate hierarchy survives every notch. */
   --transcript-text-size: 14px;
+  /* Theme picker swatches (GeneralSettings): each color theme's canvas,
+     sidebar, accent, and primary text, readable while any other theme
+     renders. The contract test holds each to its theme block. */
+  --theme-swatch-tangerine-dark-app: #000000;
+  --theme-swatch-tangerine-dark-sidebar: #050505;
+  --theme-swatch-tangerine-dark-accent: #ff8a1f;
+  --theme-swatch-tangerine-dark-text: #f7f3eb;
+  --theme-swatch-tangerine-light-app: #ffffff;
+  --theme-swatch-tangerine-light-sidebar: #f7f4ef;
+  --theme-swatch-tangerine-light-accent: #b74c00;
+  --theme-swatch-tangerine-light-text: #1a1612;
+  --theme-swatch-catppuccin-mocha-app: #1e1e2e;
+  --theme-swatch-catppuccin-mocha-sidebar: #181825;
+  --theme-swatch-catppuccin-mocha-accent: #fab387;
+  --theme-swatch-catppuccin-mocha-text: #cdd6f4;
+  --theme-swatch-catppuccin-latte-app: #eff1f5;
+  --theme-swatch-catppuccin-latte-sidebar: #e6e9ef;
+  --theme-swatch-catppuccin-latte-accent: #983801;
+  --theme-swatch-catppuccin-latte-text: #343648;
+  --theme-swatch-solarized-dark-app: #002b36;
+  --theme-swatch-solarized-dark-sidebar: #073642;
+  --theme-swatch-solarized-dark-accent: #dba600;
+  --theme-swatch-solarized-dark-text: #b1bfbf;
+  --theme-swatch-solarized-light-app: #fdf6e3;
+  --theme-swatch-solarized-light-sidebar: #eee8d5;
+  --theme-swatch-solarized-light-accent: #9a3911;
+  --theme-swatch-solarized-light-text: #3a4f56;
+  --theme-swatch-gray-dark-app: #2b2b2e;
+  --theme-swatch-gray-dark-sidebar: #252528;
+  --theme-swatch-gray-dark-accent: #ffa95a;
+  --theme-swatch-gray-dark-text: #ececee;
+  --theme-swatch-gray-light-app: #ebebed;
+  --theme-swatch-gray-light-sidebar: #e2e2e5;
+  --theme-swatch-gray-light-accent: #8a3900;
+  --theme-swatch-gray-light-text: #1d1d20;
+  --theme-swatch-blue-dark-app: #0f1724;
+  --theme-swatch-blue-dark-sidebar: #0b121d;
+  --theme-swatch-blue-dark-accent: #5baaff;
+  --theme-swatch-blue-dark-text: #e4ecf8;
+  --theme-swatch-blue-light-app: #f3f7fc;
+  --theme-swatch-blue-light-sidebar: #e8eff8;
+  --theme-swatch-blue-light-accent: #1c56ac;
+  --theme-swatch-blue-light-text: #0f223b;
+  --theme-swatch-phosphor-dark-app: #050a06;
+  --theme-swatch-phosphor-dark-sidebar: #030704;
+  --theme-swatch-phosphor-dark-accent: #00ff41;
+  --theme-swatch-phosphor-dark-text: #c8f5d0;
 }
 
 /* =============================================================}
@@ -525,6 +585,724 @@
 
 /* =============================================================}
 
+   COLOR THEMES — one per scheme, picked independently
+
+   The operator picks a dark theme and a light theme; the scheme the
+   window resolves to (Settings → Theme: system, dark, or light) chooses
+   which one renders. `data-theme` stays the scheme (light or absent) so
+   every scheme-keyed rule and script keeps working, and
+   `data-color-theme="<id>"` recolors the tokens on top. Tangerine is the
+   bare :root / :root[data-theme="light"] pair and sets no attribute.
+
+   Each block sets the full themeable token set. A light theme's block has
+   the same specificity as :root[data-theme="light"] and comes later, so it
+   wins. Tokens no theme sets — shadows, scrims, the Star Map float — follow
+   the scheme block, as UI-THEME.md requires.
+
+   CONTRAST. Every token read as text clears WCAG AA at 4.55:1 (0.05 of
+   margin for rendering) against the lowest-contrast background it can land
+   on: the flat surfaces plus the 12% and 16% accent tints over panel,
+   sidebar, and hover. Each semantic text also clears its own soft tint.
+   Non-text marks (--danger-base, --status-suspended, chart series) clear
+   3.05:1 on the flat surfaces. --text-subtle clears AA in every theme here.
+
+   Catppuccin and Solarized are borrowed palettes, so they follow one rule:
+   each token starts from its upstream color, and only a token that fails
+   its floor moves, by the least OKLCH lightness that clears it. Hue and
+   chroma stay. Most of Mocha is upstream; Latte's text, accent, and
+   semantic colors move, because Catppuccin tunes Latte below AA.
+   Solarized's stock text does not clear AA on base02 (base0 is 4.1:1,
+   base01 2.4:1), so its text moves by the one lightness step base0 needs,
+   and the dark accent is Solarized yellow; orange cannot clear AA as text
+   on base03, so the pair's accents differ in hue.
+
+   Latte's accent is too light for text (peach is 2.6:1 on base), so text
+   and marks take a darker orange and --accent-fill keeps Catppuccin's
+   peach for fills under dark ink. Every other theme fills with --accent.
+
+   The integrated terminal keeps each palette's own ANSI colors, even where
+   one is below AA on its canvas (Latte yellow, Solarized base2 white): the
+   terminal is where operators compare PwrAgent with their own setup, and
+   programs pick ANSI colors without knowing the background.
+
+   Catppuccin (https://catppuccin.com/licensing/) and Solarized are MIT
+   licensed. Their notices are in apps/desktop/resources/color-themes/ and
+   THIRD_PARTY_LICENSES.
+
+   Gray and Blue are PwrAgent designs. Gray keeps the Tangerine accent on
+   neutral charcoal or light-gray surfaces; Blue uses a blue accent on navy
+   or pale-blue surfaces. Their terminals keep the Tangerine ANSI colors.
+
+   Phosphor is a PwrAgent design after a green-phosphor CRT terminal, dark
+   only: phosphor green (#00ff41) as the accent and terminal ink on
+   green-tinted near-black, with red for danger and blue for info. It
+   borrows no published palette, so it carries no license notice.
+   =========================================================================== */
+:root[data-color-theme="catppuccin-mocha"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #1e1e2e;
+  --bg-sidebar: #181825;
+  --bg-panel: #1e1e2e;
+  --bg-panel-elevated: #252536;
+  --bg-panel-hover: #28293a;
+  --bg-row-active: #342d37;
+  --bg-input: #181825;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text: Catppuccin's text / subtext1 / subtext0 */
+  --text-primary: #cdd6f4;
+  --text-secondary: #bac2de;
+  --text-muted: #a7aec9;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 74%, transparent);
+
+  /* Accent: Peach */
+  --accent: #fab387;
+  --accent-strong: #feb78b;
+  --accent-bright: #febd96;
+  --accent-on: #11111b;
+  --button-text: #11111b;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #1e1e2e;
+  --terminal-fg: var(--text-primary);
+  --terminal-cursor: #f5e0dc;
+  --terminal-cursor-accent: #1e1e2e;
+  --terminal-ansi-black: #45475a;
+  --terminal-ansi-red: #f38ba8;
+  --terminal-ansi-green: #a6e3a1;
+  --terminal-ansi-yellow: #f9e2af;
+  --terminal-ansi-blue: #89b4fa;
+  --terminal-ansi-magenta: #f5c2e7;
+  --terminal-ansi-cyan: #94e2d5;
+  --terminal-ansi-white: #bac2de;
+  --terminal-ansi-bright-black: #585b70;
+  --terminal-ansi-bright-red: #f38ba8;
+  --terminal-ansi-bright-green: #a6e3a1;
+  --terminal-ansi-bright-yellow: #f9e2af;
+  --terminal-ansi-bright-blue: #89b4fa;
+  --terminal-ansi-bright-magenta: #f5c2e7;
+  --terminal-ansi-bright-cyan: #94e2d5;
+  --terminal-ansi-bright-white: #a6adc8;
+
+  /* Semantic */
+  --danger-base: #f38ba8;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #ffc4d2;
+  --danger-text-light: #eba0ac;
+  --success-soft: color-mix(in srgb, #a6e3a1 18%, transparent);
+  --success-border: color-mix(in srgb, #a6e3a1 32%, transparent);
+  --success-text: #a8e5a3;
+  --info-soft: color-mix(in srgb, #89b4fa 16%, transparent);
+  --info-border: color-mix(in srgb, #89b4fa 28%, transparent);
+  --info-text: #a9caff;
+  --info-teal: #94e2d5;
+  --brand-purple: #cba6f7;
+
+  /* Status */
+  --status-ok: #a6e3a1;
+  --status-warning: #f9e2af;
+  --status-error: #eba0ac;
+  --status-suspended: #6f7389;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #89b4fa;
+  --usage-series-3: #94e2d5;
+  --usage-series-4: #cba6f7;
+  --usage-series-5: #f9e2af;
+}
+
+:root[data-color-theme="catppuccin-latte"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #eff1f5;
+  --bg-sidebar: #e6e9ef;
+  --bg-panel: #eff1f5;
+  --bg-panel-elevated: #f7f8fa;
+  --bg-panel-hover: #e4e7ed;
+  --bg-row-active: #f1e3de;
+  --bg-input: #f7f8fa;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text: subtext0 needs AA (#53566b at the floor), which leaves no room
+     between it and Catppuccin's text, so primary darkens to keep a ladder. */
+  --text-primary: #343648;
+  --text-secondary: #454756;
+  --text-muted: #545666;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 79%, transparent);
+
+  /* Accent: Peach */
+  --accent: #983801;
+  --accent-strong: #933601;
+  --accent-bright: #8e3401;
+  /* Peach is 2.6:1 as text on base, so text and marks take a darker
+     orange; fills keep Catppuccin's peach under dark ink (6.3:1). */
+  --accent-fill: #fe640b;
+  --accent-fill-strong: #f15d00;
+  --accent-on: #11111b;
+  --button-text: #11111b;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #eff1f5;
+  --terminal-fg: var(--text-primary);
+  --terminal-cursor: #dc8a78;
+  --terminal-cursor-accent: #eff1f5;
+  --terminal-ansi-black: #5c5f77;
+  --terminal-ansi-red: #d20f39;
+  --terminal-ansi-green: #40a02b;
+  --terminal-ansi-yellow: #df8e1d;
+  --terminal-ansi-blue: #1e66f5;
+  --terminal-ansi-magenta: #ea76cb;
+  --terminal-ansi-cyan: #179299;
+  --terminal-ansi-white: #acb0be;
+  --terminal-ansi-bright-black: #6c6f85;
+  --terminal-ansi-bright-red: #d20f39;
+  --terminal-ansi-bright-green: #40a02b;
+  --terminal-ansi-bright-yellow: #df8e1d;
+  --terminal-ansi-bright-blue: #1e66f5;
+  --terminal-ansi-bright-magenta: #ea76cb;
+  --terminal-ansi-bright-cyan: #179299;
+  --terminal-ansi-bright-white: #bcc0cc;
+
+  /* Semantic */
+  --danger-base: #d20f39;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #86001f;
+  --danger-text-light: #b1012b;
+  --success-soft: color-mix(in srgb, #40a02b 18%, transparent);
+  --success-border: color-mix(in srgb, #40a02b 32%, transparent);
+  --success-text: #245918;
+  --info-soft: color-mix(in srgb, #1e66f5 16%, transparent);
+  --info-border: color-mix(in srgb, #1e66f5 28%, transparent);
+  --info-text: #0841b4;
+  --info-teal: #0f6065;
+  --brand-purple: #6e13e6;
+
+  /* Status */
+  --status-ok: #28631b;
+  --status-warning: #7d4c00;
+  --status-error: #b1012b;
+  --status-suspended: #7c8297;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #1e66f5;
+  --usage-series-3: #179097;
+  --usage-series-4: #8839ef;
+  --usage-series-5: #b67418;
+}
+
+:root[data-color-theme="solarized-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #002b36;
+  --bg-sidebar: #073642;
+  --bg-panel: #002b36;
+  /* Solarized publishes two background tones per scheme, so hover sits
+     midway between them: lighter than base03 on the panel, darker than
+     base02 in the sidebar. A lighter hover would put the text below AA on
+     its accent tints. */
+  --bg-panel-elevated: #073642;
+  --bg-panel-hover: #04313c;
+  --bg-row-active: #163731;
+  --bg-input: #073642;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text: base1 / base0 / base0 (base01 / base00 / base00 in light),
+     each moved by the one lightness step base0 needs for AA. */
+  --text-primary: #b1bfbf;
+  --text-secondary: #a7b9bb;
+  --text-muted: #a0b2b4;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 89%, transparent);
+
+  /* Accent */
+  --accent: #dba600;
+  --accent-strong: #e1ab00;
+  --accent-bright: #e7af00;
+  --accent-on: #002b36;
+  --button-text: #002b36;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #002b36;
+  --terminal-fg: #839496;
+  --terminal-cursor: #93a1a1;
+  --terminal-cursor-accent: #002b36;
+  --terminal-ansi-black: #073642;
+  --terminal-ansi-red: #dc322f;
+  --terminal-ansi-green: #859900;
+  --terminal-ansi-yellow: #b58900;
+  --terminal-ansi-blue: #268bd2;
+  --terminal-ansi-magenta: #d33682;
+  --terminal-ansi-cyan: #2aa198;
+  --terminal-ansi-white: #eee8d5;
+  --terminal-ansi-bright-black: #002b36;
+  --terminal-ansi-bright-red: #cb4b16;
+  --terminal-ansi-bright-green: #586e75;
+  --terminal-ansi-bright-yellow: #657b83;
+  --terminal-ansi-bright-blue: #839496;
+  --terminal-ansi-bright-magenta: #6c71c4;
+  --terminal-ansi-bright-cyan: #93a1a1;
+  --terminal-ansi-bright-white: #fdf6e3;
+
+  /* Semantic */
+  --danger-base: #e43b36;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #f1a2a0;
+  --danger-text-light: #f1a281;
+  --success-soft: color-mix(in srgb, #859900 18%, transparent);
+  --success-border: color-mix(in srgb, #859900 32%, transparent);
+  --success-text: #b3ce00;
+  --info-soft: color-mix(in srgb, #268bd2 16%, transparent);
+  --info-border: color-mix(in srgb, #268bd2 28%, transparent);
+  --info-text: #8dc4ea;
+  --info-teal: #33c2b7;
+  --brand-purple: #a8abdc;
+
+  /* Status */
+  --status-ok: #a1b900;
+  --status-warning: #e4ad00;
+  --status-error: #f1a07e;
+  --status-suspended: #668088;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #268bd2;
+  --usage-series-3: #2aa198;
+  --usage-series-4: #6f74c5;
+  --usage-series-5: #d2521f;
+}
+
+:root[data-color-theme="solarized-light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #fdf6e3;
+  --bg-sidebar: #eee8d5;
+  --bg-panel: #fdf6e3;
+  /* Solarized publishes two background tones per scheme. Hover sits midway
+     between base3 and base2, and raised surfaces sit just above base3, so
+     neither matches the panel or the sidebar. */
+  --bg-panel-elevated: #fffcf5;
+  --bg-panel-hover: #f6efdc;
+  --bg-row-active: #f5e7d2;
+  --bg-input: #fdf6e3;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text: base1 / base0 / base0 (base01 / base00 / base00 in light),
+     each moved by the one lightness step base0 needs for AA. */
+  --text-primary: #3a4f56;
+  --text-secondary: #40555c;
+  --text-muted: #465b63;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 91%, transparent);
+
+  /* Accent */
+  --accent: #9a3911;
+  --accent-strong: #933610;
+  --accent-bright: #8e3510;
+  --accent-on: #fdf6e3;
+  --button-text: #fdf6e3;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #fdf6e3;
+  --terminal-fg: #5f747c;
+  --terminal-cursor: #586e75;
+  --terminal-cursor-accent: #fdf6e3;
+  --terminal-ansi-black: #073642;
+  --terminal-ansi-red: #dc322f;
+  --terminal-ansi-green: #859900;
+  --terminal-ansi-yellow: #b58900;
+  --terminal-ansi-blue: #268bd2;
+  --terminal-ansi-magenta: #d33682;
+  --terminal-ansi-cyan: #2aa198;
+  --terminal-ansi-white: #eee8d5;
+  --terminal-ansi-bright-black: #002b36;
+  --terminal-ansi-bright-red: #cb4b16;
+  --terminal-ansi-bright-green: #586e75;
+  --terminal-ansi-bright-yellow: #657b83;
+  --terminal-ansi-bright-blue: #839496;
+  --terminal-ansi-bright-magenta: #6c71c4;
+  --terminal-ansi-bright-cyan: #93a1a1;
+  --terminal-ansi-bright-white: #fdf6e3;
+
+  /* Semantic */
+  --danger-base: #dc322f;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #891917;
+  --danger-text-light: #7b2d0d;
+  --success-soft: color-mix(in srgb, #859900 18%, transparent);
+  --success-border: color-mix(in srgb, #859900 32%, transparent);
+  --success-text: #4a5500;
+  --info-soft: color-mix(in srgb, #268bd2 16%, transparent);
+  --info-border: color-mix(in srgb, #268bd2 28%, transparent);
+  --info-text: #17537e;
+  --info-teal: #1a625d;
+  --brand-purple: #474db1;
+
+  /* Status */
+  --status-ok: #525e00;
+  --status-warning: #6b5100;
+  --status-error: #86320f;
+  --status-suspended: #768787;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #2689cf;
+  --usage-series-3: #26928a;
+  --usage-series-4: #6c71c4;
+  --usage-series-5: #a67e00;
+}
+
+:root[data-color-theme="gray-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #2b2b2e;
+  --bg-sidebar: #252528;
+  --bg-panel: #2b2b2e;
+  --bg-panel-elevated: #323236;
+  --bg-panel-hover: #37373b;
+  --bg-row-active: #403832;
+  --bg-input: #232326;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #ececee;
+  --text-secondary: #c8c8cb;
+  --text-muted: #bcbcc0;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 71%, transparent);
+
+  /* Accent */
+  --accent: #ffa95a;
+  --accent-strong: #ffb169;
+  --accent-bright: #ffb876;
+  --accent-on: #1c1c1e;
+  --button-text: #1c1c1e;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #2b2b2e;
+  --terminal-fg: #d4d4d8;
+  --terminal-cursor: #ffb35c;
+  --terminal-cursor-accent: #2b2b2e;
+
+  /* Semantic */
+  --danger-base: #ff9b8a;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #ffdbd4;
+  --danger-text-light: #f9ddd7;
+  --success-soft: color-mix(in srgb, #8fd6a5 18%, transparent);
+  --success-border: color-mix(in srgb, #8fd6a5 32%, transparent);
+  --success-text: #bce7c9;
+  --info-soft: color-mix(in srgb, #93bff7 16%, transparent);
+  --info-border: color-mix(in srgb, #93bff7 28%, transparent);
+  --info-text: #c0dafa;
+  --info-teal: #5fd3cc;
+  --brand-purple: #c6b3ee;
+
+  /* Status */
+  --status-ok: #8fd6a5;
+  --status-warning: #e8c48b;
+  --status-error: #f4c5ba;
+  --status-suspended: #8a8a90;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #7aa7e0;
+  --usage-series-3: #4fb8a8;
+  --usage-series-4: #b59be0;
+  --usage-series-5: #d8c07a;
+}
+
+:root[data-color-theme="gray-light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #ebebed;
+  --bg-sidebar: #e2e2e5;
+  --bg-panel: #eeeef0;
+  --bg-panel-elevated: #f6f6f7;
+  --bg-panel-hover: #dddde1;
+  --bg-row-active: #e6e0dd;
+  --bg-input: #f6f6f7;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text */
+  --text-primary: #1d1d20;
+  --text-secondary: #45454b;
+  --text-muted: #515157;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 69%, transparent);
+
+  /* Accent */
+  --accent: #8a3900;
+  --accent-strong: #843700;
+  --accent-bright: #7f3400;
+  --accent-on: #ffffff;
+  --button-text: #ffffff;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #ebebed;
+  --terminal-fg: #2e2e33;
+  --terminal-cursor: #d96d00;
+  --terminal-cursor-accent: #ebebed;
+
+  /* Semantic */
+  --danger-base: #8a1f12;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #70190f;
+  --danger-text-light: #612918;
+  --success-soft: color-mix(in srgb, #1a5c2e 18%, transparent);
+  --success-border: color-mix(in srgb, #1a5c2e 32%, transparent);
+  --success-text: #164c26;
+  --info-soft: color-mix(in srgb, #1a4f8a 16%, transparent);
+  --info-border: color-mix(in srgb, #1a4f8a 28%, transparent);
+  --info-text: #174478;
+  --info-teal: #095c58;
+  --brand-purple: #5e4294;
+
+  /* Status */
+  --status-ok: #1a5c2e;
+  --status-warning: #6c4300;
+  --status-error: #75321d;
+  --status-suspended: #7b7b82;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #2f64a8;
+  --usage-series-3: #11806f;
+  --usage-series-4: #7250b0;
+  --usage-series-5: #8a6d12;
+}
+
+:root[data-color-theme="blue-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #0f1724;
+  --bg-sidebar: #0b121d;
+  --bg-panel: #111a28;
+  --bg-panel-elevated: #162133;
+  --bg-panel-hover: #1a2740;
+  --bg-row-active: #18283e;
+  --bg-input: #0c1420;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #e4ecf8;
+  --text-secondary: #b6c4da;
+  --text-muted: #95a7c2;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 61%, transparent);
+
+  /* Accent */
+  --accent: #5baaff;
+  --accent-strong: #64afff;
+  --accent-bright: #6db4ff;
+  --accent-on: #06111f;
+  --button-text: #06111f;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #0f1724;
+  --terminal-fg: #c9d6ea;
+  --terminal-cursor: #7fbcff;
+  --terminal-cursor-accent: #0f1724;
+
+  /* Semantic */
+  --danger-base: #ffa99a;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #ffc1b6;
+  --danger-text-light: #f8c5b9;
+  --success-soft: color-mix(in srgb, #8fdcab 18%, transparent);
+  --success-border: color-mix(in srgb, #8fdcab 32%, transparent);
+  --success-text: #8fdcab;
+  --info-soft: color-mix(in srgb, #a8cdff 16%, transparent);
+  --info-border: color-mix(in srgb, #a8cdff 28%, transparent);
+  --info-text: #a8cdff;
+  --info-teal: #5fd8d2;
+  --brand-purple: #bba6f2;
+
+  /* Status */
+  --status-ok: #8fdcab;
+  --status-warning: #e9bd6a;
+  --status-error: #f4a693;
+  --status-suspended: #63728c;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #5aa9ff;
+  --usage-series-3: #4fb8a8;
+  --usage-series-4: #b59be0;
+  --usage-series-5: #d8c07a;
+}
+
+:root[data-color-theme="blue-light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #f3f7fc;
+  --bg-sidebar: #e8eff8;
+  --bg-panel: #f6f9fd;
+  --bg-panel-elevated: #ffffff;
+  --bg-panel-hover: #e1e9f4;
+  --bg-row-active: #e5ecf7;
+  --bg-input: #ffffff;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
+
+  /* Text */
+  --text-primary: #0f223b;
+  --text-secondary: #33486a;
+  --text-muted: #475976;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 69%, transparent);
+
+  /* Accent */
+  --accent: #1c56ac;
+  --accent-strong: #1b52a5;
+  --accent-bright: #1a4f9f;
+  --accent-on: #ffffff;
+  --button-text: #ffffff;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #f3f7fc;
+  --terminal-fg: #1f2f47;
+  --terminal-cursor: #1f5fbf;
+  --terminal-cursor-accent: #f3f7fc;
+
+  /* Semantic */
+  --danger-base: #9a2516;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #7b1e12;
+  --danger-text-light: #6c2e1b;
+  --success-soft: color-mix(in srgb, #1a5c2e 18%, transparent);
+  --success-border: color-mix(in srgb, #1a5c2e 32%, transparent);
+  --success-text: #18532a;
+  --info-soft: color-mix(in srgb, #174a8c 16%, transparent);
+  --info-border: color-mix(in srgb, #174a8c 28%, transparent);
+  --info-text: #17498a;
+  --info-teal: #0a6360;
+  --brand-purple: #5e3fa3;
+
+  /* Status */
+  --status-ok: #1a5c2e;
+  --status-warning: #744800;
+  --status-error: #7e3520;
+  --status-suspended: #77859c;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #2f64a8;
+  --usage-series-3: #11806f;
+  --usage-series-4: #7250b0;
+  --usage-series-5: #8a6d12;
+}
+
+:root[data-color-theme="phosphor-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #050a06;
+  --bg-sidebar: #030704;
+  --bg-panel: #070d08;
+  --bg-panel-elevated: #0c160e;
+  --bg-panel-hover: #112014;
+  --bg-row-active: #06250e;
+  --bg-input: #040805;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #c8f5d0;
+  --text-secondary: #8fd49c;
+  --text-muted: #7db187;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 61%, transparent);
+
+  /* Accent */
+  --accent: #00ff41;
+  --accent-strong: #48ff77;
+  --accent-bright: #6aff90;
+  --accent-on: #021a06;
+  --button-text: #021a06;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #050a06;
+  --terminal-fg: #33ff66;
+  --terminal-cursor: #00ff41;
+  --terminal-cursor-accent: #050a06;
+
+  /* Semantic */
+  --danger-base: #c4302b;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #e6908d;
+  --danger-text-light: #ff827b;
+  --success-soft: color-mix(in srgb, #7bd88f 18%, transparent);
+  --success-border: color-mix(in srgb, #7bd88f 32%, transparent);
+  --success-text: #84db96;
+  --info-soft: color-mix(in srgb, #4f8dff 16%, transparent);
+  --info-border: color-mix(in srgb, #4f8dff 28%, transparent);
+  --info-text: #8eb6ff;
+  --info-teal: #3fd9c0;
+  --brand-purple: #b39ddb;
+
+  /* Status */
+  --status-ok: #7bd88f;
+  --status-warning: #e0b040;
+  --status-error: #ff908a;
+  --status-suspended: #4f7358;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #4f8dff;
+  --usage-series-3: #3fd9c0;
+  --usage-series-4: #b39ddb;
+  --usage-series-5: #e0b040;
+}
+
+/* =============================================================}
+
    DENSITY — Compact vs. Mission Control
 
    Density is a separate axis from theme. Mission Control is the default
@@ -684,11 +1462,11 @@ body,
 /* Every window's own edge, on the one platform that draws us none.
 
    Electron gives a frameless Linux window an `OpaqueFrameView`: no border, no
-   rounded corners, and no drop shadow on X11. There is no option to get them
-   back — `roundedCorners` is handled inside `#if BUILDFLAG(IS_WIN)`, and the
-   only way to round a frameless window is `transparent: true`, which Electron
-   documents as giving up resizing. So the edge is a hairline we paint, and the
-   corners stay square. (Resizing itself is unaffected: `FramelessView::
+   rounded corners, and no drop shadow on X11. Electron 43 made
+   `roundedCorners` round it under client-side decorations, but only there, so
+   the main window passes `roundedCorners: false` (`main-window-chrome.ts`):
+   the edge is a hairline we paint, and the corners stay square on every
+   Linux desktop. (Resizing itself is unaffected: `FramelessView::
    ResizingBorderHitTest` uses an inside-bounds resize border with 16px corner
    grabs, under this overlay, which takes no clicks.)
 
@@ -3199,7 +3977,7 @@ textarea,
 }
 
 .log-window__match--active {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -3819,7 +4597,8 @@ textarea,
    in-lane `.sidebar-empty.directory-row__empty` and the masthead error
    (a `.sidebar` child, not a region child) are untouched. */
 .sidebar__scroll-region > .sidebar-empty,
-.sidebar__scroll-region > .sidebar-error {
+.sidebar__scroll-region > .sidebar-error,
+.sidebar__scroll-region > .sidebar-start-actions {
   margin-inline: var(--sidebar-rail-inset);
 }
 
@@ -4281,6 +5060,16 @@ a.button {
   background: var(--bg-panel-hover);
 }
 
+/* A thread lens with no threads to show. `aria-disabled` keeps the tab
+   focusable so its tooltip can say why; restate the muted treatment over the
+   hover fill above so it never looks actionable. */
+.lens-switch__button[aria-disabled="true"],
+.lens-switch__button[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
 .button--secondary {
   border-color: var(--border-subtle);
   background: var(--bg-panel-elevated);
@@ -4299,7 +5088,7 @@ a.button {
 }
 
 .button--primary:hover:not([disabled]) {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -4773,6 +5562,20 @@ a.button {
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+  /* The accent edge — PwrGit's `.ref-branch-row.is-current` marker. An
+     inset shadow is clipped to the padding box, so it follows the card's
+     inner radius and curves around both left corners into the outline.
+     It replaced a 3px `::before` bar drawn 5px inside the border, which
+     shared that gutter with the sub-thread chevron (a parent card had to
+     start its bar below the chevron) and with the directory-summary
+     chevron (which had to drop the bar entirely). The shadow takes no
+     layout space and nothing sits under it, so every row kind gets the
+     same edge.
+
+     The edge carries SC 1.4.11 for the selected state: --accent is
+     8.40:1 against --bg-row-active in dark and 4.82:1 in light, where
+     the --bg-row-active fill alone is a wash. */
+  box-shadow: inset 2px 0 0 0 var(--accent);
   /* Lift the accented card in the stacking order (rows are
      `position: relative`) so its border is never painted over by an
      adjacent sibling's hover background — most visible between two tight
@@ -4795,8 +5598,8 @@ a.button {
    long as the pointer rests on the link (see ThreadRow / thread-links). */
 .thread-row.is-composer-source,
 .thread-row.is-link-target {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--accent-on);
   /* Same stacking lift as `.is-selected` — keep the solid accent fill +
      border above a neighbouring hovered row. */
@@ -4870,7 +5673,7 @@ a.button {
   right: 12px;
   padding: 1px 7px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-on);
   font-size: 10px;
   font-weight: 600;
@@ -4896,8 +5699,7 @@ a.button {
 }
 
 :root[data-native-drag-active] [role="tooltip"],
-:root[data-native-drag-active] [role="menu"],
-:root[data-native-drag-active] .tooltip-target[data-tooltip]::after {
+:root[data-native-drag-active] [role="menu"] {
   display: none !important;
 }
 
@@ -5258,7 +6060,7 @@ a.button {
 
 .reaction-picker__custom-submit:hover:not(:disabled),
 .reaction-picker__custom-submit:focus-visible {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -5270,40 +6072,6 @@ a.button {
 .reaction-picker__custom-submit:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.thread-row.is-selected::before {
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 5px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--accent);
-  content: "";
-  pointer-events: none;
-}
-
-/* Directory-summary rows reuse `.thread-row` for typography + selection
-   tokens, but the row's lateral padding is tightened to 4px so the
-   folder icon sits close to the row edge. The base `::before` accent
-   bar (positioned at left:5px) would paint over the folder icon under
-   that tighter inset. The row already telegraphs selection via the
-   accent border and tinted background from `.thread-row.is-selected`,
-   so the redundant bar is suppressed here. */
-.directory-row__summary.is-selected::before {
-  content: none;
-}
-
-/* A card with sub-threads carries the expand/collapse toggle in its left
-   gutter (`.thread-row__subthread-toggle`, top: 9px / 18px tall → bottom
-   at 27px, left: 8px). The selection accent bar (`::before`, top: 8px,
-   left: 5px) otherwise starts level with the toggle and the two cluster
-   against the card border. Drop the bar's start just below the toggle so it
-   still telegraphs selection down the card's left edge without running
-   into the chevron. */
-.thread-row-shell.has-subthreads .thread-row.is-selected::before {
-  top: 30px;
 }
 
 /* Title line — a sibling of the open-thread overlay since the
@@ -5459,6 +6227,17 @@ a.button {
 /* A pin kept at top: the same glyph, filled. */
 .thread-row__heading-pin--kept path {
   fill: currentColor;
+}
+
+/* A locked thread: the padlock follows the title, before the pin, in the
+   accent the pin uses. Hoverable through the header's pointer transparency
+   so the viewport tooltip can show the lock note. */
+.thread-row__lock {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--accent);
+  pointer-events: auto;
 }
 
 /* A command that outlived its turn (a dev server, a watcher). Quiet on
@@ -5714,8 +6493,8 @@ a.button {
 
 .chip--agent,
 .thread-row__chip--agent {
-  border: 1px solid var(--accent-strong);
-  background: var(--accent);
+  border: 1px solid var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--accent-on);
   font-weight: 700;
 }
@@ -5743,15 +6522,15 @@ a.button {
 
 .thread-row__chip--approval,
 .thread-row__chip--input {
-  border: 1px solid var(--accent-strong);
-  background: var(--accent);
+  border: 1px solid var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 700;
 }
 
 .thread-row__chip--approval:hover,
 .thread-row__chip--input:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 
 /* Icon-only marker: this thread has a live shell. Quieter than the approval /
@@ -5773,8 +6552,8 @@ a.button {
    two labels sit in the same list. Only one renders per row (priority is
    resolved upstream), but they share the base pill sizing. */
 .thread-row__chip--scheduled {
-  border: 1px solid var(--accent-strong);
-  background: var(--accent);
+  border: 1px solid var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 700;
 }
@@ -5801,6 +6580,32 @@ a.button {
   font-weight: 600;
 }
 
+/* A sub-thread still being written (`SubthreadDraftRow`). The thread row's
+   box in the Draft chip's dashed neutral, so it reads as the same reminder
+   at row size; the title steps down to the secondary ink because nothing
+   has been sent. Selection keeps the dash and takes the accent edge. */
+.thread-row--draft {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.thread-row--draft .thread-row__title {
+  color: var(--text-secondary);
+}
+
+.thread-row__status-indicator--draft {
+  color: var(--text-muted);
+}
+
+/* The parent a draft row names when it waits away from it. Neutral like the
+   location chip, and it gives up width first: the title says what it is. */
+.thread-row__chips .thread-row__chip--subthread-parent {
+  flex: 0 1 auto;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+}
+
 .path-copy-target {
   position: relative;
 }
@@ -5817,66 +6622,13 @@ a.button {
   filter: brightness(1.06);
 }
 
-.tooltip-target[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 10px);
-  z-index: 30;
-  width: max-content;
-  max-width: min(320px, calc(100vw - 32px));
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--popover-bg-soft);
-  box-shadow: 0 12px 28px var(--shadow-tint-soft);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  text-align: left;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-50%) translateY(4px);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease;
-}
-
-/* Keyboard focus only. `:focus-within` also matches a button that took focus
-   from a mouse click, which pinned its tooltip open over the next control
-   until focus moved: after clicking the composer mic, its "End voice" tooltip
-   sat beside the voice bar's End voice and read as a second button. */
-.tooltip-target[data-tooltip]:hover::after,
-.tooltip-target[data-tooltip]:focus-visible::after,
-.tooltip-target[data-tooltip]:has(:focus-visible)::after {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-
-.context-list__meta.tooltip-target[data-tooltip]::after {
-  right: 0;
-  left: auto;
-  transform: translateY(4px);
-}
-
-.context-list__meta.tooltip-target[data-tooltip]:hover::after,
-.context-list__meta.tooltip-target[data-tooltip]:focus-visible::after {
-  transform: translateY(0);
-}
-
-.context-panel .context-list__label.tooltip-target[data-tooltip]::after {
-  left: 0;
-  transform: translateY(4px);
-}
-
-.context-panel .context-list__label.tooltip-target[data-tooltip]:hover::after,
-.context-panel .context-list__label.tooltip-target[data-tooltip]:focus-visible::after {
-  transform: translateY(0);
-}
-
+/* `.tooltip-target[data-tooltip]` draws no tooltip of its own. DataTooltipLayer
+   (lib/DataTooltipLayer.tsx) shows that text in a portal on document.body.
+   It used to be an `::after` here, and a pseudo-element paints inside its
+   host: every `overflow` ancestor clipped it and every stacking context
+   around it capped it, which is how the composer's toggles kept drawing
+   their tooltips under the sidebar. Do not bring the pseudo-element back for
+   one control; anything this rule's old job needs belongs in that layer. */
 .tooltip-target:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -7220,6 +7972,71 @@ a.button {
   cursor: default;
 }
 
+/* Start Chat and Add Project Folder, always the thread list's last item (see
+   `SidebarStartActions`). As a footer below history it is a quiet pair under
+   a hairline; with no thread yet it sits right under the empty state and the
+   chat action takes the accent, because it is the next step. */
+.sidebar-start-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-start-actions--lead {
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.sidebar-start-actions__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sidebar-start-actions__icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.sidebar-start-actions--lead .sidebar-start-actions__button--chat {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.sidebar-start-actions__button:hover:not([aria-disabled="true"]) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-start-actions__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* In flight: focusable, so the ring above still shows, but muted and inert. */
+.sidebar-start-actions__button[aria-disabled="true"] {
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
+  cursor: default;
+}
+
 .directory-group {
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);
@@ -7424,7 +8241,7 @@ a.button {
 }
 
 .thread-context-menu button[aria-checked="true"] .thread-context-menu__check {
-  background: var(--accent);
+  background: var(--accent-fill);
   box-shadow: none;
   color: var(--accent-on);
 }
@@ -7606,6 +8423,73 @@ a.button {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+/* Lock Thread / Edit Lock Note: the rename dialog's frame with a note field. */
+.thread-lock-dialog {
+  width: min(480px, 100%);
+}
+
+.thread-lock-dialog__lede,
+.thread-lock-dialog__hint {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-lock-dialog__hint {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.thread-lock-dialog textarea {
+  width: 100%;
+  min-height: 76px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.thread-lock-dialog textarea:focus,
+.thread-lock-dialog textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-lock-dialog__blocks {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.thread-lock-dialog__blocks p {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-lock-dialog__blocks ul {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .app-main {
@@ -8297,6 +9181,18 @@ a.button {
   padding-right: 6px;
 }
 
+.app-notice-toast__link {
+  color: var(--accent-bright);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.app-notice-toast__link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .codex-version-build {
   display: grid;
   gap: 8px;
@@ -8556,14 +9452,14 @@ a.button {
 
 .button.app-update-banner__restart,
 .button.settings-update-channel__restart-button {
-  border-color: var(--accent-strong);
-  background: var(--accent);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
 .button.app-update-banner__restart:hover:not([disabled]),
 .button.settings-update-channel__restart-button:hover:not([disabled]) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 
 /* "Release notes" — text among real buttons, on purpose. The card already
@@ -10584,6 +11480,17 @@ a.button {
   line-height: 1.45;
 }
 
+/* A link inside the description, such as a theme's palette credit. It
+   sits in muted prose, so it keeps its underline as well as the accent. */
+.settings-field__sub a {
+  color: var(--accent-bright);
+  text-underline-offset: 2px;
+}
+
+.settings-field__sub a:focus-visible {
+  border-radius: 3px;
+}
+
 .settings-field__control {
   display: flex;
   flex-direction: column;
@@ -11142,6 +12049,23 @@ a.button {
 
 .settings-update-channel__result {
   color: var(--text-secondary);
+}
+
+.settings-update-channel__manual {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+}
+
+.settings-update-channel__manual code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.settings-update-channel__manual .button {
+  justify-self: start;
 }
 
 .settings-update-channel__result--error {
@@ -12236,6 +13160,45 @@ a.button {
   color: var(--text-muted);
   font-size: 11.5px;
   overflow-wrap: anywhere;
+}
+
+/* A group heading (`SelectOption.group`): the eyebrow type the Settings
+   section heads use, aligned with the option labels' check column. */
+.select-group__label {
+  padding: 8px 10px 3px 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.select-listbox > [role="group"]:not(:first-child) > .select-group__label {
+  margin-top: 4px;
+}
+
+.select-option__leading,
+.select-trigger__leading {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1lh;
+  align-items: center;
+}
+
+/* The four-color strip on a theme option (GeneralSettings): app canvas,
+   sidebar, accent, primary text. Colors are the `--theme-swatch-*` tokens
+   on `:root`, each held to its theme block by the contract test. */
+.theme-swatch {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+
+.theme-swatch > i {
+  display: block;
+  width: 7px;
+  height: 12px;
 }
 
 .settings-input--invalid {
@@ -16759,8 +17722,8 @@ a.button {
 }
 
 /* Selection speaks the sidebar's language: the same tinted fill and accent
-   border as `.thread-row.is-selected`, and the same solid accent rail,
-   which is the part that actually reads. The previous 1px ring reused
+   border as `.thread-row.is-selected`, and the same accent edge, which is
+   the part that actually reads. The previous 1px ring reused
    `--accent-border` — the identical token the hover state puts on the
    border — so a selected card and a hovered one were the same picture. */
 .star-map-card-shell--selected .star-map-card {
@@ -16768,20 +17731,23 @@ a.button {
   background: var(--bg-row-active);
 }
 
+/* The sidebar draws its edge with the row's own `box-shadow`. A card cannot:
+   hover elevation, the Agent's highlight ring, the chat tether, and the
+   located pulse each set the card's `box-shadow` and would erase it. So the
+   edge rides a pseudo-element covering the padding box, with the card's
+   8px radius minus its 1px border, which is the curve `overflow: hidden`
+   clips to. */
 .star-map-card-shell--selected .star-map-card::before {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
-  left: 3px;
+  inset: 0;
   z-index: 1;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--accent);
+  border-radius: 7px;
+  box-shadow: inset 2px 0 0 0 var(--accent);
   content: "";
   pointer-events: none;
 }
 
-/* Hover still elevates a selected card. Selection is carried by the rail,
+/* Hover still elevates a selected card. Selection is carried by the edge,
    so the pointer keeps its own feedback instead of the two fighting over
    the background. */
 .star-map-card-shell--selected:hover .star-map-card {
@@ -18251,9 +19217,12 @@ a.button {
    keeps room for the thinking indicator. So no padding here, and no
    override of the items rule either: the card takes the transcript's own
    spacing rather than restating it. */
+/* A zero basis, so the transcript takes what the band and composer leave.
+   With `auto` it shrank in proportion to its content height, and a long
+   transcript squeezed the band to three rows, well under its cap. */
 .star-map-chat-card__transcript {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
@@ -18424,16 +19393,54 @@ a.button {
   user-select: text;
 }
 
+/* The card's band: every transient row between the transcript and the
+   compact composer — live work, the send error or notice, queued turns —
+   the same set of rows the full thread view keeps in `.composer__band`.
+   Before it existed these were loose children of the body that could not
+   shrink, so a long queue pushed the composer past the card's clipped bottom
+   edge. Now the band is capped at a share of the body and scrolls, and the
+   order the body gives up height in is the main window's: transcript first,
+   then the band, never the composer. The body's height is the card's own
+   inline height, so the percentage resolves. See
+   `styles/__tests__/composer-band-bounds.test.ts`. */
+.star-map-chat-card__band {
+  --rail-band-gap: 6px;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--rail-band-gap);
+  min-height: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.star-map-chat-card__band:empty {
+  display: none;
+}
+
+/* The rows keep their content height and let the band scroll; a flex item's
+   default `min-height: auto` already guarantees that, this says it aloud. */
+.star-map-chat-card__band > * {
+  flex-shrink: 0;
+}
+
 /* The full thread view surfaces monitor jobs and native sub-agents in the
    band above its composer. A floating chat is still an operating surface for
    that same thread, so carry the shared strip into the equivalent position
    instead of making the operator open the full window to discover live work.
    The component returns null while empty, leaving no reserved gap. */
-.star-map-chat-card > .live-strip {
-  flex: 0 0 auto;
+.star-map-chat-card__band > .live-strip {
   padding: 4px 0;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
+}
+
+/* The band draws the divider and the inset now. */
+.star-map-chat-card__band > .star-map-chat-card__error,
+.star-map-chat-card__band > .star-map-chat-card__notice {
+  padding: 0 2px;
+  border-top: 0;
 }
 
 /* Compact composer: for surfaces with no vertical budget. The field sits
@@ -18482,6 +19489,7 @@ a.button {
   .composer-tiptap-input.is-empty
   .composer-tiptap-input__editor::before {
   top: 6px;
+  right: 8px;
   left: 8px;
 }
 
@@ -18669,7 +19677,7 @@ a.button {
   align-items: center;
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-size: 10px;
   font-weight: 600;
@@ -18932,7 +19940,7 @@ a.button {
 
 .compact-composer__menu-toggle.is-checked {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
 }
 
 .compact-composer__menu-toggle.is-checked
@@ -18962,8 +19970,8 @@ a.button {
 }
 
 .compact-composer__send:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -19678,184 +20686,6 @@ a.button {
   font-weight: 700;
 }
 
-.environment-setup-choice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px 18px;
-  margin: 12px 22px;
-  padding: 14px 16px;
-  /* Stay inside the transcript column even when the context rail is pinned. */
-  max-width: 100%;
-  box-sizing: border-box;
-  /* The panel is a sibling of the transcript inside `.thread-view__primary`,
-     so every pixel it takes comes out of the transcript. A flex item's
-     `min-height: auto` floor let it size to its own content and refuse to
-     shrink: at a 700px-tall window it measured 685px inside a 644px pane,
-     which left the transcript 0px tall (nothing to scroll) and pushed the
-     actions row 53px below the `overflow: hidden` on `.thread-view`, so
-     "Continue anyway" could not be reached at all. The height bound lives on
-     `__body` — the part that scrolls — and the actions row sits outside it. */
-  min-height: 0;
-  border: 1px solid var(--danger-border);
-  border-radius: 8px;
-  background: var(--danger-soft);
-  color: var(--text-primary);
-}
-
-.environment-setup-choice__body {
-  /* Take all remaining horizontal space so the output pre fills the
-     dialog. The actions column on the right is flex: 0 0 auto so it
-     only gets its natural width, leaving the rest to the body. */
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  /* The panel's vertical bound, and the panel's one scroll container. It is
-     here rather than on the section because the actions row wraps below the
-     body under ~1200px of chat column, and a wrapped flex line is sized to
-     its content: capping the section would clip the buttons instead of
-     shrinking the body. A percentage would resolve against the section's
-     auto height (that is, not at all), so the bound is window-relative, in
-     the `min(<px>, <vh>)` form `.launchpad-pending__command` already uses:
-     the vh share keeps the actions inside the pane well below the 640px
-     minimum window height, and the pixel ceiling stops a tall display from
-     handing the panel 600px of transcript for no reason. */
-  min-height: 0;
-  max-height: min(360px, 40vh);
-  overflow-y: auto;
-}
-
-.environment-setup-choice__heading > *:first-child {
-  margin-top: 0;
-}
-
-.environment-setup-choice h3 {
-  margin: 0;
-  font-size: 16px;
-  line-height: 1.3;
-}
-
-.environment-setup-choice p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.environment-setup-choice__error {
-  color: var(--danger-text);
-}
-
-.environment-setup-choice__details {
-  margin: 0;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel-elevated);
-  padding: 0;
-}
-
-.environment-setup-choice__details > summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  user-select: none;
-  /* `__body` scrolls, and this summary carries the exit code and the collapse
-     control — the two things worth keeping in view while reading the output.
-     Its containing block is the `<details>`, which spans the whole scrolled
-     stack, so it stays pinned for as long as any of the detail is visible.
-     `.launchpad-pending__output`'s header is pinned for the same reason. */
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--bg-panel-elevated);
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-}
-
-.environment-setup-choice__details > summary::-webkit-details-marker {
-  display: none;
-}
-
-.environment-setup-choice__details[open] > summary {
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.environment-setup-choice__field {
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.environment-setup-choice__field + .environment-setup-choice__field {
-  border-top: 1px solid var(--border-subtle);
-}
-
-.environment-setup-choice__field-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
-.environment-setup-choice__pre {
-  margin: 0;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-primary);
-  white-space: pre;
-  overflow-x: auto;
-  /* Defensive: ensure the user can actually copy build output from the
-     dialog. Some upstream rules globally set user-select: none on chrome. */
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.environment-setup-choice__pre--output {
-  /* No height cap of its own: `__body` is the panel's one scroll container,
-     and a 320px box inside a body that is itself shorter than that on a small
-     window made two nested vertical scrollers the wheel had to chain out of.
-     Wrapping rather than scrolling sideways matches
-     `.launchpad-pending__output pre`, the live setup panel's output block —
-     and it is what keeps this readable now that the body scrolls, because
-     `__pre`'s horizontal scrollbar would otherwise sit at the bottom of the
-     full output, outside the body's viewport. */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.environment-setup-choice__path {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-all;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.environment-setup-choice__actions {
-  /* Natural width only so the body next to it can stretch to fill the
-     dialog. When the dialog wraps onto two rows (narrow widths), this
-     wraps under the body at full width with the buttons right-aligned. */
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-self: flex-start;
-  gap: 8px;
-}
-
 .thread-header__eyebrow-row {
   display: flex;
   align-items: center;
@@ -19895,6 +20725,35 @@ a.button {
    chip at the boundary while the ones that fit still render whole. */
 .thread-header__eyebrow-row > .chip {
   flex: 0 0 auto;
+}
+
+/* The machine chip, beside the backend chip. The launchpad composer portals
+   its machine picker in here, and the thread header puts the fixed chip in
+   the same place, so starting a thread moves nothing. It never shrinks, like
+   the chips above, and sits at their 24px height. */
+.thread-header__eyebrow-row > .thread-header__machine {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.thread-header__machine:empty {
+  display: none;
+}
+
+/* `.thread-header *` makes every box a window-drag region and only opts
+   bare controls back out, so the chip's own boxes and its fixed menu would
+   drag the window instead of taking the click. The extra class outranks
+   that rule wherever it sits in the file. */
+.thread-header .thread-header__machine,
+.thread-header .thread-header__machine * {
+  -webkit-app-region: no-drag;
+}
+
+.thread-header__machine .composer-dropdown__button,
+.thread-header__machine .composer__fixed-value {
+  min-height: 24px;
+  font-size: 12px;
 }
 
 /* Baseline, not centre: the 12px project eyebrow and the 14px title are one
@@ -20095,7 +20954,8 @@ a.button {
 }
 
 .thread-view__primary {
-  /* Positioning context for the absolutely-placed in-thread find bar (⌘F). */
+  /* Positioning context for the absolutely-placed in-thread find bar (⌘F)
+     and the lock card. */
   position: relative;
   display: flex;
   flex: 1;
@@ -20110,37 +20970,100 @@ a.button {
   min-height: 0;
 }
 
-/* A failed environment can coincide with a failed first history read. The
-   setup choice and composer both have substantial natural heights, while the
-   transcript normally starts from a zero flex basis. On a short or narrow
-   pane that left only a sliver for the history error; its text then painted
-   out of that sliver and underneath the composer.
-
-   Reserving the error row makes the setup panel surrender height. Its normal
-   wrapping flex layout cannot pass that deficit into `__body`: the wrapped
-   flex lines keep their content heights and overflow the panel, including the
-   escape actions. In this combined state, use one non-wrapping column instead.
-   `__body` is the only child allowed to shrink and already scrolls, while the
-   natural-height action row remains `flex: 0 0 auto` inside the panel. */
-.thread-view__primary:has(> .transcript-panel .transcript-error)
-  > .environment-setup-choice {
-  flex-direction: column;
-  flex-wrap: nowrap;
-  align-items: stretch;
-  justify-content: flex-start;
-  overflow: hidden;
+/* A locked thread. Everything in the primary column dims together (the
+   transcript, banners, and the composer, which the lock also disables) and
+   the lock card sits centered over it. Opacity only: a filter would make each
+   dimmed pane a containing block for its fixed-position descendants. */
+.thread-view__primary--locked > :not(.thread-lock-layer):not(.celestial-watermark) {
+  opacity: 0.45;
 }
 
-.thread-view__primary:has(> .transcript-panel .transcript-error)
-  > .environment-setup-choice
-  > .environment-setup-choice__actions {
-  width: 100%;
-  align-self: end;
+/* Pointer-transparent, so the transcript under the dim still scrolls and
+   selects; only the card takes the pointer. */
+.thread-lock-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--scrim-subtle);
+  pointer-events: none;
 }
 
-/* Reserve one readable error row. Longer errors scroll inside
-   `.transcript-error` instead of escaping the card. */
-.thread-view__primary:has(> .environment-setup-choice)
+.thread-lock-card {
+  display: grid;
+  gap: 10px;
+  width: min(440px, 100%);
+  padding: 14px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  pointer-events: auto;
+}
+
+.thread-lock-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.thread-lock-card__heading svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.thread-lock-card__note {
+  max-height: 40vh;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-panel);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-lock-card__note--empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.thread-lock-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-lock-card__origin {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.thread-lock-card__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* A failed environment setup can coincide with a failed first history read.
+   The setup row lives in the composer band, which can give up height, so
+   reserve one readable history-error row and let the band take the deficit.
+   Longer errors scroll inside `.transcript-error` instead of escaping it. */
+.thread-view__primary:has(> .thread-view__composer-slot > .composer .environment-setup-row)
   > .transcript-panel:has(.transcript-error) {
   flex-basis: 132px;
   min-height: 132px;
@@ -20154,7 +21077,7 @@ a.button {
 }
 
 ::highlight(thread-find-active) {
-  background-color: var(--accent);
+  background-color: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -20448,6 +21371,10 @@ a.button {
 .launchpad-pending__output pre {
   flex: 1;
   min-height: 0;
+  /* The forking placeholder is the one place this panel still renders, and
+     its output box is a block-level <details> sized to its content: without
+     a bound, a long install log ran past the clipped bottom of the column. */
+  max-height: min(360px, 45vh);
   padding: 12px;
   overflow: auto;
 }
@@ -20691,12 +21618,12 @@ a.button {
   box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   transform: translateX(-50%);
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
 .transcript-list__scroll-bottom:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -20945,6 +21872,40 @@ a.button {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+}
+
+.transcript-voice-context__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.transcript-voice-context__toggle:hover {
+  color: var(--text-primary);
+}
+
+.transcript-voice-context__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-voice-context__toggle[aria-expanded="true"] .transcript-work-phase-group__chevron {
+  transform: rotate(45deg);
+}
+
+.transcript-voice-context__text {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--transcript-text-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__header--continuation {
@@ -22100,7 +23061,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer .incident-explorer__primary {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 650;
 }
@@ -22873,7 +23834,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__gate-filter[aria-pressed="true"] {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-on);
 }
 
@@ -25415,6 +26376,120 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+/* Environment setup, as one row in the band (EnvironmentSetupRow.tsx). It
+   borrows the env action row's chrome and the error row's header, so the
+   three read as one family; these rules cover only what it adds. */
+.environment-setup-row__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+}
+
+.environment-setup-row__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.environment-setup-row__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.environment-setup-row[data-open="true"] .composer__queued-env-action-chevron {
+  transform: rotate(45deg);
+}
+
+/* The elapsed counter ticks every second; fixed-width digits keep the
+   summary from shifting as it does. */
+.environment-setup-row .composer__queued-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.composer__queued-env-action-actions .environment-setup-row__retry,
+.environment-setup-row__decision-actions .composer__secondary-action,
+.environment-setup-row__body-actions .composer__secondary-action {
+  flex: 0 0 auto;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* The decision a thread with no turns still needs. It sits outside the
+   disclosure, so it is visible while the row is collapsed. 24px of left
+   padding puts the copy under the label, past the chevron. */
+.environment-setup-row__decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  padding: 0 8px 7px 24px;
+}
+
+.environment-setup-row__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.environment-setup-row__hint--error {
+  color: var(--danger-text);
+}
+
+.environment-setup-row__decision-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.environment-setup-row__decision-actions .environment-setup-row__cleanup {
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+
+.environment-setup-row__decision-actions .environment-setup-row__cleanup:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.environment-setup-row__body-actions {
+  display: flex;
+}
+
+/* Two classes: `.composer__queued-env-action-output` sets `white-space: pre`
+   further down at the same specificity. Setup output wraps, as it did in the
+   panel this replaces, so a long pnpm line is readable without a sideways
+   scroll at the bottom of a box that already scrolls vertically. */
+.environment-setup-row .environment-setup-row__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Shorter than the band on a small window, so the command, path and the
+     output's own tail can share the band's viewport instead of the output
+     box alone filling it. */
+  max-height: min(320px, 28vh);
+}
+
+.environment-setup-row__path {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.composer-error-rail:empty {
+  display: none;
+}
+
 .composer-error-row__header {
   display: flex;
   align-items: center;
@@ -25457,6 +26532,15 @@ div.composer-error-row__toggle {
 .composer-error-row .composer-error-row__detail {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* The band scrolls at min(40vh, 300px); a 320px detail box inside it would
+     be taller than its own scroller on a small window. */
+  max-height: min(320px, 28vh);
+}
+
+/* Same reason, for an env action's output above the composer. The sidebar
+   copy keeps its own 260px bound. */
+.env-action-run--composer .composer__queued-env-action-output {
+  max-height: min(320px, 28vh);
 }
 
 .transcript-activity {
@@ -26210,6 +27294,47 @@ div.composer-error-row__toggle {
   flex-wrap: wrap;
 }
 
+/* Always allow on the left, alone; the refusals and the primary grant on the
+   right. `margin-left: auto` holds the group right when Always allow is not
+   offered. */
+.transcript-mcp__actions {
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.transcript-mcp__actions-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* `.button` sets no size, so approval rows inherited the 16px document size:
+   larger than the 14px transcript and as large as the card's title. One size
+   for every transcript approval row keeps the cards one family. The MCP
+   login card's Open link sits in its URL row and takes the same size. */
+.transcript-request__actions .button,
+.transcript-questionnaire__actions .button,
+.transcript-mcp__actions .button,
+.transcript-mcp__url .button {
+  min-height: 30px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcript-request__actions .button--ghost,
+.transcript-questionnaire__actions .button--ghost,
+.transcript-mcp__actions .button--ghost {
+  color: var(--text-secondary);
+}
+
+.transcript-request__actions .button--ghost:hover:not([disabled]),
+.transcript-questionnaire__actions .button--ghost:hover:not([disabled]),
+.transcript-mcp__actions .button--ghost:hover:not([disabled]) {
+  color: var(--text-primary);
+}
+
 .transcript-request__actions .button {
   max-width: 100%;
   white-space: normal;
@@ -26269,23 +27394,91 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
-.transcript-mcp__params {
-  display: grid;
+/* The MCP card is denser than the questionnaire it shares a frame with: the
+   title, its warning and its parameters read as one 6px block, and the card
+   spends 10px between header, block, fields and actions. */
+.transcript-mcp {
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.transcript-mcp--risk {
+  border-color: var(--status-warning);
+}
+
+.transcript-mcp__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcript-mcp__connector {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcript-mcp__server {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.transcript-mcp__summary {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+}
+
+.transcript-mcp__prompt h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+/* The server's own warning line. It stays in body text: the light theme's
+   --status-warning is 4.1:1 on this card, under 4.5:1 for 13px text, so a
+   high-risk card carries the warning on its border instead. */
+.transcript-mcp__subtitle {
   margin: 0;
   color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.transcript-mcp--risk .transcript-mcp__subtitle {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* One grid for every row, so labels share the longest label's width and a
+   short key sits next to its value. A per-row 0.3fr column put the value
+   165px from a 25px label at the card's 760px cap; the 200px cap keeps one
+   long raw key from pushing every value off the card. */
+.transcript-mcp__params {
+  display: grid;
+  grid-template-columns: fit-content(200px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0;
   font-size: 13px;
 }
 
 .transcript-mcp__params div {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.3fr) minmax(0, 1fr);
-  gap: 10px;
+  display: contents;
 }
 
 .transcript-mcp__params dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-muted);
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* No display name: the raw parameter key, verbatim. */
+.transcript-mcp__params dt.transcript-mcp__param-key {
+  font-family: var(--font-mono);
 }
 
 .transcript-mcp__params dd {
@@ -26293,6 +27486,7 @@ div.composer-error-row__toggle {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text-primary);
+  line-height: 1.45;
 }
 
 .transcript-mcp__url {
@@ -27625,10 +28819,9 @@ div.composer-error-row__toggle {
   background: var(--accent);
 }
 
-/* Portal-rendered tooltip rendered by the useViewportTooltip hook.
-   Used when a CSS-pseudo `tooltip-target` would get clipped by an
-   ancestor's overflow:hidden / overflow:auto (sidebar scroll
-   region, overflow-hidden chip with text-ellipsis, etc.). */
+/* Portal-rendered tooltip rendered by the useViewportTooltip hook, and by
+   DataTooltipLayer for every `tooltip-target[data-tooltip]`. It lives on
+   document.body, so no pane's overflow clips it. */
 .viewport-tooltip {
   position: fixed;
   z-index: 90;
@@ -27646,6 +28839,18 @@ div.composer-error-row__toggle {
   pointer-events: none;
   text-align: left;
   white-space: pre-wrap;
+}
+
+/* The DataTooltipLayer portal. One instance serves every declarative
+   `data-tooltip` control in the window, so it has to clear every surface
+   such a control can sit in: the composer and transcript, the director voice
+   panel (135), and the full-window Settings and Automations layers (120).
+   That is the 140 layer `.pr-status-card` and `.messaging-status-tooltip` use
+   for the same reason. `overflow-wrap` is for the path tooltips (directory
+   references, skill chips), which have no spaces to wrap at. */
+.viewport-tooltip.data-tooltip-layer {
+  z-index: 140;
+  overflow-wrap: anywhere;
 }
 
 /* Messaging appears inside full-window Settings/Automations surfaces whose
@@ -31723,6 +32928,147 @@ button.pricing-token-miser__folded:focus-visible {
 .composer > .composer__pending-controls > * {
   width: 100%;
   max-width: var(--chat-column-max);
+  /* The input, attachments tray and toolbar never give up height. The band
+     below is the one composer row that does. */
+  flex-shrink: 0;
+}
+
+/* The band: every transient row between the transcript and the input —
+   sub-agents, automations, environment setup, env actions, composer errors,
+   queued turns. Before it existed these were all direct children of the
+   composer, each sized to its content, and each open row could add 320px of
+   output. A failed environment setup on an existing thread stacked a
+   content-sized panel above the transcript and an open error row in here, and
+   the composer's toolbar ended up below `.thread-view`'s `overflow: hidden`
+   edge, unreachable.
+
+   Now the band is capped and scrolls, and it is the only composer row allowed
+   to shrink, so the column gives up height in a fixed order: the transcript
+   first (its basis is 0), then the band, never the input. The vh share keeps
+   about 180px of transcript at the 640px minimum window; the pixel ceiling
+   stops a tall display from handing the band half the column. See
+   `styles/__tests__/composer-band-bounds.test.ts`. */
+.composer > .composer__pending-controls > .composer__band {
+  --rail-band-gap: 12px;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--rail-band-gap);
+  min-height: 0;
+  max-height: min(40vh, 300px);
+  overflow-y: auto;
+  /* A scroller clips on both axes, which would slice the 2px focus rings of
+     the rows' controls at the band's edges. Pad them back in and return the
+     space with a matching negative margin so the rows stay on the chat
+     column's edges. */
+  width: calc(100% + 6px);
+  max-width: calc(var(--chat-column-max) + 6px);
+  margin: -3px;
+  padding: 3px;
+  box-sizing: border-box;
+}
+
+/* Same specificity as the rule above, so `display: none` wins by order. */
+.composer > .composer__pending-controls > .composer__band:empty {
+  display: none;
+}
+
+/* Overflow cue for the capped bands (this one and the Star Map chat card's).
+   macOS draws no scrollbar until the operator scrolls, so a band holding
+   twenty queued messages looked like a band holding three, with the fourth
+   sliced at the edge. Each edge now fades into the surface while content
+   lies past it.
+
+   The band is a scroll-state container and its own ::before / ::after are
+   the fades: sticky to the scrollport edges, zero net height (each pulls
+   back its own height plus the band's gap), and shown by a scroll-state
+   query. The query is re-evaluated on every layout, so a band that drains
+   below its cap while scrolled to the end drops the fade with it. A
+   scroll-driven `animation-timeline: scroll(self)` mask was tried first and
+   does not: Chromium holds the last value of a timeline that goes inactive,
+   which left a fade over the first row of a two-row band.
+
+   The fades paint the band's surface color, so each band names it. */
+.composer > .composer__pending-controls > .composer__band {
+  container-type: scroll-state;
+  --rail-band-fade-color: var(--bg-app);
+}
+
+.star-map-chat-card__band {
+  container-type: scroll-state;
+  --rail-band-fade-color: var(--bg-panel-elevated);
+}
+
+.composer__band::before,
+.composer__band::after,
+.star-map-chat-card__band::before,
+.star-map-chat-card__band::after {
+  content: "";
+  position: sticky;
+  z-index: 2;
+  flex-shrink: 0;
+  height: 24px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.composer__band::before,
+.star-map-chat-card__band::before {
+  top: 0;
+  margin-bottom: calc(-24px - var(--rail-band-gap));
+  background: linear-gradient(
+    to bottom,
+    var(--rail-band-fade-color) 0%,
+    transparent 100%
+  );
+}
+
+.composer__band::after,
+.star-map-chat-card__band::after {
+  bottom: 0;
+  margin-top: calc(-24px - var(--rail-band-gap));
+  background: linear-gradient(
+    to top,
+    var(--rail-band-fade-color) 0%,
+    transparent 100%
+  );
+}
+
+@container scroll-state(scrollable: top) {
+  .composer__band::before,
+  .star-map-chat-card__band::before {
+    opacity: 1;
+  }
+}
+
+@container scroll-state(scrollable: bottom) {
+  .composer__band::after,
+  .star-map-chat-card__band::after {
+    opacity: 1;
+  }
+}
+
+/* A control that Tab scrolls to an edge stops clear of the fade (24px plus
+   the ring's reach), the same way the transcript's fades are handled. */
+.composer__band :where(:focus-visible),
+.star-map-chat-card__band :where(:focus-visible) {
+  scroll-margin-block: 28px;
+}
+
+/* In the thread column the composer may shrink — only its band can — so a
+   column over budget takes the deficit out of the band rather than pushing the
+   composer's content past the clipped bottom edge. */
+.thread-view__composer-slot > .composer {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* The slot generates no box, so the composer stays a flex item of
+   `.thread-view__primary`. It exists for its React key: see
+   `features/thread-detail/composer-slot.ts`. */
+.thread-view__composer-slot {
+  display: contents;
 }
 
 .integrated-terminal {
@@ -32061,11 +33407,30 @@ button.pricing-token-miser__folded:focus-visible {
   padding-left: 20px;
 }
 
+/* The reply placeholder rotates through usage tips (composer-tips.ts). The
+   empty box stays one line tall, so a placeholder too long for a narrow box
+   ends in an ellipsis instead of wrapping, which the box's floor would clip
+   mid-line. */
 .composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
   content: attr(data-placeholder);
   position: absolute;
   top: 12px;
+  right: 12px;
   left: 12px;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* A slash command's remaining parameters, drawn after the draft in the
+   placeholder's color. The empty alt text keeps the hint out of the
+   textbox's accessible value. */
+.composer-tiptap-input.has-inline-hint
+  .composer-tiptap-input__editor
+  > p:last-child::after {
+  content: var(--composer-inline-hint) / "";
   color: var(--text-muted);
   pointer-events: none;
 }
@@ -32192,8 +33557,24 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
+/* A queued message is one line: chevron, short state label, title. Actions
+   float over the line's right end on hover or focus, and anything longer — an
+   error, the opened message — takes a line of its own below. Twenty queued
+   messages are twenty 32px rows, not twenty cards. */
 .composer__queued--message {
-  grid-template-columns: minmax(0, 1fr) auto;
+  --queued-row-bg: var(--bg-panel-elevated);
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  min-height: 32px;
+  padding: 0 8px 0 4px;
+  background: var(--queued-row-bg);
+}
+
+.composer__queued--message:hover {
+  border-color: var(--border-strong);
 }
 
 .composer__queued--steer {
@@ -32211,6 +33592,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__queued--scheduled {
+  --queued-row-bg: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
   border-color: var(--accent-border);
   background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
 }
@@ -32221,6 +33603,10 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__queued--failed {
   border-color: color-mix(in srgb, var(--status-error) 60%, var(--border-subtle));
+}
+
+.composer__queued--message.composer__queued--failed {
+  --queued-row-bg: color-mix(in srgb, var(--danger-soft) 40%, var(--bg-panel-elevated));
 }
 
 .composer__queued--failed .composer__queued-label,
@@ -32298,6 +33684,293 @@ button.pricing-token-miser__folded:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.composer__queued-line {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 30px;
+}
+
+.composer__queued--message .composer__queued-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.composer__queued--message .composer__queued-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* No title yet, or a message short enough to be its own: shown as typed, a
+   step quieter than a title. */
+.composer__queued-text--raw {
+  color: var(--text-secondary);
+}
+
+/* A sub-thread launchpad's parent, nearest the input. The queued row's card
+   and height, one line: glyph, muted label, the parent's title (the part
+   that truncates), the history note, then ×. */
+.composer__subthread-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.composer__subthread-source-icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.composer__subthread-source-label,
+.composer__subthread-source-meta {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.composer__subthread-source-parent {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.composer__subthread-source-parent {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+button.composer__subthread-source-parent:hover {
+  text-decoration-color: currentColor;
+}
+
+.composer__subthread-source-detach {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.composer__subthread-source-detach:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__subthread-source-parent:focus-visible,
+.composer__subthread-source-detach:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The chevron button's hit area covers the whole line (the row is the
+   positioned ancestor), so the summary opens on a click anywhere. The actions
+   stack above it. */
+.composer__queued-disclosure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.composer__queued-disclosure::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.composer__queued-disclosure:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+/* The rail's 8px border chevron (`.composer__queued-env-action-chevron`). */
+.composer__queued-chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.composer__queued-disclosure[data-open="true"] .composer__queued-chevron {
+  transform: rotate(45deg);
+}
+
+.composer__queued--message > .composer__queued-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 6px 0 36px;
+  border-radius: 0 8px 8px 0;
+  background: linear-gradient(to right, transparent, var(--queued-row-bg) 30px);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.composer__queued--message:hover > .composer__queued-actions,
+.composer__queued--message:focus-within > .composer__queued-actions,
+.composer__queued--pinned-actions > .composer__queued-actions {
+  opacity: 1;
+}
+
+.composer__queued--message > .composer__queued-actions .composer__secondary-action {
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.composer__queued-icon-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.composer__queued-icon-action:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__queued-icon-action--danger:hover:not(:disabled) {
+  color: var(--danger-text);
+}
+
+.composer__queued-icon-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.composer__queued-icon-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.composer__queued-image-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px 0 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.composer__queued-image-chip img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+/* The Star Map card's row: a size down to match the compact composer below
+   it. The opened message stays inside the band, which scrolls. */
+.composer__queued--message.composer__queued--compact {
+  min-height: 28px;
+}
+
+.composer__queued--compact .composer__queued-disclosure::after {
+  height: 28px;
+}
+
+.composer__queued--compact > .queued-message-inspector {
+  max-height: 180px;
+  margin-left: 28px;
+  font-size: 12px;
+}
+
+.composer__queued--compact .composer__queued-line {
+  gap: 6px;
+  height: 26px;
+}
+
+.composer__queued--compact .composer__queued-label {
+  font-size: 10px;
+}
+
+.composer__queued--compact .composer__queued-text {
+  font-size: 12px;
+}
+
+.composer__queued--compact > .composer__queued-actions {
+  height: 26px;
+  padding-right: 2px;
+}
+
+.composer__queued--compact .composer__queued-icon-action {
+  width: 22px;
+  height: 22px;
+}
+
+/* Second-line content sits under the label, past the chevron. */
+.composer__queued-detail,
+.composer__queued--message > .queued-message-inspector {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-left: 30px;
+}
+
+.composer__queued-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
 }
 
 /* Env-action anchor: collapsed-by-default <details> with chevron, body
@@ -33216,12 +34889,12 @@ button.pricing-token-miser__folded:focus-visible {
 /* Find is the field's one primary action. */
 .image-lightbox__svg-search button[type="submit"] {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
 .image-lightbox__svg-search button[type="submit"]:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -33236,6 +34909,112 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--danger-text);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* The notice before an SVG's own scripts run. It stands just above the
+   bottom cluster, centred on the axis of the pill whose Interact button (or
+   the image above it) opened it, so it never reaches either top corner the
+   OS owns. Opaque rather than the pill's translucent plate: it is prose the
+   operator has to read, and the picture runs under it. */
+.image-lightbox__svg-notice {
+  position: absolute;
+  bottom: calc(var(--lightbox-band-bottom) + 8px);
+  left: 50%;
+  z-index: 2;
+  width: min(400px, calc(100% - 32px));
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
+  transform: translateX(-50%);
+  -webkit-app-region: no-drag;
+}
+
+.image-lightbox__svg-notice-title {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.image-lightbox__svg-notice-body {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.image-lightbox__svg-notice-foot {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.image-lightbox__svg-notice-error {
+  margin: 10px 0 0;
+  color: var(--danger-text);
+}
+
+.image-lightbox__svg-notice-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+/* The lasting choice: an outline, so it never reads as the default. */
+.image-lightbox__svg-notice-always {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-lightbox__svg-notice-always:hover:not([aria-disabled="true"]) {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.image-lightbox__svg-notice-always:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-lightbox__svg-notice-always[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The notice's one accent action, matching the SVG search field's Find. */
+.image-lightbox__svg-notice-run {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: var(--button-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-lightbox__svg-notice-run:hover:not([aria-disabled="true"]) {
+  background: var(--accent-fill-strong);
+}
+
+.image-lightbox__svg-notice-run:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-lightbox__svg-notice-run[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .image-lightbox__image {
@@ -33253,6 +35032,11 @@ button.pricing-token-miser__folded:focus-visible {
 .image-lightbox__image[style] {
   max-width: none;
   max-height: none;
+}
+
+/* A click on an SVG with scripts offers interaction; a drag still pans. */
+.image-lightbox__image[data-interact-on-click="true"] {
+  cursor: pointer;
 }
 
 .image-lightbox__image[data-panning="true"] {
@@ -33276,7 +35060,7 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 0;
   border: 1px solid var(--accent-border);
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   cursor: pointer;
@@ -33284,7 +35068,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .image-lightbox__close:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -33573,6 +35357,234 @@ button.pricing-token-miser__folded:focus-visible {
   }
 }
 
+/* Image rows in the Edits rail. The rail is far too narrow to compare in, so
+   an expanded image row shows a pair of small frames — enough to say which
+   picture this is and that it changed — and each frame opens the image diff
+   lightbox on itself. Always two columns: a lone Added or Deleted frame keeps
+   the scale of a pair instead of stretching across the rail. */
+.image-diff-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.image-diff-preview__side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.image-diff-preview__side:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Transparent sprites are most of what this shows, so the rail's frames and
+   the lightbox canvas are a checkerboard rather than a flat panel that hides
+   where the alpha is. Each sets only its own tile size. */
+.image-diff-preview__frame,
+.image-diff-lightbox__canvas {
+  background-color: var(--bg-panel);
+  background-image: conic-gradient(
+    var(--image-diff-checker) 25%,
+    transparent 0 50%,
+    var(--image-diff-checker) 0 75%,
+    transparent 0
+  );
+}
+
+.image-diff-preview__frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 112px;
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background-size: 12px 12px;
+}
+
+.image-diff-preview__side:hover .image-diff-preview__frame {
+  border-color: var(--accent-border);
+}
+
+/* Filled, not capped at natural size: a 24px sprite would otherwise be a dot
+   in a 112px frame. Pixel art upscales pixelated; anything big enough to be
+   downscaled keeps smooth sampling. */
+.image-diff-preview__frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.image-diff-preview__frame[data-small="true"] img {
+  image-rendering: pixelated;
+}
+
+.image-diff-preview__caption {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.image-diff-preview__label {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.image-diff-preview__meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The image diff lightbox rides `.image-lightbox` — same bands, cookie, edge
+   controls and bottom cluster — and adds one canvas that every revision of a
+   file is drawn into, so the gestures' view is shared by Before, After and
+   Diff. */
+.image-diff-lightbox__canvas {
+  position: relative;
+  background-size: 16px 16px;
+}
+
+/* The pointer belongs to the canvas, which owns the pan; a layer that took it
+   would also offer the browser's image drag. */
+.image-diff-lightbox__layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Hidden, not unmounted: the inactive revision stays decoded, so a flip is
+   instant and the diff never waits on a side nobody has looked at. */
+.image-diff-lightbox__layer[data-active="false"] {
+  visibility: hidden;
+}
+
+/* Past 2x the honest picture is the pixels, not the browser's guess at what
+   lay between them. */
+.image-diff-lightbox__canvas[data-pixelated="true"] .image-diff-lightbox__layer {
+  image-rendering: pixelated;
+}
+
+.image-diff-lightbox__note {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* The path gives way first; the numbers are what the plate is for. */
+.image-diff-lightbox__detail {
+  flex: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.image-diff-lightbox__legend {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.image-diff-lightbox__swatch {
+  width: 9px;
+  height: 9px;
+  margin-left: 4px;
+  border-radius: 2px;
+}
+
+.image-diff-lightbox__swatch[data-kind="changed"] {
+  background: var(--image-diff-changed);
+}
+
+.image-diff-lightbox__swatch[data-kind="aa"] {
+  background: var(--image-diff-aa);
+}
+
+.image-diff-lightbox__items {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.image-diff-lightbox__item {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-diff-lightbox__item:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* `--accent-bright`, not `--accent`: it is the accent floored for text on
+   the `--accent-soft` tint, which plain `--accent` misses in light theme. */
+.image-diff-lightbox__item[aria-pressed="true"],
+.image-diff-lightbox__stretch[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+
+.image-diff-lightbox__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* A file with one side has nothing to switch to, so its name is a label. */
+.image-diff-lightbox__single {
+  padding: 0 8px 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .composer__setup {
   display: flex;
   flex-wrap: wrap;
@@ -33816,8 +35828,8 @@ button.pricing-token-miser__folded:focus-visible {
    It's the single SOLID-orange fill in the otherwise-neutral chip row so it
    can't be missed — the accent doubles as our warning signal. */
 .composer-dropdown--danger .composer-dropdown__button {
-  border-color: var(--accent-strong);
-  background: var(--accent);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 600;
 }
@@ -33825,8 +35837,8 @@ button.pricing-token-miser__folded:focus-visible {
 .composer-dropdown--danger .composer-dropdown__button:hover,
 .composer-dropdown--danger .composer-dropdown__button:focus-visible,
 .composer-dropdown--danger.composer-dropdown--open .composer-dropdown__button {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -33910,6 +35922,17 @@ button.pricing-token-miser__folded:focus-visible {
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+/* Opens downward from a trigger near the top of the window; the component
+   sets `top` and `right` from the trigger's rect. */
+.composer-dropdown__menu--below {
+  position: fixed;
+  z-index: 31;
+  bottom: auto;
+  left: auto;
+  min-width: 260px;
+  max-height: min(420px, calc(100dvh - 96px));
 }
 
 .composer-dropdown__menu--other {
@@ -34062,7 +36085,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer-thread-options__toggle.is-checked {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
 }
 
 .composer-thread-options__toggle.is-checked
@@ -34553,7 +36576,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__run-split-play:hover:not(:disabled),
 .composer__run-split-play:focus-visible {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -35554,7 +37577,7 @@ button.pricing-token-miser__folded:focus-visible {
   height: 14px;
   padding: 0 3px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-on);
   font-size: 9px;
   font-weight: 700;
@@ -35672,6 +37695,14 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 7px 10px;
   border: 0;
   border-radius: 6px;
+}
+
+/* A folder name sits beside its path, so the name column stops at 160px and
+   the path takes the rest. An instance's meta is a short status, and the
+   160px cap cut machine names ("Studio-MBP-M5-M…") beside empty space:
+   the name takes the row and the status keeps its own width. */
+.composer__autocomplete--directories .composer__autocomplete-option--instance:not(.composer__autocomplete-option--action) {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .composer__autocomplete--directories .composer__autocomplete-title {
@@ -36352,7 +38383,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__primary-action:hover:not([disabled]) {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -36535,8 +38566,8 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__send-schedule-toggle.is-armed .composer__send-schedule-toggle-box {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
 }
 
 .composer__send-schedule-toggle:not(.is-armed) .composer__send-schedule-toggle-label {
@@ -36546,7 +38577,7 @@ button.pricing-token-miser__folded:focus-visible {
 /* Hover fills this zone like the caret/Send zones so it's clear a click lands
    here — but keep the armed check box readable by giving it a solid outline. */
 .composer__send-split-pill .composer__send-schedule-toggle:not(:disabled):hover {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -36560,7 +38591,7 @@ button.pricing-token-miser__folded:focus-visible {
    for the old two-button version where one highlight hid under the other. */
 .composer__send-split-pill .button:not(:disabled):hover,
 .composer__send-split--open .composer__send-schedule-button:not(:disabled) {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -36998,6 +39029,10 @@ button.pricing-token-miser__folded:focus-visible {
   font-family: var(--font-mono);
   font-size: 13px;
   white-space: pre-wrap;
+}
+
+.renderer-error-boundary .button {
+  align-self: flex-start;
 }
 
 @media (max-width: 1100px) {
@@ -37698,11 +39733,11 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 .onboarding-wizard__btn--primary {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 .onboarding-wizard__btn--primary:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 .onboarding-wizard__btn--primary:disabled {
   background: var(--bg-panel-elevated);
@@ -38426,8 +40461,8 @@ button.pricing-token-miser__folded:focus-visible {
   flex-shrink: 0;
 }
 .onboarding-wizard__safety-check.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
 }
 .onboarding-wizard__safety-check.is-on::after {
   content: "";
@@ -38499,8 +40534,8 @@ button.pricing-token-miser__folded:focus-visible {
   display: inline-block;
 }
 .onboarding-wizard__provider-check.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
 }
 .onboarding-wizard__provider-check.is-on::after {
   content: "";
@@ -40213,7 +42248,7 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-sky__cta:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 /* Empty sky opens the map too, so pointing at it lights the button; pointing
    at a body lights only the body. */
-.federation-sky:hover:not(:has(.federation-sky__body:hover)) .federation-sky__cta, .federation-sky__cta:hover, .federation-sky__cta:focus-visible { border-color: var(--accent); background: var(--accent); color: var(--button-text); }
+.federation-sky:hover:not(:has(.federation-sky__body:hover)) .federation-sky__cta, .federation-sky__cta:hover, .federation-sky__cta:focus-visible { border-color: var(--accent-fill); background: var(--accent-fill); color: var(--button-text); }
 
 .federation-traffic { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 9px 10px 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); color: var(--text-primary); text-align: left; cursor: pointer; }
 .federation-traffic:hover:not(:disabled), .federation-traffic:focus-visible { border-color: var(--border-strong); background: var(--bg-panel-hover); }
@@ -40287,21 +42322,8 @@ button.pricing-token-miser__folded:focus-visible {
 
 .federation-activity__sizes { margin-top: 18px; }
 
-.queued-message-inspector-shell {
-  grid-column: 1 / -1;
-  min-width: 0;
-}
-
-.queued-message-inspector-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .queued-message-inspector {
-  margin-top: 8px;
+  margin-bottom: 8px;
   max-height: 320px;
   overflow: auto;
   padding: 8px;
@@ -40781,8 +42803,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .usage-analysis__result > p { color: var(--text-muted); font: 10px var(--font-mono); }
 .usage-analysis__result pre { font: inherit; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .usage-analysis__result--failed .usage-eyebrow, .usage-analysis__result--failed pre { color: var(--status-error); }
-.usage-button--primary { width: 100%; border-color: var(--accent); background: var(--accent); color: var(--button-text); font-weight: 600 !important; }
-.usage-button--primary:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+.usage-button--primary { width: 100%; border-color: var(--accent-fill); background: var(--accent-fill); color: var(--button-text); font-weight: 600 !important; }
+.usage-button--primary:hover { border-color: var(--accent-fill-strong); background: var(--accent-fill-strong); }
 
 /* Empty states */
 .usage-empty { padding: 32px 14px; color: var(--text-muted); font-size: 12px; }

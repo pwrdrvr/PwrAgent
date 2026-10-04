@@ -151,9 +151,10 @@ function buildViewMenu(developerMode: boolean): MenuItemConstructorOptions {
   return {
     label: "View",
     submenu: [
+      // Recovery must remain reachable when the renderer cannot draw controls.
+      { label: "Reload Window", role: "reload" },
       ...(developerMode
         ? [
-            { role: "reload" as const },
             { role: "forceReload" as const },
             { role: "toggleDevTools" as const },
             { type: "separator" as const },

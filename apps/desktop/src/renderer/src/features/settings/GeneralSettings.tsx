@@ -1,8 +1,15 @@
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import { useState } from "react";
+import type {
+  DesktopColorTheme,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared";
+import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   AppearanceController,
+  DarkThemePreference,
   DensityPreference,
+  LightThemePreference,
   TextSizePreference,
   ThemePreference,
 } from "../../lib/useAppearance";
@@ -26,6 +33,127 @@ const THEME_OPTIONS: Array<{
   { label: "Dark", meta: "Always dark", value: "dark" },
   { label: "Light", meta: "Always light", value: "light" },
 ];
+
+/** A theme's canvas, sidebar, accent, and primary text, from the
+ *  `--theme-swatch-*` tokens on `:root`, so it shows true while any other
+ *  theme renders. */
+function ThemeSwatch(props: { theme: DesktopColorTheme }) {
+  return (
+    <span className="theme-swatch">
+      {(["app", "sidebar", "accent", "text"] as const).map((part) => (
+        <i
+          key={part}
+          style={{ background: `var(--theme-swatch-${props.theme}-${part})` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+const PWRAGENT_THEMES = "PwrAgent";
+const COMMUNITY_THEMES = "Community palettes";
+
+/* The theme each scheme renders in. Picked independently, so "System"
+   above flips between the two choices with the OS. PwrAgent's own pairs
+   come first; the community group is what explains the borrowed names. */
+function themeOption<T extends DesktopColorTheme>(
+  value: T,
+  label: string,
+  group: string,
+  description?: string,
+): SelectOption<T> {
+  return {
+    value,
+    label,
+    group,
+    description,
+    leading: <ThemeSwatch theme={value} />,
+  };
+}
+
+const DARK_THEME_OPTIONS: readonly SelectOption<DarkThemePreference>[] = [
+  themeOption("tangerine-dark", "Tangerine", PWRAGENT_THEMES, "PwrAgent default"),
+  themeOption("gray-dark", "Gray", PWRAGENT_THEMES, "Charcoal surfaces"),
+  themeOption("blue-dark", "Blue", PWRAGENT_THEMES, "Navy surfaces"),
+  themeOption("phosphor-dark", "Phosphor", PWRAGENT_THEMES, "Green CRT on black"),
+  themeOption("catppuccin-mocha", "Catppuccin Mocha", COMMUNITY_THEMES),
+  themeOption("solarized-dark", "Solarized Dark", COMMUNITY_THEMES),
+];
+
+const LIGHT_THEME_OPTIONS: readonly SelectOption<LightThemePreference>[] = [
+  themeOption("tangerine-light", "Tangerine", PWRAGENT_THEMES, "PwrAgent default"),
+  themeOption("gray-light", "Gray", PWRAGENT_THEMES, "Light gray surfaces"),
+  themeOption("blue-light", "Blue", PWRAGENT_THEMES, "Pale blue surfaces"),
+  themeOption("catppuccin-latte", "Catppuccin Latte", COMMUNITY_THEMES),
+  themeOption("solarized-light", "Solarized Light", COMMUNITY_THEMES),
+];
+
+/** Each theme's other half: picking one offers it for the other scheme. A
+ *  dark-only theme (Phosphor) has no light half, so picking it offers none. */
+const LIGHT_PAIR: Partial<Record<DarkThemePreference, LightThemePreference>> = {
+  "tangerine-dark": "tangerine-light",
+  "gray-dark": "gray-light",
+  "blue-dark": "blue-light",
+  "catppuccin-mocha": "catppuccin-latte",
+  "solarized-dark": "solarized-light",
+};
+const DARK_PAIR = Object.fromEntries(
+  Object.entries(LIGHT_PAIR).map(([dark, light]) => [light, dark]),
+) as Record<LightThemePreference, DarkThemePreference>;
+
+/** Credit for a community palette, linked from its field. Their licenses
+ *  are in THIRD_PARTY_LICENSES. */
+const PALETTE_CREDITS: Partial<
+  Record<DesktopColorTheme, { name: string; url: string }>
+> = {
+  "catppuccin-mocha": { name: "Catppuccin", url: "https://catppuccin.com/licensing/" },
+  "catppuccin-latte": { name: "Catppuccin", url: "https://catppuccin.com/licensing/" },
+  "solarized-dark": { name: "Ethan Schoonover", url: "https://ethanschoonover.com/solarized/" },
+  "solarized-light": { name: "Ethan Schoonover", url: "https://ethanschoonover.com/solarized/" },
+};
+
+type ThemePairOffer =
+  | { scheme: "dark"; theme: DarkThemePreference; pairedWith: string }
+  | { scheme: "light"; theme: LightThemePreference; pairedWith: string };
+
+function themeLabel(theme: DesktopColorTheme): string {
+  return (
+    [...DARK_THEME_OPTIONS, ...LIGHT_THEME_OPTIONS].find(
+      (option) => option.value === theme,
+    )?.label ?? theme
+  );
+}
+
+/** The scheme row's sub-line: what it is for, whether Theme can reach it,
+ *  and the palette credit. */
+function themeFieldSub(
+  scheme: "dark" | "light",
+  themePreference: ThemePreference,
+  colorTheme: DesktopColorTheme,
+) {
+  const credit = PALETTE_CREDITS[colorTheme];
+  const unreachable =
+    themePreference !== "system" && themePreference !== scheme;
+  return (
+    <>
+      Colors used whenever the app is {scheme}.
+      {unreachable
+        ? ` Not used while Theme is ${themePreference === "dark" ? "Dark" : "Light"}.`
+        : null}
+      {credit ? (
+        <>
+          {" "}Palette by{" "}
+          <a href={credit.url} target="_blank" rel="noreferrer">
+            {credit.name}
+          </a>
+          {" "}(MIT).
+        </>
+      ) : null}
+    </>
+  );
+}
+
+const THEME_PICKER_CLASS = "settings-select settings-select--chip";
 
 const DENSITY_OPTIONS: Array<{
   label: string;
@@ -110,6 +238,30 @@ const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   },
 ];
 
+function ThemePairOfferPrompt(props: {
+  offer: ThemePairOffer;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const label = themeLabel(props.offer.theme);
+  return (
+    <div aria-live="polite" className="settings-action-confirmation">
+      <div className="settings-action-confirmation__copy">
+        <strong>Use {label} for the {props.offer.scheme} theme too?</strong>
+        <span>It is {props.offer.pairedWith}&apos;s {props.offer.scheme} pair.</span>
+      </div>
+      <div className="settings-inline-actions">
+        <button className="button button--primary" type="button" onClick={props.onAccept}>
+          Use {label}
+        </button>
+        <button className="button button--ghost" type="button" onClick={props.onDismiss}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
@@ -117,9 +269,14 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
+  onInteractiveSvgChange: (patch: {
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
+  }) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
+  onThemedDockIconChange: (value: boolean) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const pastedImageMaxPatches =
@@ -128,8 +285,21 @@ export function GeneralSettings(props: {
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd =
     props.snapshot.general.attentionPromoteOnTurnEnd;
+  const interactiveSvgSkipNotice =
+    props.snapshot.general.interactiveSvgSkipNotice;
+  const interactiveSvgAutoOpen = props.snapshot.general.interactiveSvgAutoOpen;
+  // An older profile can hold auto-open without skip-notice; auto-open has
+  // always implied it, as the lightbox reads it.
+  const trustsSvgScripts =
+    interactiveSvgSkipNotice.value || interactiveSvgAutoOpen.value;
+  // The badge names whichever key turned trust on.
+  const svgTrustSource =
+    interactiveSvgSkipNotice.value || !interactiveSvgAutoOpen.value
+      ? interactiveSvgSkipNotice
+      : interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
+  const themedDockIcon = props.snapshot.general.appearance.themedDockIcon;
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
@@ -137,6 +307,10 @@ export function GeneralSettings(props: {
   );
 
   const appearance = props.appearanceController?.appearance;
+  // Offered once, right after a pick, when the other scheme's theme is not
+  // the picked theme's pair. Never applied without a click: choosing the
+  // two independently is the point of the two rows.
+  const [pairOffer, setPairOffer] = useState<ThemePairOffer | null>(null);
 
   return (
     <SettingsSectionStack paneId="general" aria-label="General settings">
@@ -170,6 +344,86 @@ export function GeneralSettings(props: {
                 />
               }
             />
+            <SettingsField
+              label="Dark theme"
+              sub={themeFieldSub("dark", appearance.theme, appearance.darkTheme)}
+              source={appearance.resolvedTheme === "dark" ? "Showing" : undefined}
+              control={
+                <Select
+                  aria-label="Dark theme"
+                  className={THEME_PICKER_CLASS}
+                  options={DARK_THEME_OPTIONS}
+                  value={appearance.darkTheme}
+                  onChange={(value) => {
+                    props.appearanceController?.setDarkTheme(value);
+                    const pair = LIGHT_PAIR[value];
+                    setPairOffer(
+                      pair === undefined || appearance.lightTheme === pair
+                        ? null
+                        : { scheme: "light", theme: pair, pairedWith: themeLabel(value) },
+                    );
+                  }}
+                />
+              }
+              actions={
+                pairOffer?.scheme === "light" ? (
+                  <ThemePairOfferPrompt
+                    offer={pairOffer}
+                    onAccept={() => {
+                      props.appearanceController?.setLightTheme(pairOffer.theme);
+                      setPairOffer(null);
+                    }}
+                    onDismiss={() => setPairOffer(null)}
+                  />
+                ) : null
+              }
+            />
+            <SettingsField
+              label="Light theme"
+              sub={themeFieldSub("light", appearance.theme, appearance.lightTheme)}
+              source={appearance.resolvedTheme === "light" ? "Showing" : undefined}
+              control={
+                <Select
+                  aria-label="Light theme"
+                  className={THEME_PICKER_CLASS}
+                  options={LIGHT_THEME_OPTIONS}
+                  value={appearance.lightTheme}
+                  onChange={(value) => {
+                    props.appearanceController?.setLightTheme(value);
+                    const pair = DARK_PAIR[value];
+                    setPairOffer(
+                      appearance.darkTheme === pair
+                        ? null
+                        : { scheme: "dark", theme: pair, pairedWith: themeLabel(value) },
+                    );
+                  }}
+                />
+              }
+              actions={
+                pairOffer?.scheme === "dark" ? (
+                  <ThemePairOfferPrompt
+                    offer={pairOffer}
+                    onAccept={() => {
+                      props.appearanceController?.setDarkTheme(pairOffer.theme);
+                      setPairOffer(null);
+                    }}
+                    onDismiss={() => setPairOffer(null)}
+                  />
+                ) : null
+              }
+            />
+            {props.desktopApi?.platform === "darwin" ? (
+              <ToggleField
+                checked={themedDockIcon.value}
+                disabled={props.saving}
+                label="Match Dock icon to theme"
+                sub="While PwrAgent runs, its Dock icon wears the dark theme, so instances on different profiles are easy to tell apart."
+                source={sourceBadge(themedDockIcon)}
+                onChange={(next) => {
+                  return props.onThemedDockIconChange(next);
+                }}
+              />
+            ) : null}
             <SettingsField
               label="Info density"
               sub="Compact hides the provider, directory, and branch chips in thread rows so more threads fit on screen. PR chips, reactions, and pin markers stay visible."
@@ -219,6 +473,43 @@ export function GeneralSettings(props: {
             source={sourceBadge(attentionPromoteOnTurnEnd)}
             onChange={(next) => {
               return props.onAttentionPromoteOnTurnEndChange(next);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="Interactive SVGs"
+        chip={sourceBadge(interactiveSvgAutoOpen.source === "default"
+          ? interactiveSvgSkipNotice
+          : interactiveSvgAutoOpen)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={trustsSvgScripts}
+            disabled={props.saving}
+            label="Run SVG scripts without asking"
+            sub="Clicking an SVG runs its scripts in an isolated frame, with no notice first."
+            source={sourceBadge(svgTrustSource)}
+            onChange={(next) => {
+              // Opening interactive runs scripts too, so it goes off with trust.
+              return props.onInteractiveSvgChange(next
+                ? { interactiveSvgSkipNotice: true }
+                : { interactiveSvgSkipNotice: false, interactiveSvgAutoOpen: false });
+            }}
+          />
+          <ToggleField
+            checked={interactiveSvgAutoOpen.value}
+            disabled={props.saving}
+            label="Open SVGs interactive"
+            sub="Skip the static preview when an SVG has scripts."
+            lockedReason={trustsSvgScripts
+              ? undefined
+              : "Needs \u201cRun SVG scripts without asking\u201d: opening an SVG runs its scripts."}
+            source={sourceBadge(interactiveSvgAutoOpen)}
+            onChange={(next) => {
+              return props.onInteractiveSvgChange({ interactiveSvgAutoOpen: next });
             }}
           />
         </div>

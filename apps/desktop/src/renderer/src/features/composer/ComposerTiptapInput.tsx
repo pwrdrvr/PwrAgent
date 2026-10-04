@@ -7,11 +7,13 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
@@ -61,6 +63,16 @@ type ComposerTiptapInputProps = {
   readOnly?: boolean;
   editorDocument?: JSONContent;
   id: string;
+  /**
+   * Muted text drawn after the draft's last character, such as the
+   * parameters a slash command still accepts. It is not part of the value.
+   */
+  inlineHint?: string;
+  /**
+   * The literal leading part of `inlineHint`, accepted by Tab, Right Arrow,
+   * or Space when the caret sits at the end of the draft.
+   */
+  inlineCompletion?: string;
   label: string;
   markdownConversion?: boolean;
   onChange: (
@@ -276,8 +288,12 @@ const SkillMention = Mention.extend({
       ];
     }
     if (node.attrs.kind === "instance") {
+      // `name` is the short name the chip shows; `description`, when the
+      // chip was minted from the picker, is the full machine label.
       const label = String(node.attrs.name ?? "instance");
       const path = String(node.attrs.path ?? "");
+      const fullLabel =
+        typeof node.attrs.description === "string" ? node.attrs.description : "";
       return ["span", {
         class: "chip chip--instance composer-tiptap-input__mention",
         "data-type": "mention",
@@ -287,7 +303,8 @@ const SkillMention = Mention.extend({
         "data-label": label,
         "data-skill-name": label,
         "data-skill-path": path,
-        "data-tooltip": `${label}\n${path}`,
+        ...(fullLabel ? { "data-skill-description": fullLabel } : {}),
+        "data-tooltip": `${fullLabel || label}\n${path}`,
       }, `@${label}`];
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
@@ -2530,6 +2547,71 @@ function applyExternalSkillInsertion(params: {
   return inserted;
 }
 
+/** The collapsed caret's document position, or undefined for a range. */
+function readLiveCaret(editor: TiptapEditor): number | undefined {
+  const { view } = editor;
+  const domSelection = view.dom.ownerDocument.getSelection();
+  if (
+    !domSelection?.focusNode ||
+    !view.dom.contains(domSelection.focusNode)
+  ) {
+    return editor.state.selection.empty
+      ? editor.state.selection.head
+      : undefined;
+  }
+  if (!domSelection.isCollapsed) {
+    return undefined;
+  }
+  try {
+    return view.posAtDOM(domSelection.focusNode, domSelection.focusOffset);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Accept the hint's literal completion the way a shell accepts an
+ * autosuggestion: Tab, Right Arrow, or Space with the caret at the very end of
+ * the draft inserts the rest of the token plus a separating space. Elsewhere
+ * the keys keep their usual meaning, so Tab still moves focus.
+ */
+function acceptInlineCompletion(
+  editor: TiptapEditor,
+  completion: string | undefined,
+  event: globalThis.KeyboardEvent,
+): boolean {
+  if (
+    !completion ||
+    (event.key !== "Tab" && event.key !== "ArrowRight" && event.key !== " ") ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.shiftKey ||
+    event.isComposing
+  ) {
+    return false;
+  }
+  const { doc } = editor.state;
+  if (!doc.lastChild?.isTextblock) {
+    return false;
+  }
+  // Read the live DOM caret. ProseMirror adopts a native caret move on the
+  // next selectionchange, so a quick Left then Right would otherwise still
+  // look like the end of the draft and accept.
+  const head = readLiveCaret(editor);
+  if (head !== doc.content.size - 1) {
+    return false;
+  }
+  // Insert at the caret the operator sees, not ProseMirror's stale copy.
+  if (editor.state.selection.head !== head) {
+    editor.commands.setTextSelection(head);
+  }
+  editor.view.dispatch(
+    editor.state.tr.insertText(`${completion} `).scrollIntoView(),
+  );
+  return true;
+}
+
 export const ComposerTiptapInput = forwardRef<
   ComposerInputHandle,
   ComposerTiptapInputProps
@@ -2735,6 +2817,18 @@ export const ComposerTiptapInput = forwardRef<
           // Let the browser select, copy, and scroll, without running editor
           // commands (including undo and the composer's submit shortcuts).
           if (propsRef.current.readOnly) return true;
+          const currentEditorForHint = editorRef.current;
+          if (
+            currentEditorForHint &&
+            acceptInlineCompletion(
+              currentEditorForHint,
+              propsRef.current.inlineCompletion,
+              event,
+            )
+          ) {
+            event.preventDefault();
+            return true;
+          }
           const macPlatform = isMacPlatform();
           if (
             event.key.toLowerCase() === "y" &&
@@ -2967,7 +3061,8 @@ export const ComposerTiptapInput = forwardRef<
         nextEditor.state.selection.from,
         readMode,
       );
-      propsRef.current.onChange(next.value, next.skillTokens, {
+        recordRendererUpdate(RendererUpdateEvent.editorPublish);
+        propsRef.current.onChange(next.value, next.skillTokens, {
         editorDocument: nextEditor.getJSON(),
       });
     },
@@ -2993,6 +3088,7 @@ export const ComposerTiptapInput = forwardRef<
     // rather than relying on editability updates to report it as a user edit.
     const initial = readTiptapContent(editor, readMode);
     if (getContentSignature(initial) !== getContentSignature(propsRef.current)) {
+      recordRendererUpdate(RendererUpdateEvent.editorNormalize);
       propsRef.current.onChange(initial.value, initial.skillTokens, {
         editorDocument: editor.getJSON(),
       });
@@ -3136,6 +3232,7 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     let loadedEditorDocument = false;
+    recordRendererUpdate(RendererUpdateEvent.editorControlledSync);
     if (
       nextEditorDocumentSignature &&
       currentEditorDocumentSignature !== nextEditorDocumentSignature
@@ -3194,6 +3291,7 @@ export const ComposerTiptapInput = forwardRef<
       }
       const restored = readTiptapContent(editor, readMode);
       const restoredEditorDocument = editor.getJSON();
+      recordRendererUpdate(RendererUpdateEvent.editorControlledPublish);
       propsRef.current.onChange(restored.value, restored.skillTokens, {
         editorDocument: restoredEditorDocument,
       });
@@ -3405,10 +3503,17 @@ export const ComposerTiptapInput = forwardRef<
 
   return (
     <div
-      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}${props.readOnly ? " is-readonly" : ""}`}
+      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}${props.readOnly ? " is-readonly" : ""}${props.inlineHint ? " has-inline-hint" : ""}`}
+      data-inline-completion={props.inlineCompletion}
+      data-inline-hint={props.inlineHint}
       data-placeholder={props.placeholder}
       data-testid="composer-tiptap-input"
       data-value={props.value}
+      // ProseMirror owns the editor's own attributes, so the hint rides in a
+      // custom property that the last paragraph's ::after inherits.
+      style={props.inlineHint
+        ? { "--composer-inline-hint": JSON.stringify(props.inlineHint) } as CSSProperties
+        : undefined}
       onContextMenu={(event) => {
         const target = event.target instanceof Element
           ? event.target.closest<HTMLElement>('[data-mention-kind="thread"]')

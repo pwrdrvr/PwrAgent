@@ -59,7 +59,7 @@ import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { TranscriptError } from "./TranscriptError";
 import type { PendingQuestionnaireState } from "./questionnaire";
-import type { PendingMcpInteractionState } from "./mcp-elicitation";
+import type { McpApprovalPersistence, PendingMcpInteractionState } from "./mcp-elicitation";
 import {
   ACTIVE_WORK_GROUP_THRESHOLD_MS,
   buildTranscriptRenderItems,
@@ -153,7 +153,8 @@ type TranscriptListProps = {
   onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
   onSubmitPendingMcpInteraction?: (
     state: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
+    persist?: McpApprovalPersistence,
   ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
@@ -1739,8 +1740,8 @@ export function TranscriptList(props: TranscriptListProps) {
               onChange={(state) => {
                 props.onPendingMcpInteractionChange?.(state);
               }}
-              onSubmit={async (state, action) => {
-                await props.onSubmitPendingMcpInteraction?.(state, action);
+              onSubmit={async (state, action, persist) => {
+                await props.onSubmitPendingMcpInteraction?.(state, action, persist);
               }}
             />
           ) : null}

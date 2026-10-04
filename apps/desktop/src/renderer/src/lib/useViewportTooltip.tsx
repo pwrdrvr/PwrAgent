@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { recordRendererUpdate, RendererUpdateEvent } from "./renderer-update-diagnostics";
 import {
   isNativeDragInteractionActive,
   subscribeNativeDragInteraction,
@@ -20,6 +21,10 @@ import {
 const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and the target element (above or below). */
 const TOOLTIP_GAP = 10;
+/** Where a pointer-anchored tooltip sits relative to the cursor's hotspot:
+ *  right of the arrow and below its tail, as a native cursor tooltip does. */
+const POINTER_OFFSET_X = 12;
+const POINTER_OFFSET_Y = 20;
 /**
  * Short entry delay for dense metadata tooltips. It filters incidental pointer
  * crossings without requiring the pointer to remain perfectly stationary.
@@ -103,6 +108,8 @@ export function portalViewportTop(): number {
   return gutterFloor;
 }
 
+export type TooltipPoint = { x: number; y: number };
+
 type TooltipState = {
   content: ReactNode;
   horizontalBounds?: {
@@ -112,6 +119,9 @@ type TooltipState = {
   targetTop: number;
   targetBottom: number;
   targetCenter: number;
+  /** Set for a tooltip that follows the pointer rather than its anchor's box.
+   *  The live position is in `pointerRef`; moves never pass through state. */
+  followsPointer?: boolean;
   /** Computed left after measure; undefined on the first paint. */
   left?: number;
   /** Computed top after measure; undefined on the first paint. */
@@ -268,9 +278,10 @@ function toTargetRect(rect: DOMRect | TooltipTargetRect): TooltipTargetRect {
 /**
  * Hook for portal-rendered tooltips that escape any clipping ancestor
  * (sidebar scroll regions, overflow:hidden chips, etc.) and clamp
- * themselves to viewport bounds. Use when CSS-pseudo-element tooltips
- * (`tooltip-target` + `data-tooltip` in app.css) get clipped by a
- * `overflow:hidden`/`overflow:auto` ancestor.
+ * themselves to viewport bounds. A plain-text tooltip needs none of this
+ * wiring: `tooltip-target` + `data-tooltip` reaches the same portal through
+ * `DataTooltipLayer`. Call the hook directly for `ReactNode` content, a card
+ * class, a hover delay, or a pointer-anchored tooltip.
  *
  * Pattern adapted from ThreadContextPanel's railTooltip — same
  * measure-then-clamp two-pass render, same portal target.
@@ -365,6 +376,20 @@ export function useViewportTooltip(options: {
   tooltipId: string;
   show: (target: HTMLElement, content: ReactNode) => void;
   /**
+   * Show beside the pointer instead of above or below `target`, for a target
+   * too large for its edge to say what the tooltip is about. `target` is
+   * still the anchor the dismissal rules watch. Call `movePointer` from the
+   * target's pointer moves to follow it.
+   */
+  showAtPointer: (
+    target: HTMLElement,
+    point: TooltipPoint,
+    content: ReactNode,
+  ) => void;
+  /** Move a pointer-anchored tooltip. False, and nothing moves, when the
+   *  tooltip showing (if any) is not one. */
+  movePointer: (point: TooltipPoint) => boolean;
+  /**
    * Arm a tooltip after a short delay from pointer entry. Pointer movement does
    * not restart the delay; leaving the target should call `hide` to cancel it.
    */
@@ -397,6 +422,10 @@ export function useViewportTooltip(options: {
   const getHorizontalBoundsRef = useRef(getHorizontalBounds);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
+  const pointerRef = useRef<TooltipPoint | null>(null);
+  /** The showing tooltip's bounds, for the per-frame writes that skip state. */
+  const pointerBoundsRef = useRef<TooltipState["horizontalBounds"]>(undefined);
+  const pointerFrameRef = useRef<number | null>(null);
   const [delayPending, setDelayPending] = useState(false);
 
   useEffect(() => {
@@ -412,13 +441,19 @@ export function useViewportTooltip(options: {
   }, []);
 
   const hide = useCallback((): void => {
+    recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
     clearHoverDelay();
     setDelayPending(false);
     targetRef.current = null;
     targetRectRef.current = null;
     anchorSettlingRef.current = false;
+    pointerRef.current = null;
+    if (pointerFrameRef.current !== null) {
+      window.cancelAnimationFrame(pointerFrameRef.current);
+      pointerFrameRef.current = null;
+    }
     setState(undefined);
-  }, [clearHoverDelay]);
+  }, [clearHoverDelay, tooltipId]);
 
   /**
    * Wait out the motion, then re-baseline the anchor and re-anchor the tooltip
@@ -501,6 +536,18 @@ export function useViewportTooltip(options: {
       return;
     }
     const rect = tooltipElement.getBoundingClientRect();
+    if (state.followsPointer) {
+      const point = pointerRef.current;
+      if (!point) {
+        return;
+      }
+      const { left, top } = pointerTooltipPosition(rect, point, state.horizontalBounds);
+      if (state.left !== left || state.top !== top) {
+        recordRendererUpdate(RendererUpdateEvent.tooltipReposition, tooltipId);
+        setState({ ...state, left, top });
+      }
+      return;
+    }
     const horizontalLeft = Math.max(
       VIEWPORT_PADDING,
       state.horizontalBounds?.left ?? VIEWPORT_PADDING,
@@ -542,11 +589,13 @@ export function useViewportTooltip(options: {
       top = Math.min(maximumTop, Math.max(viewportTop, preferredTop));
     }
     if (state.left !== left || state.top !== top) {
+      recordRendererUpdate(RendererUpdateEvent.tooltipReposition, tooltipId);
       setState({ ...state, left, top });
     }
-  }, [state]);
+  }, [state, tooltipId]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+    recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);
     clearHoverDelay();
     setDelayPending(false);
     if (isNativeDragInteractionActive()) {
@@ -562,6 +611,8 @@ export function useViewportTooltip(options: {
       return;
     }
     const horizontalBounds = getHorizontalBounds?.(target);
+    pointerRef.current = null;
+    pointerBoundsRef.current = horizontalBounds;
     setState({
       content,
       horizontalBounds,
@@ -569,7 +620,55 @@ export function useViewportTooltip(options: {
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
-  }, [clearHoverDelay, getHorizontalBounds, rememberTarget]);
+  }, [clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
+
+  const showAtPointer = useCallback(
+    (target: HTMLElement, point: TooltipPoint, content: ReactNode): void => {
+      show(target, content);
+      if (!targetRef.current) {
+        return;
+      }
+      pointerRef.current = point;
+      setState((current) => (current ? { ...current, followsPointer: true } : current));
+    },
+    [show],
+  );
+
+  // Writes the portal's position straight to the DOM, once per frame: routing
+  // every pointer move through state would re-render the tooltip's owner, a
+  // whole surface, on each one. A later render keeps the written values, since
+  // React only rewrites a style it sees change.
+  const movePointer = useCallback((point: TooltipPoint): boolean => {
+    if (!pointerRef.current) {
+      return false;
+    }
+    pointerRef.current = point;
+    if (pointerFrameRef.current !== null) {
+      return true;
+    }
+    pointerFrameRef.current = window.requestAnimationFrame(() => {
+      pointerFrameRef.current = null;
+      const tooltipElement = tooltipRef.current;
+      const latest = pointerRef.current;
+      if (!tooltipElement || !latest || tooltipElement.style.visibility === "hidden") {
+        return;
+      }
+      const { left, top } = pointerTooltipPosition(
+        tooltipElement.getBoundingClientRect(),
+        latest,
+        pointerBoundsRef.current,
+      );
+      tooltipElement.style.left = `${left}px`;
+      tooltipElement.style.top = `${top}px`;
+    });
+    return true;
+  }, []);
+
+  useEffect(() => () => {
+    if (pointerFrameRef.current !== null) {
+      window.cancelAnimationFrame(pointerFrameRef.current);
+    }
+  }, []);
 
   const showAfterDelay = useCallback(
     (target: HTMLElement, content: DelayedTooltipContent): void => {
@@ -593,8 +692,9 @@ export function useViewportTooltip(options: {
   );
 
   const update = useCallback((content: ReactNode): void => {
+    recordRendererUpdate(RendererUpdateEvent.tooltipUpdate, tooltipId);
     setState((current) => (current ? { ...current, content } : current));
-  }, []);
+  }, [tooltipId]);
 
   useEffect(() => clearHoverDelay, [clearHoverDelay]);
 
@@ -735,10 +835,43 @@ export function useViewportTooltip(options: {
   return {
     tooltipId,
     show,
+    showAtPointer,
+    movePointer,
     showAfterDelay,
     update,
     hide,
     visible,
     tooltipNode,
   };
+}
+
+/** Beside the cursor, flipped to its left near the right edge and above it
+ *  near the bottom, and kept on screen. Flipping, not clamping: a clamped
+ *  tooltip slides under the pointer and covers what it points at. */
+function pointerTooltipPosition(
+  rect: { width: number; height: number },
+  point: TooltipPoint,
+  horizontalBounds: TooltipState["horizontalBounds"],
+): { left: number; top: number } {
+  const minLeft = Math.max(VIEWPORT_PADDING, horizontalBounds?.left ?? VIEWPORT_PADDING);
+  const maxLeft = Math.max(
+    minLeft,
+    Math.min(
+      window.innerWidth - VIEWPORT_PADDING,
+      horizontalBounds?.right ?? window.innerWidth - VIEWPORT_PADDING,
+    ) - rect.width,
+  );
+  const right = point.x + POINTER_OFFSET_X;
+  const left = Math.min(
+    maxLeft,
+    Math.max(minLeft, right <= maxLeft ? right : point.x - POINTER_OFFSET_X - rect.width),
+  );
+  const viewportTop = portalViewportTop();
+  const viewportBottom = window.innerHeight - VIEWPORT_PADDING;
+  const below = point.y + POINTER_OFFSET_Y;
+  const above = point.y - TOOLTIP_GAP - rect.height;
+  const top = below + rect.height <= viewportBottom
+    ? below
+    : Math.max(viewportTop, above);
+  return { left, top };
 }

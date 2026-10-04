@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { copyText } from "../../lib/copy-text";
+import { copyText, copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type SettingsCopyValueProps = {
@@ -7,6 +7,8 @@ type SettingsCopyValueProps = {
   value: string;
   /** Copied to the clipboard; callbacks run at click time. Defaults to `value`. */
   copyValue?: string | (() => string);
+  /** Include a rich code block alongside the original plain text. */
+  copyAsCodeBlock?: boolean;
   desktopApi?: DesktopApi;
   label?: string;
   /**
@@ -64,7 +66,8 @@ export function SettingsCopyValue(props: SettingsCopyValueProps) {
           const copyValue = typeof props.copyValue === "function"
             ? props.copyValue()
             : props.copyValue ?? props.value;
-          void copyText(copyValue, props.desktopApi).then(
+          const copy = props.copyAsCodeBlock ? copyTextAsCodeBlock : copyText;
+          void copy(copyValue, props.desktopApi).then(
             () => {
               setCopied(true);
               window.clearTimeout(resetTimer.current);

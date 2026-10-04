@@ -1,11 +1,16 @@
-import { BrowserWindow, nativeTheme } from "electron";
+import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
+import type {
+  DesktopAppearanceTheme,
+  DesktopColorTheme,
+} from "@pwragent/shared";
 import type {
   QuitBlockerItem,
   QuitBlockerQueueSnapshot,
 } from "../shared/quit-blockers";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
+import { primaryMainWindowWebContents } from "./primary-main-window";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
 import { requestShowQuitBlockers } from "./window-show-quit-blockers";
 import { requestShowThread } from "./window-show-thread";
@@ -30,7 +35,6 @@ export type QuitConfirmationDialogOptions = {
   terminalSessionCount: number;
   actionRunCount?: number;
   items?: QuitBlockerItem[];
-  parent?: BrowserWindow | null;
   refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
 };
 
@@ -55,6 +59,8 @@ type QuitDialogPalette = {
   textMuted: string;
   accent: string;
   accentBright: string;
+  /** app.css's --accent-fill, where a theme sets one; else the accent. */
+  accentFill?: string;
   buttonText: string;
 };
 
@@ -96,10 +102,154 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
   },
 };
 
+/** Every other color theme, from its `:root[data-color-theme="<id>"]` block
+ *  in app.css; the border is that block's `--border-subtle` mix resolved to a
+ *  literal. A test reads app.css and fails when an entry drifts. Tangerine
+ *  is `QUIT_DIALOG_PALETTES` above. */
+export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
+  Exclude<DesktopColorTheme, "tangerine-dark" | "tangerine-light">,
+  QuitDialogPalette
+> = {
+  "catppuccin-mocha": {
+    bg: "#1e1e2e",
+    sidebar: "#181825",
+    surface: "#252536",
+    rowActive: "#342d37",
+    panelHover: "#28293a",
+    border: "rgba(205, 214, 244, 0.1)",
+    textPrimary: "#cdd6f4",
+    textSecondary: "#bac2de",
+    textMuted: "#a7aec9",
+    accent: "#fab387",
+    accentBright: "#febd96",
+    buttonText: "#11111b",
+  },
+  "catppuccin-latte": {
+    bg: "#eff1f5",
+    sidebar: "#e6e9ef",
+    surface: "#f7f8fa",
+    rowActive: "#f1e3de",
+    panelHover: "#e4e7ed",
+    border: "rgba(52, 54, 72, 0.09)",
+    textPrimary: "#343648",
+    textSecondary: "#454756",
+    textMuted: "#545666",
+    accent: "#983801",
+    accentBright: "#8e3401",
+    accentFill: "#fe640b",
+    buttonText: "#11111b",
+  },
+  "solarized-dark": {
+    bg: "#002b36",
+    sidebar: "#073642",
+    surface: "#073642",
+    rowActive: "#163731",
+    panelHover: "#04313c",
+    border: "rgba(177, 191, 191, 0.1)",
+    textPrimary: "#b1bfbf",
+    textSecondary: "#a7b9bb",
+    textMuted: "#a0b2b4",
+    accent: "#dba600",
+    accentBright: "#e7af00",
+    buttonText: "#002b36",
+  },
+  "solarized-light": {
+    bg: "#fdf6e3",
+    sidebar: "#eee8d5",
+    surface: "#fffcf5",
+    rowActive: "#f5e7d2",
+    panelHover: "#f6efdc",
+    border: "rgba(58, 79, 86, 0.09)",
+    textPrimary: "#3a4f56",
+    textSecondary: "#40555c",
+    textMuted: "#465b63",
+    accent: "#9a3911",
+    accentBright: "#8e3510",
+    buttonText: "#fdf6e3",
+  },
+  "gray-dark": {
+    bg: "#2b2b2e",
+    sidebar: "#252528",
+    surface: "#323236",
+    rowActive: "#403832",
+    panelHover: "#37373b",
+    border: "rgba(236, 236, 238, 0.1)",
+    textPrimary: "#ececee",
+    textSecondary: "#c8c8cb",
+    textMuted: "#bcbcc0",
+    accent: "#ffa95a",
+    accentBright: "#ffb876",
+    buttonText: "#1c1c1e",
+  },
+  "gray-light": {
+    bg: "#ebebed",
+    sidebar: "#e2e2e5",
+    surface: "#f6f6f7",
+    rowActive: "#e6e0dd",
+    panelHover: "#dddde1",
+    border: "rgba(29, 29, 32, 0.09)",
+    textPrimary: "#1d1d20",
+    textSecondary: "#45454b",
+    textMuted: "#515157",
+    accent: "#8a3900",
+    accentBright: "#7f3400",
+    buttonText: "#ffffff",
+  },
+  "blue-dark": {
+    bg: "#0f1724",
+    sidebar: "#0b121d",
+    surface: "#162133",
+    rowActive: "#18283e",
+    panelHover: "#1a2740",
+    border: "rgba(228, 236, 248, 0.1)",
+    textPrimary: "#e4ecf8",
+    textSecondary: "#b6c4da",
+    textMuted: "#95a7c2",
+    accent: "#5baaff",
+    accentBright: "#6db4ff",
+    buttonText: "#06111f",
+  },
+  "blue-light": {
+    bg: "#f3f7fc",
+    sidebar: "#e8eff8",
+    surface: "#ffffff",
+    rowActive: "#e5ecf7",
+    panelHover: "#e1e9f4",
+    border: "rgba(15, 34, 59, 0.09)",
+    textPrimary: "#0f223b",
+    textSecondary: "#33486a",
+    textMuted: "#475976",
+    accent: "#1c56ac",
+    accentBright: "#1a4f9f",
+    buttonText: "#ffffff",
+  },
+  "phosphor-dark": {
+    bg: "#050a06",
+    sidebar: "#030704",
+    surface: "#0c160e",
+    rowActive: "#06250e",
+    panelHover: "#112014",
+    border: "rgba(200, 245, 208, 0.1)",
+    textPrimary: "#c8f5d0",
+    textSecondary: "#8fd49c",
+    textMuted: "#7db187",
+    accent: "#00ff41",
+    accentBright: "#6aff90",
+    buttonText: "#021a06",
+  },
+};
+
+function quitDialogPalette(
+  colorTheme: DesktopColorTheme,
+): QuitDialogPalette {
+  if (colorTheme === "tangerine-dark") return QUIT_DIALOG_PALETTES.dark;
+  if (colorTheme === "tangerine-light") return QUIT_DIALOG_PALETTES.light;
+  return COLOR_THEME_QUIT_DIALOG_PALETTES[colorTheme];
+}
+
 /** Resolve the active PwrAgent theme (honoring the in-app setting, not just the
  *  OS). "system" falls back to the OS scheme via nativeTheme. */
-function resolveQuitDialogTheme(): "dark" | "light" {
-  const { theme } = readBootstrapAppearance();
+function resolveQuitDialogTheme(theme: DesktopAppearanceTheme): "dark" | "light" {
   if (theme === "light") return "light";
   if (theme === "dark") return "dark";
   return nativeTheme.shouldUseDarkColors ? "dark" : "light";
@@ -123,6 +273,7 @@ function resolveQuitDialogTheme(): "dark" | "light" {
  */
 type ActiveQuitDialog = {
   window: BrowserWindow;
+  parent: BrowserWindow | undefined;
   ready: boolean;
 };
 
@@ -140,12 +291,88 @@ export function focusActiveQuitConfirmationDialog(): boolean {
   if (!active.ready) {
     return true;
   }
-  if (active.window.isMinimized()) {
-    active.window.restore();
-  }
-  active.window.show();
-  active.window.focus();
+  raiseQuitDialog(active);
   return true;
+}
+
+/**
+ * The window the prompt attaches to: the one the user is in, else the main
+ * window. Not just the focused window: a quit from the Dock, from Ctrl+C in the
+ * terminal running the app, or from anywhere while another app is active finds
+ * no focused PwrAgent window, and an unparented prompt opens wherever the OS
+ * centres new windows — on a multi-monitor desk, often a screen nobody is
+ * looking at.
+ */
+function resolveQuitDialogParent(): BrowserWindow | undefined {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed()) {
+    return focused;
+  }
+  const mainContents = primaryMainWindowWebContents();
+  const main = mainContents ? BrowserWindow.fromWebContents(mainContents) : null;
+  return main && !main.isDestroyed() ? main : undefined;
+}
+
+/**
+ * Centre the prompt over its parent, kept on the parent's display; with no
+ * parent, on the display under the pointer. macOS draws a modal child as a
+ * sheet and ignores this, but Windows and Linux centre an unpositioned window
+ * on the primary display, parent or not.
+ */
+function resolveQuitDialogPosition(
+  parent: BrowserWindow | undefined,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  // A minimized window on Windows reports off-screen sentinel bounds
+  // (-32000, -32000); anchor on where it will be once raiseQuitDialog restores it.
+  const anchor = parent?.isMinimized()
+    ? parent.getNormalBounds()
+    : parent?.getBounds();
+  const area = anchor
+    ? screen.getDisplayMatching(anchor).workArea
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const target = anchor ?? area;
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(value, max));
+  return {
+    x: clamp(
+      target.x + Math.round((target.width - width) / 2),
+      area.x,
+      area.x + area.width - width,
+    ),
+    y: clamp(
+      target.y + Math.round((target.height - height) / 2),
+      area.y,
+      area.y + area.height - height,
+    ),
+  };
+}
+
+/**
+ * Bring the prompt, and the window it is attached to, in front of the user.
+ * A sheet on a minimized or buried window is as lost as a dialog on the wrong
+ * monitor. On macOS the app is activated outright: every path here is a quit
+ * the user (or the OS, for a logout) asked for, and it is waiting on an answer.
+ * Off macOS `app.focus()` focuses the first window instead, which could pull an
+ * unrelated window over this one, so the window calls alone do it there.
+ */
+function raiseQuitDialog(active: ActiveQuitDialog): void {
+  if (process.platform === "darwin") {
+    app.focus({ steal: true });
+  }
+  const { parent, window } = active;
+  if (parent && !parent.isDestroyed()) {
+    if (parent.isMinimized()) {
+      parent.restore();
+    }
+    parent.show();
+  }
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
 }
 
 export async function showQuitConfirmationDialog(
@@ -155,21 +382,27 @@ export async function showQuitConfirmationDialog(
     .toString(36)
     .slice(2)}`;
   const navigationPrefix = `pwragent-quit-confirmation://${token}/`;
-  const parent =
-    options.parent && !options.parent.isDestroyed() ? options.parent : undefined;
-  const colorScheme = resolveQuitDialogTheme();
-  const palette = QUIT_DIALOG_PALETTES[colorScheme];
+  const parent = resolveQuitDialogParent();
+  const appearance = readBootstrapAppearance();
+  const colorScheme = resolveQuitDialogTheme(appearance.theme);
+  const palette = quitDialogPalette(
+    colorScheme === "light" ? appearance.lightTheme : appearance.darkTheme,
+  );
   const items = options.items ?? [];
   const countdownSeconds = resolveQuitCountdownSeconds(
     options.countdownSeconds,
     items.length,
   );
+  const width = 460;
+  // The list is scrollable, but a dialog that always reserves room for ten
+  // rows would look absurd when nothing is running. Grow with the content up
+  // to a ceiling, then let the list scroll inside it.
+  const height =
+    quitDialogHeight(items.length) + (options.federationPeerCount ? 72 : 0);
   const window = new BrowserWindow({
-    width: 460,
-    // The list is scrollable, but a dialog that always reserves room for ten
-    // rows would look absurd when nothing is running. Grow with the content up
-    // to a ceiling, then let the list scroll inside it.
-    height: quitDialogHeight(items.length) + (options.federationPeerCount ? 72 : 0),
+    width,
+    height,
+    ...resolveQuitDialogPosition(parent, width, height),
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -197,7 +430,7 @@ export async function showQuitConfirmationDialog(
     },
   });
 
-  const active: ActiveQuitDialog = { window, ready: false };
+  const active: ActiveQuitDialog = { window, parent, ready: false };
   activeDialog = active;
 
   /** Drop the shared handle and the window, whichever way this call ends. */
@@ -429,8 +662,7 @@ export async function showQuitConfirmationDialog(
     });
     window.once("ready-to-show", () => {
       active.ready = true;
-      window.show();
-      window.focus();
+      raiseQuitDialog(active);
       if (options.refresh) {
         void refreshDialog();
         refreshTimer = setInterval(
@@ -652,6 +884,7 @@ export function buildQuitConfirmationHtml(options: {
         --text-muted: ${p.textMuted};
         --accent: ${p.accent};
         --accent-bright: ${p.accentBright};
+        --accent-fill: ${p.accentFill ?? p.accent};
         --button-text: ${p.buttonText};
         /* Derived exactly like app.css's --accent-border. */
         --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
@@ -847,7 +1080,7 @@ export function buildQuitConfirmationHtml(options: {
         font-weight: 600;
       }
       .primary:hover {
-        background: var(--accent);
+        background: var(--accent-fill);
         color: var(--button-text);
       }
       /* Close (top-right of the strip) → maps to "Stay Open". */

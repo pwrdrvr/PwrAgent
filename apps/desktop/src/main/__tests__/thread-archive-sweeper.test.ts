@@ -6,6 +6,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  archiveCandidateProtectionReason,
+  isProtectedArchiveCandidate,
   isStaleArchiveCandidate,
   ThreadArchiveSweeper,
   THREAD_AUTO_ARCHIVE_AGE_MS,
@@ -141,6 +143,33 @@ describe("ThreadArchiveSweeper", () => {
     await sweeper.stop();
   });
 
+  it("never archives or deletes threads in Codex chat folders", async () => {
+    const linked = candidate("codex-chat");
+    linked.thread.linkedDirectories = [
+      { id: "chat", kind: "local", label: "chat", path: "/Users/tester/Documents/Codex/2026-05-08/chat" },
+    ];
+    const extra = candidate("codex-chat-extra");
+    extra.overlay = { backend: "codex", threadId: "codex-chat-extra", extraLinkedDirectories: [
+      { id: "chat", kind: "local", label: "chat", path: "C:\\Users\\tester\\Documents\\Codex\\2026-05-08\\chat" },
+    ] };
+    const lookalike = candidate("lookalike");
+    lookalike.thread.linkedDirectories = [
+      { id: "repo", kind: "local", label: "repo", path: "/Users/tester/Documents/Codex-tools/repo" },
+    ];
+    expect(archiveCandidateProtectionReason(linked)).toBe("Codex chat folder");
+    expect(isProtectedArchiveCandidate(extra)).toBe(true);
+    expect(isProtectedArchiveCandidate(lookalike)).toBe(false);
+    for (const mode of ["age", "count"] as const) {
+      const items = [linked, extra, lookalike].map((item) => ({ ...item, thread: { ...item.thread, projectKey: "project" } }));
+      const { deps } = harness(items);
+      const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, mode, keepPerProject: 0 };
+      const sweeper = new ThreadArchiveSweeper({ ...deps, getPolicy: () => policy });
+      await sweeper.sweep();
+      expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["lookalike"]);
+      await sweeper.stop();
+    }
+  });
+
   it("uses the 30-day boundary and protects recent views and restores", () => {
     const item = candidate();
     item.thread.updatedAt = Date.now() - THREAD_AUTO_ARCHIVE_AGE_MS;
@@ -269,7 +298,20 @@ describe("workspaceIsSafeForAutoArchive", () => {
     await git("branch", "retained-local-work");
     expect(await workspaceIsSafeForAutoArchive(repo, signal)).toBe(true);
     expect(await workspaceIsSafeForAutoArchive(path.join(root, "deleted-worktree"), signal)).toBe(true);
-    await expect(workspaceIsSafeForAutoArchive(root, signal)).rejects.toThrow();
+  });
+
+  it("accepts a directory outside any repository, but rejects a broken worktree link", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-auto-archive-"));
+    tempDirs.push(root);
+    const signal = new AbortController().signal;
+    const scratch = path.join(root, "scratch-project");
+    await mkdir(scratch);
+    await writeFile(path.join(scratch, "notes.txt"), "scratch work\n");
+    expect(await workspaceIsSafeForAutoArchive(scratch, signal)).toBe(true);
+    const broken = path.join(root, "broken-worktree");
+    await mkdir(broken);
+    await writeFile(path.join(broken, ".git"), `gitdir: ${path.join(root, "missing", ".git", "worktrees", "x")}\n`);
+    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(/not a git repository/);
   });
 });
 

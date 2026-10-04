@@ -193,6 +193,7 @@ export function buildBindingStatusIntent(params: {
       ? params.threadState.queuedExecutionMode
       : undefined;
   const activeTurn = params.threadState.activeTurn;
+  const threadLock = params.threadState.thread?.lock;
   const branch = formatBranch(params.threadState);
   const bindingTitle = formatStatusBindingTitle(params.threadState, params.binding.threadId);
   const bindingKind = params.binding.targetKind === "agent_thread"
@@ -248,6 +249,9 @@ export function buildBindingStatusIntent(params: {
     status: statusForThreadState(params.threadState),
     text: [
       `${bindingKind}: ${bindingTitle} (${params.binding.backend})`,
+      threadLock
+        ? threadLock.note ? `Locked: ${threadLock.note}` : "Locked"
+        : undefined,
       `Project: ${projectLabel}`,
       `Directory: ${directoryPath}`,
       params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
@@ -312,6 +316,7 @@ export function buildBindingStatusIntent(params: {
       showStreamingOption: params.showStreamingOption,
       streamingControlRevealed: params.binding.preferences?.streamingControlRevealed,
       toolUpdateMode,
+      locked: Boolean(threadLock),
     }),
   };
 }
@@ -612,6 +617,7 @@ function buildStatusActions(params: {
   showStreamingOption?: boolean;
   streamingControlRevealed?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
+  locked: boolean;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
   if (profile && !capabilityProfileSupportsActionCount(profile, STATUS_CARD_MIN_ACTIONS)) {
@@ -734,6 +740,18 @@ function buildStatusActions(params: {
       style: "secondary",
       fallbackText: "skills",
       priority: 14,
+    },
+    {
+      id: "status:lock",
+      label: params.locked ? "Unlock" : "Lock",
+      style: "secondary",
+      fallbackText: params.locked ? "unlock" : "lock",
+      // Unlocking is the one thing a locked thread is waiting on, so it
+      // outlasts every control but Stop on a short action budget.
+      priority: params.locked ? 1 : 15,
+      // The state the button asks for, so a stale card or a second tap on
+      // the same Lock cannot invert it.
+      value: { locked: !params.locked },
     },
     {
       id: "status:stop",

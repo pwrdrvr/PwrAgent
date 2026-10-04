@@ -25,6 +25,7 @@ import type { FederationProjectDirectory } from "../../chrome/useFederationProje
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import type { ComponentProps } from "react";
 import {
   documentTabStops,
   pressEscape,
@@ -1010,6 +1011,153 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("disables the thread lenses, but keeps them explainable, when there are no threads", async () => {
+    const onBrowseModeChange = vi.fn();
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[]}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        threads={[]}
+        threadLensesEmpty
+        onBrowseModeChange={onBrowseModeChange}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const tablist = screen.getByRole("tablist", { name: "Thread lenses" });
+    const tabs = within(tablist).getAllByRole("tab");
+    const directoriesTab = within(tablist).getByRole("tab", { name: "Directories" });
+    for (const tab of tabs) {
+      if (tab === directoriesTab) continue;
+      expect(tab).toHaveAttribute("aria-disabled", "true");
+      // aria-disabled, not disabled: a disabled button takes no focus, so its
+      // tooltip could never tell a keyboard user why it is off.
+      expect(tab).not.toBeDisabled();
+      fireEvent.click(tab);
+    }
+    expect(onBrowseModeChange).not.toHaveBeenCalled();
+    expect(directoriesTab).not.toHaveAttribute("aria-disabled");
+    expect(directoriesTab).toHaveAttribute("aria-selected", "true");
+
+    const updatedTab = within(tablist).getByRole("tab", { name: "Updated" });
+    fireEvent.focus(updatedTab);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Updated — all threads, most recently updated first\nNo threads yet"
+    );
+    fireEvent.blur(updatedTab);
+
+    // Attention hovers a card, not a line of text, so it carries the reason
+    // as the card's footer.
+    const attentionTab = within(tablist).getByRole("tab", { name: /^Attention/ });
+    fireEvent.focus(attentionTab);
+    expect((await screen.findByRole("tooltip")).querySelector(".attention-card__footer"))
+      .toHaveTextContent("No threads yet");
+  });
+
+  describe("start actions at the end of the thread list", () => {
+    function renderStartActions(props: Partial<ComponentProps<typeof Sidebar>> = {}) {
+      const onCreateThreadWithoutDirectory = vi.fn(async () => undefined);
+      const onAddProjectDirectory = vi.fn(async () => undefined);
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          directories={[]}
+          inboxThreads={[]}
+          loading={false}
+          creatingThread={undefined}
+          threads={[]}
+          threadLensesEmpty
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onCreateThreadWithoutDirectory={onCreateThreadWithoutDirectory}
+          onAddProjectDirectory={onAddProjectDirectory}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          {...props}
+        />
+      );
+      return { onCreateThreadWithoutDirectory, onAddProjectDirectory };
+    }
+
+    it("offers Start Chat and Add Project Folder under the empty state", () => {
+      const { onCreateThreadWithoutDirectory, onAddProjectDirectory } = renderStartActions();
+
+      const startChat = screen.getByRole("button", { name: "Start Chat" });
+      const addFolder = screen.getByRole("button", { name: "Add Project Folder" });
+      expect(
+        screen.getByText("No threads yet.").compareDocumentPosition(startChat)
+          & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // The next step leads while nothing exists yet.
+      expect(startChat.closest(".sidebar-start-actions")).toHaveClass("sidebar-start-actions--lead");
+
+      fireEvent.click(startChat);
+      expect(onCreateThreadWithoutDirectory).toHaveBeenCalledTimes(1);
+      fireEvent.click(addFolder);
+      expect(onAddProjectDirectory).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows the last row once threads exist", () => {
+      renderStartActions({
+        browseMode: "inbox",
+        directories,
+        inboxThreads: [sharedThread],
+        threads: [sharedThread],
+        threadLensesEmpty: false,
+      });
+
+      const row = screen.getByRole("button", { name: /^Cross-project cleanup/ });
+      const startChat = screen.getByRole("button", { name: "Start Chat" });
+      expect(row.compareDocumentPosition(startChat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(startChat.closest(".sidebar-start-actions")).not.toHaveClass("sidebar-start-actions--lead");
+      // In the scrolling lane, so it scrolls with the rows, but not in the
+      // thread list, so it is not counted as a thread.
+      expect(startChat.closest(".sidebar-list--dense")).not.toBeNull();
+      expect(startChat.closest('[role="list"]')).toBeNull();
+      // The lane already pads the rows; the list inside it must not pad them
+      // again, or every lens's first row drops 12px.
+      expect(row.closest('[role="list"]')).toHaveClass("sidebar-list--compact");
+    });
+
+    it("stays out of the way until a provider can start a chat", () => {
+      renderStartActions({ backends: backends.map((backend) => ({ ...backend, available: false })) });
+
+      expect(screen.queryByRole("button", { name: "Start Chat" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add Project Folder" })).not.toBeInTheDocument();
+    });
+
+    it("waits for the list to load", () => {
+      renderStartActions({ loading: true });
+
+      expect(screen.queryByRole("button", { name: "Start Chat" })).not.toBeInTheDocument();
+    });
+
+    it("holds each action while it is already in flight", () => {
+      const { onCreateThreadWithoutDirectory, onAddProjectDirectory } = renderStartActions({
+        addingProjectDirectory: true,
+        creatingThread: { backend: "codex", executionMode: "default" },
+      });
+
+      const startChat = screen.getByRole("button", { name: "Start Chat" });
+      const addFolder = screen.getByRole("button", { name: "Adding Project Folder…" });
+      for (const button of [startChat, addFolder]) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+        expect(button).not.toBeDisabled();
+        fireEvent.click(button);
+      }
+      expect(onCreateThreadWithoutDirectory).not.toHaveBeenCalled();
+      expect(onAddProjectDirectory).not.toHaveBeenCalled();
+    });
+  });
+
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {
     const onAddProjectDirectory = vi.fn(async () => undefined);
     const onCreateThread = vi.fn(async () => undefined);
@@ -1064,7 +1212,7 @@ describe("Sidebar", () => {
     expect(onAddProjectDirectory).toHaveBeenCalledTimes(1);
   });
 
-  it("groups sub-threads under their parent and persists collapse clicks", () => {
+  it("groups sub-threads under their parent and persists collapse clicks", async () => {
     const childThread = {
       ...sharedThread,
       id: "thread-review",
@@ -1095,11 +1243,13 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: /^Cross-project cleanup/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adversarial review" })).toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Collapse sub-threads for Cross-project cleanup",
-      }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Collapse sub-threads for Cross-project cleanup",
+        }),
+      );
+    });
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
@@ -1157,7 +1307,7 @@ describe("Sidebar", () => {
     ).toBe("2");
   });
 
-  it("groups same-owner remote sub-threads and submits their drag order", () => {
+  it("groups same-owner remote sub-threads and submits their drag order", async () => {
     const target = { scope: "remote" as const, instanceId: "remote-owner" };
     const remoteParent: NavigationThreadSummary = {
       ...sharedThread,
@@ -1249,7 +1399,9 @@ describe("Sidebar", () => {
     };
     fireEvent.dragStart(source, { dataTransfer });
     fireEvent.dragOver(targetRow, { clientY: 75, dataTransfer });
-    fireEvent.drop(targetRow, { clientY: 75, dataTransfer });
+    await act(async () => {
+      fireEvent.drop(targetRow, { clientY: 75, dataTransfer });
+    });
 
     expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(remoteParent, {
       threadId: "remote-child-a", anchorThreadId: "remote-child-b", placement: "before",
@@ -3154,7 +3306,7 @@ describe("Sidebar", () => {
     expect(within(threadRow).queryByText("local")).not.toBeInTheDocument();
   });
 
-  it("opens the directory launchpad from the plus button", () => {
+  it("opens the directory launchpad from the plus button", async () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
 
     render(
@@ -3174,11 +3326,13 @@ describe("Sidebar", () => {
       />
     );
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open new thread launchpad for PwrAgent",
-      })
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Open new thread launchpad for PwrAgent",
+        })
+      );
+    });
 
     expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }), undefined);
   });
@@ -5943,7 +6097,9 @@ describe("Sidebar", () => {
     await waitFor(() => {
       expect(appendTarget).not.toHaveClass("is-drop-target-before");
     });
-    releaseThreadPinPointer({ x: 50, y: 150 });
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 150 });
+    });
     expect(onReorderThreadPins).not.toHaveBeenCalled();
 
     startThreadPinPointerDrag(row!, { x: 50, y: 150 });
@@ -5955,7 +6111,9 @@ describe("Sidebar", () => {
       expect(appendTarget).toHaveClass("is-drop-target-before");
     });
 
-    releaseThreadPinPointer({ x: 50, y: 90 });
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 90 });
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
@@ -6455,7 +6613,9 @@ describe("Sidebar", () => {
     await waitFor(() => {
       expect(appendTarget).toHaveClass("is-drop-target-before");
     });
-    releaseThreadPinPointer({ x: 50, y: 150 });
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 150 });
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
@@ -6607,7 +6767,9 @@ describe("Sidebar", () => {
       expect(pinnedRow).not.toHaveClass("is-drop-target-after");
       expect(appendTarget).toHaveClass("is-drop-target-before");
     });
-    releaseThreadPinPointer({ x: 50, y: 115 });
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 115 });
+    });
   });
 
   it("renders no pinned section or drag affordance in the Created lens", () => {
@@ -7172,6 +7334,86 @@ describe("Sidebar", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
 
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
+  });
+
+  it("locks a thread with a note from the thread context menu", async () => {
+    const onSetThreadLock = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadLock={onSetThreadLock}
+      />
+    );
+
+    fireEvent.contextMenu(threadCard(screen.getByText("Cross-project cleanup")), { clientX: 12, clientY: 34 });
+    expect(screen.queryByRole("menuitem", { name: "Unlock Thread" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Lock Thread…" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Lock Thread" });
+    const note = within(dialog).getByLabelText("Note");
+    expect(note).toHaveFocus();
+    fireEvent.change(note, { target: { value: "Worktree handed to another agent." } });
+    // Enter adds a line to the note; only ⌘Enter submits.
+    fireEvent.keyDown(note, { key: "Enter" });
+    expect(onSetThreadLock).not.toHaveBeenCalled();
+    fireEvent.keyDown(note, { key: "Enter", metaKey: true });
+
+    await waitFor(() => {
+      expect(onSetThreadLock).toHaveBeenCalledWith(sharedThread, true, "Worktree handed to another agent.");
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Lock Thread" })).toBeNull());
+  });
+
+  it("shows a locked thread's note on its row and offers unlock and note editing", async () => {
+    const onSetThreadLock = vi.fn(async () => undefined);
+    const lockedThread: NavigationThreadSummary = {
+      ...sharedThread,
+      lock: { note: "Worktree handed to another agent.", lockedAt: 1, source: "operator" },
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[lockedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[lockedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadLock={onSetThreadLock}
+      />
+    );
+
+    expect(screen.getByRole("img", { name: "Locked: Worktree handed to another agent." })).toBeInTheDocument();
+
+    fireEvent.contextMenu(threadCard(screen.getByText("Cross-project cleanup")), { clientX: 12, clientY: 34 });
+    expect(screen.queryByRole("menuitem", { name: "Lock Thread…" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit Lock Note…" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Lock Note" });
+    expect(within(dialog).getByLabelText("Note")).toHaveValue("Worktree handed to another agent.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(onSetThreadLock).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(threadCard(screen.getByText("Cross-project cleanup")), { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unlock Thread" }));
+    expect(onSetThreadLock).toHaveBeenCalledWith(lockedThread, false);
   });
 
   it("offers rename for ACP threads when the backend supports local renaming", () => {
@@ -8015,7 +8257,7 @@ describe("Sidebar directory pinning", () => {
     ).toBeTruthy();
   });
 
-  it("pins an unpinned directory when it is dropped on the pinned divider", () => {
+  it("pins an unpinned directory when it is dropped on the pinned divider", async () => {
     const onSetDirectoryPin = vi.fn(async () => undefined);
     const onReorderDirectoryPins = vi.fn(async () => undefined);
     const pinned: NavigationDirectorySummary = {
@@ -8028,16 +8270,18 @@ describe("Sidebar directory pinning", () => {
       onReorderDirectoryPins,
     });
 
-    fireEvent.drop(
-      screen.getByRole("separator", { name: "Unpinned directories" }),
-      { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
-    );
+    await act(async () => {
+      fireEvent.drop(
+        screen.getByRole("separator", { name: "Unpinned directories" }),
+        { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
+      );
+    });
 
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
     expect(onReorderDirectoryPins).not.toHaveBeenCalled();
   });
 
-  it("reorders pinned directories when one is dropped on another pinned directory", () => {
+  it("reorders pinned directories when one is dropped on another pinned directory", async () => {
     const onReorderDirectoryPins = vi.fn(async () => undefined);
     const pinnedA: NavigationDirectorySummary = {
       ...projectADirectory,
@@ -8062,8 +8306,10 @@ describe("Sidebar directory pinning", () => {
     const headerA = pinnedASummary.closest(".directory-row__header");
     expect(headerA).not.toBeNull();
 
-    fireEvent.drop(headerA!, {
-      dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+    await act(async () => {
+      fireEvent.drop(headerA!, {
+        dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+      });
     });
 
     expect(onReorderDirectoryPins).toHaveBeenCalledWith([
@@ -8318,7 +8564,7 @@ describe("Sidebar directory pinning", () => {
     expect(onSetDirectoryPin).not.toHaveBeenCalled();
   });
 
-  it("suppresses the synthetic post-drag click on the directory summary button", () => {
+  it("suppresses the synthetic post-drag click on the directory summary button", async () => {
     // Regression: an earlier ref-based suppression flag could get
     // stuck `true` if `dragend` didn't fire (e.g., React detached
     // the listener during a re-render that moved the row between
@@ -8352,26 +8598,26 @@ describe("Sidebar directory pinning", () => {
     // of a reorder gesture). This stamps the suppression
     // timestamp via the section's onDrop handler.
     const sectionA = summary.closest(".directory-row") as HTMLElement;
-    fireEvent.drop(sectionA, {
-      dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+    await act(async () => {
+      fireEvent.drop(sectionA, {
+        dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+      });
     });
 
     // The synthetic post-drag click that browsers fire on the
     // element under the mouse should be suppressed — the row must
     // stay collapsed.
-    fireEvent.click(summary);
+    await act(async () => {
+      fireEvent.click(summary);
+    });
     expect(summary.getAttribute("aria-expanded")).toBe("false");
 
     // After the suppression window elapses, a normal click toggles
     // expand again. POST_DRAG_CLICK_SUPPRESS_MS is 150ms; wait
     // longer than that, then click.
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        fireEvent.click(summary);
-        expect(summary.getAttribute("aria-expanded")).toBe("true");
-        resolve();
-      }, 200);
-    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    await act(async () => { fireEvent.click(summary); });
+    expect(summary.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("does not re-expand a user-collapsed directory when another directory is unpinned", async () => {
@@ -8794,9 +9040,11 @@ describe("Sidebar thread pinning Move items", () => {
     const remoteRow = screen
       .getByRole("button", { name: /Grok middle pin/i })
       .closest(".thread-row-shell") as HTMLElement;
-    fireEvent.click(
-      remoteRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
-    );
+    await act(async () => {
+      fireEvent.click(
+        remoteRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+      );
+    });
 
     const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });
     const moveDown = await screen.findByRole("menuitem", {
@@ -8805,7 +9053,9 @@ describe("Sidebar thread pinning Move items", () => {
     expect(moveUp).toBeEnabled();
     expect(moveDown).toBeEnabled();
 
-    fireEvent.click(moveUp);
+    await act(async () => {
+      fireEvent.click(moveUp);
+    });
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "remote:peer-laptop:acp:grok:grok-middle",
       "codex:codex-top",
@@ -8813,7 +9063,7 @@ describe("Sidebar thread pinning Move items", () => {
     ], { key: "remote:peer-laptop:acp:grok:grok-middle", direction: "up" });
   });
 
-  it("invokes the reorder IPC on Cmd+Shift+ArrowDown on a focused pinned thread row", () => {
+  it("invokes the reorder IPC on Cmd+Shift+ArrowDown on a focused pinned thread row", async () => {
     // Locks the unified shortcut. The thread reorder shortcut
     // used to be plain Cmd+Arrow; it now matches the directory
     // reorder shortcut (Cmd+Shift+Arrow). A plain Cmd+Arrow
@@ -8856,15 +9106,19 @@ describe("Sidebar thread pinning Move items", () => {
     const topButton = screen.getByRole("button", { name: /Top pinned/i });
 
     // Old shortcut (Cmd alone) → must NOT fire.
-    fireEvent.keyDown(topButton, { key: "ArrowDown", metaKey: true });
+    await act(async () => {
+      fireEvent.keyDown(topButton, { key: "ArrowDown", metaKey: true });
+    });
     expect(onReorderThreadPins).not.toHaveBeenCalled();
 
     // New shortcut (Cmd + Shift) → fires the reorder, swapping
     // the top thread with the bottom one.
-    fireEvent.keyDown(topButton, {
-      key: "ArrowDown",
-      metaKey: true,
-      shiftKey: true,
+    await act(async () => {
+      fireEvent.keyDown(topButton, {
+        key: "ArrowDown",
+        metaKey: true,
+        shiftKey: true,
+      });
     });
     expect(onReorderThreadPins).toHaveBeenCalledWith([], { key: `codex:${pinnedTop.id}`, direction: "down" });
   });
@@ -9266,7 +9520,7 @@ it("reveals an added project's selected folder after its descriptor arrives and 
   }
 });
 
-it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {
+it("opens a project launchpad from the palette and reveals its folder without taking focus", async () => {
   const { scrollIntoView, restore } = withMockScrollIntoView();
   const onOpenLaunchpad = vi.fn(async () => undefined);
   const onBrowseModeChange = vi.fn();
@@ -9278,40 +9532,53 @@ it("opens a project launchpad from the palette and reveals its expanded, focused
     threads: [sharedThread], onBrowseModeChange, onCreateThread: async () => undefined,
     onOpenLaunchpad, onSelectThread: () => undefined, onThreadJumpOpenChange,
   };
+  // Stands in for the launchpad composer, which focuses itself as it opens.
+  // The reveal lands a frame later and must leave the caret there.
+  const view = (sidebarProps: Partial<Parameters<typeof Sidebar>[0]>) => (
+    <>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} browseMode="directories" {...sidebarProps} />
+    </>
+  );
+  const projectHeader = (label: string): HTMLElement | undefined =>
+    [...document.querySelectorAll<HTMLElement>(".directory-row__summary")]
+      .find((header) => header.textContent?.includes(label));
   try {
-    const { rerender } = render(<Sidebar {...props} browseMode="inbox" threadJumpOpen />);
+    const { rerender } = render(view({ browseMode: "inbox", threadJumpOpen: true }));
+    const composer = screen.getByRole("textbox", { name: "New thread message" });
     const input = screen.getByRole("textbox", { name: "Jump to thread or project" });
     fireEvent.change(input, { target: { value: "PwrAgent" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }));
     expect(onBrowseModeChange).toHaveBeenCalledWith("directories");
     expect(onThreadJumpOpenChange).toHaveBeenCalledWith(false);
-    rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
-      selectedItemKey={`launchpad:${directories[0]!.key}`} />);
+    rerender(view({ threadJumpOpen: false, selectedItemKey: `launchpad:${directories[0]!.key}` }));
+    composer.focus();
     await waitFor(() => {
-      expect(document.activeElement).toHaveClass("directory-row__summary");
-      expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+      const header = projectHeader(directories[0]!.label);
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(header?.closest(".directory-row"));
     });
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
-    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+    expect(composer).toHaveFocus();
 
     // Visit another project, then return to the already expanded first one.
     // Its sticky header may be visible while its threads are above the viewport;
     // the normal-flow section must remain the scroll target on repeated jumps.
     for (const project of [props.directories[1]!, props.directories[0]!]) {
-      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen />);
+      rerender(view({ threadJumpOpen: true }));
       const search = screen.getByRole("textbox", { name: "Jump to thread or project" });
       fireEvent.change(search, { target: { value: project.label } });
       fireEvent.keyDown(search, { key: "Enter" });
       scrollIntoView.mockClear();
-      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
-        selectedItemKey={`launchpad:${project.key}`} />);
+      rerender(view({ threadJumpOpen: false, selectedItemKey: `launchpad:${project.key}` }));
+      composer.focus();
       await waitFor(() => {
-        expect(document.activeElement).toHaveClass("directory-row__summary");
-        expect(document.activeElement).toHaveTextContent(project.label);
-        expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
-        expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+        const header = projectHeader(project.label);
+        expect(header).toHaveAttribute("aria-expanded", "true");
+        expect(scrollIntoView.mock.contexts.at(-1)).toBe(header?.closest(".directory-row"));
       });
+      expect(composer).toHaveFocus();
     }
   } finally {
     restore();

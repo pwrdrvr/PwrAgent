@@ -1,4 +1,5 @@
 import type { ThreadSubAgentSummary } from "./contracts/navigation";
+import type { AppServerThreadSubAgentCallDetail } from "./contracts/normalized-app-server";
 
 export type SubAgentLens = "harness" | "token-miser" | "pwragent";
 
@@ -22,10 +23,24 @@ export function isCodexNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "mon
   return subAgent.monitorId.startsWith("codex-native:");
 }
 
+/** Execution thread IDs also exist for ephemeral workers; they do not imply a reloadable transcript. */
+export function hasDurableSubAgentTranscript(
+  subAgent: Pick<AppServerThreadSubAgentCallDetail, "backend" | "origin">,
+): boolean {
+  return subAgent.backend !== "codex" || subAgent.origin === "codex-native";
+}
+
 export function isSystemTitleHelperSubAgent(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): boolean {
   return subAgent.monitorId.startsWith("system:title-helper:");
+}
+
+/** The per-thread row that names long queued messages. */
+export function isSystemQueuedMessageTitleHelperSubAgent(
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
+): boolean {
+  return subAgent.monitorId.startsWith("system:queued-message-titles:");
 }
 
 export function isTokenMiserSubAgent(
@@ -52,7 +67,10 @@ export function subAgentLens(subAgent: ThreadSubAgentSummary): SubAgentLens {
 export function subAgentOriginLabel(
   subAgent: ThreadSubAgentSummary,
 ): string | undefined {
-  if (isSystemTitleHelperSubAgent(subAgent)) {
+  if (
+    isSystemTitleHelperSubAgent(subAgent)
+    || isSystemQueuedMessageTitleHelperSubAgent(subAgent)
+  ) {
     return "PwrAgent system helper";
   }
   if (isTokenMiserSubAgent(subAgent)) {
@@ -75,7 +93,10 @@ export function subAgentOriginSentence(
 }
 
 export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
-  if (isSystemTitleHelperSubAgent(subAgent)) {
+  if (
+    isSystemTitleHelperSubAgent(subAgent)
+    || isSystemQueuedMessageTitleHelperSubAgent(subAgent)
+  ) {
     return "System";
   }
   if (isTokenMiserSubAgent(subAgent)) {
@@ -95,6 +116,9 @@ export function subAgentPricingUsageTitle(
 ): string {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "Thread naming";
+  }
+  if (isSystemQueuedMessageTitleHelperSubAgent(subAgent)) {
+    return "Queued message titles";
   }
   if (isTokenMiserSubAgent(subAgent)) {
     return "Token Miser gate";

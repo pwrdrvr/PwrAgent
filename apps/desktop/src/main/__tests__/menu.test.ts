@@ -181,10 +181,10 @@ describe("buildApplicationMenuTemplate", () => {
     expect(openProfilesSettings).toHaveBeenCalledTimes(2);
   });
 
-  it("hides developer-only View items when Developer Mode is off", () => {
+  it("keeps window recovery available and hides developer-only View items when Developer Mode is off", () => {
     const roles = submenuRoles(buildTemplate(false), "View");
 
-    expect(roles).not.toContain("reload");
+    expect(roles.filter((role) => role === "reload")).toHaveLength(1);
     expect(roles).not.toContain("forceReload");
     expect(roles).not.toContain("toggleDevTools");
     expect(roles.filter((role) => role === "togglefullscreen")).toHaveLength(1);

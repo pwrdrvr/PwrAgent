@@ -2,6 +2,7 @@ import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFami
 import { runGitCommand } from "./git-executable";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  classifyDirectory,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
 } from "@pwragent/shared";
@@ -30,8 +31,10 @@ import {
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
+import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
+import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -142,6 +145,10 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type SetThreadPinRequest,
+  type SetThreadLockResponse,
+  type FederationInstanceId,
+  type ThreadLock,
+  type ThreadLockSource,
   type SetThreadPinResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
@@ -203,6 +210,7 @@ import {
   type ConfigureGrokWorkflowBudgetResponse,
   type ControlActiveTurnRequest,
   type ControlActiveTurnResponse,
+  type ControlActiveTurnErrorCode,
   type ForkThreadRequest,
   type ForkThreadResponse,
   isBranchDrifted,
@@ -309,6 +317,8 @@ import {
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
+  type MarkProjectReadToolArgs,
+  type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
@@ -365,7 +375,6 @@ import {
   type ThreadReadEvaluationTokenMiser,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
-  type ThreadCompactionRecord,
   type ThreadTokenMiserSavings,
   type ThreadPricingSummary,
   type ThreadUsageLineRecord,
@@ -541,6 +550,7 @@ import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-ag
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
+import { buildAutomationMcpConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
   buildStarMapIntakeAgentTools,
@@ -718,16 +728,24 @@ import {
 } from "./codex-environment-hydration-store";
 import {
   ThreadTurnQueue,
+  type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueImmediateSubmissionResult,
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
-import { materializeLocalImageInputs } from "./image-input-files";
+import {
+  QueuedMessageTitler,
+  queuedMessageTitleSource,
+  type QueuedMessageTitleRequest,
+  type QueuedMessageTitleSettlement,
+} from "./queued-message-title";
+import { deleteThreadAssets, type ThreadAssetOwner } from "./thread-assets";
 import { enrichLocalFileInputs } from "./local-file-input";
 import {
   portableTurnInputAttachments,
   stageQueuedFileInputs,
+  ownThreadInputAttachments,
   stageTurnInputAttachmentsForRetention,
 } from "./turn-input-attachment-files";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
@@ -888,6 +906,7 @@ type BackendClient = {
   readThreadModelSettings?(params: {
     threadId: string;
   }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
+  readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -964,6 +983,7 @@ type BackendClient = {
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
+  resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
@@ -1143,14 +1163,6 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
-}
-
-function mergedPrCommitShas(prs: PrSummary[]): string[] {
-  return prs
-    .filter((pr) => pr.lifecycleState === "merged" || pr.state === "merged")
-    .flatMap((pr) => pr.commitShas ?? [])
-    .map((sha) => sha.trim().toLowerCase())
-    .filter((sha) => /^[0-9a-f]{40}$/.test(sha));
 }
 
 function linkedDirectoriesHaveSameWorkspaceIdentity(
@@ -2991,6 +3003,7 @@ type TaskMonitorDelegationRecord = {
   monitorTurnId?: string;
   parentBackend: AppServerBackendKind;
   parentThreadId: string;
+  parentTurnId: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
   preferredModel: string;
@@ -5016,11 +5029,7 @@ function withLegacyTokenMiserReplayAccounting(
   };
 }
 
-type ThreadPricingLedger = {
-  compactions?: ThreadCompactionRecord[];
-  lines: ThreadUsageLineRecord[];
-  summaries: ThreadPricingSummary[];
-};
+type ThreadPricingLedger = NonNullable<AppServerReadThreadResponse["pricing"]>;
 
 function toThreadReadEvaluationPricing(
   pricing: ThreadPricingLedger,
@@ -6971,6 +6980,74 @@ function titleHelperSubAgentId(
   return `system:title-helper:${backend}:${threadId}`;
 }
 
+/**
+ * One row per thread, not per message: a messaging thread handed dozens of
+ * long messages would otherwise fill the Sub-agents rail with a card each.
+ */
+function queuedMessageTitleHelperSubAgentId(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `system:queued-message-titles:${backend}:${threadId}`;
+}
+
+const QUEUED_MESSAGE_TITLE_COUNT_PATTERN = /^Named (\d+) queued messages?\./u;
+
+/**
+ * How many titles the row has landed so far. The count rides at the head of
+ * the row's message because the summary has no counter field, and adding one
+ * would change a shape that peers already read.
+ */
+function queuedMessageTitleHelperCount(
+  subAgent: ThreadSubAgentSummary | undefined,
+): number {
+  const match = QUEUED_MESSAGE_TITLE_COUNT_PATTERN.exec(subAgent?.lastMessage ?? "");
+  return match ? Number(match[1]) : 0;
+}
+
+function queuedMessageTitleHelperSubAgentMessage(params: {
+  count: number;
+  settlement: QueuedMessageTitleSettlement;
+}): string {
+  const { result, title, applied } = params.settlement;
+  const run = title === undefined
+    ? result.status === "ok"
+      ? "Latest title rejected: the helper returned no usable title."
+      : `Latest title failed: ${result.reason}`
+    : applied
+      ? `Latest: ${title}`
+      : `Latest title not applied: ${title}. The message changed or left the queue.`;
+  if (params.count === 0) return run;
+  return `Named ${params.count} queued ${params.count === 1 ? "message" : "messages"}. ${run}`;
+}
+
+/**
+ * Adds one run's usage to a row's running total. Token counts sum exactly;
+ * the list price is re-estimated at the latest run's model, which is the one
+ * Helper model setting every run reads.
+ */
+function addTaskMonitorUsageSnapshots(
+  previous: TaskMonitorUsageSnapshot | undefined,
+  run: TaskMonitorUsageSnapshot | undefined,
+): TaskMonitorUsageSnapshot | undefined {
+  if (!previous) return run;
+  if (!run) return previous;
+  const sum = (key: keyof TaskMonitorUsageSnapshot["tokenUsage"]) =>
+    (previous.tokenUsage[key] ?? 0) + (run.tokenUsage[key] ?? 0);
+  return buildTaskMonitorUsageSnapshot({
+    model: run.model ?? previous.model,
+    serviceTier: run.serviceTier ?? previous.serviceTier,
+    tokenUsage: {
+      cacheWriteInputTokens: sum("cacheWriteInputTokens"),
+      cachedInputTokens: sum("cachedInputTokens"),
+      inputTokens: sum("inputTokens"),
+      outputTokens: sum("outputTokens"),
+      reasoningOutputTokens: sum("reasoningOutputTokens"),
+      totalTokens: sum("totalTokens"),
+    },
+  }) ?? run;
+}
+
 function titleHelperSubAgentMessage(params: {
   result?: ThreadTitleHelperResult;
   status: "pending" | "running" | "success" | "failed" | "cancelled";
@@ -7929,6 +8006,7 @@ function threadOrchestrationFailure(
 
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
 export type AgentThreadActions = {
+  markProjectRead?: (args: MarkProjectReadToolArgs) => Promise<MarkProjectReadResult>;
   archiveThread: (request: ArchiveThreadRequest) => Promise<ArchiveThreadResponse>;
   setThreadPin: (request: SetThreadPinRequest) => Promise<SetThreadPinResponse>;
   markThreadSeen: (
@@ -8051,8 +8129,9 @@ type PendingThreadMessageContext = {
 
 async function pendingThreadMessageImageParts(
   input: AppServerTurnInputItem[] | undefined,
+  owner: ThreadAssetOwner,
 ): Promise<AppServerThreadImagePart[]> {
-  const materializedInput = await materializeLocalImageInputs(input ?? []);
+  const materializedInput = await stageTurnInputAttachmentsForRetention(input ?? [], { owner });
   return materializedInput.flatMap((item): AppServerThreadImagePart[] => {
     if (item.type === "localImage") {
       return [{
@@ -8664,6 +8743,7 @@ export class DesktopBackendRegistry {
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
   private readonly threadLifecycleLocks = new PerKeyAsyncLock();
+  private readonly threadAttachmentAdmissionLocks = new PerKeyAsyncLock();
   private readonly automaticArchiveReservations = new Map<string, { cancelled: boolean }>();
   private readonly threadLifecycleMutationCounts = new Map<string, number>();
   private readonly handoffTurnStarts = new Map<string, number>();
@@ -8956,6 +9036,17 @@ export class DesktopBackendRegistry {
   >();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
+  private readonly queuedMessageTitler = new QueuedMessageTitler({
+    generate: async (params) =>
+      await this.generateStructuredObject({
+        ...params,
+        helper: "queued_message_titles",
+      }),
+    apply: (request, title) => this.applyQueuedMessageTitle(request, title),
+    settle: async (request, settlement) =>
+      await this.recordQueuedMessageTitle(request, settlement),
+    log: (message, fields) => backendRegistryLog.info(message, fields),
+  });
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
@@ -9102,6 +9193,7 @@ export class DesktopBackendRegistry {
       suppressBindingBroadcast?: boolean;
       mcpConnectionIds?: string[];
       mcpServerAliases?: Record<string, string[]>;
+      mcpAllowedServerNames?: string[];
       toolAllowlist?: string[];
       mcpRegistrations?: McpConnectionBridgeRegistration[];
       pendingTerminalNotification?: AppServerNotification;
@@ -10110,6 +10202,42 @@ export class DesktopBackendRegistry {
     });
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
+      canSteerThread: (entry) => !this.stoppingRunningTurnsForShutdown
+        && !this.threadHasBlockingWorkspaceMove(entry)
+        && this.getActiveTurnForThread(entry) !== undefined
+        && this.findReviewForParentTurn({
+          backend: entry.backend,
+          parentThreadId: entry.threadId,
+        })?.mode !== "native",
+      steerTurn: async (entry) => {
+        const active = this.getActiveTurnForThread(entry);
+        if (!active) return undefined;
+        const backend = (await this.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend);
+        if (!backend?.capabilities.steerTurn) return undefined;
+        // Review ownership can change while backend discovery is pending.
+        if (this.findReviewForParentTurn({
+          backend: entry.backend,
+          parentThreadId: entry.threadId,
+        })?.mode === "native") return undefined;
+        try {
+          const result = await this.steerTurn({
+            backend: entry.backend,
+            threadId: entry.threadId,
+            expectedTurnId: active.turnId,
+            requestId: entry.id,
+            input: entry.input,
+          }, entry.messageOrigin);
+          return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/no active turn|expected active turn id/.test(message)) {
+            const current = this.getActiveTurnForThread(entry);
+            return current?.turnId !== active.turnId ? "retry" : undefined;
+          }
+          throw error;
+        }
+      },
       // A turn a quit stopped releases its thread; the next queued turn must
       // not start in its place, so every thread reads as busy from then on.
       isThreadActive: ({ backend, threadId }) =>
@@ -10991,6 +11119,7 @@ export class DesktopBackendRegistry {
       suppressBindingBroadcast: params.suppressBindingBroadcast,
       mcpConnectionIds: mcp?.connectionIds,
       mcpServerAliases: mcp?.serverAliases,
+      mcpAllowedServerNames: mcp?.allowedServerNames,
       toolAllowlist: params.toolAllowlist,
       mcpRegistrations: mcp?.registrations,
       pendingTerminalNotification: undefined as AppServerNotification | undefined,
@@ -11107,16 +11236,27 @@ export class DesktopBackendRegistry {
   private async emitTurnQueueLifecycle(
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
-    const source = event.entry.messageOrigin?.sourceThread;
-    if (
-      source?.messageId
-      && event.type !== "terminal"
-    ) {
-      this.updateCorrespondenceStatus(source, source.messageId, {
-        state: event.type === "blocked" ? "held" : event.type,
-        queueEntryId: event.entry.id,
-        ...(event.type === "started" ? { turnId: event.turnId } : {}),
-      });
+    if (event.type === "queued" || event.type === "held") {
+      // Re-queued entries (a release that put the queue back) keep the
+      // title they already have. A grouped steer that took another message
+      // arrives here untitled, so the larger batch is named again.
+      if (!event.entry.title) this.requestQueuedMessageTitle(event.entry);
+    } else {
+      this.queuedMessageTitler.forget(event.entry.id);
+    }
+    const origins = event.type === "queued" && event.inputUpdated
+      ? event.entry.agentMessageOrigins?.slice(-1) ?? []
+      : event.entry.agentMessageOrigins
+      ?? [event.entry.messageOrigin];
+    for (const origin of origins) {
+      const source = origin?.sourceThread;
+      if (source?.messageId && event.type !== "terminal") {
+        this.updateCorrespondenceStatus(source, source.messageId, {
+          state: event.type === "blocked" ? "held" : event.type,
+          queueEntryId: event.entry.id,
+          ...(event.type === "started" ? { turnId: event.turnId } : {}),
+        });
+      }
     }
     const baseParams = {
       threadId: event.entry.threadId,
@@ -11136,6 +11276,7 @@ export class DesktopBackendRegistry {
             ? {
                 ...baseParams,
                 status: "queued",
+                ...(event.inputUpdated ? { inputUpdated: true } : {}),
                 position: event.position,
                 // Windows that did not submit this entry mirror a chip
                 // from the event; carry the text so they need not wait
@@ -13029,7 +13170,7 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
         })
       : undefined;
-    const pendingRequest = this.pendingServerRequestForThread({
+    const pendingRequest = this.getPendingRequestForThread({
       backend,
       threadId: request.threadId,
     });
@@ -13791,6 +13932,11 @@ export class DesktopBackendRegistry {
       cleanupRetention: async (onFailure) => await this.sweepArchivedThreadRetention(onFailure),
       resolveProject: async ({ thread, overlay }) => {
         const directory = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []][0];
+        // Scratch projects share one quota per projects root, matching their
+        // single Workspaces row. Each would otherwise be its own project and
+        // never reach the per-project limit.
+        const descriptor = directory ? classifyDirectory(directory) : undefined;
+        if (descriptor?.kind === "workspace") return descriptor.key;
         const cwd = directory?.worktreePath ?? directory?.path;
         if (!cwd) return thread.projectKey;
         try {
@@ -13867,14 +14013,20 @@ export class DesktopBackendRegistry {
       observeArchives: async (threads, now) => await this.overlayStore.observeArchivedThreads!(
         threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), now),
       confirmAbsent: async (state) => {
-        if (isAcpBackendId(state.backend)) return !this.acpBackend.getSession(state.backend, state.threadId);
+        if (isAcpBackendId(state.backend)) {
+          const absent = !this.acpBackend.getSession(state.backend, state.threadId);
+          if (absent) await deleteThreadAssets(state);
+          return absent;
+        }
         return await this.withCodexThreadClient(state.threadId, async (client) => {
           if (!client.readThreadSummary) return false;
           try { await client.readThreadSummary(state.threadId); return false; }
           catch (error) {
             // Only an explicit provider not-found response confirms deletion.
             // Transport errors, unloaded threads and profile changes retain refs.
-            return error instanceof Error && error.message.toLowerCase().includes("thread not found:");
+            const absent = error instanceof Error && error.message.toLowerCase().includes("thread not found:");
+            if (absent) await deleteThreadAssets(state);
+            return absent;
           }
         });
       },
@@ -13917,6 +14069,11 @@ export class DesktopBackendRegistry {
           throw new AutomaticArchiveCancelledError();
         }
         await remove(root.id);
+        // The provider deletes the complete family. Child notifications may
+        // be missed, so release every owner's assets before forgetting refs.
+        for (const thread of family) {
+          await deleteThreadAssets({ backend: thread.source, threadId: thread.id });
+        }
         this.invalidateThreadListCache(root.source);
         this.invalidateArchiveCleanupReads(root.source);
       };
@@ -14503,6 +14660,7 @@ export class DesktopBackendRegistry {
   }
 
   private async handoffThreadWorkspaceWithoutArchiveLock(request: HandoffThreadWorkspaceRequest): Promise<HandoffThreadWorkspaceResponse> {
+    await this.assertThreadNotLocked(request.backend, request.threadId);
     this.assertThreadNotHandingOff(request.backend, request.threadId);
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
@@ -15136,7 +15294,7 @@ export class DesktopBackendRegistry {
     Thread extends AppServerThreadSummary,
   >(threads: Thread[], worktreePaths: string[]): Promise<void> {
     const acceptedPushedCommitShasByWorktreePath =
-      await this.readAcceptedMergedPrCommitShasByWorktreePath(
+      await this.readAcceptedPublishedPrCommitShasByWorktreePath(
         threads,
         worktreePaths,
       );
@@ -15151,7 +15309,7 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async readAcceptedMergedPrCommitShasByWorktreePath<
+  private async readAcceptedPublishedPrCommitShasByWorktreePath<
     Thread extends AppServerThreadSummary,
   >(
     threads: Thread[],
@@ -15178,7 +15336,18 @@ export class DesktopBackendRegistry {
         ...(overlay?.prs ?? []),
         ...(overlay?.detachedPrs ?? []),
       ];
-      for (const commitSha of mergedPrCommitShas(prs)) {
+      let canonicalPrs = prs;
+      if (this.threadPullRequestCanonicalizer && prs.length > 0) {
+        try {
+          canonicalPrs = await this.threadPullRequestCanonicalizer(prs);
+        } catch (error) {
+          backendRegistryLog.warn("working-state PR canonicalization failed", {
+            error: error instanceof Error ? error.message : String(error),
+            threadId: thread.id,
+          });
+        }
+      }
+      for (const commitSha of publishedPrCommitShas(canonicalPrs)) {
         accepted.add(commitSha);
       }
     }));
@@ -15306,7 +15475,7 @@ export class DesktopBackendRegistry {
    * Resolve a renderer-supplied worktree path against the owning thread before
    * a federated peer can read commit metadata from it. The peer supplies the
    * path it rendered, but this instance remains authoritative for both the
-   * linked-directory boundary and merged-PR exclusions.
+   * linked-directory boundary and published-PR exclusions.
    */
   async resolveThreadWorktreeGitReadContext(params: {
     backend?: AppServerBackendKind;
@@ -15368,7 +15537,7 @@ export class DesktopBackendRegistry {
     }
     return {
       worktreePath: matchedPath,
-      acceptedPushedCommitShas: mergedPrCommitShas(canonicalPrs),
+      acceptedPushedCommitShas: publishedPrCommitShas(canonicalPrs),
     };
   }
 
@@ -15439,6 +15608,16 @@ export class DesktopBackendRegistry {
     }
     this.assertNotBootstrap("readThread");
     const pricing = await this.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
+    if (backend === "codex" && request.display.resource === "pricing"
+      && pricing.summaries.length === 0 && !pricing.lines.some((line) => line.status !== "superseded")) {
+      const snapshot = await this.withCodexThreadClient(request.threadId, async (client) =>
+        await client.readThreadPricingSnapshot?.(request.threadId), undefined, false);
+      if (snapshot) {
+        const modelLabel = this.codexBackendSummary?.launchpadOptions?.models?.find((model) => model.id === snapshot.model)?.label;
+        const localModel = Boolean(snapshot.model && this.resolveCodexLocalModelIdsFn().includes(snapshot.model));
+        pricing.snapshot = { ...snapshot, ...(modelLabel ? { modelLabel } : {}), localModel };
+      }
+    }
     const stored = await this.overlayStore.readThreadToolAccounting({
       backend, threadId: request.threadId,
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
@@ -15646,7 +15825,7 @@ export class DesktopBackendRegistry {
       backend,
       request.threadId,
     );
-    const pendingRequest = this.pendingServerRequestForThread({
+    const pendingRequest = this.getPendingRequestForThread({
       backend,
       threadId: request.threadId,
     });
@@ -15680,7 +15859,19 @@ export class DesktopBackendRegistry {
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
-    return { ...await this.overlayStore.readUsageActivity(request), readAt: Date.now(),
+    const activity = await this.overlayStore.readUsageActivity(request);
+    return { ...activity,
+      // Navigation indexing can lag a live thread or rename. The information
+      // store retains titles independently of query caches; consult it on the
+      // owner before relaying rows over local IPC or federation. Durable titles
+      // still name historical threads this process has never observed.
+      rows: activity.rows.map((row) => ({
+        ...row,
+        title: this.getThreadInfo({
+          backend: row.line.backend as AppServerBackendKind, threadId: row.line.threadId,
+        })?.title ?? row.title,
+      })),
+      readAt: Date.now(),
       rateLimits: this.codexBackendSummary?.rateLimits ?? [],
       limitObservation: this.codexLimitObservation(),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
@@ -17001,6 +17192,24 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Refuses a new, queued, steered or review turn on a locked thread. Every
+   * turn source reaches one of the callers, so a lock needs no per-feature
+   * check. The overlay row is read on each call: the lock can be written by
+   * any window, an agent tool, or a peer, and a stale cache would let a turn
+   * through.
+   */
+  private async assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void> {
+    const lock = await this.readThreadLock(backend, threadId);
+    if (lock) {
+      throw new Error(threadLockRefusalMessage(lock));
+    }
+  }
+
+  private async readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined> {
+    return (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.lock;
+  }
+
   private assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void {
     this.cancelAutomaticArchive(backend, threadId);
     if (this.threadHandoffReservations.has(buildThreadIdentityKey(backend, threadId))) {
@@ -17352,6 +17561,26 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Reserve submission order until the queue claims a position, not until
+   * the provider responds. Other threads retain their independent admissions. */
+  private async admitThreadAttachments<T>(
+    params: ThreadAssetOwner & { input: AppServerTurnInputItem[] },
+    admit: (input: AppServerTurnInputItem[], onAdmission: () => void) => Promise<T>,
+  ): Promise<T> {
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const { submission } = await this.threadAttachmentAdmissionLocks.run(key, async () => {
+      const input = await ownThreadInputAttachments(params.input, params, this.localFilePrivateStorageRoots);
+      let onAdmission!: () => void;
+      const admitted = new Promise<void>((resolve) => { onAdmission = resolve; });
+      const submission = admit(input, onAdmission);
+      // A rejected admission must also release the next sender's reservation.
+      void submission.then(onAdmission, onAdmission);
+      await admitted;
+      return { submission };
+    });
+    return await submission;
+  }
+
   async submitTurn(params: {
     queueEntryId?: string;
     backend: AppServerBackendKind;
@@ -17368,13 +17597,26 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
+    delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", queueEntryId, ...entry } = params;
-    return await this.threadTurnQueue.submit({
-      ...entry,
-      ...(queueEntryId ? { id: queueEntryId } : {}),
-      origin,
+    const { origin = "manual", queueEntryId, delivery, ...entry } = params;
+    const hasTurnSettings = [
+      entry.executionMode,
+      entry.approvalPolicy,
+      entry.sandbox,
+      entry.model,
+      entry.collaborationMode,
+      entry.serviceTier,
+      entry.reasoningEffort,
+      entry.fastMode,
+    ].some((value) => value !== undefined);
+    return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+      const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
+      return entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings
+        ? this.threadTurnQueue.submitGroupedSteer(prepared, { onAdmission })
+        : this.threadTurnQueue.submit(prepared, { onAdmission });
     });
   }
 
@@ -17395,6 +17637,9 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    // No lock check: a held entry starts nothing until it is released, and
+    // the release is refused while the thread is locked. Holding is how a
+    // lock pauses a delivery, such as a monitor's result, without losing it.
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const {
       holdReason,
@@ -17402,11 +17647,12 @@ export class DesktopBackendRegistry {
       queueEntryId,
       ...entry
     } = params;
-    return await this.threadTurnQueue.submitHeld({
+    return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitHeld({
       ...entry,
+      input,
       id: queueEntryId,
       origin,
-    }, holdReason);
+    }, holdReason, { onAdmission }));
   }
 
   async submitTurnIfIdle(params: {
@@ -17419,15 +17665,19 @@ export class DesktopBackendRegistry {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", ...entry } = params;
     if (
-      this.threadHasActiveTurn(params.threadId, params.backend)
+      // A lock reads as busy, not as a failure: the PR watch and auto-fix
+      // callers wait without spending an attempt, and resume once unlocked.
+      (await this.readThreadLock(params.backend, params.threadId))
+      || this.threadHasActiveTurn(params.threadId, params.backend)
       || this.threadHasBlockingWorkspaceMove(params)
     ) {
       return { status: "busy" };
     }
-    return await this.threadTurnQueue.submitIfIdle({
+    return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitIfIdle({
       ...entry,
+      input,
       origin,
-    });
+    }, { onAdmission }));
   }
 
   async readQueuedTurn(
@@ -17507,34 +17757,42 @@ export class DesktopBackendRegistry {
     };
   }
 
-  replaceQueuedAgentMessage(request: {
+  async replaceQueuedAgentMessage(request: {
     backend: AppServerBackendKind;
     threadId: string;
     queueEntryId: string;
     input: AppServerTurnInputItem[];
     messageOrigin?: AppServerThreadMessageOrigin;
-  }): StartTurnResponse & { queueStatus: "queued" } {
+  }): Promise<StartTurnResponse & { queueStatus: "queued" }> {
+    const input = await ownThreadInputAttachments(request.input, request, this.localFilePrivateStorageRoots);
     // No await between lookup, ownership check, and replacement: admission
     // cannot consume the entry between validation and the edit.
     const entry = this.threadTurnQueue.getQueuedEntries(request)
       .find((candidate) => candidate.id === request.queueEntryId);
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
-    const owner = entry.messageOrigin?.sourceThread;
+    if (entry.agentMessageOrigins && !entry.agentMessages) {
+      throw new Error("The operator edited this batch; sender replacement would overwrite those edits.");
+    }
     const sender = request.messageOrigin?.sourceThread;
+    const owners = entry.agentMessages?.map((message) => message.origin?.sourceThread)
+      ?? [entry.messageOrigin?.sourceThread];
     if (
       entry.messageOrigin?.kind !== "agent"
       || request.messageOrigin?.kind !== "agent"
-      || !owner || !sender
-      || owner.backend !== sender.backend
-      || owner.threadId !== sender.threadId
-      || owner.instanceId !== sender.instanceId
+      || !sender
+      || !owners.some((owner) => owner && owner.backend === sender.backend
+        && owner.threadId === sender.threadId && owner.instanceId === sender.instanceId)
     ) {
       throw new Error("Only the sending thread can replace its own queued agent message.");
     }
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    this.updateQueuedTurnInput(entry.id, request.input);
+    if (entry.agentMessages) {
+      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender);
+      if (!updated) throw new Error("The sender's queued message is no longer waiting.");
+      this.emitQueuedTurnInputUpdated(updated);
+    } else this.updateQueuedTurnInput(entry.id, input);
     return {
       backend: entry.backend,
       threadId: entry.threadId,
@@ -17550,6 +17808,11 @@ export class DesktopBackendRegistry {
   ): void {
     const entry = this.threadTurnQueue.updateQueuedEntryInput(entryId, input);
     if (!entry) return;
+    this.emitQueuedTurnInputUpdated(entry);
+  }
+
+  private emitQueuedTurnInputUpdated(entry: ThreadTurnQueueEntry): void {
+    this.requestQueuedMessageTitle(entry);
     // This is an input refresh, not another queue admission. In particular,
     // do not replay sender correspondence lifecycle transitions.
     void this.emit({
@@ -17573,6 +17836,141 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  private requestQueuedMessageTitle(entry: ThreadTurnQueueEntry): void {
+    const source = queuedMessageTitleSource(entry.input);
+    if (!source) {
+      this.queuedMessageTitler.forget(entry.id);
+      return;
+    }
+    this.queuedMessageTitler.request({
+      entryId: entry.id,
+      backend: entry.backend,
+      threadId: entry.threadId,
+      source,
+    });
+  }
+
+  /**
+   * Lands a generated title on its entry if the entry is still queued and
+   * still holds the text the title was written from, then refreshes every
+   * window's row the way an input edit does.
+   */
+  private applyQueuedMessageTitle(
+    request: QueuedMessageTitleRequest,
+    title: string,
+  ): boolean {
+    const current = this.threadTurnQueue
+      .getAllQueuedEntries()
+      .find((entry) => entry.id === request.entryId);
+    if (!current || queuedMessageTitleSource(current.input) !== request.source) {
+      return false;
+    }
+    const entry = this.threadTurnQueue.setQueuedEntryTitle(request.entryId, title);
+    if (!entry) return false;
+    void this.emit({
+      backend: entry.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: entry.threadId,
+          queueEntryId: entry.id,
+          queueEntryCreatedAt: entry.createdAt,
+          origin: entry.origin,
+          status: entry.manualReleaseRequired ? "held" : "queued",
+          displayText: queuedTurnDisplayText(entry.input),
+          title,
+          manualReleaseRequired: entry.manualReleaseRequired === true,
+          ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
+        },
+      },
+    }).catch((error) => {
+      backendRegistryLog.error("Could not publish queued message title", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
+  }
+
+  /**
+   * Shows a finished title run on the thread's "Name queued messages" row and
+   * charges its usage to the thread as a system helper, the way thread naming
+   * does. Only finished runs are written, with no running state in between:
+   * a title costs two commits (the row and its usage line), not three.
+   */
+  private async recordQueuedMessageTitle(
+    request: QueuedMessageTitleRequest,
+    settlement: QueuedMessageTitleSettlement,
+  ): Promise<void> {
+    const { result } = settlement;
+    // No helper ran, so there is nothing to show and nothing to charge.
+    if (result.status === "unavailable") return;
+    const now = Date.now();
+    const monitorId = queuedMessageTitleHelperSubAgentId(
+      request.backend,
+      request.threadId,
+    );
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    const ok = result.status === "ok" ? result : undefined;
+    const runUsage = ok?.tokenUsage
+      ? buildTaskMonitorUsageSnapshot({
+          model: ok.model,
+          serviceTier: ok.serviceTier,
+          tokenUsage: ok.tokenUsage,
+        })
+      : undefined;
+    const monitorUsage = addTaskMonitorUsageSnapshots(existing?.monitorUsage, runUsage);
+    const succeeded = settlement.title !== undefined;
+    const preferredModel = ok?.model ?? existing?.preferredModel;
+    const preferredReasoningEffort =
+      ok?.reasoningEffort ?? existing?.preferredReasoningEffort;
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId,
+      task: "Name queued messages",
+      status: succeeded ? "success" : "failed",
+      // Each run is a new attempt, so the card's timing is the latest run's.
+      createdAt: settlement.startedAt,
+      updatedAt: now,
+      ownerRuntimeInstanceId: this.runtimeInstanceId,
+      ownerRegistrySessionId: this.registrySessionId,
+      backend: request.backend,
+      agentName: "PwrAgent",
+      ...(preferredModel ? { preferredModel } : {}),
+      ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
+      ...(ok?.helperThreadId ? { monitorThreadId: ok.helperThreadId } : {}),
+      ...(ok?.helperTurnId ? { monitorTurnId: ok.helperTurnId } : {}),
+      lastMessage: queuedMessageTitleHelperSubAgentMessage({
+        count: queuedMessageTitleHelperCount(existing) + (settlement.applied ? 1 : 0),
+        settlement,
+      }),
+      outcome: succeeded ? "success" : "failure",
+      completedAt: now,
+      completionSource: {
+        type: "pwragent_fallback",
+        reason: "system_queued_message_title_helper",
+        recoveryAttempted: false,
+        terminalStatus: succeeded ? "completed" : "failed",
+      },
+      ...(monitorUsage ? { monitorUsage } : {}),
+    };
+    await this.writeSystemHelperSubAgent({
+      backend: request.backend,
+      threadId: request.threadId,
+      subAgent,
+      ...(ok && runUsage ? { usage: { result: ok, snapshot: runUsage } } : {}),
+    });
+  }
+
+  /** Resolves once queued-message titles in flight have landed. Tests only. */
+  async queuedMessageTitlesIdle(): Promise<void> {
+    await this.queuedMessageTitler.idle();
   }
 
   canStartThreadTurnImmediately(params: {
@@ -17949,6 +18347,7 @@ export class DesktopBackendRegistry {
     config?: CodexThreadStartParams["config"];
     connectionIds: string[];
     serverAliases: Record<string, string[]>;
+    allowedServerNames: string[];
     registrations: McpConnectionBridgeRegistration[];
   }> {
     const registrations: Array<{ connectionId: string; registration: McpConnectionBridgeRegistration }> = [];
@@ -17996,6 +18395,9 @@ export class DesktopBackendRegistry {
       return {
         config: servers.length || baseConfig ? mergeCodexThreadConfigs(baseConfig, policy.config) : undefined,
         connectionIds: policy.connectionIds,
+        allowedServerNames: servers
+          .filter((server) => readRecord(readRecord(policy.config?.mcp_servers)?.[server.name])?.enabled !== false)
+          .flatMap((server) => [server.name, ...(server.aliases ?? [])]),
         serverAliases: Object.fromEntries(servers.filter((server) => server.connectionId).map((server) => [server.connectionId!, [server.name, ...(server.aliases ?? [])]])),
         registrations: selectedRegistrations.map(({ registration }) => registration),
       };
@@ -18132,7 +18534,14 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(params.backend, params.threadId);
     this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
     try {
-      return await this.withThreadLifecycleMutation(params, async () => await this.startTurnWithoutHandoff(params));
+      // Checked inside the lifecycle mutation, after the handoff count is
+      // raised: a start that waited behind a move or archive sees a lock
+      // that landed meanwhile. A queued entry that reaches here is held with
+      // this refusal as its reason until an unlock releases it.
+      return await this.withThreadLifecycleMutation(params, async () => {
+        await this.assertThreadNotLocked(params.backend, params.threadId);
+        return await this.startTurnWithoutHandoff(params);
+      });
     } finally {
       const count = (this.handoffTurnStarts.get(key) ?? 1) - 1;
       if (count) this.handoffTurnStarts.set(key, count);
@@ -18229,9 +18638,13 @@ export class DesktopBackendRegistry {
         });
         // ACP adapters already accept data-URL image parts. Keeping those
         // intact avoids changing their established image payload contract.
-        const userInput = await enrichLocalFileInputs(preparedPdfInput.input, {
-          privateStorageRoots: this.localFilePrivateStorageRoots,
-        });
+        const userInput = await ownThreadInputAttachments(
+          await enrichLocalFileInputs(preparedPdfInput.input, {
+            privateStorageRoots: this.localFilePrivateStorageRoots,
+          }),
+          params,
+          this.localFilePrivateStorageRoots,
+        );
         const input = pendingManagedReviewContexts.length > 0
           ? [
               {
@@ -18410,10 +18823,12 @@ export class DesktopBackendRegistry {
         input: params.input,
       });
       pdfAttachments = preparedPdfInput.pdfAttachments;
-      input = await materializeLocalImageInputs(
+      input = await ownThreadInputAttachments(
         await enrichLocalFileInputs(preparedPdfInput.input, {
           privateStorageRoots: this.localFilePrivateStorageRoots,
         }),
+        params,
+        this.localFilePrivateStorageRoots,
       );
       turnParams = await this.resolveModelSettings(params.backend, {
         ...params,
@@ -18719,11 +19134,11 @@ export class DesktopBackendRegistry {
     turnId?: string;
     retainAttachments?: boolean;
   }): Promise<string | undefined> {
-    const imageParts = await pendingThreadMessageImageParts(params.input);
+    const imageParts = await pendingThreadMessageImageParts(params.input, params);
     const retainedInput = params.retainAttachments
       ? await stageTurnInputAttachmentsForRetention(
           params.input ?? [],
-          { privateStorageRoots: this.localFilePrivateStorageRoots },
+          { privateStorageRoots: this.localFilePrivateStorageRoots, owner: params },
         )
       : [];
     if (
@@ -19077,6 +19492,7 @@ export class DesktopBackendRegistry {
     trustedSnapshot: boolean,
   ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
     const acpManagedMode =
       isAcpBackendId(params.backend)
@@ -19707,6 +20123,7 @@ export class DesktopBackendRegistry {
       }
   > {
     const { idempotencyKey, ...incoming } = params;
+    await this.assertThreadNotLocked(incoming.backend, incoming.threadId);
     const request = await this.prepareReviewRequest(incoming, trustedSnapshot);
     const activeTurn = this.getActiveTurnForThread({
       backend: request.backend,
@@ -20026,12 +20443,7 @@ export class DesktopBackendRegistry {
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
     const failure = (
-      code:
-        | "invalid_arguments"
-        | "no_active_turn"
-        | "stale_target"
-        | "unsupported_backend"
-        | "unsupported_capability",
+      code: ControlActiveTurnErrorCode,
       message: string,
       details: { activeTurnId?: string; expectedTurnId?: string } = {},
     ): ControlActiveTurnResponse => ({
@@ -20116,6 +20528,23 @@ export class DesktopBackendRegistry {
             disposition: "interrupted",
           };
         }
+        if (request.messageOrigin?.kind === "agent") {
+          const queued = await this.admitThreadAttachments({ ...request, input: request.input ?? [] }, (input, onAdmission) => this.threadTurnQueue.submitGroupedSteer({
+            backend: request.backend,
+            threadId: request.threadId,
+            input,
+            messageOrigin: request.messageOrigin,
+            origin: "manual",
+          }, { deferStart: true, onAdmission }));
+          return {
+            ok: true,
+            backend: request.backend,
+            threadId: request.threadId,
+            requestId: request.requestId,
+            turnId: queued.entry.id,
+            disposition: "queued",
+          };
+        }
         const steered = await this.steerTurn(
           {
             backend: request.backend,
@@ -20156,6 +20585,9 @@ export class DesktopBackendRegistry {
           });
         }
         const message = error instanceof Error ? error.message : String(error);
+        if (isThreadLockRefusal(message)) {
+          return failure("forbidden", message);
+        }
         if (/unsupported|does not support/i.test(message)) {
           return failure("unsupported_capability", message);
         }
@@ -20575,6 +21007,8 @@ export class DesktopBackendRegistry {
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
+    // Compaction runs a backend turn, so a lock refuses it like any other.
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     const compactWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; turnId: string; itemId?: string }> => {
@@ -20829,6 +21263,7 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     const review = this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
@@ -20836,9 +21271,13 @@ export class DesktopBackendRegistry {
     if (review?.mode === "native") {
       throw new Error("Native review steering is unsupported; queue a follow-up instead.");
     }
-    const input = await enrichLocalFileInputs(params.input, {
-      privateStorageRoots: this.localFilePrivateStorageRoots,
-    });
+    const input = await ownThreadInputAttachments(
+      await enrichLocalFileInputs(params.input, {
+        privateStorageRoots: this.localFilePrivateStorageRoots,
+      }),
+      params,
+      this.localFilePrivateStorageRoots,
+    );
     if (isAcpBackendId(params.backend)) {
       const acpBackend = params.backend;
       const promptPayload = await inputToAcpPrompt(input);
@@ -21170,6 +21609,7 @@ export class DesktopBackendRegistry {
         position: position++,
         ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.title ? { title: entry.title } : {}),
       };
     }
   }
@@ -21194,6 +21634,7 @@ export class DesktopBackendRegistry {
           ? { manualReleaseRequired: true }
           : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.title ? { title: entry.title } : {}),
       });
       snapshot[threadKey] = queue;
     }
@@ -22346,6 +22787,76 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * Locks, re-notes or unlocks a thread. Every lock write lands here (the
+   * sidebar menu, the thread's lock card, the `mutate_thread` agent tool and
+   * a peer), so windows, messaging status surfaces and federation viewers
+   * all hear one `thread/lock/updated` event. Changing the note of a locked
+   * thread keeps its original time and source. The lock itself is enforced
+   * by `assertThreadNotLocked`.
+   */
+  async setThreadLock(
+    request: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      locked: boolean;
+      note?: string;
+    },
+    origin: { source: ThreadLockSource; sourceInstanceId?: FederationInstanceId },
+    /** False leaves a queue the lock held for the caller to resume. */
+    options: { resumeQueue?: boolean } = {},
+  ): Promise<SetThreadLockResponse> {
+    const identity = { backend: request.backend, threadId: request.threadId };
+    const current = await this.readThreadLock(request.backend, request.threadId);
+    let lock: ThreadLock | undefined;
+    if (request.locked) {
+      const note = request.note === undefined
+        ? current?.note
+        : normalizeThreadLockNote(request.note);
+      lock = {
+        ...(note ? { note } : {}),
+        lockedAt: current?.lockedAt ?? Date.now(),
+        source: current?.source ?? origin.source,
+        ...(current
+          ? current.sourceInstanceId ? { sourceInstanceId: current.sourceInstanceId } : {}
+          : origin.sourceInstanceId ? { sourceInstanceId: origin.sourceInstanceId } : {}),
+      };
+      if (current && current.note === lock.note) {
+        return { ...identity, lock: current };
+      }
+    } else if (!current) {
+      return identity;
+    }
+    await this.writeThreadLock(identity, lock);
+    if (!lock && options.resumeQueue !== false) {
+      // An unlock resumes what the lock paused: a queue the lock held, with
+      // its entries in order, drains once the thread is idle.
+      await this.threadTurnQueue.releaseHold(identity, isThreadLockRefusal);
+    }
+    return {
+      ...identity,
+      ...(lock ? { lock } : { previousLock: current }),
+    };
+  }
+
+  /** Stores a lock as given, or clears it, and publishes the change. */
+  private async writeThreadLock(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    lock: ThreadLock | undefined,
+  ): Promise<void> {
+    await this.overlayStore.setThreadLock({ ...identity, lock });
+    await this.emit({
+      backend: identity.backend,
+      notification: {
+        method: "thread/lock/updated",
+        params: {
+          threadId: identity.threadId,
+          ...(lock ? { lock } : {}),
+        },
+      },
+    });
+  }
+
   async setThreadPrAutoDispatch(
     params: SetThreadPrAutoDispatchRequest,
   ): Promise<SetThreadPrAutoDispatchResponse> {
@@ -23032,7 +23543,7 @@ export class DesktopBackendRegistry {
     return keys;
   }
 
-  private pendingServerRequestForThread(params: {
+  getPendingRequestForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): AppServerPendingRequestNotification | undefined {
@@ -24685,6 +25196,7 @@ export class DesktopBackendRegistry {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
     this.closed = true;
+    this.threadTurnQueue.close();
     this.backgroundTerminalGeneration += 1;
     this.codexBackgroundTerminals.clear();
     this.backgroundTerminalReadRevisions.clear();
@@ -26401,6 +26913,7 @@ export class DesktopBackendRegistry {
         queueEntryId: string;
         mcpConnectionIds?: string[];
         mcpServerAliases?: Record<string, string[]>;
+        mcpAllowedServerNames?: string[];
         toolAllowlist?: string[];
       }
     | undefined {
@@ -31830,8 +32343,9 @@ export class DesktopBackendRegistry {
           throw new Error("This backend does not support live voice.");
         }
         // A running coding task already owns the loaded thread and catalog.
-        // An idle thread must prove its initial catalog in this process or
-        // refresh it before realtime delegates. A thread ID alone is not proof.
+        // Ordinary idle threads need current-process proof or catalog refresh.
+        // The remembered director can restore its PwrAgent-created catalog;
+        // its discovery tool resolves current definitions at dispatch time.
         const running = this.threadHasActiveTurn(threadId);
         const ownsReservation = !this.reservedCodexStartThreadIds.has(threadId);
         if (ownsReservation) this.reservedCodexStartThreadIds.add(threadId);
@@ -31862,8 +32376,19 @@ export class DesktopBackendRegistry {
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
-              const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
-              await client.refreshThreadTools!({ ...admission, dynamicTools });
+              const manager = this.overlayStore.getVoiceManagerThread?.();
+              if (manager?.backend === "codex" && manager.threadId === threadId
+                && !overlay?.codexEnvironmentRuntime
+                && client.resumeNativeVoiceThread
+                && !(await this.supportsTokenMiserDynamicToolsResume(client))) {
+                // Stock resume restores creation-time tools across restarts.
+                // Do not manufacture current-catalog proof from this result.
+                // Custom execution environments still need verified refresh.
+                await client.resumeNativeVoiceThread(admission);
+              } else {
+                const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
+                await client.refreshThreadTools!({ ...admission, dynamicTools });
+              }
             }
           }
           this.nativeVoiceLeases += 1;
@@ -33467,10 +33992,40 @@ export class DesktopBackendRegistry {
       ...(usageSnapshot ? { monitorUsage: usageSnapshot } : {}),
     };
 
-    await this.overlayStore.upsertThreadSubAgent({
+    await this.writeSystemHelperSubAgent({
       backend: params.backend,
       threadId: params.threadId,
       subAgent,
+      ...(params.result && usageSnapshot
+        ? { usage: { result: params.result, snapshot: usageSnapshot } }
+        : {}),
+    });
+  }
+
+  /**
+   * Lands a PwrAgent system helper's row on its thread and, when the run
+   * reported usage, the run's usage line, which the Pricing rail counts as a
+   * system helper by its `system:` monitor id. Remote viewers pick both up
+   * through the existing `thread/subAgents/updated` and pricing refreshes.
+   */
+  private async writeSystemHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    subAgent: ThreadSubAgentSummary;
+    usage?: {
+      result: {
+        helperThreadId?: string;
+        helperTurnId?: string;
+        model?: string;
+        serviceTier?: string;
+      };
+      snapshot: TaskMonitorUsageSnapshot;
+    };
+  }): Promise<void> {
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgent: params.subAgent,
     });
     this.invalidateThreadListCache(params.backend);
     await this.emit({
@@ -33482,21 +34037,21 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    const usage = params.usage;
     if (
-      usageSnapshot &&
-      params.result?.helperThreadId &&
+      usage?.result.helperThreadId &&
       typeof this.overlayStore.upsertThreadUsageLine === "function"
     ) {
       const line = buildTaskMonitorUsageLine({
         backend: params.backend,
-        model: params.result.model,
-        monitorId,
-        monitorThreadId: params.result.helperThreadId,
-        monitorTurnId: params.result.helperTurnId,
+        model: usage.result.model,
+        monitorId: params.subAgent.monitorId,
+        monitorThreadId: usage.result.helperThreadId,
+        monitorTurnId: usage.result.helperTurnId,
         parentThreadId: params.threadId,
-        serviceTier: params.result.serviceTier,
+        serviceTier: usage.result.serviceTier,
         source: "monitor",
-        usage: usageSnapshot,
+        usage: usage.snapshot,
       });
       logUnpricedThreadUsageLine(line);
       await this.overlayStore.upsertThreadUsageLine({ line });
@@ -33733,15 +34288,10 @@ export class DesktopBackendRegistry {
       this.logTokenMiserReplaySkip("no-store", threadId);
       return;
     }
-    const entries = this.activeTokenMiserReplayEntries.get(threadId);
-    if (!entries || entries.size === 0) {
-      this.logTokenMiserReplaySkip("no-active-gates", threadId);
-      return;
-    }
-    const totalUsage = readTaskMonitorTokenUsageRecords(
+    const requestUsage = readTaskMonitorTokenUsageRecords(
       event.notification.params.tokenUsage,
-    )?.totalUsage;
-    const cumulativeInputTokens = totalUsage?.inputTokens;
+    );
+    const cumulativeInputTokens = requestUsage?.totalUsage?.inputTokens;
     if (typeof cumulativeInputTokens !== "number") {
       this.logTokenMiserReplaySkip("no-cumulative-input", threadId);
       return;
@@ -33767,6 +34317,12 @@ export class DesktopBackendRegistry {
         // gates accept the new lower sequence while other live threads retain
         // their own monotonic request histories.
         this.tokenMiserRequestEpochByCursor.set(cursorKey, randomUUID());
+        this.tokenMiserStore.recordParentRequestUsage({
+          threadId,
+          cumulativeInputTokens,
+          cachedInputTokens: requestUsage?.latestUsage?.cachedInputTokens,
+          requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey)!,
+        });
         this.logTokenMiserReplaySkip("session-reset", threadId);
         return;
       }
@@ -33774,6 +34330,20 @@ export class DesktopBackendRegistry {
       return;
     }
     this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+    // Compaction stops replay tracking, but the originals stay retrievable
+    // until the next turn. Their requesting rounds still need fresh usage.
+    this.tokenMiserStore.recordParentRequestUsage({
+      threadId,
+      cumulativeInputTokens,
+      cachedInputTokens: requestUsage?.latestUsage?.cachedInputTokens,
+      requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey)
+        ?? this.tokenMiserRequestEpoch,
+    });
+    const entries = this.activeTokenMiserReplayEntries.get(threadId);
+    if (!entries || entries.size === 0) {
+      this.logTokenMiserReplaySkip("no-active-gates", threadId);
+      return;
+    }
     const observed = [...entries.entries()];
     const updated = await Promise.all(
       observed.map(([objectId]) =>
@@ -34789,7 +35359,13 @@ export class DesktopBackendRegistry {
       && typeof request.params.callId === "string"
         ? request.params.callId.trim()
         : "";
-    if (!callId) {
+    if (
+      !callId
+      || !this.isLiveDynamicToolCall(backend, {
+        threadId: request.params.threadId,
+        turnId: request.params.turnId ?? undefined,
+      })
+    ) {
       return await this.observeNativeVoiceToolCall(
         backend,
         request,
@@ -35326,6 +35902,25 @@ export class DesktopBackendRegistry {
       backend,
       request,
     );
+    if (backend === "codex" && headlessAutomation && isMcpToolApproval(request)) {
+      const serverName = String(request.params.serverName ?? "");
+      const aliases = Object.values(headlessAutomation.mcpServerAliases ?? {})
+        .filter((names) => names.includes(serverName)).flat();
+      const selected = await this.readThreadMcpConnections({
+        backend, threadId: headlessAutomation.agentThreadId,
+      });
+      const connectionIds = Object.entries(headlessAutomation.mcpServerAliases ?? {})
+        .filter(([, names]) => names.includes(serverName)).map(([id]) => id);
+      const stillSelected = connectionIds.length > 0
+        ? connectionIds.some((id) => headlessAutomation.mcpConnectionIds?.includes(id) && selected.connectionIds.includes(id))
+        : selected.providerServersEnabled;
+      const consent = headlessAutomation.mcpAllowedServerNames?.includes(serverName)
+        && stillSelected
+        && this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
+        ? buildAutomationMcpConsent({ request, serverNames: [serverName, ...aliases], toolAllowlist: headlessAutomation.toolAllowlist })
+        : undefined;
+      return consent ?? { action: "cancel", content: null, _meta: null };
+    }
     if (headlessAutomation) {
       backendRegistryLog.warn("auto-cancelling headless automation server request", {
         agentThreadId: headlessAutomation.agentThreadId,
@@ -35585,6 +36180,29 @@ export class DesktopBackendRegistry {
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
   }
 
+  private clearAcceptedToolCallsForEndedTurn(
+    backend: AppServerBackendKind,
+    threadId: string,
+    turnId: string,
+  ): void {
+    // Removing replay results while the turn is live would admit the same
+    // call again. Both turn-ending paths remove that marker before eviction.
+    if (this.isLiveDynamicToolCall(backend, { threadId, turnId })) return;
+
+    const dynamicCallPrefix = [backend, threadId, turnId, ""].join("\u0000");
+    for (const key of this.acceptedDynamicToolCalls.keys()) {
+      if (key.startsWith(dynamicCallPrefix)) {
+        this.acceptedDynamicToolCalls.delete(key);
+      }
+    }
+    const handoffPrefix = ["handoff", backend, threadId, turnId, ""].join(":");
+    for (const key of this.acceptedHandoffTaskRequests.keys()) {
+      if (key.startsWith(handoffPrefix)) {
+        this.acceptedHandoffTaskRequests.delete(key);
+      }
+    }
+  }
+
   private resolveAgentToolMcpCallContext(
     context: AgentToolMcpClientContext,
   ): ResolvedAgentToolMcpCallContext | undefined {
@@ -35693,7 +36311,7 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const attachments = await stageTurnInputAttachmentsForRetention(
       params.input,
-      { privateStorageRoots: this.localFilePrivateStorageRoots },
+      { privateStorageRoots: this.localFilePrivateStorageRoots, owner: params },
     );
     if (attachments.length === 0) {
       return;
@@ -36975,6 +37593,7 @@ export class DesktopBackendRegistry {
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
       const remoteRequest = {
+        ...(request.args.delivery ? { delivery: request.args.delivery } : {}),
         replaceQueueEntryId: request.args.replaceQueueEntryId,
         backend,
         threadId,
@@ -37017,7 +37636,7 @@ export class DesktopBackendRegistry {
       } else {
         if (localThread) {
           if (request.args.replaceQueueEntryId) {
-            turn = this.replaceQueuedAgentMessage({
+            turn = await this.replaceQueuedAgentMessage({
               backend,
               threadId,
               queueEntryId: request.args.replaceQueueEntryId,
@@ -37026,6 +37645,7 @@ export class DesktopBackendRegistry {
             });
           } else {
             const submitted = await this.submitTurn({
+              delivery: request.args.delivery,
               backend,
               threadId,
               input,
@@ -37117,7 +37737,7 @@ export class DesktopBackendRegistry {
             ? {
                 queueStatus: turn.queueStatus,
                 queueEntryId: turn.queueEntryId,
-                guidance: "Batch related findings. To update this pending message, call send_message_to_thread with replaceQueueEntryId set to this queueEntryId and the complete consolidated prompt. Do not append overlapping updates as separate turns.",
+                guidance: "Pending guidance is grouped across senders and prefers steering. Replace your own contribution with replaceQueueEntryId and your complete consolidated prompt; other senders' contributions are preserved.",
                 ...(turn.position === undefined ? {} : { position: turn.position }),
               }
             : {}),
@@ -37493,11 +38113,13 @@ export class DesktopBackendRegistry {
       return threadOrchestrationFailure(
         error instanceof PwrAgentFederatedThreadMessageError
           ? error.code
-          : /unsupported|does not support/i.test(message)
-            ? "unsupported_capability"
-            : /active|expected turn|stale/i.test(message)
-              ? "stale_target"
-              : "internal_error",
+          : isThreadLockRefusal(message)
+            ? "forbidden"
+            : /unsupported|does not support/i.test(message)
+              ? "unsupported_capability"
+              : /active|expected turn|stale/i.test(message)
+                ? "stale_target"
+                : "internal_error",
         message,
         {
           backend,
@@ -37512,7 +38134,7 @@ export class DesktopBackendRegistry {
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const callId = request.context.callId?.trim();
-    if (!callId) {
+    if (!callId || !this.isLiveDynamicToolCall(request.context.backend, request.context)) {
       return await this.performHandoffTaskToThread(request);
     }
     const handoffId = [
@@ -38715,6 +39337,7 @@ export class DesktopBackendRegistry {
       monitorId,
       parentBackend: context.backend,
       parentThreadId,
+      parentTurnId: context.turnId,
       pollIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
@@ -38767,6 +39390,26 @@ export class DesktopBackendRegistry {
     record.monitorThreadId = startedMonitor.threadId;
     record.monitorTurnId = startedMonitor.turnId;
     await this.persistTaskMonitorSubAgent(record, { status: "running" });
+    await this.emit({
+      backend: record.parentBackend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: record.parentThreadId,
+          turnId: `monitor:${monitorId}`,
+          item: {
+            id: `${monitorId}:created`,
+            type: "taskMonitorCreated",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              parentTurnId: record.parentTurnId,
+              task: record.task,
+            },
+          },
+        },
+      },
+    });
 
     return {
       ok: true,
@@ -39467,6 +40110,8 @@ export class DesktopBackendRegistry {
       outcome: params.outcome,
       parentBackend: params.record.parentBackend,
       parentThreadId: params.record.parentThreadId,
+      parentTurnId: params.record.parentTurnId,
+      task: params.record.task,
     });
 
     let parentTurn:
@@ -39485,12 +40130,12 @@ export class DesktopBackendRegistry {
         summary: params.summary,
         task: params.record.task,
       });
-      const submitted = await this.submitTurn({
+      const parentWake = {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         input: [
           {
-            type: "text",
+            type: "text" as const,
             text: buildTaskMonitorFinalHandoffInput({
               completionSource: params.completionSource,
               details: params.details,
@@ -39501,9 +40146,19 @@ export class DesktopBackendRegistry {
             }),
           },
         ],
-        origin: "manual",
+        origin: "manual" as const,
         messageOrigin,
-      });
+      };
+      const parentLock = await this.readThreadLock(parentWake.backend, parentWake.threadId);
+      // A locked parent holds the result rather than refusing it: the monitor
+      // finishes either way, and an unlock delivers what it found.
+      const submitted = parentLock
+        ? await this.submitHeldTurn({
+            ...parentWake,
+            queueEntryId: `task-monitor:${params.record.monitorId}`,
+            holdReason: threadLockRefusalMessage(parentLock),
+          })
+        : await this.submitTurn(parentWake);
       parentTurn =
         submitted.status === "started"
           ? {
@@ -39958,6 +40613,8 @@ export class DesktopBackendRegistry {
     outcome: CompleteMonitoringToolArgs["outcome"];
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
+    parentTurnId: string;
+    task: string;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
@@ -39973,6 +40630,8 @@ export class DesktopBackendRegistry {
             data: {
               source: "pwragent_task_monitor",
               monitorId: params.monitorId,
+              parentTurnId: params.parentTurnId,
+              task: params.task,
               outcome: params.outcome,
               completionSource: params.completionSource,
               fallbackGenerated:
@@ -40307,6 +40966,27 @@ export class DesktopBackendRegistry {
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
       });
+    }
+
+    if (request.operation === "mark_project_read") {
+      const args = request.args;
+      if (typeof args.projectKey !== "string" || !args.projectKey.trim()
+        || (args.instanceId !== undefined && (typeof args.instanceId !== "string" || !args.instanceId.trim()))
+        || Object.keys(args).some((key) => key !== "projectKey" && key !== "instanceId")) {
+        return threadInspectionFailure("invalid_arguments", "Provide an exact projectKey and optional nonempty instanceId.");
+      }
+      if (!this.agentThreadActions?.markProjectRead) {
+        return threadInspectionFailure("unsupported_operation", "Project mark-read is unavailable on this instance.");
+      }
+      try {
+        const projectRead = await this.agentThreadActions.markProjectRead({
+          projectKey: args.projectKey,
+          ...(args.instanceId !== undefined ? { instanceId: args.instanceId.trim() } : {}),
+        });
+        return { ok: true, data: { projectRead } };
+      } catch (error) {
+        return threadInspectionFailure("internal_error", error instanceof Error ? error.message : String(error));
+      }
     }
 
     if (request.operation === "mutate_thread") {
@@ -40954,7 +41634,7 @@ export class DesktopBackendRegistry {
       projectPath = args.projectPath.trim();
     }
 
-    for (const field of ["archive", "pinned", "unread"] as const) {
+    for (const field of ["archive", "pinned", "unread", "locked"] as const) {
       if (Object.hasOwn(args, field) && typeof args[field] !== "boolean") {
         return threadInspectionFailure(
           "invalid_arguments",
@@ -40967,6 +41647,21 @@ export class DesktopBackendRegistry {
     const archive = args.archive;
     const pinned = args.pinned;
     const unread = args.unread;
+    const lockNoteProvided = Object.hasOwn(args, "lockNote");
+    if (lockNoteProvided && typeof args.lockNote !== "string") {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "lockNote must be a string when provided.",
+      );
+    }
+    if (lockNoteProvided && args.locked === false) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "lockNote cannot be combined with locked false. Unlocking drops the note.",
+      );
+    }
+    const lockNote = lockNoteProvided ? normalizeThreadLockNote(args.lockNote) ?? "" : undefined;
+    const locked = args.locked ?? (lockNoteProvided ? true : undefined);
 
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
@@ -41018,6 +41713,20 @@ export class DesktopBackendRegistry {
         to: unread,
       });
     }
+    if (locked !== undefined) {
+      changes.push({
+        field: "locked",
+        status: dryRun ? "would_apply" : "applied",
+        to: locked,
+      });
+    }
+    if (lockNote !== undefined) {
+      changes.push({
+        field: "lock_note",
+        status: dryRun ? "would_apply" : "applied",
+        to: lockNote,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -41025,7 +41734,7 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, or unread.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, or lockNote.",
         },
       };
     }
@@ -41089,6 +41798,8 @@ export class DesktopBackendRegistry {
           ...(archive !== undefined ? { archive } : {}),
           ...(pinned !== undefined ? { pinned } : {}),
           ...(unread !== undefined ? { unread } : {}),
+          ...(locked !== undefined ? { locked } : {}),
+          ...(lockNote !== undefined ? { lockNote } : {}),
           dryRun,
         });
       } catch (error) {
@@ -41168,6 +41879,19 @@ export class DesktopBackendRegistry {
       }
     }
 
+    // An unlock lands before the move, which a lock refuses; a lock lands
+    // last, after the move it would otherwise refuse. A refused move puts
+    // the unlocked lock back as it was.
+    // The queue the lock held resumes only after the move: a message started
+    // in between would run in the old workspace and refuse the move.
+    const unlockedLock = mutateLocally && locked === false && !dryRun
+      ? (await this.setThreadLock({
+          backend: args.backend,
+          threadId,
+          locked: false,
+        }, { source: "agent_tool" }, { resumeQueue: false })).previousLock
+      : undefined;
+
     // First, and before anything else changes: the destination is checked on
     // disk, and a move that fails should leave the title and settings as
     // they were rather than half the request applied.
@@ -41180,12 +41904,18 @@ export class DesktopBackendRegistry {
           targetPath: projectPath,
         });
       } catch (error) {
+        if (unlockedLock) {
+          await this.writeThreadLock({ backend: args.backend, threadId }, unlockedLock);
+        }
         const message = error instanceof Error ? error.message : String(error);
         return threadInspectionFailure(
           message === ACTIVE_TURN_HANDOFF_ERROR ? "forbidden" : "invalid_arguments",
           message,
         );
       }
+    }
+    if (unlockedLock) {
+      await this.threadTurnQueue.releaseHold({ backend: args.backend, threadId }, isThreadLockRefusal);
     }
 
     if (mutateLocally && title !== undefined && !dryRun) {
@@ -41226,6 +41956,15 @@ export class DesktopBackendRegistry {
         threadId,
         ...threadSeenWatermark(localSummary?.updatedAt, unread),
       });
+    }
+
+    if (mutateLocally && locked === true && !dryRun) {
+      await this.setThreadLock({
+        backend: args.backend,
+        threadId,
+        locked: true,
+        ...(lockNote !== undefined ? { note: lockNote } : {}),
+      }, { source: "agent_tool" });
     }
 
     return {
@@ -42519,7 +43258,11 @@ export class DesktopBackendRegistry {
       this.invalidateThreadListCache(event.backend);
       if (!this.closed) void this.sweepInactiveThreads();
     }
-    const emitted = this.emitEvent(event);
+    const emitted = event.notification.method === "thread/deleted"
+      ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
+          .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
+          .then(() => this.emitEvent(event))
+      : this.emitEvent(event);
     const method = event.notification.method;
     if (
       this.stoppingRunningTurnsForShutdown
@@ -42827,29 +43570,6 @@ export class DesktopBackendRegistry {
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
       this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
       if (completedTurnId) {
-        const dynamicCallPrefix = [
-          event.backend,
-          event.notification.params.threadId,
-          completedTurnId,
-          "",
-        ].join("\u0000");
-        for (const key of this.acceptedDynamicToolCalls.keys()) {
-          if (key.startsWith(dynamicCallPrefix)) {
-            this.acceptedDynamicToolCalls.delete(key);
-          }
-        }
-        const handoffPrefix = [
-          "handoff",
-          event.backend,
-          event.notification.params.threadId,
-          completedTurnId,
-          "",
-        ].join(":");
-        for (const key of this.acceptedHandoffTaskRequests.keys()) {
-          if (key.startsWith(handoffPrefix)) {
-            this.acceptedHandoffTaskRequests.delete(key);
-          }
-        }
         const usageKey = [
           event.backend,
           event.notification.params.threadId,
@@ -42952,6 +43672,10 @@ export class DesktopBackendRegistry {
           for (const key of Array.from(this.activeTurnKeys)) {
             if (key.startsWith(genericActiveTurnKeyPrefix)) {
               this.activeTurnKeys.delete(key);
+              const parsed = parseActiveTurnKey(key);
+              if (parsed) {
+                this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
+              }
             }
           }
         } else {
@@ -42959,6 +43683,7 @@ export class DesktopBackendRegistry {
             buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
           );
         }
+        this.clearAcceptedToolCallsForEndedTurn(event.backend, notification.params.threadId, turnId);
         const steerKeyPrefix = buildSteerTurnKeyPrefix({
           backend: event.backend,
           threadId: notification.params.threadId,
@@ -43176,6 +43901,9 @@ export class DesktopBackendRegistry {
             endedTurnIds.add(parsed.turnId);
           }
           this.activeTurnKeys.delete(key);
+          if (parsed) {
+            this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
+          }
         }
       }
       if (event.backend !== "codex") {
@@ -43213,6 +43941,9 @@ export class DesktopBackendRegistry {
               endedTurnIds.add(parsed.turnId);
             }
             this.activeCodexTurnModes.delete(key);
+            if (parsed) {
+              this.clearAcceptedToolCallsForEndedTurn(event.backend, parsed.threadId, parsed.turnId);
+            }
           }
         }
         if (hadKnownActiveTurn) {

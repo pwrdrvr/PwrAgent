@@ -1,4 +1,5 @@
 import { registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { markAgentProjectRead } from "./app-server/agent-project-read";
 import { configureBundledGit } from "./bundled-git";
 import {
   applyRememberedLinuxPasswordStore,
@@ -137,7 +138,7 @@ import {
   registerProfilesIpcHandlers,
 } from "./ipc/profiles";
 import { buildDockProfileMenuTemplate } from "./dock-menu";
-import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
+import { disposeRendererErrorIpcHandlers, registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import {
   disposeRuntimeIdentityIpcHandlers,
   registerRuntimeIdentityIpcHandlers,
@@ -598,6 +599,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
+  disposeRendererErrorIpcHandlers();
   disposeFederationIpcHandlers();
   disposeStarMapIpcHandlers();
   disposeImageNormalizationIpcHandlers();
@@ -984,20 +986,8 @@ function isWindowCreationBlocked(): boolean {
  * app.quit() re-closing this window during teardown, so there's no loop.
  */
 function quitAppOnMainWindowClose(window: BrowserWindow): void {
-  window.webContents.on("render-process-gone", (_event, details) => {
-    if (
-      details.reason === "clean-exit"
-      || mainProcessShutdownPromise
-      || mainProcessResourcesDisposed
-      || isUpdateInstallInProgress()
-    ) return;
-    const source = `main-renderer-${details.reason}`;
-    mainLog.error("main renderer lost; shutting down app", details);
-    // A dead renderer cannot answer the active-turn confirmation dialog.
-    beginQuitInProgress(source);
-    appQuitManager.allowImmediateQuit();
-    quitAfterResourceShutdown(source);
-  });
+  // Renderer termination is recovered by the window's recovery handler. It
+  // does not close the BrowserWindow or end main-owned turns and connections.
   window.on("close", (event) => {
     if (appQuitManager.isQuitAllowed()) {
       return;
@@ -1575,6 +1565,7 @@ export function bootstrapApp(): void {
     // children on other instances, and its pins and read marks reach every
     // window the way a click does.
     getDesktopBackendRegistry().setAgentThreadActions({
+      markProjectRead: async (args) => await markAgentProjectRead(getDesktopFederationRuntime(), args),
       archiveThread: async (request) =>
         await appServerService.archiveThread(request),
       setThreadPin: async (request) =>
@@ -1603,8 +1594,8 @@ export function bootstrapApp(): void {
     registerAppMetadataIpcHandlers();
     registerClipboardIpcHandlers();
     registerAppUpdateIpcHandlers({
-      requestQuit: async (performQuit) =>
-        await requestQuit({ performQuit, source: "update-install" }),
+      requestQuit: async (performQuit, beforeQuit) =>
+        await requestQuit({ performQuit, beforeQuit, source: "update-install" }),
     });
     registerComposerDraftIpcHandlers();
     registerDiagnosticsIpcHandlers();

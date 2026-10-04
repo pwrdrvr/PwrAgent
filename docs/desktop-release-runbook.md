@@ -5,8 +5,8 @@
 This runbook covers cutting v1.x desktop releases. macOS releases ship as
 Apple Silicon (arm64) and universal Apple Silicon + Intel binaries; distribution is outside the Mac App
 Store via signed/notarized DMG with auto-update through `electron-updater`
-against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship as manual
-Debian packages for x64/amd64 and arm64.
+against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship DEB, RPM, pacman, and tar.gz artifacts for x64 and arm64.
+Native packages use `electron-updater`; portable tar.gz builds are updated manually.
 
 ---
 
@@ -488,6 +488,65 @@ gh release upload v1.0.0-beta.4 PwrAgent.dmg --repo pwrdrvr/PwrAgent --clobber
 
 ---
 
+## Release-matched JavaScript debug artifacts
+
+Every new desktop release retains five separate debug archives, one for each
+packaged build: `darwin-universal`, `darwin-arm64`, `win32-x64`, `linux-x64`,
+and `linux-arm64`. GitHub Release asset names are
+`PwrAgent-<version>-<platform>-<arch>-debug.tar.gz`, each with a `.sha256`
+sidecar. Release CI also retains the intermediate archives for 30 days;
+preview CI retains its universal macOS archive for 14 days alongside the DMG.
+
+`release.mjs` captures each archive immediately after its production Vite
+build, before deployment or signing. Both macOS stages have their own archive,
+even if their JavaScript happens to match. `--sign-stage-only` consumes the
+prepared output without rebuilding or generating maps. Debug archives stay
+under `apps/desktop/.local/debug-artifacts/`, outside the deployed stage and
+installed app. Vite emits hidden maps for main, preload, and renderer; no
+source map URL is added to the JavaScript. The existing builder exclusion and
+ASAR verification continue to reject `.map` files in the app. Signing,
+notarization, fuses, updater metadata, and installed runtime behavior use the
+same packaging path.
+
+Each archive contains:
+
+- `out/`: the exact generated JavaScript and adjacent maps, preserving ASAR
+  paths, including workers and lazy chunks; generated HTML and CSS are also
+  retained. Maps embed the original source text in `sourcesContent`.
+- `manifest.json`: desktop version, release tag, Git commit, tracked tree
+  changes, timestamp, target platform/architecture, build host, Node and tool
+  versions, lockfile hash, CI repository/ref/run/attempt, and SHA-256/size for
+  every retained file. JavaScript entries identify their adjacent map (or
+  `null` for copied vendor assets without a Vite map).
+- `README.md`: matching and stack-frame lookup instructions.
+
+The publication job requires all five archives and their checksums, verifies
+the tag/version/commit/target and clean tracked tree in each manifest, and
+checks the uploaded asset names. Missing or mismatched debug artifacts fail
+publication. Debug archives contain source text and are public release assets.
+
+To investigate a production stack, download the matching version and target
+archive, verify its checksum, then compare the frame's JavaScript SHA-256 from
+the installed `app.asar` with `manifest.json`. Use that file's adjacent map;
+DevTools can load it manually. Stack lines are 1-based. Source map consumers
+take 0-based columns, so subtract one from a browser stack's column. The
+embedded sources allow inspection without a checkout. External npm modules
+and native code are outside these Vite maps.
+
+Do not rebuild an old tag and assume its offsets match an installed app.
+Dependency resolution, platform, and repeated build attempts can change
+output; the generated file hash is the deciding match. This retention starts
+with releases built by the updated workflow and does not add maps to previous
+releases. A separately rebuilt map is usable only after the generated
+JavaScript's byte count and SHA-256 match the installed file exactly; a matching
+tag, version, or chunk name alone is insufficient.
+
+For a local build without packaging, run `pnpm --filter @pwragent/desktop build`
+then `node apps/desktop/scripts/desktop-debug-artifacts.mjs darwin universal`
+(or another supported platform and architecture). Local archives record the
+current tracked tree state; release publication requires a clean tree and
+`RELEASE_TAG=v<version>`.
+
 ## Updater channel files
 
 `configureAutoUpdaterFeedForRelease` points electron-updater at a `generic`
@@ -638,9 +697,11 @@ APP=apps/desktop/release-stage/dist/mac-universal/PwrAgent.app
 # Identity must be PwrDrvr LLC
 codesign -dv --verbose=4 "$APP"
 
-# Main executable and native addon must contain both Apple Silicon and Intel slices
+# Main executable and native addons must contain both Apple Silicon and Intel slices
 lipo -archs "$APP/Contents/MacOS/PwrAgent"
 lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"
 
 # Gatekeeper-approved (Notarized Developer ID)
 spctl -a -vv "$APP"
@@ -718,10 +779,22 @@ older selected release as a **switch back** rather than "no update":
 Phase 2 distribution channel migration removes the token requirement entirely.
 See [desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md).
 
-Linux builds intentionally skip `electron-updater`. Operators upgrade by
-installing the newer DEB, RPM, or pacman package, or replacing the
-extracted tar.gz from GitHub Releases; the in-app update status
-reports that Linux packages are updated manually.
+Linux DEB, RPM, and pacman installations use `electron-updater`, which detects
+its backend from electron-builder's `resources/package-type`. Release selection
+requires the running architecture's Linux channel file and installed package
+format. Downloads run on startup and hourly; installation happens only after
+an explicit Restart action, with package-manager administrator authorization.
+Authorization precedes committing quit permission and federation shutdown; a
+failed or canceled authorization resumes automation dispatch and allows retry.
+RPM switch-backs use downgrade-capable package-manager commands.
+Ordinary quit does not install a Linux update. Failed checks and downloads show
+a copyable terminal command for the selected release (or explicitly the latest stable
+release if the feed could not be read).
+
+Portable tar.gz builds retain release discovery and release-note links, but
+still require replacing the extracted directory. An AppImage launched with `APPIMAGE` set can use electron-updater's AppImage
+backend, but this workflow does not yet build or publish AppImages; see the
+runtime distribution requirements above.
 
 ---
 

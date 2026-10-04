@@ -7,6 +7,8 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -140,13 +142,6 @@ const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 const ONBOARDING_WIZARD_SELECTOR = ".onboarding-wizard-overlay";
 
 /**
- * Upper bound on how long the wizard watcher stays armed. It only has to
- * outlive a slow boot; expiring means the wizard never appeared, so the
- * watcher goes quiet rather than failing.
- */
-const ONBOARDING_WIZARD_WATCH_TIMEOUT_MS = 120_000;
-
-/**
  * Env vars that redirect which PwrAgent root and profile the launched
  * app opens into. The harness inherits the full ambient environment
  * (below), so any of these left exported in the runner's shell — the
@@ -264,6 +259,8 @@ type LaunchElectronAppParams = {
    */
   appearance?: {
     theme?: DesktopAppearanceTheme;
+    darkTheme?: DesktopDarkTheme;
+    lightTheme?: DesktopLightTheme;
     density?: DesktopAppearanceDensity;
   };
   /**
@@ -388,6 +385,8 @@ export async function launchElectronApp(
         confirmQuitWithInProgressThreads: false,
         appearance: {
           theme: params.appearance?.theme ?? "dark",
+          darkTheme: params.appearance?.darkTheme ?? "tangerine-dark",
+          lightTheme: params.appearance?.lightTheme ?? "tangerine-light",
           density: params.appearance?.density ?? "mission-control",
         },
       },
@@ -859,7 +858,7 @@ export async function waitForRendererReady(params: {
       await wizardWatch.assertAbsent();
     }
   } finally {
-    wizardWatch?.disarm();
+    await wizardWatch?.disarm();
   }
 }
 
@@ -869,23 +868,49 @@ function watchForOnboardingWizard(
 ): {
   detected: Promise<never>;
   assertAbsent: () => Promise<void>;
-  disarm: () => void;
+  disarm: () => Promise<void>;
 } {
   let disarmed = false;
+  const watchId = randomUUID();
   const overlay = window.locator(ONBOARDING_WIZARD_SELECTOR);
   const never = new Promise<never>(() => undefined);
-  const detected = overlay
-    .waitFor({
-      state: "attached",
-      timeout: ONBOARDING_WIZARD_WATCH_TIMEOUT_MS,
-    })
-    .then(
-      () => (disarmed ? never : Promise.reject(onboardingWizardError(context))),
-      // Timed out, or the page went away because the launch failed for
-      // an unrelated reason. Either way this racer has nothing to say —
-      // never settle, and let the real result win the race.
-      () => never,
-    );
+  // Own the DOM observer and its completion promise. Locator.waitFor cannot
+  // be cancelled: disarming its result left the RPC alive after launch, where
+  // a deliberately terminated renderer rejected it with "Target crashed".
+  const installed = window.evaluate(({ watchId, selector }) => {
+    type Watch = { detected: Promise<boolean>; stop: () => void };
+    const host = globalThis as typeof globalThis & { __PWRAGENT_ONBOARDING_WATCHES__?: Map<string, Watch> };
+    const watches = host.__PWRAGENT_ONBOARDING_WATCHES__ ??= new Map();
+    let answer!: (present: boolean) => void;
+    const detected = new Promise<boolean>((resolve) => { answer = resolve; });
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(selector)) {
+        observer.disconnect();
+        answer(true);
+      }
+    });
+    watches.set(watchId, {
+      detected,
+      stop: () => {
+        observer.disconnect();
+        answer(false);
+        watches.delete(watchId);
+      },
+    });
+    if (document.querySelector(selector)) answer(true);
+    else observer.observe(document, { childList: true, subtree: true });
+  }, { watchId, selector: ONBOARDING_WIZARD_SELECTOR });
+  const answered = installed.then(() => window.evaluate(async (watchId) => {
+    const host = globalThis as typeof globalThis & {
+      __PWRAGENT_ONBOARDING_WATCHES__?: Map<string, { detected: Promise<boolean> }>;
+    };
+    return await host.__PWRAGENT_ONBOARDING_WATCHES__?.get(watchId)?.detected ?? false;
+  }, watchId));
+  const detected = answered.then(
+    (present) => (disarmed || !present ? never : Promise.reject(onboardingWizardError(context))),
+    // A launch failure may destroy the document. Preserve that launch error.
+    () => never,
+  );
   detected.catch(() => undefined);
   return {
     detected,
@@ -894,8 +919,16 @@ function watchForOnboardingWizard(
         throw onboardingWizardError(context);
       }
     },
-    disarm: () => {
+    disarm: async () => {
       disarmed = true;
+      await installed;
+      await window.evaluate((watchId) => {
+        const host = globalThis as typeof globalThis & {
+          __PWRAGENT_ONBOARDING_WATCHES__?: Map<string, { stop: () => void }>;
+        };
+        host.__PWRAGENT_ONBOARDING_WATCHES__?.get(watchId)?.stop();
+      }, watchId);
+      await answered.catch(() => undefined);
     },
   };
 }
@@ -1188,16 +1221,18 @@ export async function closeElectronApplication(
     requestQuit: async () => {
       await withTimeout(
         electronApp.evaluate(({ app }) => {
-          // Fixture teardown has already decided to quit. Use the app's
-          // immediate, bounded shutdown path so connected peers cannot open
-          // an interactive countdown and exhaust the fixture close budget.
-          // Emit inside Electron rather than killing its Windows launcher.
-          if (process.listenerCount("SIGTERM") > 0) {
-            process.emit("SIGTERM", "SIGTERM");
-          } else {
-            // Startup may fail before the app installs its shutdown handlers.
-            app.quit();
-          }
+          // Let Playwright flush its context before app.quit() removes the
+          // renderer and stops the inspector. Starting shutdown in this RPC
+          // races that preparation and can strand electronApp.close().
+          // Authorize immediate quit ahead of the product's before-quit
+          // listener so connected peers cannot open a confirmation dialog.
+          app.prependOnceListener("before-quit", () => {
+            if (process.listenerCount("SIGTERM") > 0) {
+              process.emit("SIGTERM", "SIGTERM");
+            }
+            // Before startup installs the signal handler, Playwright's own
+            // app.quit() supplies the normal native shutdown path.
+          });
         }),
         ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
         "Electron quit evaluation timed out",

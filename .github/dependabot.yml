@@ -21,16 +21,16 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 7
     # @types/node tracks the Node runtime, which is pinned to Electron
-    # 41.10.3's bundled Node (.nvmrc + CI node-version: 24.18.0). Block
+    # 44.4.5's bundled Node (.nvmrc 24.21.0; CI node-version ^24.21.0). Block
     # major bumps so v25+ types don't sneak ahead of the runtime via a
     # grouped dev-dep PR.
     ignore:
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
-      # Electron majors need a planned desktop runtime migration. Native module
-      # prebuild availability, packaging behavior, and Electron breaking changes
-      # need human review before a PR is worth opening.
+      # Electron majors need a planned desktop runtime migration. Packaging
+      # behavior and Electron breaking changes need human review before a PR
+      # is worth opening.
       - dependency-name: "electron"
         update-types:
           - "version-update:semver-major"
@@ -55,14 +55,6 @@ updates:
       - dependency-name: "@electron/*"
         update-types:
           - "version-update:semver-major"
-      # better-sqlite3 13 is the N-API rewrite: it drops prebuild-install and
-      # Electron-tagged GitHub assets. Desktop postinstall still fetches an
-      # Electron prebuild into electron-native/, so 13.x needs a planned native
-      # pipeline migration rather than a Dependabot bump. 12.x minor/patch
-      # updates stay in desktop-runtime-minor-patch.
-      - dependency-name: "better-sqlite3"
-        versions:
-          - "13.x"
       # node-fetch is kept at v2 for grammY's current Node runtime shim. The
       # latest grammY release still depends on node-fetch v2 and its CommonJS
       # entrypoint; v3 is ESM-only and should be handled as a planned Telegram

@@ -51,7 +51,7 @@ const rendererMonitorStopMock = vi.fn();
 const mainMonitorStartMock = vi.fn();
 const mainMonitorStopMock = vi.fn();
 const shellOpenExternalMock = vi.fn();
-const clipboardWriteTextMock = vi.fn();
+const clipboardWriteTextMock = vi.fn(async (_text: string) => {});
 const addWordToSpellCheckerDictionaryMock = vi.fn();
 const replaceMisspellingMock = vi.fn();
 const copyImageAtMock = vi.fn();
@@ -153,6 +153,9 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
     setTitle: browserWindowState.setTitle,
     show: browserWindowState.show,
     webContents: {
+      id: BrowserWindowMock.mock.calls.length,
+      isDestroyed: () => false,
+      reload: vi.fn(),
       send: browserWindowState.send,
       on: browserWindowState.webContentsOn,
       once: browserWindowState.webContentsOnce,

@@ -40,3 +40,25 @@ it("applies status updates only to the destination repository when PR numbers ov
   expect(result.prs).toEqual([fork, updated]);
   expect(result.prs?.[0]).toBe(fork);
 });
+
+it("applies and clears a thread lock from its owner event", () => {
+  const thread: NavigationThreadSummary = {
+    id: "thread",
+    source: "codex",
+    title: "Parked",
+    titleSource: "explicit",
+    linkedDirectories: [],
+    inbox: { inInbox: false },
+  };
+  const lock = { note: "Handed off", lockedAt: 1, source: "operator" as const };
+  const locked = applyNavigationThreadEvent(thread, {
+    backend: "codex",
+    notification: { method: "thread/lock/updated", params: { threadId: "thread", lock } },
+  });
+  expect(locked.lock).toEqual(lock);
+  const unlocked = applyNavigationThreadEvent(locked, {
+    backend: "codex",
+    notification: { method: "thread/lock/updated", params: { threadId: "thread" } },
+  });
+  expect(unlocked.lock).toBeUndefined();
+});

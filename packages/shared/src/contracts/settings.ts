@@ -307,6 +307,36 @@ export const DESKTOP_UI_LAYOUT_DEFAULTS: {
 
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
 
+/**
+ * Color themes, chosen per scheme. `theme` above picks the scheme (dark,
+ * light, or follow the OS); the dark and light theme pick the colors each
+ * scheme renders in, independently, so "system" can follow the OS between
+ * any dark theme and any light theme. Tangerine is PwrAgent's own pair and
+ * the default for both.
+ */
+export const DESKTOP_DARK_THEMES = [
+  "tangerine-dark",
+  "catppuccin-mocha",
+  "solarized-dark",
+  "gray-dark",
+  "blue-dark",
+  "phosphor-dark",
+] as const;
+export type DesktopDarkTheme = (typeof DESKTOP_DARK_THEMES)[number];
+export const DESKTOP_DARK_THEME_DEFAULT: DesktopDarkTheme = "tangerine-dark";
+
+export const DESKTOP_LIGHT_THEMES = [
+  "tangerine-light",
+  "catppuccin-latte",
+  "solarized-light",
+  "gray-light",
+  "blue-light",
+] as const;
+export type DesktopLightTheme = (typeof DESKTOP_LIGHT_THEMES)[number];
+export const DESKTOP_LIGHT_THEME_DEFAULT: DesktopLightTheme = "tangerine-light";
+
+export type DesktopColorTheme = DesktopDarkTheme | DesktopLightTheme;
+
 export const DESKTOP_APPEARANCE_DENSITIES = [
   "mission-control",
   "compact",
@@ -685,6 +715,11 @@ export type DesktopIntegratedTerminalSettingsSnapshot = {
 
 export type DesktopAppearanceSnapshot = {
   theme: DesktopSettingsValue<DesktopAppearanceTheme>;
+  darkTheme: DesktopSettingsValue<DesktopDarkTheme>;
+  lightTheme: DesktopSettingsValue<DesktopLightTheme>;
+  /** macOS: a running instance's Dock icon follows its dark theme, so two
+   *  profiles in two themes are told apart in the Dock. On by default. */
+  themedDockIcon: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -698,6 +733,17 @@ export type DesktopGeneralSettingsSnapshot = {
    * the one exception: whether a finished turn earns one last move to the top.
    */
   attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
+  /**
+   * Skip the notice the image lightbox shows before an SVG's own scripts run
+   * in its isolated frame. The notice's "Always Run" sets this.
+   */
+  interactiveSvgSkipNotice: DesktopSettingsValue<boolean>;
+  /**
+   * Open an SVG that has scripts or hover styles straight into its
+   * interactive frame, instead of the static preview. Implies the notice was
+   * accepted: the lightbox does not ask before running it.
+   */
+  interactiveSvgAutoOpen: DesktopSettingsValue<boolean>;
   /**
    * Whether the profile runs the PwrAgent-managed MCP connection gateway.
    *
@@ -1427,6 +1473,8 @@ export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -1441,6 +1489,9 @@ export type DesktopSettingsConfigPatch = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
+      darkTheme?: DesktopDarkTheme;
+      lightTheme?: DesktopLightTheme;
+      themedDockIcon?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -1716,6 +1767,8 @@ export type DesktopConfigBootstrapSnapshot = {
   configError?: string;
   appearance: {
     theme: DesktopAppearanceTheme;
+    darkTheme: DesktopDarkTheme;
+    lightTheme: DesktopLightTheme;
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
@@ -2268,6 +2321,14 @@ export function isDesktopAppearanceTheme(
   value: string,
 ): value is DesktopAppearanceTheme {
   return DESKTOP_APPEARANCE_THEMES.includes(value as DesktopAppearanceTheme);
+}
+
+export function isDesktopDarkTheme(value: string): value is DesktopDarkTheme {
+  return DESKTOP_DARK_THEMES.includes(value as DesktopDarkTheme);
+}
+
+export function isDesktopLightTheme(value: string): value is DesktopLightTheme {
+  return DESKTOP_LIGHT_THEMES.includes(value as DesktopLightTheme);
 }
 
 export function isDesktopAppearanceDensity(

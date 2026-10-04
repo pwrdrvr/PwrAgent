@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { mastheadAction } from "./fixtures/window-chrome";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,7 +26,10 @@ test("keeps a Windows title-bar flyout open while the pointer crosses into it", 
   });
 
   try {
-    const trigger = app.window.getByRole("button", { name: "New thread" });
+    const trigger = mastheadAction(app.window, "New thread");
+    // Windows retains the native pointer position between Electron launches.
+    // Start outside the title bar so hover produces a fresh mouse-enter event.
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).hover();
     await trigger.hover();
 
     const menu = app.window.getByRole("menu", { name: "New thread options" });

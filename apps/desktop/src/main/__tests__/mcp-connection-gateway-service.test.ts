@@ -180,7 +180,7 @@ describe("McpConnectionGatewayService", () => {
     const publish = vi.spyOn(McpConnectionBrokerDiscovery.prototype, "publish");
     const service = new McpConnectionGatewayService({
       settings: createSettings(),
-      leaseManager: { id: "bootstrap-test", acquire, release: vi.fn(), snapshot: vi.fn() },
+      leaseManager: { id: "bootstrap-test", profile: "dev", acquire, release: vi.fn(), snapshot: vi.fn(), shouldRetryAcquisition: vi.fn() },
     });
     services.push(service);
     const git = new PwrGitConnectionService({
@@ -553,6 +553,65 @@ describe("McpConnectionGatewayService", () => {
    * list beneath it showed every tool of every server.
    */
   describe("listConnectionTools", () => {
+    it("keeps PwrGit ready when closing the inventory session aborts its notification GET", async () => {
+      const settings = createSettings();
+      Object.assign(settings, {
+        resolvePwrGitMcpCredential: vi.fn(async () => JSON.stringify({
+          tokens: { access_token: "fixture-pwrgit-access", token_type: "bearer" },
+        })),
+      });
+      let notificationSignal: AbortSignal | undefined;
+      let notificationAborted = false;
+      const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        if (init?.method === "GET") {
+          notificationSignal = init.signal ?? undefined;
+          // Exercise the SDK's real background notification request. It is
+          // still waiting for headers when the inventory closes its client.
+          return await new Promise<Response>((_resolve, reject) => {
+            const onAbort = () => {
+              notificationAborted = true;
+              reject(init.signal?.reason);
+            };
+            if (init.signal?.aborted) onAbort();
+            else init.signal?.addEventListener("abort", onAbort, { once: true });
+          });
+        }
+        const message = JSON.parse(String(init?.body)) as { id?: number; method: string };
+        if (message.method === "notifications/initialized") {
+          return new Response(null, { status: 202 });
+        }
+        const result = message.method === "initialize"
+          ? {
+              protocolVersion: "2025-06-18",
+              capabilities: { tools: {} },
+              serverInfo: { name: "PwrGit fixture", version: "1.0.0" },
+            }
+          : { tools: [{ name: "repository_roots", inputSchema: { type: "object" } }] };
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }), {
+          headers: { "content-type": "application/json" },
+        });
+      });
+      const service = new McpConnectionGatewayService({
+        registry: temporaryRegistry(),
+        settings,
+        fetchFn,
+        leaseManager: null,
+      });
+      services.push(service);
+
+      await expect(service.listConnectionTools({ connectionId: "pwrgit" })).resolves.toMatchObject({
+        tools: ["repository_roots"],
+      });
+      // Let the aborted background fetch's rejection pass through the
+      // coordinator before inspecting health; no mocked session opener.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(notificationSignal?.aborted).toBe(true);
+      expect(notificationAborted).toBe(true);
+      const status = (await service.listConnections()).find((connection) => connection.id === "pwrgit");
+      expect(status).toMatchObject({ configured: true, state: "ready" });
+      expect(status?.detail).toBeUndefined();
+    });
+
     type ListTools = (
       params?: { cursor?: string },
       options?: { timeout?: number },

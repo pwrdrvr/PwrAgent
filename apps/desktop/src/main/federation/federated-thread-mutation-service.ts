@@ -35,6 +35,8 @@ function capabilitiesForMutation(
     || request.executionMode !== undefined
     || request.projectPath !== undefined
     || request.archive !== undefined
+    || request.locked !== undefined
+    || request.lockNote !== undefined
   ) {
     required.push("turn_control");
   }
@@ -132,15 +134,42 @@ export function createFederatedThreadMutationHandler(
         );
       }
     }
+    const setLock = async (locked: boolean, note = request.lockNote) => {
+      try {
+        return await match!.backend.setThreadLock({
+          backend: request.backend,
+          threadId: request.threadId,
+          locked,
+          ...(locked && note !== undefined ? { note } : {}),
+        });
+      } catch (error) {
+        if (!hasFederationErrorCode(error, "method_not_found")) throw error;
+        throw new PwrAgentFederatedThreadInspectionError(
+          "invalid_arguments",
+          `${match!.peer.label} runs a PwrAgent too old to lock a thread for another instance.`,
+        );
+      }
+    };
+    // As locally: an unlock lands before the move a lock refuses.
+    const unlockedLock = request.locked === false && !request.dryRun
+      ? (await setLock(false)).previousLock
+      : undefined;
     // First, as locally: the peer checks the destination on its own disk,
     // and a refused move should not leave the other changes half applied.
     if (request.projectPath !== undefined && !request.dryRun) {
-      await match.backend.handoffThreadWorkspace({
-        backend: request.backend,
-        threadId: request.threadId,
-        direction: "to-project",
-        targetPath: request.projectPath,
-      });
+      try {
+        await match.backend.handoffThreadWorkspace({
+          backend: request.backend,
+          threadId: request.threadId,
+          direction: "to-project",
+          targetPath: request.projectPath,
+        });
+      } catch (error) {
+        // The peer stamps the restored lock with this request's time and
+        // source; its note is what the operator reads, and that survives.
+        if (unlockedLock) await setLock(true, unlockedLock.note ?? "");
+        throw error;
+      }
     }
     if (!request.dryRun) {
       if (request.title !== undefined) {
@@ -177,6 +206,9 @@ export function createFederatedThreadMutationHandler(
           threadId: request.threadId,
           ...threadSeenWatermark(match.thread.updatedAt, request.unread),
         });
+      }
+      if (request.locked === true) {
+        await setLock(true);
       }
     }
     return {

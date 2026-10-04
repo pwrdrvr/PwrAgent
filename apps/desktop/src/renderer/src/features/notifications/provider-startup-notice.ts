@@ -65,6 +65,9 @@ export function buildNoStartupBackendNotice(params: {
       },
     ],
     autoDismiss: false,
+    ...(provider?.kind === "codex"
+      ? { coalescing: { key: "codex-launch", priority: 0 } }
+      : {}),
     id: NO_STARTUP_BACKEND_NOTICE_ID,
     onDismiss: params.onDismiss,
     title: "No agent backend is available",

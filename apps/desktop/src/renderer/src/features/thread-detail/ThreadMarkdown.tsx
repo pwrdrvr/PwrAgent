@@ -571,7 +571,7 @@ const markdownComponents: Components = {
     );
   },
   ol(listProps) {
-    return <ol className="transcript-message__list">{listProps.children}</ol>;
+    return <ol className="transcript-message__list" start={listProps.start}>{listProps.children}</ol>;
   },
   p(paragraphProps) {
     return (

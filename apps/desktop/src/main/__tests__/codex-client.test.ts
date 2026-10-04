@@ -221,6 +221,7 @@ class MockTransport implements JsonRpcTransport {
   static threadResumeError:
     | { code?: number; message: string }
     | undefined = undefined;
+  static accountUsageError: { code: number; message: string } | undefined;
   static threadSettingsUpdateError: string | undefined;
 
   readonly sentMessages: string[] = [];
@@ -235,6 +236,10 @@ class MockTransport implements JsonRpcTransport {
   constructor(options?: unknown) {
     this.options = options;
     MockTransport.instances.push(this);
+  }
+
+  notify(method: string, params: unknown): void {
+    this.messageHandler(JSON.stringify({ method, params }));
   }
 
   async connect(): Promise<void> {
@@ -878,6 +883,10 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "account/usage/read") {
+      if (MockTransport.accountUsageError) {
+        this.messageHandler(JSON.stringify({ id: payload.id, error: MockTransport.accountUsageError }));
+        return;
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1938,6 +1947,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
+    MockTransport.accountUsageError = undefined;
     MockTransport.threadSettingsUpdateError = undefined;
   });
 
@@ -3729,6 +3739,97 @@ describe("CodexAppServerClient", () => {
     await expect(client.readAccountUsage()).resolves.toEqual(
       MockTransport.accountUsageResult,
     );
+  });
+
+  it("reads historical pricing through the existing read-only connection without acquiring a writer", async () => {
+    const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100, status: { type: "notLoaded" } };
+    MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
+    MockTransport.threadResumeError = { message: "thread already has an active writer" };
+    MockTransport.accountUsageResult = { threadUsage: { threadId: thread.id, estimatedUsageUsdMicros: 42_000, groups: [
+      { model: "gpt-6-astra", inputTokens: 1_000, cachedInputTokens: 800, netNewInputTokens: 200, outputTokens: 100, totalTokens: 1_100 },
+      { model: "gpt-6.1-sol", inputTokens: 500, cachedInputTokens: 100, netNewInputTokens: 400, outputTokens: 50, totalTokens: 550 },
+    ] } };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    const observer = vi.fn();
+    client.onNotification(observer);
+    try {
+      const results = await Promise.all([client.readThreadPricingSnapshot(thread.id), client.readThreadPricingSnapshot(thread.id)]);
+      expect(results).toEqual([expect.objectContaining({ model: thread.model, pricingSource: "provider", estimatedCostMicros: 42_000,
+        tokens: { inputTokens: 1_500, cachedInputTokens: 900, uncachedInputTokens: 600, outputTokens: 150, totalTokens: 1_650 },
+      }), expect.objectContaining({ estimatedCostMicros: 42_000 })]);
+      expect(MockTransport.instances).toHaveLength(1);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+      expect(observer).not.toHaveBeenCalled();
+      const requests = MockTransport.instances[0].sentMessages.map((message) => JSON.parse(message));
+      expect(requests.filter((request) => request.method === "account/usage/read").map((request) => request.params)).toEqual([{ threadId: thread.id }]);
+      expect(requests.some((request) => ["thread/resume", "thread/start", "turn/start", "fs/readFile"].includes(request.method))).toBe(false);
+      // updatedAt is second-granular: do not reuse stale historical counts.
+      MockTransport.accountUsageResult = { threadUsage: { threadId: thread.id, groups: [{ totalTokens: 2_100 }] } };
+      expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(2_100);
+    } finally { await client.close(); }
+  });
+
+  it.each([null, { threadId: "other", groups: [{ totalTokens: 100 }] }, { threadId: "external-thread", groups: [] }])(
+    "keeps unavailable or unrelated historical totals unknown: %j", async (threadUsage) => {
+      MockTransport.readThreadResultByThreadId.set("external-thread", { thread: { id: "external-thread", model: "gpt-6.1-sol" } });
+      MockTransport.accountUsageResult = { summary: { lifetimeTokens: 999_999 }, threadUsage };
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex" });
+      try {
+        expect(await client.readThreadPricingSnapshot("external-thread")).toEqual({ model: "gpt-6.1-sol" });
+        expect(MockTransport.instances).toHaveLength(1);
+        expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+      } finally { await client.close(); }
+    },
+  );
+
+  it("keeps partial historical counts unknown and rejects unsafe counts", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history" } });
+    MockTransport.accountUsageResult = { threadUsage: { threadId: "history", estimatedUsageUsdMicros: -1, groups: [
+      { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: Number.MAX_SAFE_INTEGER },
+      { inputTokens: 0, cachedInputTokens: null, outputTokens: -1, totalTokens: 1 },
+    ] } };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: undefined, pricingSource: "provider", tokens: {
+        inputTokens: 0, cachedInputTokens: undefined, uncachedInputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
+      } });
+    } finally { await client.close(); }
+  });
+
+  it("does not resume as a fallback when the read-only usage API is unsupported", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history", model: "gpt-6.1-sol" } });
+    MockTransport.accountUsageError = { code: -32601, message: "Method not found" };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: "gpt-6.1-sol" });
+      expect(MockTransport.instances).toHaveLength(1);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+    } finally { await client.close(); }
+  });
+
+  it.each(["thread/compacted", "thread/rewound", "thread/closed", "item/completed"] as const)("uses owning-client totals for read-only pricing and invalidates them on %s", async (invalidation) => {
+    const total = { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const last = { inputTokens: 100, cachedInputTokens: 80, outputTokens: 10, totalTokens: 110 };
+    MockTransport.readThreadResultByThreadId.set("owned", { thread: { id: "owned", model: "gpt-6.1-sol", turns: [] } });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.getInitializeResult();
+      const transport = MockTransport.instances[0];
+      transport.notify("thread/tokenUsage/updated", { threadId: "owned", turnId: "active", tokenUsage: { total, last, modelContextWindow: 128_000 } });
+      expect(await client.readThreadPricingSnapshot("owned")).toMatchObject({ model: "gpt-6.1-sol", tokens: total });
+      expect(transport.sentMessages.map((message) => JSON.parse(message)).some((request) => ["thread/resume", "account/usage/read"].includes(request.method))).toBe(false);
+      transport.notify("thread/tokenUsage/updated", { threadId: "owned", tokenUsage: { total: { ...total, totalTokens: 2_100 } } });
+      expect((await client.readThreadPricingSnapshot("owned")).tokens?.totalTokens).toBe(2_100);
+      transport.notify(invalidation, { threadId: "owned", ...(invalidation === "item/completed" ? { item: { type: "contextCompaction", id: "compact" } } : {}) });
+      expect((await client.readThreadPricingSnapshot("owned")).tokens).toBeUndefined();
+      await client.close();
+      expect((await client.readThreadPricingSnapshot("owned")).tokens).toBeUndefined();
+    } finally { await client.close(); }
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {
@@ -13234,6 +13335,91 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each(["turn response", "turn notification", "review response"])(
+    "skips new thread history until the first %s",
+    async (firstTurnSignal) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const threadId = "thread-awaiting-env-setup";
+      MockTransport.threadStartResult = { thread: { id: threadId, turns: [] } };
+      MockTransport.readThreadResultByThreadId.set(threadId, {
+        thread: { id: threadId, turns: [] },
+      });
+      const missingRollout = {
+        code: -32600,
+        message: `invalid paginated history lineage for ${threadId}: missing source rollout`,
+      };
+      MockTransport.threadTurnsListTransientErrorsByRequest.set(`${threadId}:`, [missingRollout]);
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+
+      try {
+        await client.startThread({});
+        const transport = MockTransport.instances.at(-1)!;
+        transport.sentMessages.length = 0;
+
+        // A setup failure leaves the thread in this state until the operator
+        // retries or continues. Repeated transcript loads must send no RPCs.
+        for (let index = 0; index < 2; index += 1) {
+          await expect(client.readThread({ threadId })).resolves.toMatchObject({
+            entries: [], messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          });
+        }
+        expect(transport.sentMessages).toHaveLength(0);
+
+        MockTransport.threadTurnsListTransientErrorsByRequest.delete(`${threadId}:`);
+        MockTransport.threadTurnsListResultByRequest.set(`${threadId}:`, {
+          data: [{ id: "turn-first", status: "completed", items: [] }],
+          nextCursor: null,
+        });
+        MockTransport.threadItemsListResultByRequest.set(`${threadId}:turn-first:`, {
+          data: [{ turnId: "turn-first", item: { id: "reply-first", type: "agentMessage", text: "First reply" } }],
+          nextCursor: null,
+        });
+        if (firstTurnSignal === "turn response") {
+          MockTransport.turnStartResult = { threadId, turn: { id: "turn-first" } };
+          await client.startTurn({ threadId, input: [{ type: "text", text: "Continue anyway" }] });
+        } else if (firstTurnSignal === "review response") {
+          MockTransport.reviewStartResult = { reviewThreadId: threadId, turn: { id: "turn-first" } };
+          await client.startReview({ threadId, target: { type: "uncommittedChanges" } });
+        } else {
+          const notifications: AppServerNotification[] = [];
+          client.onNotification((notification) => { notifications.push(notification); });
+          transport.emitInbound({ method: "turn/started", params: {
+            threadId, turn: { id: "turn-first", status: "inProgress" },
+          } });
+          await vi.waitFor(() => expect(notifications.some((notification) => notification.method === "turn/started")).toBe(true));
+        }
+
+        const replay = await client.readThread({ threadId });
+        expect(replay.messages.map((message) => message.text)).toContain("First reply");
+        const methods = transport.sentMessages.map((message) => JSON.parse(message).method);
+        expect(methods).toContain("thread/read");
+        expect(methods).toContain("thread/turns/list");
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("reads fork history before its first new turn and preserves missing-lineage errors", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "thread-fork";
+    MockTransport.readThreadResultByThreadId.set(threadId, {
+      thread: { id: threadId, turns: [] },
+    });
+    MockTransport.threadTurnsListTransientErrorsByRequest.set(`${threadId}:`, [{
+      code: -32600,
+      message: `invalid paginated history lineage for ${threadId}: missing source rollout`,
+    }]);
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await client.forkThread({ threadId: "thread-parent" });
+      await expect(client.readThread({ threadId })).rejects.toThrow("missing source rollout");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("treats unmaterialized new threads as empty transcripts", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadErrorByThreadId.set("thread-empty", {
@@ -14190,6 +14376,167 @@ describe("CodexAppServerClient", () => {
       } finally { await client.close(); }
     });
 
+    it("reuses admitted catalog proof after an owned realtime handoff and stop on stock 0.160", async () => {
+      MockTransport.serverVersion = "0.160.0";
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        const admission = { ...settings, threadId, dynamicTools };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        const realtime = { threadId, version: "v3" as const, outputModality: "audio" as const,
+          transport: { type: "webrtc" as const, sdp: "v=0\r\nsample" } };
+        await client.startRealtime(realtime);
+        const transport = MockTransport.instances.at(-1)!;
+        transport.emitInbound({ method: "turn/started", params: { threadId, turn: { id: "voice-handoff", status: "inProgress" } } });
+        transport.emitInbound({ method: "turn/completed", params: { threadId, turn: { id: "voice-handoff", status: "completed" } } });
+        await client.stopRealtime(threadId);
+        expect(await client.prepareFreshNativeVoiceThread({ ...admission, model: "updated-model", reasoningEffort: "high", approvalPolicy: "never", sandbox: "danger-full-access" })).toBe(true);
+        await client.startRealtime(realtime);
+        await client.stopRealtime(threadId);
+        const requests = MockTransport.instances.flatMap((item) => item.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+        expect(requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(2);
+        expect(requests.filter((request) => request.method === "thread/settings/update")).toHaveLength(2);
+        expect(requests.filter((request) => request.method === "thread/settings/update").at(-1)?.params).toMatchObject({ model: "updated-model", effort: "high", approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
+        expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
+        expect(await client.prepareFreshNativeVoiceThread({ ...admission, dynamicTools: [] })).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it.each(["turn/started", "thread/closed", "reset"])("revokes admitted proof on unowned %s", async (event) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        const admission = { ...settings, threadId, dynamicTools };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        if (event === "reset") await client.close();
+        else MockTransport.instances.at(-1)!.emitInbound({ method: event, params: { threadId, turn: { id: "unknown-turn", status: "inProgress" } } });
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it("revokes admitted proof before a failed catalog refresh", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools });
+        const admission = { ...settings, threadId, dynamicTools };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        MockTransport.threadResumeError = { message: "Sample refresh failed" };
+        await expect(client.refreshThreadTools(admission)).rejects.toThrow("Sample refresh failed");
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(false);
+      } finally { await client.close(); }
+    });
+
+    it.each([
+      ["catalog", "settings"], ["catalog", "review"],
+      ["environment", "settings"], ["environment", "review"],
+    ] as const)("revokes admitted proof before review changes %s when %s fails", async (mutation, failure) => {
+      MockTransport.serverCapabilitiesResult = {
+        codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
+      };
+      const runtime = {
+        environmentId: "sample-env", environmentName: "Sample environment", executionTarget: "local" as const,
+        cwd: settings.cwd, shellEnvironment: { SAMPLE_TOOLCHAIN: "original" },
+      };
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const { threadId } = await client.startThread({ ...settings, dynamicTools, codexEnvironmentRuntime: runtime });
+        const admission = { ...settings, threadId, dynamicTools, codexEnvironmentRuntime: runtime };
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(true);
+        await client.startRealtime({ threadId, version: "v3", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0\r\nsample" } });
+        const transport = MockTransport.instances.at(-1)!;
+        transport.emitInbound({ method: "turn/started", params: { threadId, turn: { id: "voice-handoff", status: "inProgress" } } });
+        transport.emitInbound({ method: "turn/completed", params: { threadId, turn: { id: "voice-handoff", status: "completed" } } });
+        await client.stopRealtime(threadId);
+        if (failure === "settings") MockTransport.threadSettingsUpdateError = "Sample settings rejected.";
+        else {
+          const send = transport.send.bind(transport);
+          vi.spyOn(transport, "send").mockImplementation((message) => {
+            const request = JSON.parse(message);
+            if (request.method === "review/start") {
+              transport.sentMessages.push(message);
+              transport.emitInbound({ id: request.id, error: { code: -32000, message: "Sample review rejected." } });
+            } else send(message);
+          });
+        }
+        await expect(client.startReview({
+          ...settings, threadId, target: { type: "uncommittedChanges" }, model: "updated-model", reasoningEffort: "high",
+          ...(mutation === "catalog" ? { dynamicTools: [{ ...dynamicTools[0], name: "fixture_changed" }] } : {}),
+          codexEnvironmentRuntime: mutation === "environment"
+            ? { ...runtime, shellEnvironment: { SAMPLE_TOOLCHAIN: "changed" } } : runtime,
+        })).rejects.toThrow(failure === "settings" ? "Sample settings rejected" : "Sample review rejected");
+        const requests = transport.sentMessages.map((message) => JSON.parse(message));
+        expect(requests.filter((request) => request.method === "thread/resume")).toHaveLength(1);
+        expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject(mutation === "catalog"
+          ? { dynamicTools: [{ ...dynamicTools[0], name: "fixture_changed" }] }
+          : { config: { "shell_environment_policy.set.SAMPLE_TOOLCHAIN": "changed" } });
+        MockTransport.threadSettingsUpdateError = undefined;
+        const settingsCount = requests.filter((request) => request.method === "thread/settings/update").length;
+        expect(await client.prepareFreshNativeVoiceThread(admission)).toBe(false);
+        expect(transport.sentMessages.map((message) => JSON.parse(message))
+          .filter((request) => request.method === "thread/settings/update")).toHaveLength(settingsCount);
+      } finally { await client.close(); }
+    });
+
+    it("restores a persisted director catalog on stock without claiming current catalog proof", async () => {
+      MockTransport.serverVersion = "0.160.0";
+      const updating = deferred();
+      const finishUpdate = deferred();
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex", directoryResolver: async () => [],
+        connectionObserver: { onMessage: async (event) => {
+          if (event.direction === "outbound" && event.envelope.method === "thread/settings/update") {
+            updating.resolve();
+            await finishUpdate.promise;
+          }
+        } },
+      });
+      try {
+        let settled = false;
+        const resume = client.resumeNativeVoiceThread({
+          ...settings, threadId: "persisted-director", model: "updated-model", reasoningEffort: "high", serviceTier: "fast",
+          approvalPolicy: "never", sandbox: "danger-full-access",
+        });
+        void resume.then(() => { settled = true; });
+        await updating.promise;
+        expect(settled).toBe(false);
+        finishUpdate.resolve();
+        await resume;
+        const requests = MockTransport.instances.flatMap((item) => item.sentMessages.map((message) => JSON.parse(message)));
+        const restored = requests.find((request) => request.method === "thread/resume");
+        expect(restored.params).toMatchObject({ threadId: "persisted-director", cwd: settings.cwd });
+        expect(restored.params).not.toHaveProperty("dynamicTools");
+        expect(restored.params).not.toHaveProperty("baseInstructions");
+        expect(restored.params).not.toHaveProperty("developerInstructions");
+        const updated = requests.find((request) => request.method === "thread/settings/update");
+        expect(updated.params).toMatchObject({ model: "updated-model", effort: "high", serviceTier: "priority", approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
+        expect(requests.indexOf(updated)).toBeGreaterThan(requests.indexOf(restored));
+        expect(requests.some((request) => ["thread/start", "turn/start", "thread/realtime/start"].includes(request.method))).toBe(false);
+        expect(await client.prepareFreshNativeVoiceThread({ ...settings, threadId: "persisted-director", dynamicTools })).toBe(false);
+      } finally { finishUpdate.resolve(); await client.close(); }
+    });
+
+    it.each(["active", "resume", "settings"])("rejects persisted voice restoration on %s failure", async (failure) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        if (failure === "active") MockTransport.readThreadResultByThreadId.set("persisted-director", { thread: { id: "persisted-director", status: { type: "active" } } });
+        if (failure === "resume") MockTransport.threadResumeError = { message: "Sample resume rejected" };
+        if (failure === "settings") MockTransport.threadSettingsUpdateError = "Sample settings rejected";
+        await expect(client.resumeNativeVoiceThread({ ...settings, threadId: "persisted-director", model: "sample-model" }))
+          .rejects.toThrow(failure === "active" ? "current turn" : `Sample ${failure} rejected`);
+        const requests = MockTransport.instances.flatMap((item) => item.sentMessages.map((message) => JSON.parse(message)));
+        expect(requests.some((request) => request.method === "thread/realtime/start")).toBe(false);
+        expect(requests.some((request) => request.method === "thread/resume")).toBe(failure !== "active");
+        expect(requests.some((request) => request.method === "thread/settings/update")).toBe(failure === "settings");
+      } finally { await client.close(); }
+    });
+
     it.each([false, true])("awaits settings acknowledgment and rechecks ownership (invalidated: %s)", async (invalidate) => {
       const updating = deferred();
       const finishUpdate = deferred();
@@ -14675,7 +15022,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("normalizes MCP elicitation requests and returns MCP-shaped responses", async () => {
+  it.each([null, "session", "always"])("normalizes MCP elicitation and preserves the %s grant on the wire", async (persist) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -14691,7 +15038,7 @@ describe("CodexAppServerClient", () => {
       return {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: persist ? { persist } : null
       };
     });
 
@@ -14709,6 +15056,7 @@ describe("CodexAppServerClient", () => {
         mode: "form",
         _meta: {
           codex_approval_kind: "mcp_tool_call",
+          persist: ["session", "always"],
           tool_description: "List, create, close, or select a browser tab.",
           tool_params: {
             action: "list"
@@ -14745,6 +15093,7 @@ describe("CodexAppServerClient", () => {
             properties: {}
           },
           _meta: expect.objectContaining({
+            persist: ["session", "always"],
             tool_description: "List, create, close, or select a browser tab."
           })
         })
@@ -14760,9 +15109,114 @@ describe("CodexAppServerClient", () => {
       result: {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: persist ? { persist } : null
       }
     });
+
+    await client.close();
+  });
+
+  it("logs each MCP elicitation request without its parameter values", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+    client.onRequest(() => ({ action: "decline", content: null, _meta: null }));
+    codexClientLogInfo.mockClear();
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "cua-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        serverName: "cua_repl",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_id: "computer-use",
+          connector_name: "Computer Use",
+          persist: ["session", "always"],
+          tool_params: { app: "com.example.Editor" },
+          tool_params_display: [{ name: "app", display_name: "App", value: "Editor" }]
+        },
+        message: "Allow Computer Use to use \"Editor\"?",
+        requestedSchema: { type: "object", properties: {} }
+      }
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "pw-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        serverName: "playwright",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: "session",
+          riskLevel: "high",
+          tool_params: { url: "https://example.test/?token=secret-value" },
+          tool_params_display: [{ label: "url", value: "https://example.test/?token=secret-value" }]
+        },
+        message: "Allow playwright to open https://example.test/?token=secret-value?",
+        requestedSchema: { type: "object", properties: {} }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const logged = codexClientLogInfo.mock.calls.filter(
+      ([event]) => event === "MCP elicitation request"
+    );
+    expect(logged).toEqual([
+      ["MCP elicitation request", {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        requestId: "cua-1",
+        serverName: "cua_repl",
+        mode: "form",
+        approvalKind: "mcp_tool_call",
+        connectorId: "computer-use",
+        connectorName: "Computer Use",
+        riskLevel: undefined,
+        persist: ["session", "always"],
+        paramNames: ["app"],
+        metaKeys: [
+          "codex_approval_kind",
+          "connector_id",
+          "connector_name",
+          "persist",
+          "tool_params",
+          "tool_params_display",
+        ],
+        message: "Allow Computer Use to use \"Editor\"?",
+      }],
+      ["MCP elicitation request", {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        requestId: "pw-1",
+        serverName: "playwright",
+        mode: "form",
+        approvalKind: "mcp_tool_call",
+        connectorId: undefined,
+        connectorName: undefined,
+        riskLevel: "high",
+        persist: ["session"],
+        paramNames: ["url"],
+        metaKeys: ["codex_approval_kind", "persist", "riskLevel", "tool_params", "tool_params_display"],
+      }],
+    ]);
+    expect(JSON.stringify(logged)).not.toContain("secret-value");
 
     await client.close();
   });

@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,13 @@ import {
   E2E_MEMORY_SECRET_STORAGE_ENV,
   SECRET_STORAGE_DISABLED_ENV,
 } from "../settings/desktop-secret-store";
+
+type FixtureDom = { window: Window & Pick<typeof globalThis, "MutationObserver" | "eval"> };
+// jsdom is an existing test dependency without a declarations package. Keep
+// this fixture's small runtime contract local instead of widening dependencies.
+const { JSDOM } = createRequire(import.meta.url)("jsdom") as {
+  JSDOM: new (html: string, options: { runScripts: "outside-only" }) => FixtureDom;
+};
 
 describe("Electron E2E fixture teardown", () => {
   it("enforces release isolation after spec overrides and preserves other Node options", () => {
@@ -312,17 +320,20 @@ describe("Electron E2E renderer readiness", () => {
   function makeWindow(options?: {
     overlayAttaches?: boolean;
     overlayCount?: number;
-  }): { window: Parameters<typeof waitForRendererReady>[0]["window"] } {
-    const pending = new Promise<void>(() => undefined);
+  }): { window: Parameters<typeof waitForRendererReady>[0]["window"]; dom: FixtureDom } {
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", { runScripts: "outside-only" });
+    if (options?.overlayAttaches) {
+      dom.window.document.body.innerHTML = '<div class="onboarding-wizard-overlay"></div>';
+    }
     const window = {
       waitForLoadState: async () => undefined,
-      locator: () => ({
-        count: async () => options?.overlayCount ?? 0,
-        waitFor: async () =>
-          options?.overlayAttaches ? undefined : await pending,
-      }),
+      evaluate: async (callback: (value: unknown) => unknown, value: unknown) => {
+        const evaluate = dom.window.eval(`(${callback.toString()})`) as typeof callback;
+        return await evaluate(value);
+      },
+      locator: () => ({ count: async () => options?.overlayCount ?? 0 }),
     };
-    return { window: window as never };
+    return { window: window as never, dom };
   }
 
   function args(overrides: {
@@ -365,18 +376,49 @@ describe("Electron E2E renderer readiness", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("disconnects the wizard observer and completes its RPC before returning readiness", async () => {
+    const env = { HOME: makeHomeRoot() };
+    const { window, dom } = makeWindow();
+    const disconnect = vi.spyOn(dom.window.MutationObserver.prototype, "disconnect");
+    let pending = 0;
+    const evaluate = window.evaluate.bind(window);
+    vi.spyOn(window, "evaluate").mockImplementation(async (...args) => {
+      pending += 1;
+      try { return await evaluate(...args); }
+      finally { pending -= 1; }
+    });
+    try {
+      await waitForRendererReady(args({ env, window }));
+      expect(pending).toBe(0);
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      expect((dom.window as unknown as { __PWRAGENT_ONBOARDING_WATCHES__: Map<string, unknown> })
+        .__PWRAGENT_ONBOARDING_WATCHES__.size).toBe(0);
+      // Simulate document destruction after launch without any outstanding
+      // Playwright evaluation or observer that can reject against the test.
+      dom.window.close();
+      expect(pending).toBe(0);
+    } finally {
+      dom.window.close();
+    }
+  });
+
   it("names the wizard when the overlay wins the race against readiness", async () => {
     const env = { HOME: makeHomeRoot() };
-    const { window } = makeWindow({ overlayAttaches: true });
+    const { window, dom } = makeWindow();
     // Readiness never settles, so only the watcher can resolve this.
     const stalled = {
       ...(window as unknown as Record<string, unknown>),
       waitForLoadState: () => new Promise<void>(() => undefined),
     };
 
-    await expect(
-      waitForRendererReady(args({ env, window: stalled as never })),
-    ).rejects.toThrow(/onboarding wizard is showing/);
+    const readiness = waitForRendererReady(args({ env, window: stalled as never }));
+    const detected = expect(readiness).rejects.toThrow(/onboarding wizard is showing/);
+    dom.window.document.body.innerHTML = '<div class="onboarding-wizard-overlay"></div>';
+    try {
+      await detected;
+    } finally {
+      dom.window.close();
+    }
   });
 
   it("names the wizard when the overlay is already up once readiness settles", async () => {

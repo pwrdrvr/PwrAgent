@@ -269,10 +269,21 @@ function pollingSignal(record: ThreadToolInvocationRecord): string | undefined {
   if (tool === "sleep" || tool.endsWith("__sleep")) return "sleep";
   const command = record.normalizedCommand ?? "";
   if (/^sleep\s+\d/.test(command)) return "sleep";
-  // Group only read-only status requests for the same target. Logs and mutations
-  // are investigation/work, not evidence of a polling loop.
+  // Group only repeated read-only status queries. Logs, mutations, and PR
+  // metadata reads are investigation/work, not evidence of a polling loop.
   const gh = command.match(/^gh\s+(run\s+view|pr\s+(?:view|checks))\s+(\d+|https:\/\/[^\s'"]+)/);
   if (!gh || /--log(?:-failed)?\b/.test(command)) return undefined;
-  const repo = command.match(/(?:--repo|-R)\s+([^\s'"]+)/)?.[1] ?? "";
-  return `gh:${gh[1]}:${repo}:${gh[2]}`;
+  if (gh[1] === "pr view") {
+    const json = command.match(/(?:^|\s)--json(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s]+))/);
+    if (json) {
+      const fields = (json[1] ?? json[2] ?? json[3] ?? "").split(",");
+      if (!fields.some((field) => [
+        "statusCheckRollup", "mergeable", "mergeStateStatus", "state",
+        "mergedAt", "reviewDecision", "closed", "closedAt",
+      ].includes(field))) return undefined;
+    }
+  }
+  // Keep the requested fields and filters: checking CI, fetching a body for an
+  // edit, and verifying that edit must not become three checks of one PR.
+  return command;
 }

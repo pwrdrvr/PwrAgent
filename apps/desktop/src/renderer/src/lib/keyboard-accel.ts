@@ -6,7 +6,9 @@
  */
 import { getDesktopApi } from "./desktop-api";
 
-export function isPrimaryAccel(event: KeyboardEvent): boolean {
+export function isPrimaryAccel(
+  event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">,
+): boolean {
   // macOS uses Cmd (metaKey); Windows/Linux use Ctrl. We don't read the
   // platform here — accepting either keeps the check simple and matches
   // how the rest of the app treats accelerators.
@@ -26,7 +28,9 @@ export function isPrimaryAccel(event: KeyboardEvent): boolean {
  * Falls back to the lenient check when the platform is unknown (the desktop
  * bridge is unavailable, e.g. in unit tests), so a chord never goes dead.
  */
-export function isPlatformPrimaryAccel(event: KeyboardEvent): boolean {
+export function isPlatformPrimaryAccel(
+  event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">,
+): boolean {
   const platform = getDesktopApi()?.platform;
   if (platform === undefined) {
     return isPrimaryAccel(event);

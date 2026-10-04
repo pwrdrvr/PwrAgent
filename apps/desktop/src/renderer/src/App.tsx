@@ -47,6 +47,7 @@ import {
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
@@ -60,7 +61,10 @@ import {
   type SendThreadToMachineSource,
 } from "./features/federation/SendThreadToMachineDialog";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
-import type { LaunchpadMachineControl } from "./features/composer/LaunchpadMachineChip";
+import type {
+  LaunchpadMachineControl,
+  MachineChipValue,
+} from "./features/composer/LaunchpadMachineChip";
 import { findPeerCounterpartDirectory } from "./lib/federation-project-match";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
@@ -91,8 +95,8 @@ import {
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
-import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
-import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
+import { hasComposerDraftContent } from "./features/composer/useComposerDraftStore";
+import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
@@ -120,7 +124,11 @@ import {
 } from "./lib/useNavigationHistory";
 import { TranscriptLinkProvider } from "./lib/transcript-links";
 import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-options";
-import { useThreadNavigation } from "./lib/useThreadNavigation";
+import {
+  InteractiveSvgPreferencesProvider,
+  type InteractiveSvgPreferences,
+} from "./lib/interactive-svg-preferences";
+import { useThreadNavigation, type SubthreadLaunchpadDraft } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -134,10 +142,14 @@ import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActi
 import { useIndependentQueueProjection } from "./lib/useIndependentQueueProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { useThreadDraftIndicators, useUnassignedThreadDraftCount } from "./lib/useThreadDraftIndicators";
-import { copyText } from "./lib/copy-text";
+import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import {
+  CODEX_LAUNCH_NOTICE_ID,
+  CodexLaunchNotice,
+} from "./features/notifications/CodexLaunchNotice";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import {
@@ -308,6 +320,8 @@ export function App() {
     snapshotPreference: settings.snapshot?.general.appearance
       ? {
         theme: settings.snapshot.general.appearance.theme.value,
+        darkTheme: settings.snapshot.general.appearance.darkTheme.value,
+        lightTheme: settings.snapshot.general.appearance.lightTheme.value,
         density: settings.snapshot.general.appearance.density.value,
         sidebarTextSize:
           settings.snapshot.general.appearance.sidebarTextSize.value,
@@ -403,7 +417,7 @@ function DesktopAppShell(props: {
   const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
     DEFAULT_ACTION_RUNS_DOCK,
   );
-  const [mainView, setMainViewState] = useState<MainView>("thread");
+  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
   const mainViewRef = useRef<MainView>(mainView);
   // The control that opened Settings or Automations. The layer covers the
   // sidebar and main, which go inert under it, so focus returns here on
@@ -700,6 +714,11 @@ function DesktopAppShell(props: {
       liveFederationHealth,
     ],
   );
+  // Every known machine, the window's owner included, for naming one.
+  const federationMachines = useMemo(
+    () => buildFederationThreadTargets(liveFederationHealth),
+    [liveFederationHealth],
+  );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
       refreshFederationHealth();
@@ -896,6 +915,12 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const syncCodexLaunchNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
+    if (notice) showAppNotice(notice);
+  }, [showAppNotice]);
   const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
     const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
     if (saved) {
@@ -1428,6 +1453,7 @@ function DesktopAppShell(props: {
             errorNoticeContext: event.errorNoticeContext,
             originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,
+            onOpenCodexSettings: openCodexSettings,
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
@@ -1512,6 +1538,7 @@ function DesktopAppShell(props: {
     acknowledgeThreadSpendAlert,
     desktopApi,
     openCodexLogin,
+    openCodexSettings,
     props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
   ]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
@@ -1550,6 +1577,15 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
+  const interactiveSvgSkipNotice =
+    settings.snapshot?.general.interactiveSvgSkipNotice?.value ?? false;
+  const interactiveSvgAutoOpen =
+    settings.snapshot?.general.interactiveSvgAutoOpen?.value ?? false;
+  const interactiveSvgPreferences = useMemo<InteractiveSvgPreferences>(() => ({
+    skipNotice: interactiveSvgSkipNotice,
+    autoOpen: interactiveSvgAutoOpen,
+    save: (patch) => writeConfig({ general: patch }),
+  }), [interactiveSvgAutoOpen, interactiveSvgSkipNotice, writeConfig]);
   // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
   // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
@@ -1646,11 +1682,7 @@ function DesktopAppShell(props: {
   const profiles = usePwrAgentProfiles(desktopApi);
   const refreshProfiles = profiles.refresh;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
-  const baseComposerDraftStore = useComposerDraftStore();
-  const composerDraftStore = useDurableComposerDraftStore(
-    baseComposerDraftStore,
-    desktopApi,
-  );
+  const composerDraftStore = useRecoverableComposerDraftStore(desktopApi);
   const providerModelDefaults = useMemo(() => settings.snapshot?.models
     ? settings.snapshot.models.providerDefaults ?? {}
     : undefined, [settings.snapshot]);
@@ -1741,7 +1773,7 @@ function DesktopAppShell(props: {
       ]) => {
         const federationHealth =
           refreshedFederationHealth ?? liveFederationHealth;
-        void copyText(
+        void copyTextAsCodeBlock(
           buildLocalThreadDiagnosticsInfo(
             thread
               ? {
@@ -2693,6 +2725,17 @@ function DesktopAppShell(props: {
       federatedTargetHasProject({ scope: "remote", instanceId }, directory),
     [federatedTargetHasProject],
   );
+  // This instance, as the machine chips name it.
+  const localMachine: MachineChipValue = {
+    label: liveFederationHealth?.localLabel ?? "This machine",
+    shortLabel: federationLocalDisplayLabel(liveFederationHealth),
+    ...(liveFederationHealth?.localCelestialIcon
+      ? { celestialIcon: liveFederationHealth.localCelestialIcon }
+      : {}),
+    ...(liveFederationHealth?.instanceId
+      ? { instanceId: liveFederationHealth.instanceId }
+      : {}),
+  };
   const selectedLaunchpadForMachine = navigation.selectedLaunchpad;
   const launchpadMachine = ((): LaunchpadMachineControl | undefined => {
     const windowTarget = readRendererFederationTarget();
@@ -2703,7 +2746,7 @@ function DesktopAppShell(props: {
       return undefined;
     }
     const windowOwner = windowTarget
-      ? buildFederationThreadTargets(liveFederationHealth).find((candidate) =>
+      ? federationMachines.find((candidate) =>
           candidate.instanceId === windowTarget.instanceId)
       : undefined;
     const launchpadTarget = selectedLaunchpadForMachine.federationTarget;
@@ -2750,16 +2793,7 @@ function DesktopAppShell(props: {
               ? { celestialIcon: windowOwner.celestialIcon }
               : {}),
           }
-        : {
-            label: liveFederationHealth?.localLabel ?? "This machine",
-            shortLabel: federationLocalDisplayLabel(liveFederationHealth),
-            ...(liveFederationHealth?.localCelestialIcon
-              ? { celestialIcon: liveFederationHealth.localCelestialIcon }
-              : {}),
-            ...(liveFederationHealth?.instanceId
-              ? { instanceId: liveFederationHealth.instanceId }
-              : {}),
-          },
+        : localMachine,
       targets: newThreadFederationTargets,
       project,
       localHasProject:
@@ -2777,6 +2811,35 @@ function DesktopAppShell(props: {
               ),
           }
         : {}),
+    };
+  })();
+  // The thread header names the thread's machine wherever the launchpad
+  // showed its machine chip, so starting a thread leaves the machine put.
+  const selectedThreadForMachine = navigation.selectedThread;
+  const threadMachine = ((): MachineChipValue | undefined => {
+    const windowTarget = readRendererFederationTarget();
+    if (!selectedThreadForMachine
+      || (!windowTarget && newThreadFederationTargets.length === 0)) {
+      return undefined;
+    }
+    const target = selectedThreadForMachine.federation?.ref.target;
+    const ownerId = target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : windowTarget?.instanceId;
+    if (!ownerId) return localMachine;
+    const owner = federationMachines.find(
+      (candidate) => candidate.instanceId === ownerId,
+    );
+    return {
+      label: owner?.label
+        ?? selectedThreadForMachine.federation?.instanceLabel
+        ?? readRendererFederationLabel()
+        ?? ownerId,
+      shortLabel: owner?.shortLabel,
+      celestialIcon: owner?.celestialIcon,
+      instanceId: ownerId,
+      remote: true,
+      offline: owner?.availability === "offline",
     };
   })();
   const mastheadActions = {
@@ -2899,6 +2962,38 @@ function DesktopAppShell(props: {
       history.goBack();
     }
   });
+  // A sub-thread draft row's Discard. The open composer holds the draft
+  // live and saves it back to the store when it unmounts, so when it is the
+  // draft's composer it runs the discard itself, exactly as Cancel does.
+  const [launchpadCancelRequest, setLaunchpadCancelRequest] =
+    useState<{ directoryKey: string; id: number }>();
+  const handleDiscardSubthreadDraft = useEventCallback((draft: SubthreadLaunchpadDraft) => {
+    const composerOwnsDraft =
+      navigation.selectedItemKey === draft.selectionKey
+      && mainView !== "search"
+      && !threadDetailPending
+      && Boolean(ThreadViewComponent);
+    if (composerOwnsDraft) {
+      setLaunchpadCancelRequest((current) => ({
+        directoryKey: draft.directoryKey,
+        id: (current?.id ?? 0) + 1,
+      }));
+      return;
+    }
+    const scopeKey = `launchpad:${draft.directoryKey}`;
+    const snapshot = composerDraftStore.get(scopeKey);
+    if (snapshot && hasComposerDraftContent(snapshot)) {
+      composerDraftStore.recordHistory?.(scopeKey, snapshot, "abandoned");
+    }
+    composerDraftStore.delete(scopeKey);
+    navigation.discardLaunchpad(draft.directoryKey);
+  });
+  const handleDetachLaunchpadParent = useEventCallback((directoryKey: string) => {
+    navigation.detachSubthreadLaunchpad(directoryKey);
+  });
+  const handleSelectLaunchpadParent = useEventCallback((launchpad: { directoryKey: string }) => {
+    navigation.selectSubthreadLaunchpadParent(launchpad.directoryKey);
+  });
 
   // These event props cross the memoized Composer boundary on every shell update.
   const handleAttachDirectoryReferences = useEventCallback((
@@ -2945,6 +3040,10 @@ function DesktopAppShell(props: {
     const thread = navigation.selectedThread;
     if (thread) await navigation.setThreadPrAutoDispatch(thread, enabled);
   });
+  const handleSetThreadLock = useEventCallback(async (locked: boolean, note?: string) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setThreadLock(thread, locked, note);
+  });
   const handleCancelThreadPrAutoDispatch = useEventCallback(async (
     fingerprint: Parameters<NonNullable<ThreadViewProps["onCancelThreadPrAutoDispatch"]>>[0],
   ) => {
@@ -2959,6 +3058,9 @@ function DesktopAppShell(props: {
   });
 
   const threadViewProps = {
+    onForkThread: navigation.forkThread,
+    onCreateSubthread: navigation.createSubthread,
+    readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
     pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
       (creation) => creation.selectionKey === navigation.selectedItemKey,
     ),
@@ -2988,6 +3090,8 @@ function DesktopAppShell(props: {
       // A remote thread cannot accept input while its owning instance is
       // unreachable — typing would only queue into a dead RPC.
       remoteReadsSuspended ||
+      // A locked thread refuses every turn; its lock card says why.
+      Boolean(navigation.selectedThread?.lock) ||
       !backendSummaries.backends.some(
         (backend) =>
           backend.kind === navigation.selectedThread?.source &&
@@ -3060,6 +3164,7 @@ function DesktopAppShell(props: {
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     launchpadMachine,
+    threadMachine,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
@@ -3157,6 +3262,9 @@ function DesktopAppShell(props: {
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
+    launchpadCancelRequest,
+    onDetachLaunchpadParent: handleDetachLaunchpadParent,
+    onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
     // `@`-references); the hook's 5th is `parentThreadId` (resolved from
     // the launchpad draft internally), so map positions explicitly.
@@ -3187,6 +3295,7 @@ function DesktopAppShell(props: {
     onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
     onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
     onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
+    onSetThreadLock: navigation.selectedThread ? handleSetThreadLock : undefined,
     onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
     onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
@@ -3332,13 +3441,24 @@ function DesktopAppShell(props: {
           inert={layerView !== undefined}
           directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
-          onSelectPendingLaunchpad={(creation) => {
-            navigation.selectPendingLaunchpad(creation.selectionKey);
+          subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
+          onSelectPendingLaunchpad={(entry) => {
+            setMainView("thread");
+            if (isSubthreadLaunchpadDraft(entry)) {
+              navigation.selectDirectoryLaunchpad(entry.directoryKey);
+            } else {
+              navigation.selectPendingLaunchpad(entry.selectionKey);
+            }
+          }}
+          onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
+          onDetachSubthreadDraft={(draft) => {
+            navigation.detachSubthreadLaunchpad(draft.directoryKey);
           }}
           addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}
           selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
@@ -3503,6 +3623,7 @@ function DesktopAppShell(props: {
           }
           onRenameThread={navigation.renameThread}
           onSetThreadReaction={navigation.setThreadReaction}
+          onSetThreadLock={navigation.setThreadLock}
           onSetThreadPin={navigation.setThreadPin}
           onReorderThreadPins={navigation.reorderThreadPins}
           onSetThreadParent={navigation.setThreadParent}
@@ -3636,7 +3757,9 @@ function DesktopAppShell(props: {
                 settings.snapshot?.experimental.markdownMathRendering?.value ?? true
               }
             >
-              <ThreadViewComponent {...threadViewProps} />
+              <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
+                <ThreadViewComponent {...threadViewProps} />
+              </InteractiveSvgPreferencesProvider>
             </MarkdownRenderingOptionsProvider>
           ) : null}
         </main>
@@ -3783,6 +3906,11 @@ function DesktopAppShell(props: {
           onOpenCodexSettings={openCodexSettings}
           onManagedBuildsChange={changeCodexManagedBuilds}
           onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
+        />
+        <CodexLaunchNotice
+          discovery={settings.snapshot?.models?.codex?.discovery}
+          onNoticeChanged={syncCodexLaunchNotice}
+          onOpenCodexSettings={openCodexSettings}
         />
         <CodexRestartNotice
           desktopApi={desktopApi}

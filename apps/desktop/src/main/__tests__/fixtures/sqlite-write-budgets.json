@@ -34,6 +34,7 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "agent-project-mark-read-140-threads": {"commits": 1, "note": "One explicit agent call marks 140 unread owner members across backends in one commit; observed ~0.054 MB/action (~0.54 MB/day at 10 actions), no idle writes", "observedWalBytes": 53560, "rowsChanged": 140, "statements": 140},
   "archive-retention-acp-delete": {
     "commits": 1,
     "note": "One permanent ACP deletion removes one metadata row; no recurring writes.",
@@ -430,11 +431,12 @@
   },
   "mcp-broker-request": {
     "commits": 0,
-    "note": "serve one non-owner MCP broker list request",
+    "note": "serve 100 non-owner MCP broker list requests: read-only, 0 MB/day of SQLite writes",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
   },
+  "mcp-automation-native-consent": {"commits": 0, "note": "Native automation MCP consent checks the in-memory run grant and reads the Agent selection without adding SQLite commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "mcp-gateway-discovery-and-invocation": {
     "commits": 0,
     "note": "Fixed MCP gateway discovery and one scoped approved call use in-memory catalogs and the existing event flow, with no additional SQLite commits.",
@@ -456,6 +458,21 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "messaging-attach-active-turn": {
+    "commits": 9,
+    "note": "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
+    "observedWalBytes": 107120,
+    "rowsChanged": 7,
+    "statements": 9
+  },
+  "messaging-attach-idle-turn": {
+    "commits": 8,
+    "note": "one attachment: binding/status persistence plus one delivery record only for active typing; no new timer or turn-state persistence",
+    "observedWalBytes": 94760,
+    "rowsChanged": 6,
+    "statements": 8
+  },
+  "messaging-attach-waiting-turn": {"commits": 9, "note": "one attachment with a pre-existing pending request: binding/status persistence plus one suspended activity delivery; no new timer or turn-state persistence", "observedWalBytes": 107120, "rowsChanged": 7, "statements": 9},
   "messaging-binding-revoke": {
     "commits": 11,
     "note": "one bus-driven binding revoke including Agent Session close status",
@@ -743,6 +760,7 @@
     "rowsChanged": 2,
     "statements": 3
   },
+  "queued-message-title-helper-row": {"commits": 6, "note": "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200", "observedWalBytes": 255440, "rowsChanged": 12, "statements": 12},
   "queued-scheduled-action-hold": {
     "commits": 1,
     "note": "one queued scheduled action durably held after its preceding turn fails; one boundary transition, not a timer",
@@ -876,6 +894,13 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "thread-lock-toggle": {
+    "commits": 2,
+    "note": "An operator or agent lock and unlock: one commit each, never on a timer or per turn; a redundant unlock writes nothing. 50 toggles/day at ~4 KiB/commit is ~0.4 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "thread-pricing-lazy-repair": {
     "commits": 1,
     "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
@@ -967,6 +992,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "token-miser-retrieval-request": {"commits": 1, "note": "Full cached prompt attribution shares one existing retrieval commit (~5.9 MB/day at one retrieval/minute); zero additional commits or MB/day.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "token-miser-turn-flush": {
     "commits": 1,
     "note": "Flush ten gate counters in one turn-boundary transaction.",

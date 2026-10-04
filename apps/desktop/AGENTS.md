@@ -214,6 +214,49 @@ pnpm dev
   the repo's Electron binary without the PwrAgent app entry/path.** A bare
   Electron launch opens Electron's default shell, not PwrAgent.
 
+## Renderer update diagnostics in release builds
+
+The renderer keeps a 64-entry in-memory history of selected composer, Tiptap,
+context-card, and tooltip update requests. Consecutive identical requests
+coalesce; counters retain totals since renderer startup. These are requests,
+including no-ops, rather than React render or commit counts. Scope labels are
+static composer modes or React-generated tooltip IDs. No draft text, document
+contents, thread IDs, paths, or token usage enter the recorder.
+
+In the Electron DevTools console, inspect:
+
+```js
+window.__pwragentRendererUpdates.snapshot()
+window.__pwragentRendererUpdates.lastError()
+window.__pwragentRendererUpdates.eventNames
+```
+
+`eventNames[event.event]` decodes an event code; `counts` uses the same order.
+`firstMs`, `lastMs`, and `capturedAtMs` are renderer `performance.now()` times.
+Snapshots are detached copies. `lastError()` retains the latest reported
+failure through automatic recovery; a renderer reload clears this history.
+The error boundary captures before failed-tree teardown. The first identical
+global error or unhandled rejection in a one-minute window captures at notification
+time; further notifications increment a count without capture or IPC. One trailing
+timeout, eviction, or teardown flushes the repeat count and timestamps without
+replacing the retained snapshot. Renderer and main summary tables each have 64
+slots with bounded summary strings and fixed-size keys. Explicit recovery reports
+remain immediate. Each admitted renderer window has its own fixed-size ID, used
+by main for summary and detail admission so IPC latency cannot suppress the next
+window's snapshot. Merged repeat batches retain their earliest/latest occurrence
+timestamps. See [../../docs/renderer-recovery.md](../../docs/renderer-recovery.md)
+for the delivery and eviction limits.
+
+Normal recording has no timers, IPC, logging, or database writes. Fixed arrays
+use 1,944 bytes for numeric storage and scope-reference slots, plus JavaScript
+object/string overhead. A reported error also retains one bounded snapshot.
+Main logs `report update diagnostics` as a separate JSON string, capped at
+8 KiB, associated with the existing `stackId`. Identical fault details are
+budgeted by their renderer reporting window; reports without window metadata use
+main's one-minute interval. The log includes event names and the number of
+entries omitted to meet the limit. This history covers the instrumented edges;
+it does not identify every React setter or prove which request caused a loop.
+
 ## Profiling the Renderer with React DevTools
 
 Nothing in the app connects React DevTools on its own. Two opt-in env vars,
@@ -760,13 +803,16 @@ Things to know when extending the audit:
   seeder writing a row nothing reads would leave the audit green while it
   scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
   pins the round-trip in vitest.
-- **Every surface is audited in both themes.** The file wraps its
-  `describe` in `for (const theme of AUDIT_THEMES)` and threads the theme
-  into `launchAuditApp({ theme })`, so a new block is gated in light and
-  dark for free. This matters because contrast is the one rule class that
-  is genuinely theme-dependent — roles, names, and focus order are not.
-  The gate ran dark-only for its whole life, which is how three
-  token-level light-theme contrast failures shipped unnoticed.
+- **Every surface is audited in every color theme.** The file wraps its
+  `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
+  light pair plus each other dark theme in the dark scheme and each light
+  theme in the light scheme. It threads that appearance into
+  `launchAuditApp(appearance)`, so a new block is gated in all of them for
+  free. This matters because contrast is the one rule class that is
+  genuinely theme-dependent — roles, names, and focus order are not. The
+  gate ran dark-only for its whole life, which is how three token-level
+  light-theme contrast failures shipped unnoticed. Add a new color theme to
+  `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
 - **`runAxe(window, { include })` narrows the scan to one subtree.** No
   block passes it today, and it is not a tool for silencing a failure —
   everything outside the scope stops being gated. Prefer a
@@ -803,8 +849,8 @@ pnpm --filter @pwragent/desktop exec playwright test \
   -c playwright.config.ts e2e/a11y.spec.ts
 ```
 
-(The package's `test:e2e` script does a full Electron rebuild + Vite
-build first; the `playwright test` form above skips that when you've
+(The package's `test:e2e` script checks the Electron runtime and runs a
+Vite build first; the `playwright test` form above skips that when you've
 already built once.)
 
 ### Modal dialogs and overlays
@@ -1459,13 +1505,19 @@ budget is a record of what a path costs, not permission for it to cost that.
   windows and profiles.
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
-- For tooltips inside clipped or layered surfaces (sidebar, scroll regions,
-  overflow-hidden chips, draggable rails, or anything that must escape the
-  left bar), use `src/renderer/src/lib/useViewportTooltip.tsx` with the
-  shared `.viewport-tooltip` class. CSS pseudo-element tooltips
-  (`tooltip-target` + `data-tooltip`) are only for elements whose ancestors
-  all render with `overflow: visible`; otherwise they get clipped or lose
-  z-order fights against the main surface.
+- Every tooltip is a portal on `document.body`. A plain-text tooltip is
+  `className="tooltip-target"` plus `data-tooltip={text}`:
+  [`DataTooltipLayer`](src/renderer/src/lib/DataTooltipLayer.tsx), mounted
+  once in `main.tsx`, draws it for every window. That works inside any
+  clipping pane and beside the sidebar. Anything richer (a `ReactNode`, a
+  card class, a hover delay, pointer-following placement) uses
+  `src/renderer/src/lib/useViewportTooltip.tsx` with the shared
+  `.viewport-tooltip` class. Never draw a tooltip with `::after` /
+  `content: attr(…)`: a pseudo-element is clipped by its pane and capped by
+  its stacking context. The composer's tooltips kept going under the left
+  bar until the declarative path moved onto the portal. When a tooltip is
+  clipped or buried, fix the layer it renders in. Do not move one
+  tooltip's x or raise one control's z-index.
   - **Structured hover cards pass their own class instead of
     `.viewport-tooltip`.** The hook takes a `ReactNode`, so a card with
     sections and meters (`.context-usage-card`, `.pr-status-card`) styles

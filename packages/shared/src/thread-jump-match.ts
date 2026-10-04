@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "./contracts/navigation";
+import { textMatchesJumpQuery } from "./jump-search-text";
 
 /** Metadata needed to match or reference a row; never action/config authority. */
 export type ThreadJumpCandidate = Pick<NavigationThreadSummary,
@@ -81,7 +82,8 @@ export function agentMetadataMatchesQuery(
 /**
  * Relevance test for the thread-list quick jump (⌘K): matches title, Agent
  * metadata, thread id, linked PR number, git branch, and linked-directory
- * label/path. PR numbers match with or without the leading "#"; thread ids only
+ * label/path, including word-prefix abbreviations. PR numbers match with or
+ * without the leading "#"; thread ids only
  * match sufficiently deliberate UUID-like fragments or longer pasted ids.
  *
  * Shared between the renderer (instant local filtering) and the main process
@@ -96,7 +98,7 @@ export function threadMatchesQuery(
   if (!needle) {
     return false;
   }
-  if (thread.title.toLowerCase().includes(needle)) {
+  if (textMatchesJumpQuery(thread.title, needle)) {
     return true;
   }
   if (agentMetadataMatchesQuery(thread, needle)) {
@@ -105,7 +107,7 @@ export function threadMatchesQuery(
   if (threadIdMatchesQuery(thread.id, needle)) {
     return true;
   }
-  if ((thread.gitBranch ?? "").toLowerCase().includes(needle)) {
+  if (textMatchesJumpQuery(thread.gitBranch, needle)) {
     return true;
   }
   const bareNeedle = needle.replace(/^#/, "");
@@ -117,7 +119,7 @@ export function threadMatchesQuery(
   }
   return (thread.linkedDirectories ?? []).some((directory) =>
     [directory.label, directory.path, directory.worktreePath]
-      .some((value) => value?.toLowerCase().includes(needle)),
+      .some((value) => textMatchesJumpQuery(value, needle)),
   );
 }
 

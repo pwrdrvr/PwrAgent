@@ -3,8 +3,36 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import type {
+  PendingLaunchpadCreation,
+  SubthreadLaunchpadDraft,
+} from "../../lib/useThreadNavigation";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
+
+/**
+ * A row a list draws before its thread exists: a sub-thread still being
+ * written, or a thread still starting. Both carry the keys that place them.
+ */
+export type PendingSidebarRow = PendingLaunchpadCreation | SubthreadLaunchpadDraft;
+
+export function isSubthreadLaunchpadDraft(
+  entry: PendingSidebarRow,
+): entry is SubthreadLaunchpadDraft {
+  return "kind" in entry && entry.kind === "subthread-draft";
+}
+
+/**
+ * The title a pending row shows: the first line of what was typed. The draft
+ * row and the starting row that replaces it both use it, so sending does not
+ * rename the row.
+ */
+export function pendingThreadTitleLine(text: string | undefined): string {
+  for (const line of text?.split("\n") ?? []) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
 
 /**
  * A thread that has been submitted but does not exist yet, drawn in the row
@@ -37,7 +65,7 @@ export function StartingThreadRow(props: {
   onSelect?: (creation: PendingLaunchpadCreation) => void;
 }) {
   const { creation } = props;
-  const title = creation.title || "New thread";
+  const title = pendingThreadTitleLine(creation.title) || "New thread";
   const worktree = creation.launchpad.workMode === "worktree";
   const branchName = creation.launchpad.branchName?.trim();
   const nested = props.nestedDepth !== undefined;
@@ -126,10 +154,10 @@ export function StartingThreadRow(props: {
  * Starting rows whose thread has not landed in this list yet. Once the real
  * row is here it holds the slot, and drawing both would show the thread twice.
  */
-export function selectUnlandedStartingThreads(
-  creations: readonly PendingLaunchpadCreation[] | undefined,
+export function selectUnlandedStartingThreads<Entry extends PendingSidebarRow>(
+  creations: readonly Entry[] | undefined,
   renderedThreadKeys: { has: (threadKey: string) => boolean },
-): PendingLaunchpadCreation[] {
+): Entry[] {
   return (creations ?? []).filter(
     (creation) => !creation.threadKey || !renderedThreadKeys.has(creation.threadKey),
   );
@@ -137,10 +165,11 @@ export function selectUnlandedStartingThreads(
 
 export type StartingTrayEntry =
   | { kind: "thread"; thread: NavigationThreadSummary }
-  | { kind: "starting"; creation: PendingLaunchpadCreation; depth: number };
+  | { kind: "starting"; creation: PendingSidebarRow; depth: number };
 
 /**
  * Interleave starting sub-threads into a tray where their threads will land.
+ * A sub-thread draft takes the same slot as the starting row it becomes.
  *
  * A sub-thread launchpad inserts its new child directly below the card that
  * opened it (`insertSubthreadIdAfter`): below the source child and its own
@@ -152,7 +181,7 @@ export function interleaveStartingSubthreads(params: {
   trayKey: string;
   subtree: readonly NavigationThreadSummary[];
   depthOf: (threadKey: string) => number;
-  creations: readonly PendingLaunchpadCreation[];
+  creations: readonly PendingSidebarRow[];
 }): StartingTrayEntry[] {
   const entries: StartingTrayEntry[] = params.subtree.map((thread) => ({ kind: "thread", thread }));
   const keyOf = (entry: StartingTrayEntry): string | undefined =>

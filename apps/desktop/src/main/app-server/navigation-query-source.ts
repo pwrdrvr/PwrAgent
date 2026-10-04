@@ -46,7 +46,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor cost other readers a retry.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    overlayStore.readNavigationSourceVersion?.(), ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+    ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+  const version = overlayStore.readNavigationSourceVersion?.();
   let subscribed = false;
   return indexReads.read(key, async (signal) => {
     // An event during a scan makes its result stale. The read pool shares one
@@ -67,7 +68,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return index;
-  }, params.signal);
+  }, params.signal, version);
 }
 
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");

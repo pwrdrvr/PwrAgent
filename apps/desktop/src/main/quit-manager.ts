@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app } from "electron";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
@@ -50,6 +50,8 @@ export type QuitRequestSource =
 
 export type RequestQuitOptions = {
   performQuit?: () => void;
+  /** Authorize an update after confirmation, before committing shutdown. */
+  beforeQuit?: () => boolean;
   source: QuitRequestSource;
 };
 
@@ -72,7 +74,6 @@ export type QuitManagerDependencies = {
     terminalSessionCount: number;
     actionRunCount?: number;
     items?: QuitBlockerItem[];
-    parent?: BrowserWindow | null;
     refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
   }) => Promise<QuitConfirmationDialogResult>;
   /**
@@ -85,7 +86,6 @@ export type QuitManagerDependencies = {
   cancelShutdown?: () => void;
   commitShutdown?: () => void;
   getConfirmationEnabled: () => boolean;
-  getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
   /** Hold new automation launches until quitting proceeds or the prompt closes. */
   quiesceAutomationDispatch?: () => () => Promise<void> | void;
@@ -117,6 +117,7 @@ export function createQuitManager(
   dependencies: QuitManagerDependencies,
 ): QuitManager {
   let quitAllowed = false;
+  let pendingBeforeQuit: (() => boolean) | undefined;
   let pendingPerformQuit: (() => void) | undefined;
   let promptPromise: Promise<boolean> | undefined;
   let activePromptId = 0;
@@ -137,6 +138,7 @@ export function createQuitManager(
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
     if (quitAllowed) {
+      if (options.beforeQuit && !options.beforeQuit()) return false;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
     }
@@ -147,6 +149,7 @@ export function createQuitManager(
       dependencies.log.info?.("quit requested with no active work", {
         source: options.source,
       });
+      if (options.beforeQuit && !options.beforeQuit()) return false;
       quitAllowed = true;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
@@ -165,6 +168,7 @@ export function createQuitManager(
           threadIds: snapshot.threadIds,
         },
       );
+      if (options.beforeQuit && !options.beforeQuit()) return false;
       quitAllowed = true;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
@@ -173,6 +177,7 @@ export function createQuitManager(
     if (promptPromise) {
       if (options.performQuit) {
         pendingPerformQuit = options.performQuit;
+        pendingBeforeQuit = options.beforeQuit;
       }
       // Asking again has to do *something*. Any deliberate interaction with the
       // prompt — a click, a scroll, a keystroke — cancels its countdown for
@@ -200,6 +205,7 @@ export function createQuitManager(
     });
 
     pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
+    pendingBeforeQuit = options.beforeQuit;
     const promptId = nextPromptId + 1;
     nextPromptId = promptId;
     activePromptId = promptId;
@@ -231,7 +237,6 @@ export function createQuitManager(
           terminalSessionCount: snapshot.terminalSessionCount,
           actionRunCount: snapshot.actionRunCount,
           items,
-          parent: dependencies.getFocusedWindow?.(),
           refresh: async () =>
             await buildQuitConfirmationSnapshot(
               dependencies.getQuitBlockers(),
@@ -239,8 +244,13 @@ export function createQuitManager(
               dependencies.log,
             ),
         });
+        if (resolution !== "manual-cancel" && pendingBeforeQuit && !pendingBeforeQuit()) {
+          resolution = "manual-cancel";
+        }
       } catch (error) {
         dependencies.cancelShutdown?.();
+        pendingBeforeQuit = undefined;
+        pendingPerformQuit = undefined;
         clearPrompt();
         resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         throw error;
@@ -258,6 +268,7 @@ export function createQuitManager(
       if (resolution === "manual-cancel") {
         dependencies.cancelShutdown?.();
         pendingPerformQuit = undefined;
+        pendingBeforeQuit = undefined;
         // The dialog is already gone. Release this prompt before gates and
         // backend submissions resume so a new quit request can open a visible
         // confirmation instead of joining work nobody can see.
@@ -269,6 +280,7 @@ export function createQuitManager(
       quitAllowed = true;
       (pendingPerformQuit ?? dependencies.performQuit)();
       pendingPerformQuit = undefined;
+      pendingBeforeQuit = undefined;
       return true;
     })();
     promptPromise = currentPrompt;
@@ -671,7 +683,6 @@ export const appQuitManager = createQuitManager({
   focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
-  getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
   getQuitBlockers: getCurrentQuitBlockers,
   quiesceAutomationDispatch: () =>
     getDesktopAutomationService().quiesceDispatch(),

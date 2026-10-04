@@ -1,7 +1,7 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
-import { NativeVoiceBar, NativeVoiceToggle, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
-import { DirectorVoiceComposerToggle } from "../native-voice/DirectorVoice";
+import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   attachedPullRequestsForWorkspace,
@@ -23,7 +23,7 @@ import {
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
-import { QueuedMessageInspector } from "./QueuedMessageInspector";
+import { QueuedMessageInspector, QueuedRowIconButton } from "./QueuedMessageInspector";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
@@ -80,10 +80,12 @@ import {
   federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
+  isSubthreadLaunchpadKey,
   normalizeGitOriginUrl,
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -94,12 +96,15 @@ import {
   FolderIcon,
   LightningIcon,
   MoreVerticalIcon,
+  PencilIcon,
   PlanIcon,
   PlayIcon,
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
+  SubthreadIcon,
   ThreadIcon,
+  TrashIcon,
   CelestialIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -204,9 +209,17 @@ import {
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
+import {
+  forkCommandCompletion,
+  forkCommandHint,
+  parseForkCommand,
+  type ComposerForkCommand,
+} from "./composer-fork-command";
+import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
 import { ProjectPicker } from "./ProjectPicker";
@@ -242,10 +255,12 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
+import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
+import { useComposerTip } from "./useComposerTip";
 
-type ComposerProps = {
+export type ComposerProps = {
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
@@ -299,6 +314,13 @@ type ComposerProps = {
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
+  /**
+   * Where the machine chip renders instead of the settings row. ThreadView
+   * puts it in the title rail, where the thread header names the machine
+   * after creation, so starting a thread neither moves the chip nor changes
+   * the composer's height. `null` while that slot is mounting.
+   */
+  launchpadMachineChipHost?: HTMLElement | null;
   launchpadError?: string;
   launchpadConfigurationError?: string;
   onReloadLaunchpadConfiguration?: () => Promise<void>;
@@ -329,6 +351,16 @@ type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  /**
+   * Cancel this launchpad as its Cancel button does, asked from outside the
+   * composer (a sub-thread draft row's menu). The composer must run it: its
+   * unmount would otherwise save the draft it still holds back to the store.
+   */
+  launchpadCancelRequest?: { directoryKey: string; id: number };
+  /** The source row's ×: start this sub-thread as an ordinary thread. */
+  onDetachLaunchpadParent?: (directoryKey: string) => void;
+  /** The source row's parent title: open the parent, keep this draft. */
+  onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onMoveEnvActionsToSidebar?: () => void;
   onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
   onStopEnvActionRun?: (
@@ -337,6 +369,8 @@ type ComposerProps = {
   ) => void;
   hiddenEnvActionRunIds?: ReadonlySet<string>;
   showEnvActionAnchors?: boolean;
+  /** Environment setup progress or failure, as a row in the band. */
+  environmentSetup?: EnvironmentSetupRowModel;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   /**
@@ -346,6 +380,15 @@ type ComposerProps = {
    */
   onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   onRefreshNavigation?: () => Promise<void>;
+  onForkThread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<boolean>;
+  onCreateSubthread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<boolean>;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
   /** Token Miser experiment availability gate. */
@@ -420,6 +463,8 @@ type ComposerProps = {
   >;
   onClearPickDirectoryError?: () => void;
   onShowMcpInventory?: (detail: CodexMcpInventoryDetail) => void;
+  /** `/lock [note]`: locks this thread. Rejects with the error to show. */
+  onLockThread?: (note: string) => Promise<void>;
   onShowMcpAccess?: () => void;
   /** Managed connections this thread has selected, for the composer badge. */
   mcpConnectionCount?: number;
@@ -620,6 +665,7 @@ type QueuedTurnDraft = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  title?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -847,6 +893,32 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
     sourceLabel: "PwrAgent",
   },
 ];
+
+// One plain entry: the parameters are taught by the muted hint the input draws
+// after "/fork ", not by a row per flag combination.
+const FORK_SLASH_COMMAND: SlashCommandSuggestion = {
+  id: "fork",
+  label: "/fork",
+  insertText: "/fork",
+  description: "Fork a new child thread, with or without history",
+  source: "pwragent",
+  sourceLabel: "PwrAgent",
+};
+
+const LOCK_SLASH_COMMAND: SlashCommandSuggestion = {
+  id: "thread-lock",
+  label: "/lock",
+  insertText: "/lock",
+  description: "Lock this thread, with an optional note on why",
+  source: "pwragent",
+  sourceLabel: "PwrAgent",
+};
+
+/** The note of a `/lock [note]` draft, or undefined for any other draft. */
+function parseLockCommandNote(draft: string): string | undefined {
+  const match = /^\/lock(?:\s+([\s\S]*))?$/i.exec(draft.trim());
+  return match ? match[1] ?? "" : undefined;
+}
 
 const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -1382,9 +1454,24 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
 
 function QueuedImageAttachments(props: {
   attachments: ComposerImageAttachment[];
+  /** One thumbnail and a count, for a row that must stay one line tall. */
+  chip?: boolean;
 }): ReactNode {
   if (props.attachments.length === 0) {
     return null;
+  }
+
+  if (props.chip) {
+    const first = props.attachments[0]!;
+    return (
+      <span
+        className="composer__queued-image-chip"
+        aria-label={`Queued image attachments: ${props.attachments.length}`}
+      >
+        <img src={first.url} alt={formatPastedImageAlt(first, 0)} />
+        {props.attachments.length > 1 ? props.attachments.length : null}
+      </span>
+    );
   }
 
   const visibleAttachments = props.attachments.slice(0, 3);
@@ -1462,7 +1549,11 @@ export function EnvActionAnchorList(props: {
   onMoveToSidebar?: () => void;
   onStopRun?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
 }): ReactNode {
-  const runs = readCodexEnvironmentActionRuns(props.runtime);
+  // Superseded first, then dismissed: dismissing the newest result must not
+  // bring back the one it replaced.
+  const runs = withoutSupersededCodexEnvironmentActionRuns(
+    readCodexEnvironmentActionRuns(props.runtime),
+  );
   const visible = runs.filter((run) => {
     if (props.hiddenRunIds?.has(run.runId)) return false;
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
@@ -2773,17 +2864,9 @@ function ComposerApplicationButton(props: {
 
 export const Composer = memo(function Composer(props: ComposerProps) {
   const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
-  // Thread voice talks to a local Codex thread; every other composer still
-  // mounts the bar so a failed stop can be retried wherever the window lands.
-  const {
-    threadId: nativeVoiceThreadId,
-    directorHint: nativeVoiceDirectorHint,
-  } = threadVoiceTarget(props.thread, props.launchpad);
-  // Director voice runs only in a local main window, where the Voice manager
-  // and the published focus live.
-  const directorVoiceApi = nativeVoiceApi?.openVoiceManager && !readRendererFederationTarget()
-    ? nativeVoiceApi
-    : undefined;
+  // Composer voice entry points stay hidden until dictation can edit only the
+  // draft. Keep the bar so an already-open session or failed stop can be ended.
+  const { threadId: nativeVoiceThreadId } = threadVoiceTarget(props.thread, props.launchpad);
   const threadLinks = useThreadLinks();
   const pullRequestLinks = usePullRequestLinks();
   const rendererFederationTarget = readRendererFederationTarget();
@@ -2802,6 +2885,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const terminalTurnKeysRef = useRef(new Set<string>());
+  // Queued rows with an owner-side Edit or Delete in flight. A second click
+  // would cancel an entry the first already took and report it as no longer
+  // waiting.
+  const queuedRowActionIdsRef = useRef(new Set<string>());
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -3069,8 +3156,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const setSendError = useCallback((message?: string) => {
     setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
   }, []);
+  const [forkingScopeKey, setForkingScopeKey] = useState<string>();
+  const forking = forkingScopeKey === composerScopeKey;
+  const forkSubmissionInFlightRef = useRef(false);
   const [agentThreadError, setAgentThreadError] = useState<string>();
-  const [environmentError, setEnvironmentError] = useState<string>();
+  // `selectedEnvironmentId` marks a failed environment selection, so the
+  // setup row can claim the one failure it already reports.
+  const [environmentError, setEnvironmentError] = useState<{
+    message: string;
+    selectedEnvironmentId?: string;
+  }>();
+  const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
@@ -3135,6 +3231,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   useEffect(() => {
     setAgentThreadError(undefined);
     setEnvironmentError(undefined);
+    setEnvironmentSetupRetrying(false);
     setAgentThreadSaving(false);
   }, [composerScopeKey]);
 
@@ -3239,10 +3336,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       );
     })
   );
+  const supportsForkCommand = Boolean(
+    !isLaunchpad
+    && props.thread
+    && backend?.capabilities.forkThread
+    && props.onForkThread,
+  );
+  const supportsSubthreadCommand = Boolean(
+    !isLaunchpad && props.thread && props.onCreateSubthread,
+  );
   const supportsMcpInventory =
     !isLaunchpad
     && props.thread?.source === "codex"
     && Boolean(props.onShowMcpInventory);
+  // No `/unlock`: a locked thread's composer is disabled, and its lock card
+  // carries Unlock.
+  const supportsLockCommand =
+    !isLaunchpad
+    && Boolean(props.thread)
+    && Boolean(props.onLockThread)
+    // A peer's thread locks only where the owner grants turn control, as in
+    // the sidebar's menu.
+    && (props.thread?.federation?.capabilities?.includes("turn_control") ?? true);
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -4386,6 +4501,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return "failed";
     }
   };
+  /** Runs one owner-side Edit or Delete per row; a click while one runs is dropped. */
+  const runQueuedRowAction = async (
+    queued: QueuedTurnDraft,
+    action: () => Promise<void>,
+  ): Promise<void> => {
+    const inFlight = queuedRowActionIdsRef.current;
+    if (inFlight.has(queued.id)) return;
+    inFlight.add(queued.id);
+    try {
+      await action();
+    } finally {
+      inFlight.delete(queued.id);
+    }
+  };
   const acknowledgeQueuedFailure = (queued: QueuedTurnDraft): void => {
     turnFailureAcknowledgements.dismissMatching(failureScope, queued.holdReason ?? queued.errorMessage);
   };
@@ -4682,12 +4811,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (supportsMcpInventory) {
       localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
     }
+    if (supportsForkCommand || supportsSubthreadCommand) {
+      localCommands.push(FORK_SLASH_COMMAND);
+    }
+    if (supportsLockCommand) {
+      localCommands.push(LOCK_SLASH_COMMAND);
+    }
     return [...localCommands, ...commands];
   }, [
     props.backends,
     props.providerCommands,
+    supportsLockCommand,
     supportsMcpInventory,
     supportsReview,
+    supportsForkCommand,
+    supportsSubthreadCommand,
   ]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {
@@ -4982,6 +5120,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
+  // Only a composer that can act on /fork claims it. A launchpad, or a host
+  // that wires no fork action, sends "/fork …" on as ordinary text.
+  const forkCommand = supportsForkCommand || supportsSubthreadCommand
+    ? parseForkCommand(draft)
+    : undefined;
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
@@ -4989,6 +5132,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : supportsMcpInventory && draft.trim().toLowerCase() === "/mcp verbose"
         ? "full"
         : undefined;
+  const lockCommandNote = supportsLockCommand
+    ? parseLockCommandNote(draft)
+    : undefined;
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
@@ -5166,7 +5312,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       // Nothing to load into it. Returning to a starting thread that holds
       // a follow-up swaps content, which needs the remount.
       && !draftStore.hasDraftContent(composerScopeKey);
-    if (!followsSubmission) {
+    // The second exception: the launchpad this editor was typing into just
+    // became its thread, and `handoffLaunchpadComposer` already moved the
+    // draft to the thread's scope. The editor goes with it. A rebuild would
+    // drop the caret and any keys typed while the new editor mounted.
+    const followsMaterialization =
+      Boolean(props.thread)
+      && resolveLaunchpadComposerScope(draftStore, previousScopeKey)
+        === composerScopeKey;
+    if (!followsSubmission && !followsMaterialization) {
       setEditorScopeKey((mounted) =>
         mounted === composerScopeKey
           ? `${composerScopeKey}#${++editorRemountSequenceRef.current}`
@@ -5513,6 +5667,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? (event.notification.params as {
               displayText?: unknown;
               inputUpdated?: unknown;
+              title?: unknown;
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
               queueEntryId?: unknown;
@@ -5551,6 +5706,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           && typeof turnQueueRecord.errorMessage === "string"
             ? turnQueueRecord.errorMessage
             : undefined;
+        const title =
+          typeof turnQueueRecord.title === "string" && turnQueueRecord.title
+            ? turnQueueRecord.title
+            : undefined;
         if (matchingIndex >= 0) {
           const next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
@@ -5560,6 +5719,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     && typeof turnQueueRecord.displayText === "string"
                     ? { text: turnQueueRecord.displayText }
                     : {}),
+                  // An input edit retires the old title; a title refresh
+                  // brings the new one. Admission events carry neither.
+                  ...(title
+                    ? { title }
+                    : turnQueueRecord.inputUpdated === true
+                      ? { title: undefined }
+                      : {}),
                   manualReleaseRequired,
                   holdReason,
                 }
@@ -5575,6 +5741,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
               manualReleaseRequired,
               holdReason,
+              ...(title ? { title } : {}),
               text:
                 typeof turnQueueRecord.displayText === "string"
                   ? turnQueueRecord.displayText
@@ -6206,6 +6373,63 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   };
 
+  const submitForkCommand = async (command: ComposerForkCommand): Promise<void> => {
+    if (props.disabled || forkSubmissionInFlightRef.current) return;
+    if (command.error) {
+      setSendError(command.error);
+      return;
+    }
+    if (imageAttachments.length > 0 || fileAttachments.length > 0 || skillTokens.length > 0) {
+      setSendError("/fork does not accept attachments or skill references.");
+      return;
+    }
+    const thread = props.thread;
+    const action = command.noHistory ? props.onCreateSubthread : props.onForkThread;
+    if (!thread || isLaunchpad || !action) {
+      setSendError("/fork is only available in an existing thread.");
+      return;
+    }
+    if (!command.noHistory && !supportsForkCommand) {
+      setSendError("This provider cannot fork history. Use /fork --no-history to start a sub-thread.");
+      return;
+    }
+
+    const submittedScopeKey = composerScopeKey;
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    forkSubmissionInFlightRef.current = true;
+    setForkingScopeKey(submittedScopeKey);
+    setSendError(undefined);
+    try {
+      const mode: ThreadWorkspaceMode = command.worktree === "new"
+        ? "new-worktree"
+        : thread.linkedDirectories.some((directory) => directory.kind === "worktree")
+          ? "same-worktree"
+          : "local";
+      if (mode === "new-worktree"
+        && !await props.readThreadWorktreeAvailability?.(thread)) {
+        if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+          setSendError("This thread cannot create a new worktree. Use /fork --wt same.");
+        }
+        return;
+      }
+      if (!await action(thread, mode)) return;
+      recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
+      // Navigation may already have selected the child; clear only the source draft.
+      if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+        resetComposerDraftAndState(submittedScopeKey);
+      } else {
+        clearComposerDraftSnapshot(submittedScopeKey);
+      }
+    } catch (error) {
+      if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      forkSubmissionInFlightRef.current = false;
+      setForkingScopeKey(undefined);
+    }
+  };
+
   const showMcpInventory = (detail: CodexMcpInventoryDetail): void => {
     if (imageAttachments.length > 0 || fileAttachments.length > 0) {
       setSendError("/mcp does not accept attachments.");
@@ -6216,6 +6440,34 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
+    consumeLocalCommandDraft();
+    props.onShowMcpInventory(detail);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /** Lock this thread from `/lock [note]`; the draft clears once it holds. */
+  const lockThreadFromCommand = async (note: string): Promise<void> => {
+    if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+      setSendError("/lock does not accept attachments.");
+      return;
+    }
+    if (!props.onLockThread) {
+      setSendError("Locking is not available for this thread.");
+      return;
+    }
+    try {
+      await props.onLockThread(note);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    // Cleared only after the lock holds: a refused lock keeps the note to
+    // retry, and a held one must not reappear as a draft after unlock.
+    consumeLocalCommandDraft();
+  };
+
+  /** Clears a local command's draft and records it in draft history as sent. */
+  const consumeLocalCommandDraft = (): void => {
     const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     const emptySnapshot = createEmptyComposerDraftSnapshot();
@@ -6240,8 +6492,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
     setSendError(undefined);
     recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
-    props.onShowMcpInventory(detail);
-    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   /**
@@ -7992,6 +8242,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     mode: "default" | "steer" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
+    if (forkCommand) {
+      await submitForkCommand(forkCommand);
+      return;
+    }
     const reviewCommand = parsedReviewCommand;
     if (turnPayloadPreparationInFlightRef.current || sendPreparationRef.current) {
       return;
@@ -8043,6 +8297,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (mcpInventoryDetail) {
       showMcpInventory(mcpInventoryDetail);
+      return;
+    }
+    if (lockCommandNote !== undefined) {
+      await lockThreadFromCommand(lockCommandNote);
       return;
     }
 
@@ -8427,7 +8685,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (shouldQueueThreadSubmit()) {
+    if (command.id !== FORK_SLASH_COMMAND.id && shouldQueueThreadSubmit()) {
       void queueCurrentDraft();
       return;
     }
@@ -8498,7 +8756,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const applyDirectoryReference = (
-    directory: Pick<NavigationDirectorySummary, "label" | "path"> & { kind?: string },
+    directory: Pick<NavigationDirectorySummary, "label" | "path"> & {
+      kind?: string;
+      shortLabel?: string;
+    },
   ): void => {
     if (!inputRef.current) {
       return;
@@ -9605,7 +9866,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (!actionStarted) {
         clearThreadEnvActionStarting(startingKey);
       }
-      setEnvironmentError(error instanceof Error ? error.message : String(error));
+      setEnvironmentError({
+        message: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       props.onPendingStatusChange?.(undefined);
     }
@@ -9636,7 +9899,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         actionId,
       });
     } catch (error) {
-      setEnvironmentError(error instanceof Error ? error.message : String(error));
+      setEnvironmentError({
+        message: error instanceof Error ? error.message : String(error),
+        selectedEnvironmentId: environmentId,
+      });
     } finally {
       props.onPendingStatusChange?.(undefined);
     }
@@ -9929,6 +10195,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
   const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
+  // A launchpad with a parent starts a sub-thread. Detaching clears the
+  // parent, and the copy goes back to a plain new thread.
+  const subthreadParentTitle = isLaunchpad && props.launchpad?.parentThreadId
+    ? props.launchpad.parentThreadTitle || props.launchpad.parentThreadId
+    : undefined;
+  // A Discard asked from outside, run as the Cancel button runs it. Each
+  // request runs once, and only against the launchpad it names.
+  const handledLaunchpadCancelRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.launchpadCancelRequest;
+    if (!request || handledLaunchpadCancelRequestIdRef.current === request.id) {
+      return;
+    }
+    handledLaunchpadCancelRequestIdRef.current = request.id;
+    if (
+      !props.launchpad
+      || props.launchpad.directoryKey !== request.directoryKey
+      || launchpadSubmitting
+    ) {
+      return;
+    }
+    abandonComposerDraftSnapshot(composerScopeKey);
+    props.onCancelLaunchpad?.(request.directoryKey);
+  }, [props.launchpadCancelRequest]);
   const fiveHourResetAt = getFiveHourRateLimitResetAt({
     backend,
     now: scheduleNow,
@@ -9952,6 +10242,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : []),
   ];
   const sendButtonDisabled =
+    forking ||
     preparingSend ||
     props.disabled ||
     steering ||
@@ -9964,7 +10255,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     launchpadSubmitting ||
     (!props.thread && !props.launchpad) ||
     Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
-    isCompactCommand;
+    isCompactCommand || Boolean(forkCommand) ||
+    lockCommandNote !== undefined;
   // Only surface the schedule caret where scheduling actually applies. In the
   // compact command or a thread-less composer there is nothing to schedule,
   // so the split collapses to a plain Send pill instead of parking a
@@ -9975,7 +10267,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(
       props.thread
       || (props.launchpad && props.onMaterializeLaunchpad)
-    ) && !isCompactCommand;
+    ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
   // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
   // a checkable toggle between the caret and Send rather than hijacking the
   // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
@@ -9990,7 +10282,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const effectiveScheduledSendAt = scheduleArmed
     ? futureScheduledDraftSendAt
     : undefined;
-  const submitButtonLabel = preparingSend
+  const turnSubmitButtonLabel = preparingSend
     ? "Preparing…"
     : launchpadSubmitting ||
       activeTurnId ||
@@ -10004,8 +10296,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ? "Starting…"
             : "Sending…"
           : props.launchpad
-            ? "Start thread"
+            ? subthreadParentTitle ? "Start sub-thread" : "Start thread"
             : "Send";
+  const submitButtonLabel = forking
+    ? "Forking…"
+    : forkCommand
+      ? "Fork"
+      : turnSubmitButtonLabel;
+  // The command menu owns the "/fork" row until it closes; after that the
+  // input draws the parameters still available as muted text after the caret.
+  const forkInlineHint =
+    (supportsForkCommand || supportsSubthreadCommand)
+    && autocompleteKind !== "slash"
+    && !forking
+      ? forkCommandHint(draft)
+      : undefined;
+  const forkInlineCompletion = forkInlineHint
+    ? forkCommandCompletion(draft)
+    : undefined;
+  // Queue is the primary mid-turn; the steer chord is its keyboard-only
+  // sibling, so the button is where it gets named.
+  const submitButtonSteerHint =
+    submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
+  const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -10531,23 +10844,31 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // durable text and attachments while federation reconnects.
   const composerDisabled = false;
   const launchpadMachine = props.launchpadMachine;
+  const launchpadMachineChipHost = props.launchpadMachineChipHost;
+  const renderLaunchpadMachineChip = (chip: ReactNode): ReactNode =>
+    launchpadMachineChipHost ? createPortal(chip, launchpadMachineChipHost) : chip;
   const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
     ? launchpadMachine.targets.find(
       (target) => target.instanceId === launchpadMachine.currentInstanceId,
     )?.label ?? launchpadMachine.currentInstanceId
     : undefined;
+  // The reply box doubles as a place to teach one feature at a time.
+  const composerTip = useComposerTip(isLaunchpad ? undefined : composerScopeKey, draft.length === 0);
   const composerPlaceholder = launchpadSubmitting
     ? "Queue a follow-up while this thread starts"
     : isLaunchpad
-    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}${
+    ? `${subthreadParentTitle
+      ? `Start a sub-thread of ${subthreadParentTitle}`
+      : `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`}${
       launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
     }`
-    : "Reply to this thread";
+    : composerTip ?? "Reply to this thread";
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
     metadata?: ComposerInputChangeMetadata,
   ): void => {
+    recordRendererUpdate(RendererUpdateEvent.composerChange, isLaunchpad ? "new-thread" : "reply");
     if (!recoveringDraftRef.current) {
       recoveryCycleRef.current = undefined;
       recoveryEligibilityVersionRef.current += 1;
@@ -10683,7 +11004,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        void submitTurn(event.metaKey ? "steer" : "default", {
+        void submitTurn(isSteerShortcut(event) ? "steer" : "default", {
           restoreComposerFocus: true,
         });
       }
@@ -10972,6 +11293,45 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : null;
 
 
+  const environmentSetup = props.environmentSetup;
+  const environmentSetupRetryId =
+    environmentSetup?.status === "failed" && environmentSetup.phase === "setup"
+      ? environmentSetup.environmentId
+      : undefined;
+  const environmentSetupRow = environmentSetup ? (
+    <EnvironmentSetupRow
+      key={environmentSetup.key}
+      desktopApi={props.desktopApi}
+      model={{
+        ...environmentSetup,
+        onDismiss: environmentSetup.onDismiss
+          ? () => {
+              if (
+                environmentError?.selectedEnvironmentId
+                === environmentSetup.environmentId
+              ) {
+                setEnvironmentError(undefined);
+              }
+              environmentSetup.onDismiss?.();
+            }
+          : undefined,
+      }}
+      onRetry={
+        environmentSetupRetryId
+        && props.thread
+        && props.desktopApi?.setCodexThreadEnvironment
+          ? () => {
+              setEnvironmentSetupRetrying(true);
+              void setThreadCodexEnvironment(environmentSetupRetryId).finally(() => {
+                setEnvironmentSetupRetrying(false);
+              });
+            }
+          : undefined
+      }
+      retrying={environmentSetupRetrying}
+    />
+  ) : null;
+
   const composerErrorEntries: readonly ComposerErrorEntry[] = [
     { id: "skills", label: "Couldn't load skills", message: props.skillError },
     { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
@@ -10991,7 +11351,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       message: sendError,
       occurrence: sendErrorState.occurrence,
     },
-    { id: "environment", label: "Environment error", message: environmentError },
+    {
+      id: "environment",
+      label: "Environment error",
+      // A failed setup command rejects `setCodexThreadEnvironment`, and the
+      // setup row already shows that failure with its full output: one
+      // surface per error. Only a failure for the same environment is
+      // claimed, so a different selection's error still reports here. The
+      // row clears this error when it is dismissed, so it cannot reappear.
+      // With no row (no progress stream reached this window), the error row
+      // is the only report and stays.
+      message:
+        environmentSetup?.status === "failed"
+        && environmentError?.selectedEnvironmentId !== undefined
+        && environmentError.selectedEnvironmentId === environmentSetup.environmentId
+          ? undefined
+          : environmentError?.message,
+    },
     { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
     {
       id: "agent-change",
@@ -11037,6 +11413,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           above an input that already names itself was redundant
           chrome. */}
 
+      {/* The band: every transient row between the transcript and the
+          input. It is the one part of the composer allowed to give up height
+          — capped, scrolling, and shrinkable — so no number of open rows can
+          push the input or its toolbar off the window. See
+          `composer-band-bounds.test.ts`. */}
+      <div className="composer__band">
       {/* Topmost in the band: ambient agent work the operator did not just
           launch. Env action rows sit below it, nearer the input, because they
           carry the Stop the operator is most likely to reach for. */}
@@ -11052,6 +11434,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         desktopApi={props.desktopApi}
         thread={props.thread}
       />
+
+      {environmentSetupRow}
 
       {props.showEnvActionAnchors === false ? null : (
         <EnvActionAnchorList
@@ -11236,8 +11620,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           : scheduledSendAt
           ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
           : index === 0
-            ? "Queued next"
-            : `Queued #${index + 1}`;
+            ? "Next"
+            : `#${index + 1}`;
+        const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
 
         return (
           <div
@@ -11245,9 +11630,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               "composer__queued",
               "composer__queued--message",
               scheduledSendAt ? "composer__queued--scheduled" : "",
-              queued.errorMessage || queued.manualReleaseRequired
-                ? "composer__queued--failed"
-                : "",
+              failed ? "composer__queued--failed" : "",
+              // Rows waiting on an answer keep their actions on screen.
+              failed || scheduledSendAt ? "composer__queued--pinned-actions" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -11266,25 +11651,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             }
             key={queued.id}
           >
-            <div className="composer__queued-copy">
-              <span className="composer__queued-label" role="status">
-                {queuedLabel}
-              </span>
-              <span className="composer__queued-text">
-                {formatDraftPreview(queued)}
-              </span>
-              {queued.errorMessage ? (
-                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
-              ) : null}
-              {queued.holdReason ? (
-                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
-              ) : null}
-            </div>
-            <QueuedImageAttachments attachments={queued.imageAttachments} />
             <QueuedMessageInspector
               load={() => readQueuedMessage(queued)}
               desktopApi={props.desktopApi}
-            >
+              detail={
+                queued.errorMessage || queued.holdReason ? (
+                  <div className="composer__queued-detail">
+                    {queued.errorMessage ? (
+                      <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
+                    ) : null}
+                    {queued.holdReason ? (
+                      <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
+                    ) : null}
+                  </div>
+                ) : null
+              }
+              actions={<>
               {isLaunchpad ? (
                 supportsSteering ? (
                   <button
@@ -11355,10 +11737,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Send now
                 </button>
               ) : null}
-              <button
-                className="composer__secondary-action"
+              <QueuedRowIconButton
+                label="Edit"
                 disabled={queued.backendQueuePending}
-                type="button"
                 onClick={() => {
                   const editQueuedTurn = (editable = queued): void => {
                     acknowledgeQueuedFailure(queued);
@@ -11395,7 +11776,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     editQueuedTurn();
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     let editable: QueuedTurnDraft;
                     let contentHash: string;
                     try {
@@ -11415,22 +11796,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       return;
                     }
                     editQueuedTurn(editable);
-                  })();
+                  });
                 }}
               >
-                Edit
-              </button>
-              <button
-                className="composer__secondary-action"
+                <PencilIcon size={14} />
+              </QueuedRowIconButton>
+              <QueuedRowIconButton
+                label="Delete"
+                tone="danger"
                 disabled={queued.backendQueuePending}
-                type="button"
                 onClick={() => {
                   if (!backendOwned) {
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnAt(index);
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     const cancellation = await cancelServerManagedQueuedTurn(
                       queued,
                       queuedScopeKey,
@@ -11439,15 +11820,48 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       acknowledgeQueuedFailure(queued);
                       removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
-                  })();
+                  });
                 }}
               >
-                Delete
-              </button>
+                <TrashIcon size={14} />
+              </QueuedRowIconButton>
+              </>}
+            >
+              <span className="composer__queued-label" role="status">
+                {queuedLabel}
+              </span>
+              <span
+                className={[
+                  "composer__queued-text",
+                  queued.title ? "" : "composer__queued-text--raw",
+                ].filter(Boolean).join(" ")}
+              >
+                {queued.title ?? formatDraftPreview(queued)}
+              </span>
+              <QueuedImageAttachments attachments={queued.imageAttachments} chip />
             </QueuedMessageInspector>
           </div>
         );
       })}
+
+      {/* Last in the band, nearest the input it describes. Hidden once the
+          launchpad is submitted: the starting thread is no longer a draft
+          to detach. */}
+      {subthreadParentTitle && !launchpadSubmitting && !props.launchpadComposerScopeKey ? (
+        <SubthreadSourceRow
+          parentTitle={subthreadParentTitle}
+          onSelectParent={props.onSelectLaunchpadParent
+            ? () => props.onSelectLaunchpadParent?.(props.launchpad!)
+            : undefined}
+          onDetach={props.onDetachLaunchpadParent
+            ? () => {
+                props.onDetachLaunchpadParent?.(props.launchpad!.directoryKey);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }
+            : undefined}
+        />
+      ) : null}
+      </div>
 
       {hasVisibleAttachments ? (
         <div
@@ -12034,8 +12448,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ariaControls={autocompleteListboxId}
             ariaExpanded={Boolean(autocompleteKind)}
             disabled={composerDisabled}
-            readOnly={preparingSend}
+            readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
+            inlineHint={forkInlineHint}
+            inlineCompletion={forkInlineCompletion}
             markdownConversion
             placeholder={composerPlaceholder}
             resolveThreadLink={(ref) => {
@@ -12193,9 +12609,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     autocompleteOptionRefs.current[index] = node;
                   }}
                   aria-selected={index === activeDirectoryRefIndex}
-                  className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                  className={`composer__autocomplete-option${directory.kind === "instance" ? " composer__autocomplete-option--instance" : ""}${index === activeDirectoryRefIndex ? " is-active" : ""}`}
                   role="option"
                   tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                  title={directory.kind === "instance"
+                    ? `${directory.label} · ${directory.status}`
+                    : undefined}
                   type="button"
                   onMouseDown={(event) => {
                     event.preventDefault();
@@ -12216,7 +12635,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         : <InstanceGlyph instanceId={directory.instanceId} size={13} />
                     ) : <FolderIcon size={13} aria-hidden="true" />}
                     <HighlightedAutocompleteLabel
-                      label={directory.label}
+                      label={directory.kind === "instance"
+                        ? directory.shortLabel ?? directory.label
+                        : directory.label}
                       query={directoryRefTrigger?.query ?? ""}
                     />
                   </span>
@@ -12465,24 +12886,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           className="composer__setup"
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
-          {props.launchpad && launchpadMachine ? (
-            <LaunchpadMachineChip
-              control={launchpadMachine}
-              disabled={launchpadSubmitting}
-              onRetarget={(instanceId) => {
-                void (async () => {
-                  const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
-                  const plan = await launchpadMachine.planRetarget?.(instanceId);
-                  // The peer read can take a while. A draft only follows the
-                  // operator if they are still on the launchpad it came from.
-                  if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
-                    return;
-                  }
-                  prepareDraftRetarget(plan.directoryKey);
-                  await plan.open();
-                })();
-              }}
-            />
+          {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
+            renderLaunchpadMachineChip(
+              <LaunchpadMachineChip
+                control={launchpadMachine}
+                disabled={launchpadSubmitting}
+                menuPlacement={props.launchpadMachineChipHost ? "below" : undefined}
+                onRetarget={(instanceId) => {
+                  void (async () => {
+                    const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
+                    const plan = await launchpadMachine.planRetarget?.(instanceId);
+                    // The peer read can take a while. A draft only follows the
+                    // operator if they are still on the launchpad it came from.
+                    if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
+                      return;
+                    }
+                    prepareDraftRetarget(plan.directoryKey);
+                    await plan.open();
+                  })();
+                }}
+              />,
+            )
           ) : null}
           {props.launchpad && providerOptions.length > 0 ? (
             <ComposerDropdown
@@ -13167,12 +13591,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
       ) : null}
-      {props.launchpad &&
-      launchpadSubmitting &&
-      props.launchpad.codexEnvironmentId &&
-      selectedCodexEnvironment?.setupScript ? (
-        <p className="composer__meta">Running environment setup…</p>
-      ) : null}
       {props.updatingExecutionMode ? (
         <p className="composer__meta">
           Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
@@ -13345,15 +13763,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ? () => void props.desktopApi?.openUsageActivity?.()
               : undefined}
           />
-          {nativeVoiceApi && nativeVoiceThreadId ? (
-            <NativeVoiceToggle
-              api={nativeVoiceApi}
-              threadId={nativeVoiceThreadId}
-              turnRunning={props.thread?.threadStatus === "active"}
-            />
-          ) : directorVoiceApi && nativeVoiceDirectorHint ? (
-            <DirectorVoiceComposerToggle api={directorVoiceApi} hint={nativeVoiceDirectorHint} />
-          ) : null}
           {preparingSend ? (
             <button
               className="button button--ghost composer__cancel-preparation"
@@ -13475,6 +13884,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </button>
               ) : null}
               <button
+                {...submitTooltip.buttonProps}
                 className="button composer__send-submit-button"
                 disabled={sendButtonDisabled}
                 type="submit"
@@ -13487,6 +13897,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ) : null}
                 {submitButtonLabel}
               </button>
+              {submitTooltip.tooltipNode}
             </div>
             {scheduleAffordanceVisible && scheduleMenuOpen ? (
               <div className="composer__schedule-menu" role="menu">
@@ -13519,6 +13930,66 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     </>
   );
 });
+
+/**
+ * Names the thread a sub-thread launchpad will start under, beside the input
+ * it describes. The parent title opens the parent; × keeps the draft and
+ * drops the link, so the launchpad starts an ordinary thread.
+ */
+function SubthreadSourceRow({
+  parentTitle,
+  onSelectParent,
+  onDetach,
+}: {
+  parentTitle: string;
+  onSelectParent?: () => void;
+  onDetach?: () => void;
+}) {
+  const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
+    useViewportTooltip({ className: "viewport-tooltip" });
+  const detachTooltip = "Start as a regular thread";
+  return (
+    <div className="composer__subthread-source" role="group" aria-label="Sub-thread source">
+      <SubthreadIcon className="composer__subthread-source-icon" size={14} />
+      <span className="composer__subthread-source-label">Sub-thread of</span>
+      {onSelectParent ? (
+        <button
+          aria-label={`Open ${parentTitle}`}
+          className="composer__subthread-source-parent"
+          title={parentTitle}
+          type="button"
+          onClick={onSelectParent}
+        >
+          {parentTitle}
+        </button>
+      ) : (
+        <span className="composer__subthread-source-parent" title={parentTitle}>
+          {parentTitle}
+        </span>
+      )}
+      <span className="composer__subthread-source-meta">· no history</span>
+      {onDetach ? (
+        <button
+          aria-describedby={visible ? tooltipId : undefined}
+          aria-label={`Detach from ${parentTitle}`}
+          className="composer__subthread-source-detach"
+          type="button"
+          onBlur={hide}
+          onClick={() => {
+            hide();
+            onDetach();
+          }}
+          onFocus={(event) => show(event.currentTarget, detachTooltip)}
+          onMouseEnter={(event) => showAfterDelay(event.currentTarget, detachTooltip)}
+          onMouseLeave={hide}
+        >
+          <CloseIcon size={14} />
+        </button>
+      ) : null}
+      {tooltipNode}
+    </div>
+  );
+}
 
 function AttachmentTooltip({
   children,
@@ -13559,9 +14030,11 @@ function ContextWindowMoon({
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
-  const { show, update, hide, visible, tooltipNode } = useViewportTooltip({
+  const { show, update, hide, visible, tooltipNode, tooltipId } = useViewportTooltip({
     className: "context-usage-card",
   });
+  // The card's copy depends on availability, not the callback identity.
+  const opensUsage = Boolean(onOpenUsage);
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -13569,6 +14042,7 @@ function ContextWindowMoon({
   // drop the card so it can't reappear at stale coordinates.
   useEffect(() => {
     if (!contextWindow) {
+      recordRendererUpdate(RendererUpdateEvent.contextCardClear, tooltipId);
       hide();
       return;
     }
@@ -13579,14 +14053,15 @@ function ContextWindowMoon({
       CONTEXT_MOON_PHASES.length - 1,
       Math.max(0, contextWindow.phase),
     );
+    recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
         contextWindow={contextWindow}
-        opensUsage={Boolean(onOpenUsage)}
+        opensUsage={opensUsage}
         phaseLabel={CONTEXT_MOON_PHASES[phase]}
       />,
     );
-  }, [contextWindow, hide, onOpenUsage, update, visible]);
+  }, [contextWindow, hide, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -13602,7 +14077,7 @@ function ContextWindowMoon({
   const card = (
     <ContextWindowUsageCard
       contextWindow={contextWindow}
-      opensUsage={Boolean(onOpenUsage)}
+      opensUsage={opensUsage}
       phaseLabel={phaseLabel}
     />
   );
@@ -13959,8 +14434,11 @@ function buildLaunchpadWorkspaceOptions(
       (directory.gitStatus?.worktreeCreationAvailable === true ||
         directory.gitStatus?.currentBranch ||
         (directory.gitStatus?.branches?.length ?? 0) > 0 ||
+        // A sub-thread launchpad, detached or not, was opened from a thread
+        // whose project offered one; detaching keeps its settings.
         (launchpad.workMode === "worktree" &&
-          Boolean(launchpad.parentThreadId)))
+          (Boolean(launchpad.parentThreadId)
+            || isSubthreadLaunchpadKey(launchpad.directoryKey))))
   );
   const options: Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> = [
     { value: "local", label: localLabel ?? "Local" },

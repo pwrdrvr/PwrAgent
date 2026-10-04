@@ -260,6 +260,50 @@ describe("ScheduledThreadActionService", () => {
     });
   });
 
+  it("holds a due turn on a locked thread instead of failing it", async () => {
+    const harness = createHarness(20_000);
+    const refusal = "This thread is locked: Parked. Unlock it before starting a turn.";
+    harness.submitTurn.mockRejectedValueOnce(new Error(refusal));
+    harness.submitHeldTurn.mockImplementationOnce(async (input: { queueEntryId?: string }) => ({
+      status: "queued" as const,
+      entry: {
+        id: input.queueEntryId ?? "scheduled-turn:scheduled-1",
+        backend: "codex" as const,
+        threadId: "thread-1",
+        origin: "scheduled" as const,
+        input: [{ type: "text" as const, text: "Follow up" }],
+        createdAt: 20_000,
+        manualReleaseRequired: true,
+        holdReason: refusal,
+      },
+      position: 1,
+    }) as never);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+
+    await harness.service.evaluateDueActions();
+
+    expect(harness.submitHeldTurn).toHaveBeenCalledWith(expect.objectContaining({
+      queueEntryId: "scheduled-turn:scheduled-1",
+      origin: "scheduled",
+      holdReason: refusal,
+    }));
+    expect(store.get("scheduled-1")).toMatchObject({
+      status: "held",
+      queueEntryId: "scheduled-turn:scheduled-1",
+      errorMessage: refusal,
+    });
+  });
+
   it("persists a registry hold and retries its existing queue entry", async () => {
     const harness = createHarness(20_000);
     store.create({

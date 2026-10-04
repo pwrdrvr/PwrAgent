@@ -80,7 +80,9 @@ Status colors should not compete with tangerine as the main action and focus sig
 ### Theme Variants
 
 The renderer ships two themes (dark + light) plus a system mode that
-follows `prefers-color-scheme`. Theme selection lives in per-profile
+follows `prefers-color-scheme`. Each scheme renders in the color theme the
+operator picked for it (see [Color themes](#color-themes)). The token
+tables below are the Tangerine pair, the default for both schemes. Theme selection lives in per-profile
 `config.toml` under `[general.appearance]` and is applied via a
 `data-theme` attribute on `<html>`. The dark palette is the unscoped
 `:root` block; the light palette is opt-in under
@@ -299,6 +301,117 @@ alphas. Illustration assets that intentionally don't theme-flip
 substring-allowlisted in
 [`scripts/lint-renderer-colors.mjs`](../scripts/lint-renderer-colors.mjs).
 
+### Color themes
+
+The operator picks a **dark theme** and a **light theme** independently,
+as most editors do. Theme (system, dark, or light) still picks the scheme;
+the scheme the window resolves to chooses which of the two renders. So
+"system" follows the OS between any dark theme and any light theme.
+`[general.appearance] dark_theme` and `light_theme` in `config.toml` hold
+the choices. The Tangerine defaults are not written to the file. Settings →
+General → Appearance sets them.
+
+| Dark theme | Light theme | Origin |
+|---|---|---|
+| `tangerine-dark` (default) | `tangerine-light` (default) | PwrAgent. The bare `:root` / `:root[data-theme="light"]` blocks. |
+| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com) ([MIT](https://catppuccin.com/licensing/)), upstream colors except where AA moves them. |
+| `solarized-dark` | `solarized-light` | [Solarized](https://ethanschoonover.com/solarized/) ([MIT](https://github.com/altercation/solarized/blob/master/LICENSE)), canonical surfaces and terminal, text moved only as far as AA needs. |
+| `gray-dark` | `gray-light` | PwrAgent. Neutral charcoal or light-gray surfaces with the Tangerine accent. |
+| `blue-dark` | `blue-light` | PwrAgent. Navy or pale-blue surfaces with a blue accent. |
+| `phosphor-dark` | (none) | PwrAgent, after a green-phosphor CRT terminal. Phosphor green on green-tinted near-black. Dark only. |
+
+Each non-default theme is one `:root[data-color-theme="<id>"]` block in
+`app.css`, and `data-color-theme` is set only while that theme renders.
+`data-theme` stays the scheme whatever the color theme. Rules and scripts
+that key on `data-theme="light"`, such as brand marks and Mermaid, need no
+theme knowledge. A light theme's block has the same specificity as
+`:root[data-theme="light"]` and comes later in the file, so it wins.
+
+Every block sets the full themeable token set (Catppuccin Mocha's block is
+the reference list). A token a block leaves out would fall through to a
+stray Tangerine color. Terminal ANSI colors are the one optional group: a
+theme without its own keeps Tangerine's. No block sets the theme-neutral
+tokens listed above. Those follow the scheme block.
+
+#### Contrast
+
+Every color theme holds the same floor, measured against the
+lowest-contrast background each token can land on. Those backgrounds are
+the flat surfaces, plus the 12% and 16% accent tints over panel, sidebar,
+and hover:
+
+- Every token read as text clears 4.55:1. That is AA plus 0.05 of margin
+  for rendering. Semantic text also clears its own soft tint.
+- `--accent` is floored against the accent tints too, and `--text-subtle`
+  clears AA. The color themes inherit none of the light-theme debt above.
+- Non-text marks clear 3.05:1 on the flat surfaces. These are
+  `--danger-base`, `--status-suspended`, and the usage chart series.
+- Text ladders (primary, secondary, muted) and accent ramps keep their
+  emphasis order.
+
+Catppuccin and Solarized are borrowed palettes, and they follow one rule
+so they stay in step with upstream. Each token starts from its upstream
+color. A token that clears its floor keeps that color. One that fails moves
+by the least OKLCH lightness that clears it, and keeps its hue and chroma.
+
+Every theme draws text on an `--accent` fill with `--button-text` or
+`--accent-on`, and that fill is `--accent-fill` (`--accent-fill-strong` on
+hover). It is `--accent` unless a theme's accent is too light to be text.
+Bare marks, such as the unread cookie and selection bars, stay `--accent`,
+because they need 3:1 on the surface with no ink to carry them.
+
+The integrated terminal keeps each palette's own ANSI colors, even below AA
+on its canvas. Programs pick ANSI colors without knowing the background,
+and the terminal is where operators compare PwrAgent with their own setup.
+
+Per theme:
+
+- **Catppuccin Mocha** is upstream except muted, danger, success, and info
+  text, and the suspended mark, which each move a step to clear the
+  floor. Its terminal is Catppuccin's port mapping.
+- **Catppuccin Latte** text, accent, and semantic colors move, because
+  Catppuccin tunes Latte below AA. Muted text has to move to about
+  `#53566b`, which leaves no room under Catppuccin's text, so primary
+  darkens to keep the ladder. Peach is 2.6:1 as text, so text and marks use
+  a darker orange, and `--accent-fill` keeps peach under dark ink (6.3:1).
+- **Solarized** keeps the published surfaces (`base03`/`base02`,
+  `base3`/`base2`), terminal canvas, foreground, and 16-color ANSI mapping.
+  Its stock text does not clear AA on `base02`: `base0` is 4.1:1 and
+  `base01` is 2.4:1. Solarized has two text tones, so muted text is
+  `base0` (`base00` in Light) moved to the floor, primary is `base1`
+  (`base01`) moved by the same step, and secondary sits between them.
+  Accent and semantic colors move by the least that clears the floor.
+  The dark accent is Solarized yellow, because
+  orange cannot clear AA as text on `base03`, so the pair's accents
+  differ in hue. With only two background
+  tones per scheme, hover sits midway between them, and Light's raised
+  surface sits just above `base3`, so neither disappears into the surface
+  under it.
+- **Gray** and **Blue** are PwrAgent designs, and keep their designed values
+  wherever those already clear the floor. Blue is an explicit product
+  choice. Its navy surfaces stay low-saturation, so the anti-pattern below
+  against saturated navy dashboards still holds.
+- **Phosphor** is a PwrAgent design after a green-phosphor CRT terminal, and
+  an explicit product request. Its accent and terminal ink are phosphor
+  green `#00ff41`, on green-tinted near-black surfaces, with red for danger
+  and blue for info. It is a palette, not a costume. There is no code
+  rain, glow, or scanline effect, so the anti-patterns below against
+  novelty-terminal cosplay and decorative glows still hold. It borrows no
+  published palette and so carries no license notice. Only muted text moved
+  from its designed value to clear the floor.
+- **A theme may be dark only.** Phosphor has no light half, so picking it
+  offers no pair for the light scheme, and the operator's light theme stays
+  as it was.
+
+The theme contract test checks all of this. It reads `app.css` and fails if
+a theme drops a token, misses the floor, or breaks a ladder; if a
+Catppuccin token leaves an upstream color that passes, or moves more than
+0.3 past its floor; or if a rule puts ink on a bare `--accent` fill. The
+a11y E2E gate audits every theme in its scheme. The native window colors
+(`native-appearance.ts`) and the quit dialog palettes
+(`quit-confirmation-dialog.ts`) carry literal copies. Tests hold each one
+to its `app.css` block.
+
 ### Status indicator dots
 
 For small live-state pips (messaging platform health, per-thread binding
@@ -373,12 +486,12 @@ The palette has held one tangerine since the theme shipped — `--accent` has ne
 
 | Token | Job | Never |
 |---|---|---|
-| `--accent` | Solid fills, and the thread-row selection bar | Text |
+| `--accent` | Solid fills, and the selected-row edge | Text |
 | `--accent-border` | Outline of a **selected** container | Idle chrome, badges |
 | `--accent-soft` | Fill of a **highlighted** row or surface | Large panels |
 | `--accent-bright` | Text on an accent tint, and the typed run in a picker | Body copy, metadata |
 
-**The rule: a row carries its selection treatment plus at most one more accent element.** Badges, kind icons, boxed sigils, and counts rank via neutrals (`--border-strong` + `--text-primary` for emphasis, `--border-subtle` + `--text-secondary` for ordinary metadata). A row showing a bar, an outline, a boxed glyph, a highlighted match, and a pill all in tangerine has no signal left — everything is emphasized, so nothing is.
+**The rule: a row carries its selection treatment plus at most one more accent element.** Badges, kind icons, boxed sigils, and counts rank via neutrals (`--border-strong` + `--text-primary` for emphasis, `--border-subtle` + `--text-secondary` for ordinary metadata). A row showing an edge, an outline, a boxed glyph, a highlighted match, and a pill all in tangerine has no signal left — everything is emphasized, so nothing is.
 
 ### The two selection languages are not interchangeable
 
@@ -398,10 +511,12 @@ Used by `.project-picker__row`, `.branch-picker__option`, `.reference-picker__ro
 ```css
 border-color: var(--accent-border);
 background: var(--bg-row-active);
-/* plus the 3px ::before bar in var(--accent) */
+box-shadow: inset 2px 0 0 0 var(--accent);
 ```
 
-Used by `.thread-row.is-selected` and its derivatives. Do not lend the bar to a popover.
+Used by `.thread-row.is-selected` and its derivatives. Do not lend the edge to a popover.
+
+The edge is PwrGit's selected-row marker. An inset shadow is clipped to the padding box, so it follows the row's corners, takes no layout space, and leaves the left gutter free for the sub-thread and directory chevrons. It carries the state for SC 1.4.11: `--accent` is 8.40:1 against `--bg-row-active` in dark and 4.82:1 in light. A surface that sets its own `box-shadow` for other states, like a Star Map card, draws the same edge on an `inset: 0` pseudo-element instead.
 
 **Consequence for match highlighting:** on a highlighted row the label is already `--accent-bright`, so a color-only "typed run" highlight vanishes on exactly the row being read. Emphasize the match with **weight** (`font-weight: 700`) so it survives both states.
 
@@ -520,24 +635,25 @@ Focus states should be visible and tangerine-led, but contained so they do not c
 
 ## Tooltips
 
-Two patterns. Pick the right one:
+Every tooltip renders in a portal on `document.body`, so no pane can
+clip it and no stacking context can bury it. Two ways in:
 
-**CSS pseudo-element tooltip** (`tooltip-target` + `data-tooltip` in
-`app.css`): cheapest and stateless. Use when the hovered element and
-all its ancestors render with `overflow: visible`. The tooltip is an
-`::after` pseudo-element positioned absolutely; any clipping ancestor
-(`overflow: hidden`, `overflow: auto`, `overflow: scroll`) chops it.
+**Declarative** (`tooltip-target` + `data-tooltip`): the default for a
+plain-text tooltip. `DataTooltipLayer`
+(`renderer/src/lib/DataTooltipLayer.tsx`), mounted once at the renderer
+root, opens it on hover or keyboard focus and keeps it in the viewport.
+It works anywhere, including inside clipping panes, beside the sidebar,
+and on a disabled control.
 
 ```tsx
-<span className="… tooltip-target" data-tooltip={text}>…</span>
+<button className="… tooltip-target" data-tooltip={text}>…</button>
 ```
 
-**Portal-rendered tooltip** (`useViewportTooltip` hook in
-`renderer/src/lib/useViewportTooltip.tsx`): when ANY ancestor clips —
-sidebar scroll regions, overflow-hidden chips with text-ellipsis,
-draggable rails. The hook renders the tooltip via `createPortal` to
-`document.body` with `position: fixed`, then clamps to viewport bounds
-via `useLayoutEffect` after measuring the rendered text.
+**Hook** (`useViewportTooltip` in
+`renderer/src/lib/useViewportTooltip.tsx`): use it when the tooltip needs
+more than a string. Examples are `ReactNode` content, a structured card
+class, a hover delay, or pointer-following placement. It is the same
+portal and the same placement code.
 
 ```tsx
 const { show, hide, tooltipNode } =
@@ -555,6 +671,15 @@ return (
 );
 ```
 
+Anti-pattern: a CSS pseudo-element tooltip (`::after` with
+`content: attr(…)`). A pseudo-element paints inside its host. Every
+`overflow` ancestor clips it, and every stacking context around the host
+caps it. That is why the composer's toggles drew their tooltips under
+the sidebar. Do not fix one control by moving its tooltip's x or raising
+one z-index. Use one of the two patterns above.
+`styles/__tests__/data-tooltip-layer-contract.test.ts` fails on an
+`attr(data-tooltip)` in any renderer stylesheet.
+
 Both honor `\n` for multi-line bodies via `white-space: pre-wrap`.
 
 Anti-pattern: native `title=` attribute. Inconsistent timing across
@@ -571,7 +696,7 @@ Long titles, paths, and branch names must truncate or wrap predictably without c
 Avoid:
 
 - gray text on darker gray
-- saturated slate, navy, or purple-blue dashboard palettes
+- saturated slate, navy, or purple-blue dashboard palettes (the opt-in Blue color theme keeps its navy low-saturation)
 - purple accents, gradient orbs, and decorative glows
 - orange-dominant panels or orange body copy
 - browser-default controls

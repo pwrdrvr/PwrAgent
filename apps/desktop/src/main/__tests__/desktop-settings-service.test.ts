@@ -242,6 +242,8 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "system",
+          darkTheme: "tangerine-dark",
+          lightTheme: "tangerine-light",
           density: "mission-control",
           sidebarTextSize: "md",
           transcriptTextSize: "md",
@@ -2932,6 +2934,46 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults both interactive SVG preferences off and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettingsProjection();
+    expect(initial.general.interactiveSvgSkipNotice).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(initial.general.interactiveSvgAutoOpen).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        interactiveSvgSkipNotice: true,
+        interactiveSvgAutoOpen: true,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("interactive_svg_skip_notice = true");
+    expect(saved).toContain("interactive_svg_auto_open = true");
+    const projected = await service.readSettingsProjection();
+    expect(projected.general.interactiveSvgSkipNotice).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(projected.general.interactiveSvgAutoOpen).toEqual({
+      value: true,
+      source: "config",
+    });
+  });
+
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -2956,6 +2998,8 @@ describe("DesktopSettingsService", () => {
     });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -2967,6 +3011,9 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "light",
+          darkTheme: "solarized-dark",
+          lightTheme: "catppuccin-latte",
+          themedDockIcon: false,
           density: "compact",
           sidebarTextSize: "lg",
         },
@@ -2976,12 +3023,27 @@ describe("DesktopSettingsService", () => {
     const writtenFile = fs.readFileSync(configPath, "utf8");
     expect(writtenFile).toContain("[general.appearance]");
     expect(writtenFile).toContain('theme = "light"');
+    expect(writtenFile).toContain('dark_theme = "solarized-dark"');
+    expect(writtenFile).toContain('light_theme = "catppuccin-latte"');
+    expect(writtenFile).toContain("themed_dock_icon = false");
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
     const afterWrite = await service.readSettingsProjection();
     expect(afterWrite.general.appearance.theme).toEqual({
       value: "light",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.darkTheme).toEqual({
+      value: "solarized-dark",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.lightTheme).toEqual({
+      value: "catppuccin-latte",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.themedDockIcon).toEqual({
+      value: false,
       source: "config",
     });
     expect(afterWrite.general.appearance.density).toEqual({
@@ -2994,6 +3056,8 @@ describe("DesktopSettingsService", () => {
     });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "light",
+      darkTheme: "solarized-dark",
+      lightTheme: "catppuccin-latte",
       density: "compact",
       sidebarTextSize: "lg",
       transcriptTextSize: "md",
@@ -3005,6 +3069,9 @@ describe("DesktopSettingsService", () => {
       general: {
         appearance: {
           theme: "system",
+          darkTheme: "tangerine-dark",
+          lightTheme: "tangerine-light",
+          themedDockIcon: true,
           density: "mission-control",
           sidebarTextSize: "md",
         },
@@ -3013,21 +3080,63 @@ describe("DesktopSettingsService", () => {
 
     const restoredFile = fs.readFileSync(configPath, "utf8");
     expect(restoredFile).not.toContain('theme = "');
+    expect(restoredFile).not.toContain("dark_theme");
+    expect(restoredFile).not.toContain("light_theme");
+    expect(restoredFile).not.toContain("themed_dock_icon");
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
     const afterRestore = await service.readSettingsProjection();
     expect(afterRestore.general.appearance.theme.source).toBe("default");
+    expect(afterRestore.general.appearance.darkTheme.source).toBe("default");
+    expect(afterRestore.general.appearance.lightTheme.source).toBe("default");
+    expect(afterRestore.general.appearance.themedDockIcon).toEqual({
+      value: true,
+      source: "default",
+    });
     expect(afterRestore.general.appearance.density.source).toBe("default");
     expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
       "default",
     );
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
     });
+  });
+
+  it("drops the development-only palette key once a color theme is saved", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      '[general.appearance]\n# keep me\ntheme = "dark"\npalette = "catppuccin"\n',
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // Nothing reads it: the themes stay at their defaults until picked.
+    const before = await service.readSettingsProjection();
+    expect(before.general.appearance.darkTheme).toEqual({
+      value: "tangerine-dark",
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: { appearance: { darkTheme: "catppuccin-mocha" } },
+    });
+
+    const written = fs.readFileSync(configPath, "utf8");
+    expect(written).not.toContain("palette");
+    expect(written).toContain('dark_theme = "catppuccin-mocha"');
+    expect(written).toContain('theme = "dark"');
+    expect(written).toContain("# keep me");
   });
 
   it("fires onAppearanceChange only when writeConfigPatch touches general.appearance", async () => {
@@ -3062,6 +3171,8 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(1);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "light",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "compact",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3083,6 +3194,8 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(2);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "system",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
@@ -3107,6 +3220,25 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenCalledTimes(3);
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "dark",
+      darkTheme: "tangerine-dark",
+      lightTheme: "tangerine-light",
+      density: "mission-control",
+      sidebarTextSize: "md",
+      transcriptTextSize: "md",
+    });
+
+    // A theme-only patch is an appearance change too: every window has to
+    // recolor.
+    await service.writeConfigPatchTargeted({
+      general: {
+        appearance: { lightTheme: "blue-light" },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(4);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "dark",
+      darkTheme: "tangerine-dark",
+      lightTheme: "blue-light",
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",

@@ -26,7 +26,7 @@ function retainedIndexBytes(index: NavigationQueryIndex): number {
   return bytes;
 }
 
-type Pending = { controller: AbortController; readers: number; revision: number; done: boolean; promise: Promise<NavigationQueryIndex> };
+type Pending = { controller: AbortController; readers: number; revision: number; version?: string; done: boolean; promise: Promise<NavigationQueryIndex> };
 
 /** Shared physical reads with optional short, version-keyed, byte-bounded reuse. */
 export class NavigationIndexReadPool {
@@ -68,21 +68,29 @@ export class NavigationIndexReadPool {
     this.evict(key);
   }
 
-  read(key: string, load: (signal: AbortSignal) => Promise<NavigationQueryIndex>, signal?: AbortSignal): Promise<NavigationQueryIndex> {
+  read(key: string, load: (signal: AbortSignal) => Promise<NavigationQueryIndex>, signal?: AbortSignal, version?: string): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
     const retained = this.retained.get(key);
-    if (retained && retained.expires > Date.now()) {
+    if (retained && retained.owner.version === version && retained.expires > Date.now()) {
       listingDiagnostics.link("index", "cache-hit", retained.owner.promise);
       return Promise.resolve(retained.index);
     }
     if (retained) this.evict(key);
     if (this.readers >= 256) return Promise.reject(new Error("Navigation index consumer admission is full."));
     let pending = this.joinable.get(key);
-    if (pending) listingDiagnostics.link("index", "coalesced", pending.promise);
+    if (pending) {
+      // Revisions invalidate the owner's result, not its physical identity.
+      // A burst of writes still shares one bounded replacement scan.
+      if (pending.version !== version) {
+        pending.version = version;
+        pending.revision += 1;
+      }
+      listingDiagnostics.link("index", "coalesced", pending.promise);
+    }
     if (!pending) {
       if (this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
       const controller = new AbortController();
-      pending = { controller, readers: 0, revision: 0, done: false,
+      pending = { controller, readers: 0, revision: 0, version, done: false,
         promise: Promise.resolve(undefined as unknown as NavigationQueryIndex) };
       const owned = pending;
       this.physical.add(owned);

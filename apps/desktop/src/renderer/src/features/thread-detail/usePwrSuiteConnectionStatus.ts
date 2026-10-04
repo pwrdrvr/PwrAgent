@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /** Wait before each retry of a failed read; the last delay then repeats. */
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
 
-/** Failed reads in a row, with nothing read yet, before the card says so. */
+/** Failed reads in a row before the card explains the interruption. */
 const UNREACHABLE_AFTER_FAILURES = 2;
 
 /** An action's failure without the "Error invoking remote method …" wrapper Electron adds. */
@@ -20,9 +20,8 @@ export function connectionActionError(cause: unknown): string {
  * PwrAgent's own connection service failing to answer — most often another
  * PwrAgent instance on this profile that exited while holding the MCP
  * connection lease, whose broker socket refuses connections until the
- * dead-owner grace lets this instance take over. That is not something the
- * operator can act on from the card, so the card never shows the error: it
- * keeps the last status it read and retries until a read succeeds.
+ * dead-owner grace lets this instance take over. Keep the last status and
+ * retry, explaining repeated failures without exposing raw socket errors.
  */
 export function usePwrSuiteConnectionStatus<T>(
   read: (() => Promise<T>) | undefined,
@@ -33,6 +32,7 @@ export function usePwrSuiteConnectionStatus<T>(
   onReadRef.current = onRead;
   const [status, setStatusState] = useState<T>();
   const [failures, setFailures] = useState(0);
+  const [readError, setReadError] = useState<string>();
   // Bumped by every read and every status set from elsewhere (a Connect
   // response). A read that resolves after a newer one started, or after
   // Connect answered, is older than what the card shows and is dropped.
@@ -41,6 +41,8 @@ export function usePwrSuiteConnectionStatus<T>(
   const setStatus = useCallback((next: T) => {
     generation.current += 1;
     setStatusState(next);
+    setFailures(0);
+    setReadError(undefined);
   }, []);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -51,9 +53,15 @@ export function usePwrSuiteConnectionStatus<T>(
       if (started !== generation.current) return;
       setStatusState(next);
       setFailures(0);
+      setReadError(undefined);
       onReadRef.current?.();
-    } catch {
+    } catch (cause) {
       if (started !== generation.current) return;
+      const message = connectionActionError(cause);
+      const profile = /^MCP connections for PwrAgent profile ("[^"]+") are temporarily unavailable:/.exec(message)?.[1];
+      setReadError(profile
+        ? `MCP unavailable for PwrAgent profile ${profile}. Retrying automatically…`
+        : "MCP connections are temporarily unavailable. Retrying automatically…");
       setFailures((count) => count + 1);
     }
   }, [read]);
@@ -81,7 +89,7 @@ export function usePwrSuiteConnectionStatus<T>(
     status,
     setStatus,
     refresh,
-    unreachable:
-      status === undefined && failures >= UNREACHABLE_AFTER_FAILURES,
+    unreachable: failures >= UNREACHABLE_AFTER_FAILURES,
+    readError: failures >= UNREACHABLE_AFTER_FAILURES ? readError : undefined,
   };
 }

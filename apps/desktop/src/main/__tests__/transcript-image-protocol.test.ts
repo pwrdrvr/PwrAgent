@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   mkdtemp,
   mkdir,
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -31,7 +33,82 @@ describe("transcript image protocol", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("promotes legacy image references and resolves them after the shared source is removed", async () => {
+    vi.stubEnv("PWRAGENT_HOME", tempDir);
+    vi.stubEnv("PWRAGENT_PROFILE", "test");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const bytes = Buffer.from([1, 2, 3]);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const legacyPath = path.join(tempDir, "profiles", "test", "state", "turn-input-attachments", digest, "image.png");
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, bytes);
+    const input = {
+      backend: "codex" as const, threadId: "legacy-thread", fetchedAt: 0,
+      replay: {
+        entries: [],
+        messages: [{ id: "legacy", role: "user" as const, text: "Image", parts: [{ type: "image" as const, url: toProtocolUrl(legacyPath) }] }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    const first = await materializeTranscriptImageUrlsForRenderer(input);
+    const part = first.replay.messages[0]?.parts?.[0];
+    if (part?.type !== "image") throw new Error("Expected retained image.");
+    const ownedPath = filePathFromProtocolUrl(part.url);
+    expect(ownedPath).toContain(path.join("thread-assets", "codex", "legacy-thread"));
+    await expect(readFile(ownedPath)).resolves.toEqual(bytes);
+    await rm(legacyPath);
+    const second = await materializeTranscriptImageUrlsForRenderer(input);
+    expect(second.replay.messages[0]?.parts).toEqual(first.replay.messages[0]?.parts);
+  });
+
+  it("does no retention work for images already owned by the displayed thread", async () => {
+    vi.stubEnv("PWRAGENT_HOME", tempDir);
+    vi.stubEnv("PWRAGENT_PROFILE", "test");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const retainLocalImage = vi.fn(async () => { throw new Error("Unexpected retention work"); });
+    const url = pathToFileURL(path.join(tempDir, "profiles", "test", "state", "thread-assets", "codex", "fast-thread", "digest", "image.png")).toString();
+    const input = {
+      backend: "codex" as const, threadId: "fast-thread", fetchedAt: 0,
+      replay: {
+        entries: [],
+        messages: [{ id: "owned", role: "user" as const, text: "Image", parts: [{ type: "image" as const, url }] }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    await materializeTranscriptImageUrlsForRenderer(input, { retainLocalImage });
+    await materializeTranscriptImageUrlsForRenderer(input, { retainLocalImage });
+    expect(retainLocalImage).not.toHaveBeenCalled();
+  });
+
+  it.each(["file:///tmp/100%image.png", "file:///tmp/image%2Fname.png"])("preserves the conversation when one image has a malformed file URL: %s", async (url) => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const validPath = path.join(tempDir, "good.png");
+    const retainLocalImage = vi.fn(async () => undefined);
+    const response = {
+      backend: "codex" as const, threadId: "mixed-images", fetchedAt: 0,
+      replay: {
+        entries: [],
+        messages: [{
+          id: "mixed", role: "user" as const, text: "Keep the conversation readable",
+          parts: [
+            { type: "image" as const, url },
+            { type: "image" as const, url: pathToFileURL(validPath).toString() },
+          ],
+        }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    const result = await materializeTranscriptImageUrlsForRenderer(response, { retainLocalImage });
+    expect(result.replay.messages[0]?.text).toBe("Keep the conversation readable");
+    expect(result.replay.messages[0]?.parts).toEqual([
+      { type: "image", url },
+      { type: "image", url: toProtocolUrl(validPath) },
+    ]);
+    expect(retainLocalImage).toHaveBeenCalledTimes(1);
   });
 
   it("registers a secure custom image protocol", async () => {
@@ -756,6 +833,146 @@ describe("transcript image protocol", () => {
     } finally {
       await rm(agentTempDir, { recursive: true, force: true });
     }
+  });
+
+  it("adopts another profile's snapshot once the linked source is gone", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    // The source never exists here: macOS swept it out of /tmp after the
+    // other profile snapshotted it.
+    const imagePath = path.join(tempDir, "swept", "original-on-flamegraph.svg");
+    const sourceUrl = pathToFileURL(imagePath).toString();
+    const message = {
+      id: "message-swept-image-link",
+      role: "assistant" as const,
+      text: `[Original](${imagePath})`,
+    };
+    const rawResponse = {
+      backend: "codex" as const,
+      fetchedAt: 1,
+      threadId: "thread-swept-image-link",
+      replay: {
+        entries: [{ type: "message" as const, ...message }],
+        messages: [message],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const cacheName = `markdown-${createHash("sha256")
+      .update(`${message.id}\0${sourceUrl}`)
+      .digest("hex")}.svg`;
+    const otherProfileRoot = path.join(tempDir, "other-profile-thread-images");
+    const unrelatedProfileRoot = path.join(tempDir, "unrelated-profile-thread-images");
+    await mkdir(otherProfileRoot, { recursive: true });
+    await mkdir(unrelatedProfileRoot, { recursive: true });
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    await writeFile(path.join(otherProfileRoot, cacheName), svg);
+    await writeFile(path.join(unrelatedProfileRoot, `markdown-${"0".repeat(64)}.svg`), svg);
+    const activeRoot = path.join(tempDir, "active-profile-thread-images");
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      rawResponse,
+      {
+        resolveRoot: () => activeRoot,
+        resolveSiblingRoots: async () => [unrelatedProfileRoot, otherProfileRoot],
+      },
+      { includeTemporaryImageRoots: true },
+    );
+
+    const imagePart = response.replay.messages[0]?.parts?.[1];
+    expect(imagePart).toMatchObject({ type: "image", sourceUrl, alt: "Original" });
+    const adoptedPath = filePathFromProtocolUrl(imagePart?.type === "image" ? imagePart.url : "");
+    // Copied, not referenced: it survives the other profile's removal.
+    expect(adoptedPath).toBe(path.join(activeRoot, cacheName));
+    await expect(readFile(adoptedPath)).resolves.toEqual(svg);
+  });
+
+  it("refuses a symlinked sibling snapshot and scans profiles once per read", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const secretPath = path.join(tempDir, "outside-any-root.svg");
+    await writeFile(secretPath, '<svg xmlns="http://www.w3.org/2000/svg"><text>secret</text></svg>');
+    const message = {
+      id: "message-symlinked-snapshot",
+      role: "assistant" as const,
+      text: [
+        `[One](${path.join(tempDir, "swept", "one.svg")})`,
+        `[Two](${path.join(tempDir, "swept", "two.svg")})`,
+      ].join(" "),
+    };
+    const otherProfileRoot = path.join(tempDir, "symlinking-profile-thread-images");
+    await mkdir(otherProfileRoot, { recursive: true });
+    const cacheName = `markdown-${createHash("sha256")
+      .update(`${message.id}\0${pathToFileURL(path.join(tempDir, "swept", "one.svg")).toString()}`)
+      .digest("hex")}.svg`;
+    await symlink(secretPath, path.join(otherProfileRoot, cacheName));
+    const resolveSiblingRoots = vi.fn(async () => [otherProfileRoot]);
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex" as const,
+        fetchedAt: 1,
+        threadId: "thread-symlinked-snapshot",
+        replay: {
+          entries: [{ type: "message" as const, ...message }],
+          messages: [message],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      {
+        resolveRoot: () => path.join(tempDir, "active-profile-thread-images"),
+        resolveSiblingRoots,
+      },
+      { includeTemporaryImageRoots: true },
+    );
+
+    expect((response.replay.messages[0]?.parts ?? []).some((part) => part.type === "image")).toBe(false);
+    expect(resolveSiblingRoots).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not adopt a snapshot taken for a different message", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const imagePath = path.join(tempDir, "swept", "combined-on-flamegraph.svg");
+    const message = {
+      id: "message-without-snapshot",
+      role: "assistant" as const,
+      text: `[On](${imagePath})`,
+    };
+    const otherProfileRoot = path.join(tempDir, "other-profile-thread-images");
+    await mkdir(otherProfileRoot, { recursive: true });
+    const otherMessageCache = `markdown-${createHash("sha256")
+      .update(`another-message\0${pathToFileURL(imagePath).toString()}`)
+      .digest("hex")}.svg`;
+    await writeFile(
+      path.join(otherProfileRoot, otherMessageCache),
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+    );
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex" as const,
+        fetchedAt: 1,
+        threadId: "thread-without-snapshot",
+        replay: {
+          entries: [{ type: "message" as const, ...message }],
+          messages: [message],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      {
+        resolveRoot: () => path.join(tempDir, "active-profile-thread-images"),
+        resolveSiblingRoots: async () => [otherProfileRoot],
+      },
+      { includeTemporaryImageRoots: true },
+    );
+
+    expect((response.replay.messages[0]?.parts ?? []).some((part) => part.type === "image")).toBe(false);
   });
 
   it("returns durable data images for messaging after temporary source cleanup", async () => {

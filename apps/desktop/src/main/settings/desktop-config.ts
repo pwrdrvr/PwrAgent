@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -40,12 +42,16 @@ import type {
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   isDesktopAppearanceDensity,
+  isDesktopDarkTheme,
+  isDesktopLightTheme,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
   isDesktopCodexProfileModel,
@@ -99,6 +105,8 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -115,6 +123,9 @@ export type DesktopSettingsConfig = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
+      darkTheme?: DesktopDarkTheme;
+      lightTheme?: DesktopLightTheme;
+      themedDockIcon?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -636,6 +647,18 @@ export function desktopSettingsPatchToEdits(
       patch.general.attentionPromoteOnTurnEnd,
     );
   }
+  if (patch.general?.interactiveSvgSkipNotice !== undefined) {
+    set(
+      ["general", "interactive_svg_skip_notice"],
+      patch.general.interactiveSvgSkipNotice,
+    );
+  }
+  if (patch.general?.interactiveSvgAutoOpen !== undefined) {
+    set(
+      ["general", "interactive_svg_auto_open"],
+      patch.general.interactiveSvgAutoOpen,
+    );
+  }
   if (patch.general?.mcpGatewayEnabled !== undefined) {
     set(["general", "mcp_gateway_enabled"], patch.general.mcpGatewayEnabled);
   }
@@ -840,6 +863,46 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["general", "appearance", "theme"] });
     } else {
       set(["general", "appearance", "theme"], patch.general.appearance.theme);
+    }
+  }
+  if (patch.general?.appearance?.darkTheme !== undefined) {
+    if (patch.general.appearance.darkTheme === DESKTOP_DARK_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "dark_theme"] });
+    } else {
+      set(
+        ["general", "appearance", "dark_theme"],
+        patch.general.appearance.darkTheme,
+      );
+    }
+  }
+  if (patch.general?.appearance?.lightTheme !== undefined) {
+    if (patch.general.appearance.lightTheme === DESKTOP_LIGHT_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "light_theme"] });
+    } else {
+      set(
+        ["general", "appearance", "light_theme"],
+        patch.general.appearance.lightTheme,
+      );
+    }
+  }
+  if (
+    patch.general?.appearance?.darkTheme !== undefined
+    || patch.general?.appearance?.lightTheme !== undefined
+  ) {
+    // `palette` was a development-only key that dark_theme / light_theme
+    // replaced before any release read it. Drop it once the operator picks
+    // a theme so it does not linger as a setting nothing reads.
+    edits.push({ op: "delete", path: ["general", "appearance", "palette"] });
+  }
+  if (patch.general?.appearance?.themedDockIcon !== undefined) {
+    // On by default, so only the opt-out is written.
+    if (patch.general.appearance.themedDockIcon) {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "themed_dock_icon"],
+      });
+    } else {
+      set(["general", "appearance", "themed_dock_icon"], false);
     }
   }
   if (patch.onboarding?.completed !== undefined) {
@@ -1866,6 +1929,10 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
+      interactiveSvgSkipNotice: readBoolean(
+        general?.interactive_svg_skip_notice,
+      ),
+      interactiveSvgAutoOpen: readBoolean(general?.interactive_svg_auto_open),
       mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
@@ -1922,6 +1989,9 @@ function normalizeDesktopConfig(
       },
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
+        darkTheme: readDarkTheme(generalAppearance?.dark_theme),
+        lightTheme: readLightTheme(generalAppearance?.light_theme),
+        themedDockIcon: readBoolean(generalAppearance?.themed_dock_icon),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
@@ -2305,6 +2375,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
+  const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
+  const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
@@ -2326,6 +2398,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
+    interactiveSvgSkipNotice !== undefined ||
+    interactiveSvgAutoOpen !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
@@ -2365,6 +2439,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (attentionPromoteOnTurnEnd !== undefined) {
       pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
+    }
+    if (interactiveSvgSkipNotice !== undefined) {
+      pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;
+    }
+    if (interactiveSvgAutoOpen !== undefined) {
+      pruned.general.interactiveSvgAutoOpen = interactiveSvgAutoOpen;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
@@ -2668,6 +2748,22 @@ function readAppearanceTheme(
   value: TomlScalar | undefined,
 ): DesktopAppearanceTheme | undefined {
   return typeof value === "string" && isDesktopAppearanceTheme(value)
+    ? value
+    : undefined;
+}
+
+function readDarkTheme(
+  value: TomlScalar | undefined,
+): DesktopDarkTheme | undefined {
+  return typeof value === "string" && isDesktopDarkTheme(value)
+    ? value
+    : undefined;
+}
+
+function readLightTheme(
+  value: TomlScalar | undefined,
+): DesktopLightTheme | undefined {
+  return typeof value === "string" && isDesktopLightTheme(value)
     ? value
     : undefined;
 }

@@ -20,6 +20,7 @@ import type {
   PrSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
+  ThreadLock,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
 } from "./navigation";
@@ -1212,6 +1213,8 @@ export type AppServerReadThreadResponse = {
    */
   pendingRequest?: AppServerPendingRequestNotification;
   pricing?: {
+    /** Whole-thread estimate input; never added to observed ledger totals. */
+    snapshot?: import("../token-usage-pricing").ThreadPricingSnapshot;
     /** Observed context compactions, oldest first. */
     compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
@@ -1380,7 +1383,7 @@ export type ThreadTokenMiserSavings = {
   withoutGateCostMicros: number;
   /** 2 — what the helper actually charged. */
   gateCostMicros: number;
-  /** 3 — summaries and retrievals the parent did receive, and their replays. */
+  /** 3 — summaries, retrievals and replays, plus full cached prompts on retrieval requests. */
   revealedCostMicros: number;
   /** 1 − 2 − 3. Negative when the gate cost more than it saved. */
   savingsMicros: number;
@@ -2310,6 +2313,11 @@ export type AppServerNotification =
         displayText?: string;
         /** The owner replaced pending input, so existing previews must refresh. */
         inputUpdated?: boolean;
+        /**
+         * Generated display title. Sent on a refresh once the helper answers;
+         * an `inputUpdated` refresh without one clears the previous title.
+         */
+        title?: string;
         position?: number;
         turnId?: string;
         automationRunId?: string;
@@ -2332,6 +2340,14 @@ export type AppServerNotification =
         threadId: string;
         /** Complete reaction set, ordered by insertion. */
         reactions: string[];
+      };
+    }
+  | {
+      method: "thread/lock/updated";
+      params: {
+        threadId: string;
+        /** Absent once the thread is unlocked. */
+        lock?: ThreadLock;
       };
     }
   | {

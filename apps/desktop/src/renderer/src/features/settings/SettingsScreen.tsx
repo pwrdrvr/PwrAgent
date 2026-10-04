@@ -913,6 +913,9 @@ function SettingsSectionBody(props: {
             general: { attentionPromoteOnTurnEnd },
           });
         }}
+        onInteractiveSvgChange={async (patch) => {
+          await props.settings.writeConfig({ general: patch });
+        }}
         onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },
@@ -928,6 +931,11 @@ function SettingsSectionBody(props: {
         onNotificationsEnabledChange={async (notificationsEnabled) => {
           await props.settings.writeConfig({
             general: { notificationsEnabled },
+          });
+        }}
+        onThemedDockIconChange={async (themedDockIcon) => {
+          await props.settings.writeConfig({
+            general: { appearance: { themedDockIcon } },
           });
         }}
         onClearMessagingAcknowledgment={async () => {

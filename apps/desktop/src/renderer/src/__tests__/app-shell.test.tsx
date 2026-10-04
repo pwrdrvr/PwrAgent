@@ -29,7 +29,7 @@ import type {
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   App,
   inferReplayCodexProfileModel,
@@ -498,6 +498,129 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("puts the caret in the new-thread composer after jumping to a project", async () => {
+    const project = (label: string) => ({
+      key: `directory:/Users/me/repos/${label}`,
+      kind: "directory" as const,
+      label,
+      path: `/Users/me/repos/${label}`,
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    });
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (request: EnsureDirectoryLaunchpadRequest) => ({
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+    );
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [project("PwrAgent"), project("PwrSnap")],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+      }),
+    });
+
+    render(<App />);
+
+    const jumpTo = async (label: string): Promise<void> => {
+      fireEvent.keyDown(window, {
+        metaKey: true,
+        code: "KeyK",
+        key: "k",
+      });
+      const quickSearch = await screen.findByRole("dialog", {
+        name: "Jump to thread or project",
+      });
+      const field = within(quickSearch).getByRole("textbox", {
+        name: "Jump to thread or project",
+      });
+      fireEvent.change(field, { target: { value: label } });
+      await within(quickSearch).findByRole("option", { name: new RegExp(label) });
+      await act(async () => {
+        fireEvent.keyDown(field, { key: "Enter" });
+      });
+      await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+        expect.objectContaining({ directoryLabel: label }),
+      ));
+    };
+    // The reveal ends by scrolling the project's row, in the same frame that
+    // used to focus its header, so a scroll of that row is the moment to
+    // check where focus is.
+    const scrollIntoView = vi.fn<(this: HTMLElement) => void>();
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    onTestFinished(() => {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    });
+    const revealed = async (label: string): Promise<void> => {
+      await waitFor(() => {
+        expect(scrollIntoView.mock.contexts.some((row) =>
+          row.querySelector(".directory-row__summary")?.textContent?.includes(label)))
+          .toBe(true);
+      });
+    };
+
+    // The first jump loads the thread view; the second uses the mounted view.
+    // Both the sidebar reveal and scoped composer focus must finish with the
+    // caret where the operator will type.
+    await jumpTo("PwrAgent");
+    // The composer becomes available after deferred readiness and the import
+    // have committed. Await that visible state: awaiting the import inside act
+    // can hold the readiness update that starts the import in act's queue.
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
+    await revealed("PwrAgent");
+
+    scrollIntoView.mockClear();
+    await jumpTo("PwrSnap");
+    await revealed("PwrSnap");
+    // Changing the composer scope schedules focus in a timer, then Tiptap's
+    // animation frame. The sidebar's reveal frame can finish first.
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
+  });
+
   // Settings and Automations draw over the whole shell. The sidebar and main
   // go inert under them, so Tab cannot walk the invisible controls behind,
   // and focus goes back to the control that opened the layer on exit.
@@ -603,7 +726,6 @@ describe("App", () => {
 
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
-    const threadViewImported = createDeferred<void>();
     const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
     const remoteWorkspace = {
       key: "workspace:new-thread",
@@ -707,11 +829,6 @@ describe("App", () => {
         },
         onWindowFocus: () => () => undefined,
         readFederationHealth,
-        recordStartupProfileEvent: (event: string) => {
-          if (event === "thread-view-import:end") {
-            threadViewImported.resolve(undefined);
-          }
-        },
       }),
     });
 
@@ -741,13 +858,9 @@ describe("App", () => {
       federationTarget: remoteTarget,
       preferredBackend: undefined,
     }));
-    // The menu intentionally fire-and-forgets its async target callback, and
-    // thread detail is loaded after two animation frames. The bridge call can
-    // therefore finish before the composer module is ready on a loaded CI
-    // runner. Synchronize on the app's startup-profile readiness event rather
-    // than extending the query timeout.
-    await threadViewImported.promise;
-    await flushReactUpdates();
+    // The menu fire-and-forgets its target callback and the bridge can finish
+    // before lazy renderer readiness. Await the committed composer; the import
+    // event itself precedes the React update that installs the component.
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
     // The composer says where the thread will start, before anything is sent.
@@ -1520,7 +1633,9 @@ describe("App", () => {
     });
     fail("failed-turn");
     expect(screen.getAllByText(message)).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: action === "retry" || retryFailure ? "Retry" : action === "delete" ? "Delete" : "Dismiss notice" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: action === "retry" || retryFailure ? "Retry" : action === "delete" ? "Delete" : "Dismiss notice" }));
+    });
     if (action === "delete") {
       await waitFor(() => expect(screen.queryByText("Turn failed")).not.toBeInTheDocument());
       expect(screen.queryByText(message)).not.toBeInTheDocument();
@@ -1553,7 +1668,7 @@ describe("App", () => {
     expect(screen.queryByText("Turn failed")).not.toBeInTheDocument();
     expect(screen.queryByText(message)).not.toBeInTheDocument();
     if (action === "dismiss") {
-      act(() => {
+      await act(async () => {
         for (const listener of listeners) listener({ backend: "codex", notification: {
           method: "thread/turnQueue/updated", params: {
             threadId, queueEntryId: "held-message", origin: "manual", status: "held", errorMessage: message,
@@ -2166,12 +2281,17 @@ describe("App", () => {
         },
         appearance: {
           theme: { value: "system", source: "default" },
+          darkTheme: { value: "tangerine-dark", source: "default" },
+          lightTheme: { value: "tangerine-light", source: "default" },
+          themedDockIcon: { value: true, source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },
         },
         codexProfileModel: { value: "shared", source: "default" },
         messagingAcknowledgment: { value: null, source: "default" },
+        interactiveSvgSkipNotice: { value: false, source: "default" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },
@@ -2482,6 +2602,8 @@ describe("App", () => {
             configRevision: "fixture",
             appearance: {
               theme: "system" as const,
+              darkTheme: "tangerine-dark" as const,
+              lightTheme: "tangerine-light" as const,
               density: "mission-control" as const,
               sidebarTextSize: "md" as const,
               transcriptTextSize: "md" as const,
@@ -2513,6 +2635,9 @@ describe("App", () => {
           general: {
             appearance: {
               theme: { value: "system", source: "default" },
+              darkTheme: { value: "tangerine-dark", source: "default" },
+              lightTheme: { value: "tangerine-light", source: "default" },
+              themedDockIcon: { value: true, source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
               transcriptTextSize: { value: "md", source: "default" },
@@ -3502,6 +3627,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3647,6 +3775,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3768,6 +3899,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3876,6 +4010,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3974,6 +4111,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4070,6 +4210,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4214,6 +4357,9 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4281,12 +4427,12 @@ describe("App", () => {
 
   it("copies the selected thread's local diagnostics from the Help menu push", async () => {
     let copyDiagnosticsListener: (() => void) | undefined;
-    const copyText = vi.fn(async () => undefined);
+    const copyRichText = vi.fn(async () => undefined);
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: ownerApi({
-        copyText,
+        copyRichText,
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -4377,19 +4523,22 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenCalledWith(expect.stringContaining([
-        "Thread ID: thread-1",
-        "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
-        "Provider/backend: codex",
-        "Thread title: Fix handoff project paths and diagnostics",
-        "PwrAgent version: 1.2.3",
-        "PwrAgent build: Packaged",
-        "PwrAgent profile: work",
-        "Main process PID: 4100",
-        "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
-        "Codex profile path: /Users/operator/.codex/profiles/work",
-      ].join("\n")));
+      expect(copyRichText).toHaveBeenCalledWith({
+        text: expect.stringContaining([
+          "Thread ID: thread-1",
+          "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
+          "Provider/backend: codex",
+          "Thread title: Fix handoff project paths and diagnostics",
+          "PwrAgent version: 1.2.3",
+          "PwrAgent build: Packaged",
+          "PwrAgent profile: work",
+          "Main process PID: 4100",
+          "Renderer process PID: 4101",
+          "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+          "Codex profile path: /Users/operator/.codex/profiles/work",
+        ].join("\n")),
+        html: expect.stringContaining("<pre><code>Collected at (UTC):"),
+      });
     });
   });
 
@@ -6503,13 +6652,17 @@ describe("App", () => {
     fireEvent.click(
       await screen.findByRole("menuitem", { name: "Sub-thread in This Directory" }),
     );
-    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    await screen.findByRole("heading", { level: 2, name: "New sub-thread" });
     expect(
       await screen.findByRole("button", { name: "First project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(
       await screen.findByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
+    // The selection has a row: the draft, under the thread it came from.
+    expect(
+      await screen.findByRole("button", { name: "New sub-thread draft, under Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     await clickButton("Cancel");
     await screen.findByRole("heading", {
@@ -6519,6 +6672,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
   it("renames the selected thread from the sidebar actions menu", async () => {

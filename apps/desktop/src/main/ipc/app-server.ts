@@ -1,3 +1,4 @@
+import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
@@ -167,6 +168,8 @@ import {
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
+  type SetThreadLockRequest,
+  type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
@@ -199,6 +202,8 @@ import {
   type ListWorktreeUnpublishedCommitsResponse,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
+  type ReadWorktreeImageRequest,
+  type ReadWorktreeImageResponse,
   type ResolveMissingCodexThreadsRequest,
   type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
@@ -233,6 +238,7 @@ import {
   rankInboxThreadKeys,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { readWorktreeImage } from "../app-server/worktree-image-reader";
 import {
   disposeDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,
@@ -303,6 +309,7 @@ import {
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
@@ -328,6 +335,7 @@ import {
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_LOCK_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -1484,11 +1492,11 @@ class DesktopAppServerService {
     string,
     ThreadPrRefreshContext[]
   >();
-  // Merged PR commits are accepted as "pushed" even when the PR head branch
-  // has been deleted and no remote ref still contains those SHAs locally.
-  private readonly mergedPrCommitShasByThread = new Map<
+  // Provider-observed PR commits are published even with stale local remote
+  // refs or a deleted source branch. Keep PR identities to read fresh status.
+  private readonly publishedPrCommitsByThread = new Map<
     string,
-    { worktreePath: string; commitShas: Set<string> }
+    { worktreePath: string; prs: PrSummary[] }
   >();
   private threadSearchService: ThreadSearchService | null = null;
   private threadMigrationService: ThreadMigrationService | null = null;
@@ -2413,7 +2421,7 @@ class DesktopAppServerService {
     const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
       canonicalSnapshot.threads,
     );
-    this.rememberMergedPrCommitShas(
+    this.rememberPublishedPrCommitShas(
       canonicalSnapshot.threads,
       detachedPrsByThreadKey,
     );
@@ -2617,7 +2625,7 @@ class DesktopAppServerService {
   async resolveEditCommitStates(
     request: ResolveEditCommitStatesRequest,
   ): Promise<ResolveEditCommitStatesResponse> {
-    const acceptedPushedCommitShas = this.getMergedPrCommitShasForWorktree(
+    const acceptedPushedCommitShas = this.getPublishedPrCommitShasForWorktree(
       request.worktreePath,
     );
     // Coalesce identical in-flight requests (same worktree + groups) so an
@@ -2693,13 +2701,19 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
       request.worktreePath,
       {
-        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+        acceptedPushedCommitShas: this.getPublishedPrCommitShasForWorktree(
           request.worktreePath,
         ),
         maxCommits: request.maxCommits,
         maxFilesPerCommit: request.maxFilesPerCommit,
       },
     );
+  }
+
+  async readWorktreeImage(
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> {
+    return await readWorktreeImage(request);
   }
 
   async getWorktreeUnpublishedCommitDiff(
@@ -2730,7 +2744,7 @@ class DesktopAppServerService {
       request.commitSha,
       request.path,
       {
-        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+        acceptedPushedCommitShas: this.getPublishedPrCommitShasForWorktree(
           request.worktreePath,
         ),
         maxBytes: request.maxBytes,
@@ -2993,13 +3007,13 @@ class DesktopAppServerService {
     return detachedPrsByThreadKey;
   }
 
-  private rememberMergedPrCommitShas(
+  private rememberPublishedPrCommitShas(
     threads: NavigationSnapshot["threads"],
     detachedPrsByThreadKey: Map<string, PrSummary[]> = new Map(),
   ): void {
     for (const thread of threads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      this.rememberMergedPrCommitShasForThread({
+      this.rememberPublishedPrCommitShasForThread({
         backend: thread.source,
         threadId: thread.id,
         worktreePath: this.resolveThreadWorkingStatePath(thread),
@@ -3011,7 +3025,7 @@ class DesktopAppServerService {
     }
   }
 
-  private rememberMergedPrCommitShasForThread(params: {
+  private rememberPublishedPrCommitShasForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
     worktreePath?: string;
@@ -3021,37 +3035,29 @@ class DesktopAppServerService {
     const worktreePath = params.worktreePath?.trim()
       || this.worktreePathByThreadKey.get(threadKey);
     if (!worktreePath) {
-      this.mergedPrCommitShasByThread.delete(threadKey);
+      this.publishedPrCommitsByThread.delete(threadKey);
       return undefined;
     }
-    const commitShas = this.extractMergedPrCommitShas(params.prs);
-    if (commitShas.length === 0) {
-      this.mergedPrCommitShasByThread.delete(threadKey);
+    const prs = this.canonicalizePrs(params.prs);
+    if (prs.length === 0) {
+      this.publishedPrCommitsByThread.delete(threadKey);
       return worktreePath;
     }
-    this.mergedPrCommitShasByThread.set(threadKey, {
+    this.publishedPrCommitsByThread.set(threadKey, {
       worktreePath,
-      commitShas: new Set(commitShas),
+      prs,
     });
     return worktreePath;
   }
 
-  private extractMergedPrCommitShas(
-    prs: PrSummary[] | undefined,
-  ): string[] {
-    return (prs ?? [])
-      .filter((pr) => pr.lifecycleState === "merged" || pr.state === "merged")
-      .flatMap((pr) => normalizeCommitShas(pr.commitShas) ?? []);
-  }
-
-  private getMergedPrCommitShasForWorktree(worktreePath: string): string[] {
+  private getPublishedPrCommitShasForWorktree(worktreePath: string): string[] {
     const accepted = new Set<string>();
     const normalizedWorktreePath = worktreePath.trim();
-    for (const entry of this.mergedPrCommitShasByThread.values()) {
+    for (const entry of this.publishedPrCommitsByThread.values()) {
       if (entry.worktreePath !== normalizedWorktreePath) {
         continue;
       }
-      for (const sha of entry.commitShas) {
+      for (const sha of publishedPrCommitShas(this.canonicalizePrs(entry.prs))) {
         accepted.add(sha);
       }
     }
@@ -3487,7 +3493,7 @@ class DesktopAppServerService {
         worktreePath,
         ...(params.userAction ? { userAction: true } : {}),
         acceptedPushedCommitShas:
-          this.getMergedPrCommitShasForWorktree(worktreePath),
+          this.getPublishedPrCommitShasForWorktree(worktreePath),
       })) {
         scheduled += 1;
       }
@@ -3698,14 +3704,14 @@ class DesktopAppServerService {
         this.rememberThreadPrRefreshContexts(ownerThreads);
         const detachedPrs = await this.readDetachedPrsByThreadKey(ownerThreads);
         if (!isCurrent()) continue;
-        this.rememberMergedPrCommitShas(ownerThreads, detachedPrs);
+        this.rememberPublishedPrCommitShas(ownerThreads, detachedPrs);
         this.syncPrPollingSchedulerState();
         void getDesktopBackendRegistry().refreshThreadGitWorkingStates(ownerThreads).catch((error: unknown) => {
           appServerLog.warn("owner worktree status refresh failed", { error: String(error) });
         });
         if (complete) {
           const live = new Set(canonical.threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
-          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.mergedPrCommitShasByThread]) {
+          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.publishedPrCommitsByThread]) {
             for (const key of map.keys()) if (!live.has(key)) map.delete(key);
           }
           const liveDirectories = new Set(index.directories.map((directory) => directory.key));
@@ -5368,7 +5374,7 @@ class DesktopAppServerService {
     detachedPrs?: PrSummary[];
   }): Promise<void> {
     await this.rememberThreadPrAttachmentUpdate(params);
-    const worktreePath = this.rememberMergedPrCommitShasForThread({
+    const worktreePath = this.rememberPublishedPrCommitShasForThread({
       ...params,
       prs: [...params.prs, ...(params.detachedPrs ?? [])],
     });
@@ -6566,6 +6572,26 @@ class DesktopAppServerService {
       threadId: request.threadId,
       reactions,
     };
+  }
+
+  async setThreadLock(
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadLock(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadLock({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      locked: request.locked,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+    }, { source: "operator" });
   }
 
   async setThreadPin(
@@ -8721,6 +8747,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadReaction(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+    async (
+      _event,
+      request: SetThreadLockRequest,
+    ): Promise<SetThreadLockResponse> => {
+      return await appServerService.setThreadLock(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
@@ -9140,6 +9176,21 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.getWorktreeUnpublishedCommitDiff(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
+    async (
+      event,
+      request: ReadWorktreeImageRequest,
+    ): Promise<ReadWorktreeImageResponse> => {
+      // Image bytes are read from this machine's disk only. A remote thread's
+      // worktree path names a directory on its owner, never on the viewer.
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("Worktree image reads are not available for remote threads.");
+      }
+      return await appServerService.readWorktreeImage(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -9456,6 +9507,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
@@ -9468,6 +9520,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GLAB_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);

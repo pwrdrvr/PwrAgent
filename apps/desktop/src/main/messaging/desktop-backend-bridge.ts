@@ -16,6 +16,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
@@ -207,6 +209,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       })),
     ]);
     const activeTurn = this.registry.getActiveTurnForThread(request);
+    const pendingRequest = this.registry.getPendingRequestForThread(request);
     const threadStatus = this.registry.isThreadTurnOccupied(request)
       ? "active"
       : "idle";
@@ -228,6 +231,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       : undefined;
     return {
       ...(activeTurn ? { activeTurn } : {}),
+      ...(pendingRequest ? { pendingRequest } : {}),
       ...(thread ? { thread } : {}),
       threadStatus,
     };
@@ -978,6 +982,19 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       return await remote.startThread(stripFederationTarget(request));
     }
     return await this.registry.startThread(request);
+  }
+
+  async setThreadLock(request: SetThreadLockRequest): Promise<SetThreadLockResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.setThreadLock(stripFederationTarget(request));
+    }
+    return await this.registry.setThreadLock({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      locked: request.locked,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+    }, { source: "messaging" });
   }
 
   async compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse> {

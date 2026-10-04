@@ -5,10 +5,12 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  realpathSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,10 +61,10 @@ export const NOTICE_PNPM_ARGS = {
  */
 export const NOTICE_DEV_DEPENDENCIES = new Set(["electron"]);
 
-export function runPnpmLicenses(args) {
+function runPnpmJson(args) {
   const result = spawnSync(
     "pnpm",
-    ["licenses", "list", "--json", "--filter", NOTICE_PNPM_FILTER, ...args],
+    args,
     {
       cwd: repoRoot,
       encoding: "utf8",
@@ -73,14 +75,76 @@ export function runPnpmLicenses(args) {
     },
   );
   if (result.error) {
-    process.stderr.write(`failed to run pnpm licenses: ${result.error.message}\n`);
+    process.stderr.write(`failed to run pnpm ${args[0]}: ${result.error.message}\n`);
     process.exit(1);
   }
   if (result.status !== 0) {
-    process.stderr.write(result.stderr ?? "pnpm licenses list failed\n");
+    process.stderr.write(result.stderr ?? `pnpm ${args[0]} failed\n`);
     process.exit(result.status ?? 1);
   }
   return JSON.parse(result.stdout);
+}
+
+export function runPnpmLicenses(args) {
+  const report = runPnpmJson(["licenses", "list", "--json", "--filter", NOTICE_PNPM_FILTER, ...args]);
+  // pnpm 12's license report omits installed peers. Its dependency tree still
+  // includes them; merge those manifests into the same report used by the
+  // notice generator and the allowlist gate.
+  const projects = runPnpmJson(["list", "--json", "--depth", "Infinity", "--filter", NOTICE_PNPM_FILTER, ...args]);
+  return supplementLicenseReport(report, projects);
+}
+
+export function supplementLicenseReport(report, projects) {
+  const known = new Set(flattenLicenseReport(report).map(stableRecordKey));
+  const workspacePaths = new Set(projects.map((project) => realpathSync(project.path)));
+  const visited = new Set();
+  function visit(entry, optional = false) {
+    if (!entry.path || visited.has(entry.path)) return;
+    const manifestPath = join(entry.path, "package.json");
+    // pnpm list includes optional packages for other platforms even when their
+    // files are absent. The existing platform-variant expansion covers those.
+    if (optional && !existsSync(manifestPath)) return;
+    const packagePath = realpathSync(entry.path);
+    if (visited.has(packagePath)) return;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    visited.add(packagePath);
+    if (!workspacePaths.has(packagePath)) {
+      const key = `${manifest.name}@${manifest.version}`;
+      if (!known.has(key)) {
+        known.add(key);
+        const license = typeof manifest.license === "string" ? manifest.license : "Unknown";
+        const entries = report[license] ??= [];
+        entries.push({
+          name: manifest.name,
+          versions: [manifest.version],
+          paths: [packagePath],
+          homepage: manifest.homepage,
+          author: manifest.author,
+          description: manifest.description,
+        });
+      }
+    }
+    // Unsaved dependencies can be left over from an earlier install. They are
+    // absent from the selected dependency graph and must not enter the notice.
+    for (const field of ["dependencies", "optionalDependencies", "devDependencies"]) {
+      for (const [name, dependency] of Object.entries(entry[field] ?? {})) {
+        visit(dependency, field === "optionalDependencies" || Object.hasOwn(manifest.optionalDependencies ?? {}, name));
+      }
+    }
+    // Some optional peers (such as TypeScript under @mattermost/client) appear
+    // only as unsaved root links in pnpm list. Follow declared runtime edges
+    // through Node's search paths rather than including all unsaved packages.
+    const require = createRequire(manifestPath);
+    for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+      for (const name of Object.keys(manifest[field] ?? {})) {
+        const installedPath = require.resolve.paths(name)?.map((path) => join(path, name))
+          .find((path) => existsSync(join(path, "package.json")));
+        if (installedPath) visit({ path: installedPath });
+      }
+    }
+  }
+  for (const project of projects) visit(project);
+  return report;
 }
 
 export function flattenLicenseReport(report) {
@@ -434,6 +498,13 @@ function main() {
   const gitNotices = join(repoRoot, "apps/desktop/resources/embedded-git");
   for (const file of ["SOURCES", "COPYING", "LICENSE.git-lfs", "LICENSE.git-credential-manager", "NOTICE"]) {
     lines.push(readFileSync(join(gitNotices, file), "utf8").trim(), "");
+  }
+  lines.push("Color theme palettes");
+  lines.push("--------------------");
+  lines.push("");
+  const colorThemeNotices = join(repoRoot, "apps/desktop/resources/color-themes");
+  for (const file of ["LICENSE.catppuccin", "LICENSE.solarized"]) {
+    lines.push(readFileSync(join(colorThemeNotices, file), "utf8").trim(), "");
   }
   lines.push("Dependency Summary");
   lines.push("------------------");

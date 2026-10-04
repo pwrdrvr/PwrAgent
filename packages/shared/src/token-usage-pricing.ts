@@ -23,6 +23,19 @@ export type ThreadUsageTokenBreakdown = {
   uncachedInputTokens?: number;
 };
 
+/** Read-only provider totals, kept separate from the observed usage ledger. */
+export type ThreadPricingSnapshot = {
+  /** Provider estimate covers the recorded model/speed groups, independently of current settings. */
+  pricingSource?: "provider";
+  estimatedCostMicros?: number;
+  /** Current model is declared local in PwrAgent and has zero token cost. */
+  localModel?: boolean;
+  model?: string;
+  modelLabel?: string;
+  serviceTier?: string;
+  tokens?: ThreadUsageTokenBreakdown;
+};
+
 export type ThreadUsageSettingsSnapshot = {
   backend: string;
   fastMode?: boolean;

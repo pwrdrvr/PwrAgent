@@ -84,7 +84,7 @@ type PrAutoDispatchStore = {
     ownerId: string;
   }): Promise<
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
-    | { status: "disabled" | "stale" | "attempt-limit" }
+    | { status: "disabled" | "locked" | "stale" | "attempt-limit" }
   >;
   reserveThreadPrAutoDispatchBudget(params: {
     backend: AppServerBackendKind;
@@ -502,7 +502,9 @@ export class PrAutoDispatchCoordinator {
     });
     if (begin.status !== "ready") {
       activity(describePrRepairDecision(begin.status), "warning");
-      if (begin.status === "disabled") {
+      // A lock parks the thread for another agent, so its repair is
+      // dropped rather than retried once the thread is unlocked.
+      if (begin.status === "disabled" || begin.status === "locked") {
         await this.options.store.cancelThreadPrAutoDispatch({
           ...identity,
           fingerprint,

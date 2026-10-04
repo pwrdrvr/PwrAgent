@@ -15,6 +15,7 @@ import {
   type ReactElement,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -89,19 +90,36 @@ import {
 import { createSubthreadTrays } from "./subthread-trays";
 import {
   interleaveStartingSubthreads,
+  isSubthreadLaunchpadDraft,
   selectUnlandedStartingThreads,
-  StartingThreadRow,
+  type PendingSidebarRow,
 } from "./StartingThreadRow";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import { PendingThreadRow } from "./SubthreadDraftRow";
+import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
 
 type DirectoriesListProps = {
   presentationOrder?: NavigationPresentationOrder;
   /**
-   * Threads still starting. Each renders in the slot its thread will take:
-   * under its parent, or in its project where a new top-level thread sorts.
+   * Threads still starting, and sub-threads still being written. Each
+   * renders in the slot its thread will take: under its parent, or in its
+   * project where a new top-level thread sorts.
    */
-  startingThreads?: PendingLaunchpadCreation[];
-  onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
+  startingThreads?: PendingSidebarRow[];
+  onSelectStartingThread?: (entry: PendingSidebarRow) => void;
+  onOpenSubthreadDraftContextMenu?: (
+    draft: SubthreadLaunchpadDraft,
+    position: { x: number; y: number },
+  ) => void;
+  /**
+   * Shown when no project has a row. Defaults to the lens's own reading; the
+   * Sidebar says "No threads yet." when no thread exists in any lens.
+   */
+  emptyLabel?: string;
+  /**
+   * The lane's last item (the start actions), after every directory, so it
+   * scrolls with them. Also follows the empty state.
+   */
+  footer?: ReactNode;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -115,7 +133,8 @@ type DirectoriesListProps = {
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
   directories: NavigationDirectorySummary[];
-  projectReveal?: { key: string; focus?: boolean };
+  /** Expand and scroll to a project. Focus stays where it is: the launchpad's composer takes it. */
+  projectReveal?: { key: string };
   onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
@@ -899,7 +918,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   );
   // The projects a starting thread will render in. A sub-thread launchpad's
   // own key names no project; its thread lands under the parent's row.
-  const startingThreadDirectoryKeys = useCallback((creation: PendingLaunchpadCreation): string[] => {
+  const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
     return parent
       ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
@@ -912,7 +931,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
-  const handledProjectReveal = useRef<{ key: string; focus?: boolean } | undefined>(undefined);
+  const handledProjectReveal = useRef<{ key: string } | undefined>(undefined);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -987,13 +1006,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // Loaded threads provide the scroll extent below the header and can
     // shift it when another expanded directory above finishes loading.
     if (revealPagesInFlight) return;
-    // Wait until the palette's modal cleanup has restored its prior focus.
     const frame = requestAnimationFrame(() => {
       // The header is sticky: its visual top may already be at the viewport
       // edge while the project's threads are scrolled out above it. Reveal the
-      // section's normal-flow start, then focus without moving the scroll.
+      // section's normal-flow start.
       header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
-      if (request.focus !== false) header.focus({ preventScroll: true });
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });
@@ -1340,8 +1357,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   });
 
-  if (visibleDirectories.length === 0) {
-    return <p className="sidebar-empty">No directory-linked threads.</p>;
+  // A starting thread with no loaded project still needs its row: an empty
+  // index is exactly when navigation shows this lens for the first thread.
+  if (visibleDirectories.length === 0 && unplacedStartingThreads.length === 0) {
+    return (
+      <>
+        <p className="sidebar-empty">{props.emptyLabel ?? "No directory-linked threads."}</p>
+        {props.footer}
+      </>
+    );
   }
 
   /**
@@ -1467,13 +1491,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {trayEntries.flatMap((entry) => {
               if (entry.kind === "starting") {
                 return [
-                  <StartingThreadRow
+                  <PendingThreadRow
                     key={`${directory.key}:${entry.creation.selectionKey}`}
                     compact
-                    creation={entry.creation}
+                    entry={entry.creation}
                     locationMode="kind"
                     nestedDepth={entry.depth}
                     selected={props.selectedItemKey === entry.creation.selectionKey}
+                    onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
                     onSelect={props.onSelectStartingThread}
                   />,
                 ];
@@ -1633,16 +1658,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
       creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+    // A sub-thread being written opens its parent's tray and gives the
+    // parent its chevron, as the thread will once it lands.
+    const draftParentKeys = new Set(
+      startingSubthreads.filter(isSubthreadLaunchpadDraft).map((draft) => draft.parentThreadKey),
+    );
+    const holdsSubthreadDraft = (threadKey: string): boolean =>
+      draftParentKeys.size > 0
+      && (draftParentKeys.has(threadKey)
+        || trays.subtree(threadKey).some((child) => draftParentKeys.has(threadSummaryIdentityKey(child))));
     const startingRootSlot = !directoryThreadsCollapsed
       ? "unpinned"
       : (directory.pinnedRootCount ?? 0) > 0 ? "pinned" : "selected";
     const renderStartingRootThreads = (slot: typeof startingRootSlot): ReactElement[] | null =>
       slot === startingRootSlot
         ? startingRootThreads.map((creation) => (
-            <StartingThreadRow
+            <PendingThreadRow
               key={`${directory.key}:${creation.selectionKey}`}
               compact
-              creation={creation}
+              entry={creation}
               locationMode="kind"
               selected={props.selectedItemKey === creation.selectionKey}
               onSelect={props.onSelectStartingThread}
@@ -1683,11 +1717,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
     ): ReactElement => {
       const threadKey = threadSummaryIdentityKey(thread);
       const ordinarySubthreadCount = trays.subtree(threadKey).length;
+      const holdsDraft = holdsSubthreadDraft(threadKey);
       const subthreadCount = getSubthreadDisclosureCount(
         thread,
         ordinarySubthreadCount,
-      );
-      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+      ) + (holdsDraft ? 1 : 0);
+      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
       return (
         <Fragment key={`${directory.key}:${threadKey}`}>
           <ThreadRow
@@ -2118,11 +2153,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
                             trays.subtree(threadKey).length;
+                          const holdsDraft = holdsSubthreadDraft(threadKey);
                           const subthreadCount = getSubthreadDisclosureCount(
                             thread,
                             ordinarySubthreadCount,
-                          );
-                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+                          ) + (holdsDraft ? 1 : 0);
+                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
                               {pinnedIndex === keepAtTopSeamIndex ? (
@@ -2323,12 +2359,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
         // they wait at the top, the one place every lens can show them.
         <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
           {unplacedStartingThreads.map((creation) => (
-            <StartingThreadRow
+            <PendingThreadRow
               key={creation.selectionKey}
               compact
-              creation={creation}
+              entry={creation}
               locationMode="label"
               selected={props.selectedItemKey === creation.selectionKey}
+              showParent
+              onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
               onSelect={props.onSelectStartingThread}
             />
           ))}
@@ -2394,6 +2432,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         </div>
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
+      {props.footer}
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );

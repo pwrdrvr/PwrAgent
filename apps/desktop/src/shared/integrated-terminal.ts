@@ -3,6 +3,12 @@ import type {
   FederationRemoteTarget,
 } from "@pwragent/shared";
 
+export type IntegratedTerminalContextMenuRequest = {
+  x: number;
+  y: number;
+  canCopy: boolean;
+};
+
 export type IntegratedTerminalCreateRequest = {
   /**
    * The terminal to attach to. A pane that already has one passes it back so

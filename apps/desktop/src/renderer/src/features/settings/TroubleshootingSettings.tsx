@@ -362,6 +362,7 @@ export function TroubleshootingSettings(props: {
             control={
               appMetadata && processIds ? (
                 <SettingsCopyValue
+                  copyAsCodeBlock
                   copyValue={() => buildTroubleshootingDiagnosticsInfo(appMetadata)}
                   desktopApi={props.desktopApi}
                   label="local diagnostics info"

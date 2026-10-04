@@ -2,11 +2,15 @@ import React, { Suspense, lazy, type ReactElement } from "react";
 import ReactDOM from "react-dom/client";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
 } from "@pwragent/shared";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
+import { DataTooltipLayer } from "./lib/DataTooltipLayer";
+import { RendererRecoveryStateProvider } from "./lib/RendererRecoveryState";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
@@ -40,6 +44,8 @@ const desktopApi = (
       onAppearanceChanged?: (
         callback: (appearance: {
           theme: DesktopAppearanceTheme;
+          darkTheme: DesktopDarkTheme;
+          lightTheme: DesktopLightTheme;
           density: DesktopAppearanceDensity;
           sidebarTextSize: DesktopTextSize;
           transcriptTextSize: DesktopTextSize;
@@ -74,6 +80,8 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
   (appearance) => {
     applyAppearanceAttributes(
       resolveTheme(appearance.theme),
+      appearance.darkTheme,
+      appearance.lightTheme,
       appearance.density,
       appearance.sidebarTextSize,
       appearance.transcriptTextSize,
@@ -239,6 +247,7 @@ function chooseRoot(): ReactElement {
 }
 
 desktopApi?.recordStartupProfileEvent?.("react-render:start");
+const rendererRoot = chooseRoot();
 // Mount through `mountRendererRoot` rather than calling `createRoot` here:
 // an HMR update re-executes this module in the live page (see that module's
 // notes), and a second `createRoot` on the same container leaves two roots
@@ -246,9 +255,17 @@ desktopApi?.recordStartupProfileEvent?.("react-render:start");
 mountRendererRoot(
   document.getElementById("root")!,
   <React.StrictMode>
-    <RendererErrorBoundary>
-      <Suspense fallback={null}>{chooseRoot()}</Suspense>
-    </RendererErrorBoundary>
+    <RendererRecoveryStateProvider draftsEnabled={rendererRoot.type === App || rendererRoot.type === StarMapWindow}>
+      <RendererErrorBoundary>
+        <Suspense fallback={null}>{rendererRoot}</Suspense>
+      </RendererErrorBoundary>
+      {/* Every window's `.tooltip-target[data-tooltip]` controls, drawn on
+          document.body so no pane can clip or out-stack them. A sibling of
+          the boundary, not a child: it is window chrome that keeps serving
+          the recovery fallback, and the boundary's only child stays the
+          Suspense the renderer-recovery E2E injects its fault into. */}
+      <DataTooltipLayer />
+    </RendererRecoveryStateProvider>
   </React.StrictMode>,
   (container) => ReactDOM.createRoot(container),
 );

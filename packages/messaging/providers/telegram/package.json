@@ -8,10 +8,11 @@
   },
   "dependencies": {
     "@pwragent/messaging-interface": "workspace:*",
-    "grammy": "^1.42.0"
+    "grammy": "^1.46.0",
+    "marked": "18.0.14"
   },
   "devDependencies": {
-    "vitest": "^4.1.4"
+    "vitest": "^5.0.1"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

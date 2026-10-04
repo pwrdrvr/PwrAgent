@@ -80,8 +80,9 @@ describe("SendThreadToMachineDialog", () => {
     expect(machine("build-linux")).toHaveTextContent("No matching project");
   });
 
-  it("defaults to Copy on the first available machine", () => {
+  it("defaults to Copy on the first available machine", async () => {
     renderDialog();
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
     expect(machine("build-linux")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /^Copy/ })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /^Move/ })).toHaveAttribute("aria-checked", "false");
@@ -143,8 +144,9 @@ describe("SendThreadToMachineDialog", () => {
     });
   });
 
-  it("summarizes what is sent from the row's last Git probe", () => {
+  it("summarizes what is sent from the row's last Git probe", async () => {
     renderDialog();
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
     expect(screen.getByText(
       "History, 2 unpushed commits, 5 changed files and 1 untracked file on fix/crlf-installer",
     )).toBeInTheDocument();
@@ -210,8 +212,9 @@ describe("SendThreadToMachineDialog", () => {
     expect(screen.getByText(/This thread is running/)).toBeInTheDocument();
   });
 
-  it("closes on Escape when idle and keeps Tab inside", () => {
+  it("closes on Escape when idle and keeps Tab inside", async () => {
     const { dialog, onClose } = renderDialog();
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
     expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
     pressEscape();
     expect(onClose).toHaveBeenCalledTimes(1);

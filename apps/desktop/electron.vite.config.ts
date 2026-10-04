@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
 import type { Plugin } from "vite";
+import { inlineWorkerDebugCode } from "./scripts/inline-worker-debug-code.mjs";
 
 /**
  * Dev-only: bridge the renderer to the standalone `react-devtools` app.
@@ -98,8 +99,9 @@ function reactDevtoolsBridge(): Plugin {
 }
 
 // electron-vite defaults `build.minify` to false for all three targets.
-// For shipped builds we want minified main/preload/renderer with sourcemaps
-// stripped. esbuild minification is the right default; switch to terser only
+// Shipped builds retain hidden maps for separate debug artifacts. The maps
+// are excluded from app.asar; hidden maps add no sourceMappingURL to the JS.
+// esbuild minification is the right default; switch to terser only
 // if a measured size win justifies the build-time cost.
 //
 // The function form is needed so we can conditionally define process.env.NODE_ENV
@@ -107,6 +109,7 @@ function reactDevtoolsBridge(): Plugin {
 // keep process.env.NODE_ENV as a runtime reference — and in the packaged .app
 // it's undefined, so isDevelopment checks resolve to true.
 export default defineConfig(({ command }) => {
+  const workerDebug = inlineWorkerDebugCode();
   const isBuild = command === "build";
   const productionDefine = isBuild
     ? { "process.env.NODE_ENV": JSON.stringify("production") }
@@ -163,7 +166,7 @@ export default defineConfig(({ command }) => {
           transformMixedEsModules: true
         },
         minify: "esbuild",
-        sourcemap: false,
+        sourcemap: "hidden",
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
@@ -197,7 +200,7 @@ export default defineConfig(({ command }) => {
           exclude: ["@pwragent/shared"]
         },
         minify: "esbuild",
-        sourcemap: false,
+        sourcemap: "hidden",
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/preload/index.ts"),
@@ -211,8 +214,11 @@ export default defineConfig(({ command }) => {
     },
     renderer: {
       plugins: devtoolsBridgeEnabled
-        ? [react(), reactDevtoolsBridge()]
-        : [react()],
+        ? [react(), reactDevtoolsBridge(), workerDebug.renderer]
+        : [react(), workerDebug.renderer],
+      worker: {
+        plugins: () => [workerDebug.worker],
+      },
       optimizeDeps: {
         esbuildOptions: {
           minify: true,
@@ -228,7 +234,7 @@ export default defineConfig(({ command }) => {
       },
       build: {
         minify: "esbuild",
-        sourcemap: false,
+        sourcemap: "hidden",
         rollupOptions: {
           input: {
             index: resolve(__dirname, "src/renderer/index.html"),

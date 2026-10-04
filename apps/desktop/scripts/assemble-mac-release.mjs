@@ -13,6 +13,14 @@ const builderRequire = createRequire(require.resolve("electron-builder/package.j
 const libraryRequire = createRequire(builderRequire.resolve("app-builder-lib/package.json"));
 const yaml = libraryRequire("js-yaml");
 
+// electron-updater skips an update whose minimumSystemVersion is above
+// os.release(), which on macOS is the Darwin kernel version, not the
+// marketing version: Darwin 22 is macOS 13, the LSMinimumSystemVersion in
+// electron-builder.yml and the oldest macOS Electron 44 supports. A macOS 12
+// client (Darwin 21) keeps its current build instead of installing one its
+// OS refuses to launch.
+export const MINIMUM_MACOS_KERNEL_VERSION = "22.0.0";
+
 function digest(path, algorithm, encoding) {
   const hash = createHash(algorithm);
   const buffer = Buffer.alloc(1024 * 1024);
@@ -71,6 +79,7 @@ export function assembleMacRelease(universalDir, arm64Dir) {
     files: [universal.files[0], arm64.files[0]],
     path: universal.files[0].url,
     sha512: universal.files[0].sha512,
+    minimumSystemVersion: MINIMUM_MACOS_KERNEL_VERSION,
   };
   writeFileSync(join(universalDir, "latest-mac.yml"), yaml.dump(merged));
   const names = [

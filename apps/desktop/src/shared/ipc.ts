@@ -279,6 +279,7 @@ export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
+export const NAVIGATION_SET_THREAD_LOCK_CHANNEL = "navigation:set-thread-lock";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
 export const NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL = "navigation:pending-thread-spend-alerts";
@@ -357,6 +358,8 @@ export const NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL =
   "navigation:list-worktree-unpublished-commits";
 export const NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL =
   "navigation:get-worktree-unpublished-commit-diff";
+export const NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL =
+  "navigation:read-worktree-image";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
@@ -721,6 +724,8 @@ export const TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL =
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";
+export const INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL =
+  "integrated-terminal:context-menu";
 export const INTEGRATED_TERMINAL_RESIZE_CHANNEL =
   "integrated-terminal:resize";
 export const INTEGRATED_TERMINAL_CLOSE_CHANNEL = "integrated-terminal:close";

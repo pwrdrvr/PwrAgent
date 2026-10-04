@@ -13,7 +13,11 @@ import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import type {
+  PendingLaunchpadCreation,
+  SubthreadLaunchpadDraft,
+} from "../../lib/useThreadNavigation";
+import type { PendingSidebarRow } from "./StartingThreadRow";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
@@ -63,6 +67,7 @@ import {
   type IconProps,
 } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
+import { SidebarStartActions } from "./SidebarStartActions";
 import {
   FEDERATION_PROJECT_STATE_LABEL,
   type FederationThreadTarget,
@@ -184,6 +189,7 @@ function useRevealListChange<Args extends unknown[], Result>(
 
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
 type SidebarProps = {
   /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
@@ -193,6 +199,11 @@ type SidebarProps = {
   inert?: boolean;
   backends: BackendSummary[];
   browseMode: BrowseMode;
+  /**
+   * The owner index holds no threads, so every lens but Directories is empty.
+   * Those tabs go `aria-disabled` while Directories is shown in their place.
+   */
+  threadLensesEmpty?: boolean;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
@@ -245,7 +256,13 @@ type SidebarProps = {
   onRevealSelectedThreadComplete?: (request: number) => void;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
-  onSelectPendingLaunchpad?: (creation: PendingLaunchpadCreation) => void;
+  /** Sub-thread launchpads being written in this window. */
+  subthreadLaunchpadDrafts?: SubthreadLaunchpadDraft[];
+  onSelectPendingLaunchpad?: (entry: PendingSidebarRow) => void;
+  /** The draft row's Discard: the composer's Cancel. */
+  onDiscardSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
+  /** The draft row's Detach from Parent: the source row's ×. */
+  onDetachSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
   thinkingThreadKeys?: Record<string, boolean>;
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -333,6 +350,12 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
+  ) => Promise<void>;
+  /** Locks (or re-notes) the thread when `locked`, else unlocks it. */
+  onSetThreadLock?: (
+    thread: NavigationThreadSummary,
+    locked: boolean,
+    note?: string,
   ) => Promise<void>;
   onSetThreadPin?: (
     thread: NavigationThreadSummary,
@@ -474,6 +497,9 @@ function formatDraftThreadCount(count: number): string {
   return `${count} threads with unsent drafts`;
 }
 
+// The line a thread lens's tooltip gains while no threads exist to show.
+const NO_THREADS_TOOLTIP_LINE = "No threads yet";
+
 function formatThreadCount(count: number): string {
   return `${count} ${count === 1 ? "Thread" : "Threads"}`;
 }
@@ -502,6 +528,8 @@ export function Sidebar(props: SidebarProps) {
   const directoryContextMenuOpenerRef = useRef<HTMLElement | null>(null);
   const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
   const directoryTargetMenuOpenerRef = useRef<HTMLElement | null>(null);
+  const subthreadDraftMenuRef = useRef<HTMLDivElement>(null);
+  const subthreadDraftMenuOpenerRef = useRef<HTMLElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
@@ -515,7 +543,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string; focus?: boolean }>();
+  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -554,6 +582,18 @@ export function Sidebar(props: SidebarProps) {
     | undefined
   >();
   /**
+   * A sub-thread draft row's menu. Its own state, like the directory menu:
+   * a draft has no thread id, so none of the thread menu's actions apply.
+   */
+  const [subthreadDraftMenu, setSubthreadDraftMenu] = useState<
+    | {
+        requestedPosition: ThreadContextMenuPosition;
+        position?: { x: number; y: number };
+        draft: SubthreadLaunchpadDraft;
+      }
+    | undefined
+  >();
+  /**
    * "New chat on <machine>" for one directory row's launchpad button. Hoisted
    * here rather than owned by the row for the same reason the two context
    * menus are: the row lives inside the scrolling thread list, and a popover
@@ -583,6 +623,10 @@ export function Sidebar(props: SidebarProps) {
     | undefined
   >();
   const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
+  const [lockDialog, setLockDialog] = useState<{
+    thread: NavigationThreadSummary;
+    mode: "lock" | "edit";
+  }>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameValidationError, setRenameValidationError] = useState<string>();
   const renameDialogRef = useModalDialog<HTMLElement>({
@@ -674,12 +718,41 @@ export function Sidebar(props: SidebarProps) {
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
-  // A starting thread renders where its thread will land. Drafts holds only
-  // threads with unsent replies, which a new thread never is, so it lands
-  // nowhere there.
-  const startingThreads = props.browseMode === "drafts"
-    ? NO_STARTING_THREADS
-    : props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+  // A starting thread renders where its thread will land, and a sub-thread
+  // being written renders in the same slot. Drafts holds only threads with
+  // unsent replies, which a new thread never is, so neither lands there.
+  // Drafts splice in last, so a draft leads its parent's tray, above any
+  // sibling still starting: the slot the next child takes.
+  const startingThreads = useMemo((): PendingSidebarRow[] => {
+    if (props.browseMode === "drafts") return NO_STARTING_THREADS;
+    const creations = props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+    return props.subthreadLaunchpadDrafts?.length
+      ? [...creations, ...props.subthreadLaunchpadDrafts]
+      : creations;
+  }, [props.browseMode, props.pendingLaunchpadCreations, props.subthreadLaunchpadDrafts]);
+  const onCreateThreadWithoutDirectory = props.onCreateThreadWithoutDirectory;
+  const onAddProjectDirectory = props.onAddProjectDirectory;
+  // The list's own way to begin. Not while it loads, and not without a
+  // provider: the setup notice owns a provider-less window, and a Start Chat
+  // that cannot start would compete with it.
+  const canStartFromList = !props.loading
+    && props.backends.some((backend) => backend.available)
+    && Boolean(onCreateThreadWithoutDirectory || onAddProjectDirectory);
+  // Handed to whichever list renders, which places it after its last row,
+  // inside the scrolling lane; an empty lens shows it under its empty line.
+  const startActions = canStartFromList ? (
+    <SidebarStartActions
+      lead={Boolean(props.threadLensesEmpty)}
+      creatingThread={Boolean(props.creatingThread)}
+      addingProjectDirectory={Boolean(props.addingProjectDirectory)}
+      onStartChat={onCreateThreadWithoutDirectory
+        ? () => void onCreateThreadWithoutDirectory()
+        : undefined}
+      onAddProjectFolder={onAddProjectDirectory
+        ? () => void onAddProjectDirectory()
+        : undefined}
+    />
+  ) : null;
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
     !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
@@ -964,7 +1037,7 @@ export function Sidebar(props: SidebarProps) {
     if (browseMode === "directories" && selectedItemKey.startsWith("launchpad:")) {
       handledRevealRequestRef.current = request;
       releaseHoverStableSnapshot();
-      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length), focus: false });
+      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length) });
       return;
     }
 
@@ -1087,6 +1160,21 @@ export function Sidebar(props: SidebarProps) {
   }, [directoryContextMenu]);
 
   useEffect(() => {
+    if (!subthreadDraftMenu) {
+      return;
+    }
+
+    const closeMenu = (): void => setSubthreadDraftMenu(undefined);
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
+    };
+  }, [subthreadDraftMenu]);
+
+  useEffect(() => {
     if (federationThreadTargets.length === 0) {
       // The menu is also gated on this at render time, so without clearing the
       // state a peer reconnecting would pop the menu back open at its old
@@ -1139,6 +1227,12 @@ export function Sidebar(props: SidebarProps) {
     menuRef: directoryContextMenuRef,
     triggerRef: directoryContextMenuOpenerRef,
     onClose: () => setDirectoryContextMenu(undefined),
+  });
+  useMenuNavigation({
+    open: subthreadDraftMenu?.position !== undefined,
+    menuRef: subthreadDraftMenuRef,
+    triggerRef: subthreadDraftMenuOpenerRef,
+    onClose: () => setSubthreadDraftMenu(undefined),
   });
   useMenuNavigation({
     open:
@@ -1212,6 +1306,34 @@ export function Sidebar(props: SidebarProps) {
       position: nextPosition,
     });
   }, [directoryContextMenu]);
+
+  useLayoutEffect(() => {
+    if (!subthreadDraftMenu) {
+      return;
+    }
+
+    const menu = subthreadDraftMenuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    const nextPosition = placeThreadContextMenu(
+      subthreadDraftMenu.requestedPosition,
+      menu.getBoundingClientRect(),
+    );
+
+    if (
+      subthreadDraftMenu.position?.x === nextPosition.x &&
+      subthreadDraftMenu.position.y === nextPosition.y
+    ) {
+      return;
+    }
+
+    setSubthreadDraftMenu({
+      ...subthreadDraftMenu,
+      position: nextPosition,
+    });
+  }, [subthreadDraftMenu]);
 
   useLayoutEffect(() => {
     if (!directoryTargetMenu) {
@@ -1356,6 +1478,21 @@ export function Sidebar(props: SidebarProps) {
     setRenameValidationError(undefined);
   };
 
+  const requestLockFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: "lock" | "edit",
+  ): void => {
+    setContextMenu(undefined);
+    setLockDialog({ thread, mode });
+  };
+
+  const unlockFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    // A failed unlock leaves the lock glyph and the thread's lock card in
+    // place, which is the report: the card's own Unlock shows the error.
+    void props.onSetThreadLock?.(thread, false).catch(() => undefined);
+  };
+
   const archiveFromContextMenu = (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -1458,6 +1595,19 @@ export function Sidebar(props: SidebarProps) {
       directory,
       directories: resolveDirectoryContextMenuDirectories(directory),
     });
+  };
+
+  const openSubthreadDraftMenu = (
+    draft: SubthreadLaunchpadDraft,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    rememberMenuOpener(subthreadDraftMenuOpenerRef, subthreadDraftMenuRef);
+    setContextMenu(undefined);
+    setDirectoryContextMenu(undefined);
+    setDirectoryTargetMenu(undefined);
+    setProfileMenuOpen(false);
+    setRenameThread(undefined);
+    setSubthreadDraftMenu({ requestedPosition: position, draft });
   };
 
   const openDirectoryTargetMenu = (
@@ -1733,6 +1883,14 @@ export function Sidebar(props: SidebarProps) {
       ? canRenameThread(contextMenu.thread)
         && contextMenuCanRouteRemoteCapability("turn_control")
       : false;
+  // A lock refuses turns on the owner, so a remote row needs the same grant
+  // as starting one there.
+  const contextMenuCanLock = Boolean(
+    contextMenu
+      && !contextMenuIsBulk
+      && props.onSetThreadLock
+      && contextMenuCanRouteRemoteCapability("turn_control"),
+  );
   const contextMenuCanArchive =
     contextMenu && !contextMenuIsBulk
       ? canArchiveThread(contextMenu.thread)
@@ -2118,6 +2276,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
+    contextMenuCanLock ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
     contextMenuCanSendToMachine ||
@@ -2233,6 +2392,8 @@ export function Sidebar(props: SidebarProps) {
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
+            // The reveal leaves focus alone: the launchpad's composer takes
+            // it, so the operator can type the new thread straight away.
             setProjectReveal({ key: directory.key });
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
@@ -2444,6 +2605,7 @@ export function Sidebar(props: SidebarProps) {
                   remoteSignalVisible ? attentionCounts.activeRemote : undefined
                 }
                 reviewThreadCount={attentionCounts.review}
+                disabled={props.threadLensesEmpty}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
             ) : (
@@ -2462,6 +2624,7 @@ export function Sidebar(props: SidebarProps) {
                     : undefined
                 }
                 tooltipText={browseModeTooltips[mode]}
+                disabled={props.threadLensesEmpty && mode !== "directories"}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
             ),
@@ -2492,6 +2655,9 @@ export function Sidebar(props: SidebarProps) {
             <DirectoriesList
               startingThreads={startingThreads}
               onSelectStartingThread={props.onSelectPendingLaunchpad}
+              emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
+              footer={startActions}
+              onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
               pagedNavigation={props.pagedNavigation}
@@ -2559,23 +2725,28 @@ export function Sidebar(props: SidebarProps) {
             />
           ) : (
             renderedThreads.length === 0 && startingThreads.length === 0 ? (
-              <p className="sidebar-empty">
-                {props.browseMode === "attention"
-                  ? "Nothing running, nothing to review."
-                  : props.browseMode === "drafts"
-                    // "replies", not "drafts": launchpad (new-thread) composer
-                    // text is equally unsent but belongs to a directory rather
-                    // than a thread, so this lens cannot show it and must not
-                    // claim there is nothing to find.
-                    ? props.unassignedThreadDraftCount
-                      ? "Older drafts are available. Use Recover Draft in a composer to choose one."
-                      : "No unsent replies."
-                    : "No threads yet."}
-              </p>
+              <>
+                <p className="sidebar-empty">
+                  {props.browseMode === "attention"
+                    ? "Nothing running, nothing to review."
+                    : props.browseMode === "drafts"
+                      // "replies", not "drafts": launchpad (new-thread) composer
+                      // text is equally unsent but belongs to a directory rather
+                      // than a thread, so this lens cannot show it and must not
+                      // claim there is nothing to find.
+                      ? props.unassignedThreadDraftCount
+                        ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+                        : "No unsent replies."
+                      : "No threads yet."}
+                </p>
+                {startActions}
+              </>
             ) : (
               <RecentsList
+                footer={startActions}
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
+                onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                 pagedNavigation={props.pagedNavigation}
                 resourceIds={lensResources.map((resource) => resource.id)}
                 presentationOrder={hoverStableSnapshot.value.order}
@@ -2962,6 +3133,36 @@ export function Sidebar(props: SidebarProps) {
                       Rename Thread
                     </button>
                   ) : null}
+                  {contextMenuCanLock && contextMenu.thread.lock ? (
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => unlockFromContextMenu(contextMenu.thread)}
+                      >
+                        Unlock Thread
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          requestLockFromContextMenu(contextMenu.thread, "edit")
+                        }
+                      >
+                        Edit Lock Note…
+                      </button>
+                    </>
+                  ) : contextMenuCanLock ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        requestLockFromContextMenu(contextMenu.thread, "lock")
+                      }
+                    >
+                      Lock Thread…
+                    </button>
+                  ) : null}
                   {contextMenuCanMarkUnread ? (
                     <button
                       role="menuitem"
@@ -3201,6 +3402,55 @@ export function Sidebar(props: SidebarProps) {
         </div>
       ) : null}
 
+      {subthreadDraftMenu ? (
+        <div
+          ref={subthreadDraftMenuRef}
+          className="thread-context-menu"
+          role="menu"
+          aria-label={`Actions for the sub-thread draft under ${subthreadDraftMenu.draft.parentThreadTitle}`}
+          style={{
+            left:
+              subthreadDraftMenu.position?.x ??
+              subthreadDraftMenu.requestedPosition.x,
+            top:
+              subthreadDraftMenu.position?.y ??
+              subthreadDraftMenu.requestedPosition.y,
+            visibility: subthreadDraftMenu.position ? undefined : "hidden",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              disabled={!props.onDetachSubthreadDraft}
+              onClick={() => {
+                const { draft } = subthreadDraftMenu;
+                setSubthreadDraftMenu(undefined);
+                props.onDetachSubthreadDraft?.(draft);
+              }}
+            >
+              Detach from Parent
+            </button>
+          </div>
+          <div className="thread-context-menu__separator" role="separator" />
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              disabled={!props.onDiscardSubthreadDraft}
+              onClick={() => {
+                const { draft } = subthreadDraftMenu;
+                setSubthreadDraftMenu(undefined);
+                props.onDiscardSubthreadDraft?.(draft);
+              }}
+            >
+              Discard Sub-thread
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {directoryContextMenu ? (
         <div
           ref={directoryContextMenuRef}
@@ -3337,6 +3587,20 @@ export function Sidebar(props: SidebarProps) {
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {lockDialog ? (
+        <ThreadLockDialog
+          initialNote={lockDialog.thread.lock?.note}
+          mode={lockDialog.mode}
+          returnFocus={contextMenuOpenerRef}
+          threadTitle={lockDialog.thread.title}
+          onCancel={() => setLockDialog(undefined)}
+          onSubmit={async (note) => {
+            await props.onSetThreadLock?.(lockDialog.thread, true, note);
+            setLockDialog(undefined);
+          }}
+        />
       ) : null}
 
       {renameThread ? (
@@ -3606,6 +3870,8 @@ function AttentionLensTab(props: {
    */
   remoteActiveThreadCount?: number;
   reviewThreadCount: number;
+  /** No threads exist, so the lens would be empty. See `LensTab`'s `disabled`. */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const counts = {
@@ -3618,6 +3884,7 @@ function AttentionLensTab(props: {
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
     reviewLabel: "To review",
+    ...(props.disabled ? { footer: NO_THREADS_TOOLTIP_LINE } : {}),
   });
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
@@ -3635,12 +3902,14 @@ function AttentionLensTab(props: {
         // absent element is a dangling reference.
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
+        aria-disabled={props.disabled || undefined}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
         }`}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
+          if (props.disabled) return;
           tooltip.hide();
           props.onSelect();
         }}
@@ -3682,6 +3951,12 @@ function LensTab(props: {
    */
   countLabel?: string;
   tooltipText: string;
+  /**
+   * No threads exist, so the lens would be empty. `aria-disabled` rather than
+   * `disabled`: a disabled button takes no focus, so a keyboard user could
+   * never reach the tooltip that says why the tab is off.
+   */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -3689,9 +3964,11 @@ function LensTab(props: {
   const label = props.countLabel
     ? `${browseModeLabels[props.mode]}, ${props.countLabel}`
     : browseModeLabels[props.mode];
-  const tooltipText = props.countLabel
-    ? [props.tooltipText, props.countLabel].join("\n")
-    : props.tooltipText;
+  const tooltipText = [
+    props.tooltipText,
+    props.countLabel,
+    props.disabled ? NO_THREADS_TOOLTIP_LINE : undefined,
+  ].filter(Boolean).join("\n");
 
   return (
     <>
@@ -3705,10 +3982,12 @@ function LensTab(props: {
         // whole accessible name.
         aria-label={label}
         aria-selected={props.active}
+        aria-disabled={props.disabled || undefined}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
+          if (props.disabled) return;
           tooltip.hide();
           props.onSelect();
         }}

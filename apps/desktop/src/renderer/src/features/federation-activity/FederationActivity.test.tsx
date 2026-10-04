@@ -39,7 +39,8 @@ const openSky = async () => {
 };
 const activityAction = async (name: string, role: "menuitem" | "menuitemcheckbox" = "menuitem") => {
   fireEvent.click(screen.getByRole("button", { name: "More Federation Activity actions" }));
-  fireEvent.click(await screen.findByRole(role, { name }));
+  const action = await screen.findByRole(role, { name });
+  await act(async () => { fireEvent.click(action); });
 };
 
 describe("Federation activity surfaces", () => {

@@ -29,8 +29,12 @@ import type {
 } from "@pwragent/shared";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
+import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
+import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
@@ -158,12 +162,17 @@ function createSnapshot(
       },
       appearance: {
         theme: { value: "system", source: "default" },
+        darkTheme: { value: "tangerine-dark", source: "default" },
+        lightTheme: { value: "tangerine-light", source: "default" },
+        themedDockIcon: { value: true, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
       },
       codexProfileModel: { value: "shared", source: "default" },
       messagingAcknowledgment: { value: null, source: "default" },
+      interactiveSvgSkipNotice: { value: false, source: "default" },
+      interactiveSvgAutoOpen: { value: false, source: "default" },
     },
     onboarding: {
       completed: { value: true, source: "default" },
@@ -620,6 +629,125 @@ describe("SettingsScreen segmented pending", () => {
   });
 });
 
+describe("SettingsScreen color themes", () => {
+  it("picks the dark and light themes independently", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    // Each picker offers only its own scheme's themes.
+    const dark = screen.getByRole("combobox", { name: "Dark theme" });
+    const light = screen.getByRole("combobox", { name: "Light theme" });
+    // PwrAgent's own pairs first, then the community palettes.
+    expect(selectOptionLabels(dark)).toEqual([
+      "Tangerine",
+      "Gray",
+      "Blue",
+      "Phosphor",
+      "Catppuccin Mocha",
+      "Solarized Dark",
+    ]);
+    expect(selectOptionLabels(light)).toEqual([
+      "Tangerine",
+      "Gray",
+      "Blue",
+      "Catppuccin Latte",
+      "Solarized Light",
+    ]);
+
+    chooseSelectOption(dark, "Solarized Dark");
+    expect(controller.setDarkTheme).toHaveBeenCalledWith("solarized-dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+
+    chooseSelectOption(light, /Blue/);
+    expect(controller.setLightTheme).toHaveBeenCalledWith("blue-light");
+  });
+
+  it("marks the row on screen, credits community palettes, and offers the pair", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "dark",
+        darkTheme: "catppuccin-mocha",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    const darkRow = screen.getByRole("combobox", { name: "Dark theme" })
+      .closest(".settings-field") as HTMLElement;
+    const lightRow = screen.getByRole("combobox", { name: "Light theme" })
+      .closest(".settings-field") as HTMLElement;
+    expect(within(darkRow).getByText("Showing")).toBeInTheDocument();
+    expect(within(lightRow).queryByText("Showing")).toBeNull();
+    expect(within(lightRow).getByText(/Not used while Theme is Dark\./)).toBeInTheDocument();
+    expect(within(darkRow).getByRole("link", { name: "Catppuccin" }))
+      .toHaveAttribute("href", "https://catppuccin.com/licensing/");
+    expect(within(lightRow).queryByRole("link")).toBeNull();
+
+    // Picking a theme offers its pair for the other scheme, and only a
+    // click applies it.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), "Solarized Dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+    fireEvent.click(within(darkRow).getByRole("button", { name: "Use Solarized Light" }));
+    expect(controller.setLightTheme).toHaveBeenCalledWith("solarized-light");
+    expect(within(darkRow).queryByRole("button", { name: "Use Solarized Light" })).toBeNull();
+
+    // Catppuccin Latte is already the dark theme's pair, so nothing is offered.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), "Catppuccin Latte");
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), /Blue/);
+    fireEvent.click(within(lightRow).getByRole("button", { name: "Not now" }));
+    expect(controller.setDarkTheme).toHaveBeenCalledTimes(1);
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+
+    // Phosphor is dark only: it has no light pair to offer.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), /Phosphor/);
+    expect(controller.setDarkTheme).toHaveBeenLastCalledWith("phosphor-dark");
+    expect(within(darkRow).queryByRole("button", { name: /^Use / })).toBeNull();
+  });
+});
+
 function createArchivedSnapshot(
   threadId: string,
   archivedAt: number,
@@ -713,6 +841,68 @@ function messagingRoutesHeader(): Element | null {
 }
 
 describe("SettingsScreen", () => {
+  it("shows and copies a runnable Linux update fallback after a failed check", async () => {
+    const manualUpdate = {
+      description: "Close PwrAgent and run this command in a terminal.",
+      command: "curl -fL -o PwrAgent.deb https://example.test/PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "error" as const, message: "offline", manualUpdate })),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(
+      <SettingsScreen
+        initialSection="updates"
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    const copy = await screen.findByRole("button", { name: "Copy update command" });
+    expect(screen.getByText(manualUpdate.description)).toBeInTheDocument();
+    expect(screen.getByText(manualUpdate.command)).toBeInTheDocument();
+    fireEvent.click(copy);
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
+  it("shows the selected-release fallback when downloading fails after an available check", async () => {
+    let receiveStatus: ((status: import("../../../../../shared/app-metadata").AppUpdateStatus) => void) | undefined;
+    const manualUpdate = {
+      description: "Install v1.1.0-beta.2 from a terminal.",
+      command: "curl -fL https://example.test/v1.1.0-beta.2.deb -o PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "available" as const, version: "1.1.0-beta.2" })),
+      onAppUpdateStatus: vi.fn((listener: NonNullable<typeof receiveStatus>) => { receiveStatus = listener; return () => undefined; }),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(<SettingsScreen initialSection="updates" desktopApi={desktopApi} settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await screen.findByText(/Update available: v1.1.0-beta.2/);
+    act(() => receiveStatus?.({ status: "error", message: "download interrupted", manualUpdate }));
+    expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy update command" }));
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
+  it("keeps terminal fallback instructions when the error event precedes the check result", async () => {
+    let receiveStatus: ((status: import("../../../../../shared/app-metadata").AppUpdateStatus) => void) | undefined;
+    let resolveCheck: ((result: { status: "available"; version: string }) => void) | undefined;
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(() => new Promise<{ status: "available"; version: string }>((resolve) => { resolveCheck = resolve; })),
+      onAppUpdateStatus: (listener: NonNullable<typeof receiveStatus>) => { receiveStatus = listener; return () => undefined; },
+    };
+    render(<SettingsScreen initialSection="updates" desktopApi={desktopApi} settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await act(async () => {
+      receiveStatus?.({ status: "error", message: "download interrupted", manualUpdate: { description: "Install the selected beta.", command: "sudo apt install ./beta.deb" } });
+      resolveCheck?.({ status: "available", version: "1.1.0-beta.2" });
+    });
+    expect(screen.getByText("sudo apt install ./beta.deb")).toBeInTheDocument();
+    expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+  });
+
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
@@ -1054,7 +1244,32 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("refreshes only Codex from the focused Codex screen", async () => {
+  it("rediscovers a repaired executable before refreshing Codex models and settings", async () => {
+    const repairedSnapshot = createSnapshot();
+    const brokenSnapshot = createSnapshot();
+    const command = repairedSnapshot.models.codex.discovery!.selectedCommand!;
+    brokenSnapshot.models.codex.discovery = {
+      candidates: [{
+        command,
+        executable: false,
+        selected: false,
+        source: "path",
+        failureReason: `Command failed: ${command} --version`,
+      }],
+    };
+    let cachedSnapshot = brokenSnapshot;
+    let finishDiscovery!: () => void;
+    const refreshCodexDiscovery = vi.fn<NonNullable<DesktopApi["refreshCodexDiscovery"]>>(
+      () => new Promise((resolve) => {
+        finishDiscovery = () => {
+          cachedSnapshot = repairedSnapshot;
+          resolve({ snapshot: repairedSnapshot });
+        };
+      }),
+    );
+    const refreshSettings = vi.fn();
+    const noop = () => undefined;
+    const settings = createSettingsState(brokenSnapshot);
     const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
       async () => ({ fetchedAt: 1000, backends: [] }),
     );
@@ -1062,14 +1277,29 @@ describe("SettingsScreen", () => {
       async () => ({ fetchedAt: 1000, entries: [] }),
     );
 
-    render(
-      <SettingsScreen
-        desktopApi={{ listAcpAgents, listBackends }}
-        initialSection="models"
-        settings={createSettingsState()}
-        onClose={() => undefined}
-      />,
-    );
+    const desktopApi = { listAcpAgents, listBackends, refreshCodexDiscovery };
+    function RecoveryHarness() {
+      const [snapshot, setSnapshot] = useState(brokenSnapshot);
+      const [notice, setNotice] = useState<AppNoticeToastNotice>();
+      refreshSettings.mockImplementation(async () => setSnapshot(cachedSnapshot));
+      return (
+        <>
+          <SettingsScreen
+            desktopApi={desktopApi}
+            initialSection="models"
+            settings={{ ...settings, snapshot, refresh: refreshSettings }}
+            onClose={noop}
+          />
+          <CodexLaunchNotice
+            discovery={snapshot.models.codex.discovery}
+            onNoticeChanged={setNotice}
+            onOpenCodexSettings={noop}
+          />
+          <AppNoticeToast notice={notice} onDismiss={noop} />
+        </>
+      );
+    }
+    render(<RecoveryHarness />);
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
@@ -1077,9 +1307,18 @@ describe("SettingsScreen", () => {
       name: "Refresh Codex",
     });
     await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    expect(refreshCodexDiscovery).not.toHaveBeenCalled();
     listBackends.mockClear();
     listAcpAgents.mockClear();
     fireEvent.click(refresh);
+
+    expect(refreshCodexDiscovery).toHaveBeenCalledExactlyOnceWith({
+      discoveryIntent: "settings-user-action",
+    });
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(refreshSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
+    await act(async () => finishDiscovery());
 
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledExactlyOnceWith({
@@ -1088,7 +1327,35 @@ describe("SettingsScreen", () => {
         refreshModels: "codex",
       });
     });
+    await waitFor(() => expect(refreshSettings).toHaveBeenCalledOnce());
+    expect(screen.queryByText("Codex installation failed to start")).not.toBeInTheDocument();
     expect(listAcpAgents).not.toHaveBeenCalled();
+  });
+
+  it("reports executable rediscovery failure without refreshing the stale Codex catalog", async () => {
+    const settings = createSettingsState();
+    const refreshCodexDiscovery = vi.fn(async () => {
+      throw new Error("Codex executable rediscovery failed.");
+    });
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1000, backends: [] }));
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends, refreshCodexDiscovery }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    const refresh = await screen.findByRole("button", { name: "Refresh Codex" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(refresh);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Codex executable rediscovery failed.");
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(settings.refresh).not.toHaveBeenCalled();
+    expect(refresh).toBeEnabled();
   });
 
   it("names the active PwrAgent Codex path environment override", () => {
@@ -1122,6 +1389,37 @@ describe("SettingsScreen", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
+  });
+
+  it("turns opening SVGs interactive off with trust in their scripts", async () => {
+    const base = createSnapshot();
+    const settings = createSettingsState(createSnapshot({
+      general: {
+        ...base.general,
+        interactiveSvgSkipNotice: { value: true, source: "config" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
+      },
+    }));
+    render(
+      <SettingsScreen
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Open SVGs interactive" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { interactiveSvgAutoOpen: true },
+      });
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Run SVG scripts without asking" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { interactiveSvgSkipNotice: false, interactiveSvgAutoOpen: false },
+      });
+    });
   });
 
   it("commits an edited Codex path before an unrelated button action", async () => {
@@ -1313,6 +1611,25 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           attentionPromoteOnTurnEnd: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+    ).toHaveAttribute("aria-checked", "false");
+    // Opening interactive runs scripts, so it waits on trust, and says so.
+    expect(
+      screen.getByText(
+        "Needs \u201cRun SVG scripts without asking\u201d: opening an SVG runs its scripts.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          interactiveSvgSkipNotice: true,
         },
       });
     });
@@ -2085,12 +2402,12 @@ describe("SettingsScreen", () => {
   });
 
   it("copies Troubleshooting diagnostics with the profile, PIDs, and log path", async () => {
-    const copyText = vi.fn(async () => undefined);
+    const copyRichText = vi.fn(async () => undefined);
 
     render(
       <SettingsScreen
         desktopApi={{
-          copyText,
+          copyRichText,
           readAppMetadata: vi.fn(async () => ({
             applicationName: "PwrAgent",
             applicationVersion: "1.2.3",
@@ -2123,24 +2440,28 @@ describe("SettingsScreen", () => {
     fireEvent.click(copyButton);
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenLastCalledWith([
-        "Collected at (UTC): 2026-09-14T04:30:45.123Z",
-        "PwrAgent version: 1.2.3",
-        "PwrAgent build: Packaged",
-        "PwrAgent profile: work",
-        "Main process PID: 4100",
-        "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
-      ].join("\n"));
+      expect(copyRichText).toHaveBeenLastCalledWith({
+        text: [
+          "Collected at (UTC): 2026-09-14T04:30:45.123Z",
+          "PwrAgent version: 1.2.3",
+          "PwrAgent build: Packaged",
+          "PwrAgent profile: work",
+          "Main process PID: 4100",
+          "Renderer process PID: 4101",
+          "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+        ].join("\n"),
+        html: expect.stringContaining("<pre><code>Collected at (UTC):"),
+      });
     });
 
     timestamp.mockReturnValue("2026-09-14T04:35:00.000Z");
     fireEvent.click(copyButton);
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenLastCalledWith(expect.stringContaining(
-        "Collected at (UTC): 2026-09-14T04:35:00.000Z",
-      ));
+      expect(copyRichText).toHaveBeenLastCalledWith({
+        text: expect.stringContaining("Collected at (UTC): 2026-09-14T04:35:00.000Z"),
+        html: expect.stringContaining("<pre><code>Collected at (UTC): 2026-09-14T04:35:00.000Z"),
+      });
     });
   });
 

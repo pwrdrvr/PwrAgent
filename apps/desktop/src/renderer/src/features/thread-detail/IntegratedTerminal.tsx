@@ -1,6 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
 import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import type { Terminal } from "@xterm/xterm";
@@ -132,6 +133,27 @@ export function IntegratedTerminal({
           },
         });
         const fitAddon = new fitModule.FitAddon();
+        terminal.attachCustomKeyEventHandler((event) => {
+          if (desktopApi.platform !== "linux" && desktopApi.platform !== "win32") {
+            return true;
+          }
+          if (!event.ctrlKey || event.altKey || event.metaKey) return true;
+          if (event.key.toLowerCase() === "v") {
+            // Leave Chromium's native paste enabled, but don't let xterm send
+            // Ctrl+V (Readline's quoted-insert) before the paste event arrives.
+            // The paste event still goes through xterm's bracketed-paste path.
+            return false;
+          }
+          if (event.shiftKey && event.key.toLowerCase() === "c") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.type === "keydown" && terminal.hasSelection()) {
+              void copyText(terminal.getSelection(), desktopApi).catch(() => undefined);
+            }
+            return false;
+          }
+          return true;
+        });
         terminal.loadAddon(fitAddon);
         terminal.open(container);
         terminal.focus();
@@ -390,7 +412,20 @@ export function IntegratedTerminal({
         {status}
       </span>
       <div className="integrated-terminal__body">
-        <div ref={containerRef} className="integrated-terminal__viewport" />
+        <div
+          ref={containerRef}
+          className="integrated-terminal__viewport"
+          onContextMenu={(event) => {
+            if (!desktopApi?.showIntegratedTerminalContextMenu) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void desktopApi.showIntegratedTerminalContextMenu({
+              x: event.clientX,
+              y: event.clientY,
+              canCopy: terminalRef.current?.hasSelection() ?? false,
+            }).catch(() => undefined);
+          }}
+        />
       </div>
     </section>
   );

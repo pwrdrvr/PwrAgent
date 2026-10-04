@@ -32,7 +32,11 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
   DESKTOP_UI_LAYOUT_DEFAULTS,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopDarkTheme,
+  isDesktopLightTheme,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
 } from "@pwragent/shared";
@@ -69,6 +73,8 @@ import type {
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
   CancelThreadExecutionModeQueueRequest,
@@ -233,6 +239,8 @@ import type {
   SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -340,6 +348,8 @@ import type {
   ListWorktreeUnpublishedCommitsResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
+  ReadWorktreeImageRequest,
+  ReadWorktreeImageResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
   ResetDirectoryLaunchpadRequest,
@@ -549,6 +559,7 @@ import type {
 } from "../shared/codex-protocol-capture";
 import type {
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalErrorEvent,
@@ -700,6 +711,7 @@ import {
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
+  INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
@@ -843,6 +855,7 @@ import {
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
@@ -862,6 +875,7 @@ import {
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_LOCK_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -1775,6 +1789,11 @@ const desktopApi = Object.freeze({
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>
     await ipcRenderer.invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, request),
+  showIntegratedTerminalContextMenu: async (
+    request: IntegratedTerminalContextMenuRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL, request);
+  },
   writeIntegratedTerminal: async (
     request: IntegratedTerminalWriteRequest,
   ): Promise<void> => {
@@ -2252,6 +2271,10 @@ const desktopApi = Object.freeze({
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_REACTION_CHANNEL, request),
+  setThreadLock: async (
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_LOCK_CHANNEL, request),
   setThreadToolIncidentNotice: async (
     request: SetThreadToolIncidentNoticeRequest,
   ): Promise<SetThreadToolIncidentNoticeResponse> =>
@@ -2455,6 +2478,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
       request,
     ),
+  readWorktreeImage: async (
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL, request),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
     await invokeWithStartupProfileTiming(
       "getGhStatus",
@@ -2808,6 +2835,8 @@ const desktopApi = Object.freeze({
   onAppearanceChanged: (
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
+      darkTheme: DesktopDarkTheme;
+      lightTheme: DesktopLightTheme;
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
@@ -2817,6 +2846,8 @@ const desktopApi = Object.freeze({
       _event: Electron.IpcRendererEvent,
       payload: {
         theme: DesktopAppearanceTheme;
+        darkTheme: DesktopDarkTheme;
+        lightTheme: DesktopLightTheme;
         density: DesktopAppearanceDensity;
         sidebarTextSize: DesktopTextSize;
         transcriptTextSize: DesktopTextSize;
@@ -3025,6 +3056,8 @@ const desktopApi = Object.freeze({
 const APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
 function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
+  darkTheme: DesktopDarkTheme;
+  lightTheme: DesktopLightTheme;
   density: "mission-control" | "compact";
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
@@ -3037,6 +3070,16 @@ function readBootstrapAppearance(): {
         raw && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
           ? raw.theme
           : "system";
+      const darkTheme =
+        raw && typeof raw.darkTheme === "string"
+          && isDesktopDarkTheme(raw.darkTheme)
+          ? raw.darkTheme
+          : DESKTOP_DARK_THEME_DEFAULT;
+      const lightTheme =
+        raw && typeof raw.lightTheme === "string"
+          && isDesktopLightTheme(raw.lightTheme)
+          ? raw.lightTheme
+          : DESKTOP_LIGHT_THEME_DEFAULT;
       const density =
         raw && (raw.density === "mission-control" || raw.density === "compact")
           ? raw.density
@@ -3054,13 +3097,22 @@ function readBootstrapAppearance(): {
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
-      return { theme, density, sidebarTextSize, transcriptTextSize };
+      return {
+        theme,
+        darkTheme,
+        lightTheme,
+        density,
+        sidebarTextSize,
+        transcriptTextSize,
+      };
     } catch {
       break;
     }
   }
   return {
     theme: "system",
+    darkTheme: DESKTOP_DARK_THEME_DEFAULT,
+    lightTheme: DESKTOP_LIGHT_THEME_DEFAULT,
     density: "mission-control",
     sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,

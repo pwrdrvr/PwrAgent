@@ -19,8 +19,11 @@ import type {
   AppServerTurnInputItem,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
+import { normalizeExplicitLocalFileReferencePath } from "../explicit-local-file-reference";
 import { imageInputFileRoot } from "./image-input-files";
+import { scheduleLegacyAttachmentCleanup } from "./legacy-attachment-cleanup";
 import { resolveReadableLocalFilePath } from "./local-file-input";
+import { isThreadAssetPath, isResolvedThreadAssetPath, storeThreadAsset, threadAssetRoot, withAssetDirectory, type ThreadAssetOwner } from "./thread-assets";
 
 export const TURN_INPUT_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_TURN_INPUT_ATTACHMENT_BYTES = 128 * 1024 * 1024;
@@ -37,7 +40,8 @@ export type StagedTurnInputAttachment =
   | AppServerLocalFileInputItem;
 
 export function turnInputAttachmentRoot(): string {
-  return resolveActiveProfilePath(path.join("state", "turn-input-attachments"));
+  // Separate transient uploads from legacy files already referenced by history.
+  return resolveActiveProfilePath(path.join("state", "attachment-staging"));
 }
 
 /**
@@ -46,6 +50,7 @@ export function turnInputAttachmentRoot(): string {
  */
 export async function stageTurnInputAttachment(
   upload: TurnInputAttachmentUpload,
+  owner?: ThreadAssetOwner,
 ): Promise<StagedTurnInputAttachment> {
   const data = Buffer.from(upload.data);
   if (data.byteLength > MAX_TURN_INPUT_ATTACHMENT_BYTES) {
@@ -57,69 +62,98 @@ export async function stageTurnInputAttachment(
     throw new Error("Image attachments cannot be empty.");
   }
 
-  const digest = createHash("sha256").update(data).digest("hex");
   const root = turnInputAttachmentRoot();
-  const name = sanitizeTurnAttachmentName(
+  let name = sanitizeTurnAttachmentName(
     upload.name,
     fallbackName(upload.type, upload.mimeType),
   );
+  // Normalization preserves the original display label (for example .webp),
+  // but file consumers infer the retained image format from its extension.
+  const normalizedExtension = upload.type === "localImage"
+    ? normalizedImageExtension(upload.mimeType)
+    : undefined;
+  if (normalizedExtension) {
+    name = `${path.parse(name).name}${normalizedExtension}`;
+  }
+  if (owner) {
+    const ownedPath = await storeThreadAsset(owner, data, name);
+    void scheduleLegacyAttachmentCleanup();
+    return upload.type === "localImage"
+      ? {
+          type: "localImage",
+          ...(upload.name?.trim() ? { name: upload.name.trim() } : {}),
+          path: ownedPath,
+        }
+      : {
+          type: "localFile",
+          ...(upload.name?.trim() ? { name: upload.name.trim() } : {}),
+          ...(upload.mimeType?.trim() ? { mimeType: upload.mimeType.trim() } : {}),
+          sizeBytes: data.byteLength,
+          path: ownedPath,
+        };
+  }
+  const digest = createHash("sha256").update(data).digest("hex");
   const filePath = path.join(root, digest, name);
-  await mkdir(path.dirname(filePath), { recursive: true });
-  const stagedAt = new Date();
-  await utimes(path.dirname(filePath), stagedAt, stagedAt);
-  const existing = await stat(filePath).catch(() => undefined);
-  let reusable = false;
-  if (existing?.isFile() && existing.size === data.byteLength) {
-    const existingData = await readFile(filePath).catch(() => undefined);
-    reusable = Boolean(
-      existingData
-      && createHash("sha256").update(existingData).digest("hex") === digest,
-    );
-  }
-  if (!reusable) {
-    const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temporaryPath, data);
-      await rename(temporaryPath, filePath);
-    } finally {
-      await unlink(temporaryPath).catch(() => undefined);
+  return await withAssetDirectory(path.dirname(filePath), async () => {
+    await mkdir(path.dirname(filePath), { recursive: true });
+    const stagedAt = new Date();
+    await utimes(path.dirname(filePath), stagedAt, stagedAt);
+    const existing = await stat(filePath).catch(() => undefined);
+    let reusable = false;
+    if (existing?.isFile() && existing.size === data.byteLength) {
+      const existingData = await readFile(filePath).catch(() => undefined);
+      reusable = Boolean(
+        existingData
+        && createHash("sha256").update(existingData).digest("hex") === digest,
+      );
     }
-  } else {
-    await Promise.all([
-      utimes(filePath, stagedAt, stagedAt),
-      utimes(path.dirname(filePath), stagedAt, stagedAt),
-    ]);
-  }
-
-  void cleanupOldTurnInputAttachments(root, new Set([filePath])).catch(
-    () => undefined,
-  );
-
-  return upload.type === "localImage"
-    ? {
-        type: "localImage",
-        ...(upload.name?.trim() ? { name: upload.name.trim() } : {}),
-        path: filePath,
+    if (!reusable) {
+      const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporaryPath, data);
+        await rename(temporaryPath, filePath);
+      } finally {
+        await unlink(temporaryPath).catch(() => undefined);
       }
-    : {
-        type: "localFile",
-        ...(upload.name?.trim() ? { name: upload.name.trim() } : {}),
-        ...(upload.mimeType?.trim() ? { mimeType: upload.mimeType.trim() } : {}),
-        sizeBytes: data.byteLength,
-        path: filePath,
-      };
+    } else {
+      await Promise.all([
+        utimes(filePath, stagedAt, stagedAt),
+        utimes(path.dirname(filePath), stagedAt, stagedAt),
+      ]);
+    }
+
+    scheduleStagingCleanup(root, path.dirname(filePath));
+    void scheduleLegacyAttachmentCleanup();
+
+    return upload.type === "localImage"
+      ? {
+          type: "localImage",
+          ...(upload.name?.trim() ? { name: upload.name.trim() } : {}),
+          path: filePath,
+        }
+      : {
+          type: "localFile",
+          ...(upload.name?.trim() ? { name: upload.name.trim() } : {}),
+          ...(upload.mimeType?.trim() ? { mimeType: upload.mimeType.trim() } : {}),
+          sizeBytes: data.byteLength,
+          path: filePath,
+        };
+  });
 }
 
 export async function stageTurnInputAttachments(
   uploads: readonly TurnInputAttachmentUpload[],
 ): Promise<StagedTurnInputAttachment[]> {
-  return await Promise.all(uploads.map(stageTurnInputAttachment));
+  return await Promise.all(uploads.map((upload) => stageTurnInputAttachment(upload)));
 }
 
 export async function stageLocalTurnInputAttachment(
   item: StagedTurnInputAttachment,
-  options?: { privateStorageRoots?: readonly string[] },
+  options?: { privateStorageRoots?: readonly string[]; owner?: ThreadAssetOwner },
 ): Promise<StagedTurnInputAttachment> {
+  // Admission already validated and retained these immutable paths. Replay
+  // bookkeeping can reuse them without re-reading or re-hashing their bytes.
+  if (options?.owner && isThreadAssetPath(item.path, options.owner)) return item;
   const ownedStagingPath = await resolveOwnedStagingPath(item.path);
   const readable = ownedStagingPath
     ? { ok: true as const, path: ownedStagingPath }
@@ -142,7 +176,19 @@ export async function stageLocalTurnInputAttachment(
       `Turn attachment exceeds the ${MAX_TURN_INPUT_ATTACHMENT_BYTES}-byte limit.`,
     );
   }
+  // Transport reads of durable assets do not need a new expiring staging copy.
+  if (!options?.owner && await isResolvedThreadAssetPath(readable.path)) return { ...item, path: readable.path };
   const data = await readFile(readable.path);
+  if (options?.owner) {
+    let name = sanitizeTurnAttachmentName(item.name ?? path.basename(item.path));
+    const extension = item.type === "localImage" ? path.extname(readable.path).toLowerCase() : "";
+    if (/^\.(?:avif|bmp|gif|jpe?g|png|webp)$/u.test(extension)) {
+      name = `${path.parse(name).name}${extension}`;
+    }
+    const ownedPath = await storeThreadAsset(options.owner, data, name, readable.path);
+    void scheduleLegacyAttachmentCleanup();
+    return { ...item, path: ownedPath, ...(item.type === "localFile" ? { sizeBytes: data.byteLength } : {}) };
+  }
   return await stageTurnInputAttachment({
     type: item.type,
     data,
@@ -160,7 +206,7 @@ export async function stageLocalTurnInputAttachment(
  */
 export async function stageTurnInputAttachmentsForRetention(
   input: readonly AppServerTurnInputItem[],
-  options?: { privateStorageRoots?: readonly string[] },
+  options?: { privateStorageRoots?: readonly string[]; owner?: ThreadAssetOwner; strict?: boolean },
 ): Promise<AppServerTurnInputItem[]> {
   const attachments: AppServerTurnInputItem[] = [];
   for (const item of input) {
@@ -180,7 +226,7 @@ export async function stageTurnInputAttachmentsForRetention(
             data,
             name: item.name,
             mimeType: item.mimeType,
-          }));
+          }, options?.owner));
         }
         continue;
       }
@@ -192,7 +238,7 @@ export async function stageTurnInputAttachmentsForRetention(
             data: parsed.data,
             name: item.name,
             mimeType: parsed.mimeType,
-          }));
+          }, options?.owner));
         }
         continue;
       }
@@ -208,13 +254,61 @@ export async function stageTurnInputAttachmentsForRetention(
         continue;
       }
       attachments.push(item);
-    } catch {
+    } catch (error) {
+      if (options?.strict) throw error;
       // Forwarding is secondary to the already-admitted source turn. Omit an
       // unreadable attachment instead of retaining its inline payload or
       // failing the source turn after the backend accepted it.
     }
   }
   return attachments;
+}
+
+/** Claim a destination handle before queue admission, preserving the rest of the input. */
+export async function ownThreadInputAttachments(
+  input: readonly AppServerTurnInputItem[],
+  owner: ThreadAssetOwner,
+  privateStorageRoots?: readonly string[],
+): Promise<AppServerTurnInputItem[]> {
+  const output: AppServerTurnInputItem[] = [];
+  const ownedPaths = new Map<string, string>();
+  for (const item of input) {
+    if (item.type === "text" || (item.type === "localImage" || item.type === "localFile") && isThreadAssetPath(item.path, owner)) {
+      output.push(item);
+      continue;
+    }
+    const retained = await stageTurnInputAttachmentsForRetention([item], { owner, privateStorageRoots, strict: true });
+    const attachment = retained[0];
+    if (item.type === "localFile" && attachment?.type === "localFile" && item.path !== attachment.path) {
+      ownedPaths.set(path.resolve(item.path), attachment.path);
+    }
+    // Preserve established inline payloads for ACP and non-JPEG/PNG images
+    // such as animated GIFs. Their owned copy serves replay and forwarding.
+    const preserveInlineImage = item.type === "image"
+      && (owner.backend.startsWith("acp:")
+        || item.url.startsWith("data:") && !/^data:image\/(?:jpeg|jpg|png);base64,/iu.test(item.url));
+    if (preserveInlineImage) {
+      output.push(item);
+    } else {
+      output.push(attachment
+        ? { ...attachment, ...((item.type === "file" || item.type === "localFile") && item.pdfRenderProfile ? { pdfRenderProfile: item.pdfRenderProfile } : {}) }
+        : item);
+    }
+  }
+  if (ownedPaths.size === 0) return output;
+  return output.map((item) => {
+    if (item.type !== "text" || !item.text.includes("[@")) return item;
+    return {
+      ...item,
+      text: item.text.replace(/\[@([^\]]+)\]\(([^)]*)\)/gu, (reference, name: string, value: string) => {
+        const sourcePath = normalizeExplicitLocalFileReferencePath(value);
+        const ownedPath = sourcePath ? ownedPaths.get(sourcePath) : undefined;
+        // Escape parentheses too: encodeURIComponent leaves them unchanged.
+        const target = ownedPath ? encodeURIComponent(ownedPath).replace(/[()]/gu, (character) => character === "(" ? "%28" : "%29") : undefined;
+        return target ? `[@${name}](${target})` : reference;
+      }),
+    };
+  });
 }
 
 function filePathFromUrl(value: string): string | undefined {
@@ -273,7 +367,7 @@ export function isStagedTurnInputAttachmentPath(filePath: string): boolean {
 }
 
 async function resolveOwnedStagingPath(filePath: string): Promise<string | undefined> {
-  const roots = [turnInputAttachmentRoot(), imageInputFileRoot()];
+  const roots = [turnInputAttachmentRoot(), imageInputFileRoot(), resolveActiveProfilePath("state/turn-input-attachments"), threadAssetRoot()];
   if (!roots.some((root) => isPathWithinRoot(path.resolve(filePath), path.resolve(root)))) {
     return undefined;
   }
@@ -339,6 +433,18 @@ function fallbackName(
   }
 }
 
+function normalizedImageExtension(mimeType: string | undefined): string | undefined {
+  switch (mimeType?.trim().toLowerCase()) {
+    case "image/jpeg":
+    case "image/jpg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    default:
+      return undefined;
+  }
+}
+
 export function sanitizeTurnAttachmentName(
   value: string | undefined,
   fallback = "attachment",
@@ -352,25 +458,25 @@ export function sanitizeTurnAttachmentName(
     : fallback;
 }
 
-async function cleanupOldTurnInputAttachments(
-  root: string,
-  excludedFiles: ReadonlySet<string>,
-): Promise<void> {
-  const cutoff = Date.now() - TURN_INPUT_ATTACHMENT_MAX_AGE_MS;
+let lastStagingSweep: { root: string; at: number } | undefined;
+
+function scheduleStagingCleanup(root: string, excludedDirectory: string): void {
+  const now = Date.now();
+  if (lastStagingSweep?.root === root && now - lastStagingSweep.at < 60 * 60 * 1000) return;
+  lastStagingSweep = { root, at: now };
+  void cleanupStagedAttachments(root, now, excludedDirectory).catch(() => undefined);
+}
+
+async function cleanupStagedAttachments(root: string, now: number, excludedDirectory: string): Promise<void> {
   const entries = await readdir(root).catch(() => []);
-  await Promise.all(
-    entries.map(async (entry) => {
-      const entryPath = path.join(root, entry);
-      const children = await readdir(entryPath).catch(() => []);
-      if (children.some((child) => excludedFiles.has(path.join(entryPath, child)))) {
-        return;
+  for (const entry of entries) {
+    const directory = path.join(root, entry);
+    if (directory === excludedDirectory) continue;
+    await withAssetDirectory(directory, async () => {
+      const info = await stat(directory).catch(() => undefined);
+      if (info?.isDirectory() && info.mtimeMs < now - TURN_INPUT_ATTACHMENT_MAX_AGE_MS) {
+        await rm(directory, { recursive: true, force: true });
       }
-      const info = await stat(entryPath).catch(() => undefined);
-      if (info?.isDirectory() && info.mtimeMs < cutoff) {
-        await rm(entryPath, { recursive: true, force: true }).catch(
-          () => undefined,
-        );
-      }
-    }),
-  );
+    });
+  }
 }

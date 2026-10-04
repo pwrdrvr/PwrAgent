@@ -110,7 +110,6 @@ is_dev_command() {
   [[ "$command" == *"pnpm --filter @pwragent/desktop dev"* ]] && return 0
   [[ "$command" == *"pwragent-dev-profile-daemon.mjs"* ]] && return 0
   [[ "$command" == *"electron-vite"* && "$command" == *"dev"* ]] && return 0
-  [[ "$command" == *"scripts/rebuild-native-for-electron.mjs"* ]] && return 0
   [[ "$command" == *"Electron.app"* && "$command" == *"apps/desktop"* ]] && return 0
   [[ "$command" == *"PwrAgent"* && "$command" == *"apps/desktop"* ]] && return 0
   return 1
