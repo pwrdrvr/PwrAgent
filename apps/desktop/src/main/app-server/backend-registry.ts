@@ -33785,11 +33785,6 @@ export class DesktopBackendRegistry {
       this.logTokenMiserReplaySkip("no-store", threadId);
       return;
     }
-    const entries = this.activeTokenMiserReplayEntries.get(threadId);
-    if (!entries || entries.size === 0) {
-      this.logTokenMiserReplaySkip("no-active-gates", threadId);
-      return;
-    }
     const requestUsage = readTaskMonitorTokenUsageRecords(
       event.notification.params.tokenUsage,
     );
@@ -33822,6 +33817,7 @@ export class DesktopBackendRegistry {
         this.tokenMiserStore.recordParentRequestUsage({
           threadId,
           cumulativeInputTokens,
+          cachedInputTokens: requestUsage?.latestUsage?.cachedInputTokens,
           requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey)!,
         });
         this.logTokenMiserReplaySkip("session-reset", threadId);
@@ -33831,6 +33827,8 @@ export class DesktopBackendRegistry {
       return;
     }
     this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+    // Compaction stops replay tracking, but the originals stay retrievable
+    // until the next turn. Their requesting rounds still need fresh usage.
     this.tokenMiserStore.recordParentRequestUsage({
       threadId,
       cumulativeInputTokens,
@@ -33838,6 +33836,11 @@ export class DesktopBackendRegistry {
       requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey)
         ?? this.tokenMiserRequestEpoch,
     });
+    const entries = this.activeTokenMiserReplayEntries.get(threadId);
+    if (!entries || entries.size === 0) {
+      this.logTokenMiserReplaySkip("no-active-gates", threadId);
+      return;
+    }
     const observed = [...entries.entries()];
     const updated = await Promise.all(
       observed.map(([objectId]) =>

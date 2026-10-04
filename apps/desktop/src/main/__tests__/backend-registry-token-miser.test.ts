@@ -891,6 +891,68 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect((await tokenMiserStore.readMetadata(objectId))?.retrievalRequestCachedTokens).toBe(397_000);
   });
 
+  it.each([false, true])("uses fresh retrieval usage after all replay gates compact (previous request charged=%s)", async (previouslyCharged) => {
+    const { objectId, tokenMiserStore } = await startLiveReplayGate();
+    const retrieve = async () => {
+      const delivery = await tokenMiserStore.prepareRetrievalDelivery({
+        objectId, threadId: "thread-parent", visibleText: "xxxx",
+      });
+      await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: "thread-parent", output: delivery!.text });
+    };
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cumulativeInputTokens: 200_000, cachedInputTokens: 199_900,
+      inputTokens: 200_000, outputTokens: 0,
+    }));
+    if (previouslyCharged) await retrieve();
+    await registry.publishLocalEvent({
+      backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "thread-parent", turnId: "turn-parent",
+        item: { id: "compact-retrieval", type: "ContextCompaction" },
+      } },
+    });
+    const internals = registry as unknown as { activeTokenMiserReplayEntries: Map<string, Map<string, unknown>> };
+    expect(internals.activeTokenMiserReplayEntries.has("thread-parent")).toBe(false);
+    const before = (await tokenMiserStore.readMetadata(objectId))!;
+    const requestingRound = parentContextUsageEvent({
+      cumulativeInputTokens: 210_000, cachedInputTokens: 9_000,
+      inputTokens: 10_000, outputTokens: 0,
+    });
+    await registry.publishLocalEvent(requestingRound);
+    await retrieve();
+    await registry.publishLocalEvent(requestingRound);
+    await retrieve();
+    const after = (await tokenMiserStore.readMetadata(objectId))!;
+    expect((after.retrievalRequestCachedTokens ?? 0) - (before.retrievalRequestCachedTokens ?? 0)).toBe(9_000);
+    expect(after.cachedRevealedTokens! - before.cachedRevealedTokens!).toBe(9_000);
+    expect(after.cachedReplayCount).toBe(before.cachedReplayCount);
+    expect(after.parentRequestsObservedAfterGate).toBe(before.parentRequestsObservedAfterGate);
+  });
+
+  it("charges fresh reported cached usage from a session-reset request exactly once", async () => {
+    const { objectId, tokenMiserStore } = await startLiveReplayGate();
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cumulativeInputTokens: 1_000_000, cachedInputTokens: 190_000,
+      inputTokens: 200_000, outputTokens: 0,
+    }));
+    const before = (await tokenMiserStore.readMetadata(objectId))!;
+    const resetRound = parentContextUsageEvent({
+      cumulativeInputTokens: 200_000, cachedInputTokens: 199_000,
+      inputTokens: 200_000, outputTokens: 0,
+    });
+    await registry.publishLocalEvent(resetRound);
+    for (let index = 0; index < 2; index += 1) {
+      const delivery = await tokenMiserStore.prepareRetrievalDelivery({
+        objectId, threadId: "thread-parent", visibleText: "xxxx",
+      });
+      await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: "thread-parent", output: delivery!.text });
+      await registry.publishLocalEvent(resetRound);
+    }
+    const after = (await tokenMiserStore.readMetadata(objectId))!;
+    expect(after.retrievalRequestCachedTokens).toBe(199_000);
+    expect(after.cachedRevealedTokens! - before.cachedRevealedTokens!).toBe(199_000);
+    expect(after.parentRequestsObservedAfterGate).toBe(before.parentRequestsObservedAfterGate);
+  });
+
   it("stops baseline and revealed replay accounting at ContextCompaction", async () => {
     const { objectId, tokenMiserStore } = await startLiveReplayGate();
 
@@ -1234,6 +1296,15 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const objectId = "22222222-2222-4222-8222-222222222222";
     const tokenMiserStore = new TokenMiserStore(
       path.join(directory, "token-miser-objects"),
+      {
+        // Match the production store callback: stopped gates leave the active
+        // replay set, even while their original outputs remain retrievable.
+        onMetadataUpdated: (entry) => {
+          (registry as unknown as {
+            rememberActiveTokenMiserReplayEntry(metadata: TokenMiserObjectMetadata): void;
+          }).rememberActiveTokenMiserReplayEntry(entry);
+        },
+      },
     );
     const entry = await tokenMiserStore.store({
       baselineCharacters: 24_000,
