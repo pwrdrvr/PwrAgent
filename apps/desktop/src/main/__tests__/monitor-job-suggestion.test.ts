@@ -56,6 +56,14 @@ describe("monitor job suggestions", () => {
       .toEqual([false, false, false]);
   });
 
+  it.each(["closed", "closedAt"])("recognizes repeated PR closure polling with %s", (field) => {
+    const detector = new MonitorJobSuggestionDetector();
+    const command = `gh pr view 123 --json ${field} --jq .${field}`;
+    expect([0, 1, 2, 3].map((index) =>
+      detector.observe(record(index, command, "turn-1", index * 15_000)),
+    )).toEqual([false, false, true, false]);
+  });
+
   it("counts repeated status queries separately for the same PR", () => {
     const detector = new MonitorJobSuggestionDetector();
     const commands = [

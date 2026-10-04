@@ -279,7 +279,7 @@ function pollingSignal(record: ThreadToolInvocationRecord): string | undefined {
       const fields = (json[1] ?? json[2] ?? json[3] ?? "").split(",");
       if (!fields.some((field) => [
         "statusCheckRollup", "mergeable", "mergeStateStatus", "state",
-        "mergedAt", "reviewDecision",
+        "mergedAt", "reviewDecision", "closed", "closedAt",
       ].includes(field))) return undefined;
     }
   }
