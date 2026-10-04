@@ -230,7 +230,6 @@ export function AcpAgentsSettings(props: {
             />
           ) : null}
           <AcpAgentSection
-            desktopApi={props.desktopApi}
             entry={entry}
             desktopApi={props.desktopApi}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
@@ -381,7 +380,6 @@ function LegacyKimiCompatibilityCard(props: {
 }
 
 function AcpAgentSection(props: {
-  desktopApi?: DesktopApi;
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   desktopApi?: DesktopApi;
