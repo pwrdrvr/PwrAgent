@@ -100,6 +100,12 @@ type TelegramStreamRateLimitState = {
   timestamps: number[];
 };
 
+type TelegramPendingStreamCleanup = {
+  target: TelegramDeliveryTarget;
+  retryAt: number;
+  failures: number;
+};
+
 type TelegramStreamRateLimitDecision = {
   allowed: boolean;
   hard: boolean;
@@ -584,6 +590,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     string,
     Array<TelegramDeliveryTarget & { text: string; richHtml?: string }>
   >();
+  // Obsolete messages have separate ownership from the delivered answer.
+  // Retrying their deletion must never turn final delivery into a failure.
+  private readonly streamCleanup = new Map<string, TelegramPendingStreamCleanup>();
+  private streamCleanupTimer?: ReturnType<typeof setTimeout>;
+  private streamCleanupTask?: Promise<void>;
+  private streamCleanupStopped = false;
   /**
    * Per-process cache of forum topic names, keyed by
    * `${chatId}:${messageThreadId}`. Telegram's Bot API does not expose
@@ -740,6 +752,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     const lifecycleGeneration = ++this.lifecycleGeneration;
     this.listener = listener;
+    this.streamCleanupStopped = false;
 
     this.registerBotErrorHandler();
     this.registerBotHandlers();
@@ -824,6 +837,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         }
       });
     }
+    this.scheduleStreamCleanup();
   }
 
   onRuntimeError(listener: (reason: string) => void): () => void {
@@ -849,6 +863,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     this.lifecycleGeneration += 1;
     this.stopping = true;
     this.stopTypingSignals();
+    this.streamCleanupStopped = true;
+    if (this.streamCleanupTimer) clearTimeout(this.streamCleanupTimer);
+    this.streamCleanupTimer = undefined;
     try {
       try {
         await this.bot.stop?.();
@@ -1242,6 +1259,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
             firstOutcome ??= "updated";
             continue;
           }
+          this.recordStreamRateLimitDelivery(anchor);
           try {
             await this.bot.api.editMessageText({
               chat_id: anchor.chatId,
@@ -1261,15 +1279,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           anchor.text = chunkText;
           delete anchor.richHtml;
           firstOutcome ??= "updated";
-          // Record every real API call (edit, including a "not modified" no-op
-          // Telegram still processed) so the per-chat rate limiter doesn't
-          // undercount when a long response spans several messages this tick.
-          this.recordStreamRateLimitDelivery({
-            chatId: anchor.chatId,
-            messageId: anchor.messageId,
-            messageThreadId: anchor.messageThreadId,
-          });
         } else {
+          this.recordStreamRateLimitDelivery(target);
           const message = await this.bot.api.sendMessage({
             chat_id: target.chatId,
             disable_web_page_preview: true,
@@ -1284,48 +1295,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
             text: chunkText,
           };
           firstOutcome ??= "presented";
-          this.recordStreamRateLimitDelivery({
-            chatId: target.chatId,
-            messageId: message.message_id,
-            messageThreadId: target.messageThreadId,
-          });
         }
       }
-      // Completing Markdown can shorten the rendered text. Retire surplus
-      // messages before forgetting anchors, including on the final update.
-      while (anchors.length > chunks.length) {
-        const obsolete = anchors.at(-1)!;
-        if (obsolete.messageId !== undefined) {
-          if (this.bot.api.deleteMessage) {
-            try {
-              const deleted = await this.bot.api.deleteMessage({
-                chat_id: obsolete.chatId,
-                message_id: obsolete.messageId,
-              });
-              if (!deleted) throw new Error("Telegram did not delete the obsolete stream message.");
-            } catch (error) {
-              // A previous delete can succeed remotely before its response is
-              // lost; an already absent message also completes reconciliation.
-              if (!telegramErrorIncludes(error, "message to delete not found")) throw error;
-            }
-          } else {
-            // Custom injected APIs may expose only the original edit seam.
-            // Clear the stale content with readable text when deletion is absent.
-            try {
-              await this.bot.api.editMessageText({
-                chat_id: obsolete.chatId,
-                message_id: obsolete.messageId,
-                message_thread_id: obsolete.messageThreadId,
-                text: "Response updated above.",
-              });
-            } catch (error) {
-              if (!isTelegramMessageNotModifiedError(error)) throw error;
-            }
-          }
-          this.recordStreamRateLimitDelivery(obsolete);
-        }
-        anchors.pop();
+      // Transfer surplus messages out of the active stream before cleanup.
+      // Regrowth must create fresh chunks, never reuse a pending deletion.
+      for (const obsolete of anchors.splice(chunks.length).toReversed()) {
+        if (obsolete.messageId === undefined) continue;
+        const key = `${obsolete.chatId}:${obsolete.messageId}`;
+        this.streamCleanup.set(key, {
+          target: { chatId: obsolete.chatId, messageId: obsolete.messageId, messageThreadId: obsolete.messageThreadId },
+          retryAt: this.now(),
+          failures: 0,
+        });
       }
+      await this.flushStreamCleanup();
       const head = anchors[0];
       if (!head) {
         // Keep an empty anchor set for a partial stream so a later update
@@ -1387,6 +1370,81 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
   }
 
+  private async flushStreamCleanup(): Promise<void> {
+    if (this.streamCleanupStopped || this.streamCleanup.size === 0) return;
+    if (this.streamCleanupTask) return await this.streamCleanupTask;
+    const task = this.runStreamCleanup(this.lifecycleGeneration);
+    this.streamCleanupTask = task;
+    try {
+      await task;
+    } finally {
+      this.streamCleanupTask = undefined;
+      this.scheduleStreamCleanup();
+    }
+  }
+
+  private async runStreamCleanup(generation: number): Promise<void> {
+    for (const [key, cleanup] of this.streamCleanup) {
+      if (this.streamCleanupStopped || generation !== this.lifecycleGeneration) return;
+      if (cleanup.retryAt > this.now()) continue;
+      const { target } = cleanup;
+      const limit = this.evaluateStreamRateLimit(target, true);
+      if (!limit.allowed) {
+        cleanup.retryAt = this.now() + limit.waitMs;
+        continue;
+      }
+      // Reserve the slot before awaiting the API, so concurrent delivery sees
+      // cleanup requests in flight. Rejected requests consume a slot as well.
+      this.recordStreamRateLimitDelivery(target);
+      try {
+        if (this.bot.api.deleteMessage) {
+          const deleted = await this.bot.api.deleteMessage({
+            chat_id: target.chatId,
+            message_id: target.messageId!,
+          });
+          if (!deleted) throw new Error("Telegram did not delete the obsolete stream message.");
+        } else {
+          // Older injected APIs can clear stale content through the edit seam.
+          await this.bot.api.editMessageText({
+            chat_id: target.chatId,
+            message_id: target.messageId!,
+            message_thread_id: target.messageThreadId,
+            text: "Response updated above.",
+          });
+        }
+        this.streamCleanup.delete(key);
+      } catch (error) {
+        if (telegramErrorIncludes(error, "message to delete not found")
+          || isTelegramMessageNotModifiedError(error)) {
+          this.streamCleanup.delete(key);
+        } else {
+          cleanup.failures += 1;
+          const backoffMs = Math.min(60_000, 1000 * 2 ** Math.min(cleanup.failures - 1, 6));
+          cleanup.retryAt = this.now() + backoffMs;
+          const rateLimit = this.emitRateLimitFromError(error, target, { retryable: false });
+          if (rateLimit?.retryAfterMs !== undefined) {
+            this.blockStreamRateLimitTarget(target, rateLimit.retryAfterMs);
+            cleanup.retryAt = Math.max(cleanup.retryAt, this.now() + rateLimit.retryAfterMs);
+          }
+          this.options.logger?.warn?.(`telegram stream cleanup deferred target=${this.compactTypingTarget(target)} error=${errorMessage(error)}`);
+        }
+      }
+    }
+  }
+
+  private scheduleStreamCleanup(): void {
+    if (this.streamCleanupTimer) clearTimeout(this.streamCleanupTimer);
+    this.streamCleanupTimer = undefined;
+    if (this.streamCleanupStopped || this.streamCleanupTask || this.streamCleanup.size === 0) return;
+    let retryAt = Infinity;
+    for (const cleanup of this.streamCleanup.values()) retryAt = Math.min(retryAt, cleanup.retryAt);
+    this.streamCleanupTimer = setTimeout(() => {
+      this.streamCleanupTimer = undefined;
+      void this.flushStreamCleanup();
+    }, Math.max(1, retryAt - this.now()));
+    this.streamCleanupTimer.unref?.();
+  }
+
   private async tryDeliverRichMessage(
     richMessage: TelegramInputRichMessage | undefined,
     target: TelegramDeliveryTarget,
@@ -1394,6 +1452,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     replyMarkup?: TelegramInlineKeyboardMarkup,
   ): Promise<TelegramSentMessage | undefined> {
     if (!richMessage || !this.bot.api.sendRichMessage) return undefined;
+    this.recordStreamRateLimitDelivery(target);
     try {
       if (target.messageId !== undefined) {
         return await this.bot.api.editMessageText({
@@ -1425,8 +1484,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       if (!isTelegramRichMessageRejected(error)) throw error;
       this.options.logger?.warn?.(`telegram rich message rejected; using regular fallback error=${errorMessage(error)}`);
       return undefined;
-    } finally {
-      this.recordStreamRateLimitDelivery(target);
     }
   }
 

@@ -354,6 +354,9 @@ function renderInline(tokens: Token[], mode: TelegramHtmlMode): string {
         return `<code>${escapeTelegramHtml(token.text)}</code>`;
       case "link": {
         const label = renderInline(token.tokens, mode);
+        // GFM also creates link tokens for bare URLs, email addresses and
+        // www-prefixed filenames. Only source link syntax creates anchors.
+        if (!token.raw.startsWith("[") && !token.raw.startsWith("<")) return label;
         // Local paths and unsafe protocols remain readable text. Cap attribute
         // size so reopening a link cannot exhaust a regular message's budget.
         const href = escapeTelegramHtml(token.href).replace(/"/g, "&quot;");

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adaptGrammyBot,
   TelegramAdapter,
@@ -188,6 +188,11 @@ describe("adaptGrammyBot", () => {
 });
 
 describe("TelegramAdapter rich messages", () => {
+  const adapters: TelegramAdapter[] = [];
+  afterEach(async () => {
+    await Promise.all(adapters.splice(0).map((adapter) => adapter.stop()));
+    vi.useRealTimers();
+  });
   const markdown = "# Downloads\n\n| Asset | Count |\n| --- | ---: |\n| ZIP | **177** |\n\n- [x] Reported";
   const intent = {
     id: "stats", kind: "message" as const, createdAt: 1,
@@ -217,6 +222,7 @@ describe("TelegramAdapter rich messages", () => {
       now,
       store: fakeCallbackStore(),
     });
+    adapters.push(adapter);
     return { api, adapter, send, edit, rich };
   }
 
@@ -444,9 +450,10 @@ describe("TelegramAdapter rich messages", () => {
     expect(rich).not.toHaveBeenCalled();
   });
 
-  it("reconciles extra partial chunks after a rich edit and retries failed cleanup without resending", async () => {
-    let now = 1000;
-    const { api, adapter, send, edit, rich } = harness(() => now);
+  it("preserves successful rich final delivery and retries cleanup without another final update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit, rich } = harness(() => Date.now());
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -459,12 +466,12 @@ describe("TelegramAdapter rich messages", () => {
       stream: { key: "rich-cleanup", sequence: 1, isFinal: false },
     };
     await adapter.deliver(stream);
-    now += 5000;
     const final = { ...stream, stream: { ...stream.stream, sequence: 2, isFinal: true } };
-    expect((await adapter.deliver(final)).outcome).toBe("failed");
     const result = await adapter.deliver(final);
     expect(result.outcome).toBe("updated");
     expect(result.surface?.id).toBe("200");
+    expect(result.errorMessage).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
     expect(remove.mock.calls).toEqual([
       [{ chat_id: -100123, message_id: 201 }],
       [{ chat_id: -100123, message_id: 201 }],
@@ -509,9 +516,10 @@ describe("TelegramAdapter rich messages", () => {
     }
   });
 
-  it.each([false, true])("retries cleanup without duplicate sends after failed deletion (already absent=%s)", async (alreadyAbsent) => {
-    let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+  it.each([false, true])("preserves successful regular final delivery while cleanup retries (already absent=%s)", async (alreadyAbsent) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit } = harness(() => Date.now());
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -526,16 +534,206 @@ describe("TelegramAdapter rich messages", () => {
       stream: { key: "retry-cleanup", sequence: 1, isFinal: false },
     };
     await adapter.deliver(stream);
-    now += 5000;
     const final = { ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true } };
-    expect((await adapter.deliver(final)).outcome).toBe("failed");
-    expect((await adapter.deliver(final)).outcome).toBe("updated");
+    const result = await adapter.deliver(final);
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    expect(result.errorMessage).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
     expect(remove.mock.calls).toEqual([
       [{ chat_id: -100123, message_id: 201 }],
       [{ chat_id: -100123, message_id: 201 }],
     ]);
     expect(send).toHaveBeenCalledTimes(2);
     expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a message owned by deferred cleanup when a partial response regrows", async () => {
+    vi.useFakeTimers();
+    let now = 1000;
+    const { api, adapter, send, edit } = harness(() => now);
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "regrowth-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "regrowth-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    now += 5000;
+    expect((await adapter.deliver({
+      ...stream, text: "Short", stream: { ...stream.stream, sequence: 2 },
+    })).outcome).toBe("updated");
+    now += 5000;
+    await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 201 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+  });
+
+  it("returns the finalized answer before cleanup and honors the hard budget before each deletion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => {
+      const id = messageId++;
+      if (id === 200) vi.setSystemTime(2000);
+      return { chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: id };
+    });
+    const remove = vi.fn(async () => true);
+    api.deleteMessage = remove;
+    const stream = {
+      id: "budget-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
+      stream: { key: "budget-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    for (let index = 0; index < 16; index += 1) {
+      await adapter.deliver({
+        ...stream, text: "Complete.",
+        stream: { key: `budget-fill-${index}`, sequence: 1, isFinal: true },
+      });
+    }
+    const result = await adapter.deliver({
+      ...stream, text: markdown, markdown: "markdown",
+      stream: { ...stream.stream, sequence: 2, isFinal: true },
+    });
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    expect(edit.mock.calls[0]?.[0].rich_message?.html).toContain("<table bordered striped compact>");
+    expect(remove).not.toHaveBeenCalled();
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove).toHaveBeenCalledExactlyOnceWith({ chat_id: -100123, message_id: 202 });
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove.mock.calls).toEqual([
+      [{ chat_id: -100123, message_id: 202 }],
+      [{ chat_id: -100123, message_id: 201 }],
+    ]);
+    expect(send).toHaveBeenCalledTimes(19);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels cleanup timers on stop and resumes pending cleanup on start", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce(new Error("Deletion failed."));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "stopped-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "stopped-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    await adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    await adapter.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await adapter.start(async () => undefined);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves final delivery and honors cleanup retry_after without retrying the answer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    const remove = vi.fn(async () => true).mockRejectedValueOnce({ error_code: 429, parameters: { retry_after: 2 } });
+    api.deleteMessage = remove;
+    const onRateLimit = vi.fn();
+    adapter.onRateLimit(onRateLimit);
+    const stream = {
+      id: "limited-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "limited-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    expect(result.rateLimit).toBeUndefined();
+    expect(result.errorMessage).toBeUndefined();
+    expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: false }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries cleanup through an older edit-only API without changing final delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { adapter, send, edit } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    let cleanupAttempts = 0;
+    edit.mockImplementation(async (request) => {
+      if (request.message_id === 201) {
+        cleanupAttempts += 1;
+        if (cleanupAttempts === 1) throw new Error("Cleanup edit failed.");
+        throw new Error("Bad Request: message is not modified");
+      }
+      return { chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: request.message_id };
+    });
+    const stream = {
+      id: "edit-only-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
+      stream: { key: "edit-only-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(edit.mock.calls.filter(([request]) => request.message_id === 200)).toHaveLength(1);
+    expect(edit.mock.calls.filter(([request]) => request.message_id === 201)).toHaveLength(2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops issuing cleanup requests after shutdown during an in-flight deletion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const { api, adapter, send } = harness(() => Date.now());
+    let messageId = 200;
+    send.mockImplementation(async (request) => ({
+      chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
+    }));
+    let releaseDelete!: (value: boolean) => void;
+    const remove = vi.fn(() => new Promise<boolean>((resolve) => { releaseDelete = resolve; }));
+    api.deleteMessage = remove;
+    const stream = {
+      id: "in-flight-cleanup", kind: "stream_update" as const, createdAt: 1,
+      audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
+      stream: { key: "in-flight-cleanup", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(stream);
+    const final = adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+    releaseDelete(true);
+    expect((await final).outcome).toBe("updated");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("clears stale text through the edit seam when an injected API cannot delete messages", async () => {

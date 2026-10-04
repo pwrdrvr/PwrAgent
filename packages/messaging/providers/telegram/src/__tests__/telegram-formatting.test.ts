@@ -162,6 +162,20 @@ describe("telegram formatting", () => {
       .toBe("**literal** | pipes | &lt;b&gt;");
   });
 
+  it.each(["markdown", "light"] as const)("keeps lexer-generated links as text with the %s policy", (policy) => {
+    const text = "www.config.toml https://example.com/?a=1&b=2 person@example.com";
+    const expected = "www.config.toml https://example.com/?a=1&amp;b=2 person@example.com";
+    expect(renderTelegramHtml(text, policy)).toBe(expected);
+    expect(richMessageForTelegramText(`# Files\n\n${text}`, policy)?.html)
+      .toBe(`<h1>Files</h1>\n<p>${expected}</p>`);
+    const explicit = "[file](https://example.com/file) <https://example.com/angle> [reference][ref]\n\n[ref]: https://example.com/ref";
+    for (const html of [renderTelegramHtml(explicit, policy), richMessageForTelegramText(`# Links\n\n${explicit}`, policy)?.html]) {
+      expect(html).toContain("<a href=\"https://example.com/file\">file</a>");
+      expect(html).toContain("<a href=\"https://example.com/angle\">https://example.com/angle</a>");
+      expect(html).toContain("<a href=\"https://example.com/ref\">reference</a>");
+    }
+  });
+
   it("splits formatted Unicode text without cutting entities or leaving tags unbalanced", () => {
     const html = renderTelegramHtml(`**${"🙂 & <".repeat(1000)}**\n\n\`\`\`python\n${"x < 2\n".repeat(900)}\`\`\``, "markdown");
     const chunks = splitTelegramHtml(html);

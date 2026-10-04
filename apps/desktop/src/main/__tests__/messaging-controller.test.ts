@@ -56,7 +56,13 @@ import { textForFeishuIntent } from "@pwragent/messaging-provider-feishu";
 import { textForLineIntent } from "@pwragent/messaging-provider-line";
 import { textForMattermostIntent } from "@pwragent/messaging-provider-mattermost";
 import { textForSlackIntent } from "@pwragent/messaging-provider-slack";
-import { textForTelegramIntent } from "@pwragent/messaging-provider-telegram";
+import {
+  TelegramAdapter,
+  textForTelegramIntent,
+  type TelegramBotApi,
+  type TelegramEditMessageTextRequest,
+  type TelegramSendMessageRequest,
+} from "@pwragent/messaging-provider-telegram";
 import {
   MessagingController,
   messagingDeliveryPriority,
@@ -18060,6 +18066,85 @@ describe("MessagingController", () => {
     );
     expect(finalStreamIndex).toBeGreaterThanOrEqual(0);
     expect(idleActivityIndex).toBeGreaterThan(finalStreamIndex);
+  });
+
+  it("does not post the final answer again when Telegram stream cleanup fails", async () => {
+    let now = 1000;
+    let messageId = 200;
+    const api = {
+      sendMessage: vi.fn(async (_request: TelegramSendMessageRequest) => ({
+        chat: { id: 777, type: "private" as const }, message_id: messageId++,
+      })),
+      editMessageText: vi.fn(async (request: TelegramEditMessageTextRequest) => ({
+        chat: { id: 777, type: "private" as const }, message_id: request.message_id,
+      })),
+      sendRichMessage: vi.fn(async () => ({
+        chat: { id: 777, type: "private" as const }, message_id: 300,
+      })),
+      deleteMessage: vi.fn(async () => { throw new Error("Deletion failed."); }),
+    };
+    const telegram = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
+      now: () => now,
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    let finalDelivery: MessagingDeliveryResult | undefined;
+    try {
+      const harness = await createHarness({
+        streamingResponsesDefault: true,
+        now: () => now,
+        deliver: async (intent) => {
+          delivered.push(intent);
+          if (intent.kind === "stream_update" || (intent.kind === "message" && intent.role === "assistant")) {
+            const result = await telegram.deliver({
+              ...intent,
+              audit: {
+                actor: { platformUserId: "42" },
+                channel: { channel: "telegram", conversation: { id: "777", kind: "dm" } },
+                occurredAt: now,
+              },
+            });
+            if (intent.kind === "stream_update" && intent.stream.isFinal) finalDelivery = result;
+            return result;
+          }
+          return { channel: "telegram", deliveredAt: now, outcome: "presented" };
+        },
+      });
+      await bindThread(harness);
+      delivered.length = 0;
+      const partial = `# Downloads\n\n${"x".repeat(4200)}`;
+      for (const delta of [partial, " continued"]) {
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta },
+          },
+        } satisfies AgentEvent);
+        now += 1500;
+      }
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1", turnId: "turn-1",
+            item: { id: "item-1", type: "agentMessage", text: `${partial} complete` },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(finalDelivery).toMatchObject({ outcome: "updated", surface: { id: "200" } });
+      expect(api.deleteMessage).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText.mock.calls[0]?.[0].rich_message?.html).toContain("<h1>Downloads</h1>");
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expect(api.sendRichMessage).not.toHaveBeenCalled();
+      expect(delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant")).toEqual([]);
+    } finally {
+      await telegram.stop();
+    }
   });
 
   it("delivers the final assistant message when stream updates are discarded", async () => {
