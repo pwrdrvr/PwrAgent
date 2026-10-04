@@ -6,9 +6,12 @@ export type InstanceReference = {
   kind: "instance";
   key: string;
   instanceId: string;
-  /** Full machine and profile; the inserted mention, so what the agent reads. */
+  /** Full machine and profile, for tooltips and search. */
   label: string;
-  /** The federation short name, with any distinguishing profile, for the picker row. */
+  /**
+   * The federation short name, with any distinguishing profile. The picker
+   * row and the inserted mention use it when the machine has one.
+   */
   shortLabel?: string;
   path: string;
   profileName?: string;

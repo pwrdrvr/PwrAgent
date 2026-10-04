@@ -8499,7 +8499,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const applyDirectoryReference = (
-    directory: Pick<NavigationDirectorySummary, "label" | "path"> & { kind?: string },
+    directory: Pick<NavigationDirectorySummary, "label" | "path"> & {
+      kind?: string;
+      shortLabel?: string;
+    },
   ): void => {
     if (!inputRef.current) {
       return;

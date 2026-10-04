@@ -17732,7 +17732,7 @@ describe("Composer", () => {
     expect(attachDirectoryToThread).not.toHaveBeenCalled();
   });
 
-  it("lists Federation instances by short name, with room for the name and the full label on hover", async () => {
+  it("lists and inserts Federation instances by short name, with the full label on hover", async () => {
     const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
     render(<Composer
       desktopApi={{
@@ -17741,9 +17741,9 @@ describe("Composer", () => {
         readFederationHealth: async () => ({ health: {
           enabled: true, role: "gateway", status: "connected",
           peers: [
-            { id: "mini-1", label: "Harold-Mac-Mini-1", profileName: "default", shortLabel: "Mini 1",
+            { id: "mini-1", label: "Lab-Mac-Mini-1", profileName: "default", shortLabel: "Mini 1",
               role: "client", status: "connected", capabilities: [] },
-            { id: "mini-1-dev", label: "Harold-Mac-Mini-1", profileName: "dev", shortLabel: "Mini 1",
+            { id: "mini-1-dev", label: "Lab-Mac-Mini-1", profileName: "dev", shortLabel: "Mini 1",
               role: "client", status: "disconnected", capabilities: [] },
           ],
         } }),
@@ -17758,15 +17758,23 @@ describe("Composer", () => {
     fireEvent.change(input, { target: { value: "Hand off to @mac" } });
     const option = await screen.findByRole("option", { name: /Mini 1 \/ dev/ });
     expect(screen.getByRole("option", { name: /Mini 1 \/ default/ })).toBeInTheDocument();
-    expect(option.textContent).not.toContain("Harold-Mac-Mini-1");
-    expect(option).toHaveAttribute("title", "Harold-Mac-Mini-1 / dev · disconnected");
+    expect(option.textContent).not.toContain("Lab-Mac-Mini-1");
+    expect(option).toHaveAttribute("title", "Lab-Mac-Mini-1 / dev · disconnected");
     // The 160px name column suits a folder beside its path; an instance's
     // meta is a short status, so the name takes the row instead.
     expect(option).toHaveClass("composer__autocomplete-option--instance");
     fireEvent.click(option);
-    // What the agent reads keeps the full machine label.
-    await waitFor(() => expect(screen.getByTestId("composer-tiptap-input")
-      .querySelector('[data-mention-kind="instance"]')).toHaveTextContent("@Harold-Mac-Mini-1 / dev"));
+    const chip = await waitFor(() => {
+      const found = screen.getByTestId("composer-tiptap-input")
+        .querySelector('[data-mention-kind="instance"]');
+      expect(found).toHaveTextContent("@Mini 1 / dev");
+      return found!;
+    });
+    expect(chip.getAttribute("data-tooltip")).toContain("Lab-Mac-Mini-1 / dev");
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: "Hand off to [@Mini 1 / dev](pwragent://instance/mini-1-dev)" }],
+    })));
   });
 
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
