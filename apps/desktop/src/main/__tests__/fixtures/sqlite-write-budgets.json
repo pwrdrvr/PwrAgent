@@ -431,7 +431,7 @@
   },
   "mcp-broker-request": {
     "commits": 0,
-    "note": "serve one non-owner MCP broker list request",
+    "note": "serve 100 non-owner MCP broker list requests: read-only, 0 MB/day of SQLite writes",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
