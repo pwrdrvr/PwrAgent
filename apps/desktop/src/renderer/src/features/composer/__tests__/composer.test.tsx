@@ -15064,6 +15064,35 @@ describe("Composer", () => {
       await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(thread, "new-worktree"));
     });
 
+    it.each([
+      ["Tab", 2, "/fork --wt new", "new-worktree", false],
+      ["Enter", 2, "/fork --wt new", "new-worktree", false],
+      ["Tab", 3, "/fork --no-history", "local", true],
+      ["Enter", 3, "/fork --no-history", "local", true],
+      ["Tab", 5, "/fork --wt new --no-history", "new-worktree", true],
+      ["Enter", 5, "/fork --wt new --no-history", "new-worktree", true],
+    ] as const)("honors %s on highlighted fork option %i (%s)", async (key, index, text, mode, noHistory) => {
+      const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork " } });
+      for (let step = 0; step < index; step += 1) {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      }
+      const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
+      expect(options[index]).toHaveAttribute("aria-selected", "true");
+
+      fireEvent.keyDown(input, { key });
+      expect(input).toHaveValue(`${text} `);
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(onCreateSubthread).not.toHaveBeenCalled();
+      await flushReactUpdates();
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(noHistory ? onCreateSubthread : onForkThread).toHaveBeenCalledWith(thread, mode));
+      expect(noHistory ? onForkThread : onCreateSubthread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
     it.each(["/fork --wt", "/fork --wt other", "/fork unexpected", "/fork --no-history --no-history"])("retains invalid command %s and never sends it to the agent", async (text) => {
       const { onForkThread, startTurn } = renderForkComposer();
       const input = screen.getByLabelText("Reply");

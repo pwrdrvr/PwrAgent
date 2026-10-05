@@ -10486,6 +10486,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
         (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
 
+  const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
+    if (autocompleteKind !== "slash") {
+      return undefined;
+    }
+
+    const activeCommand = filteredSlashCommands[activeSlashIndex];
+    // Fork variants change the workspace and history action, so completion
+    // must honor the highlighted row even when /fork is an exact text match.
+    if (activeCommand?.id.startsWith("fork")) {
+      return activeCommand;
+    }
+
+    const currentSlashText = slashTrigger
+      ? `/${slashTrigger.query}`.trimEnd().toLowerCase()
+      : undefined;
+    return (
+      (currentSlashText
+        ? filteredSlashCommands.find((candidate) =>
+            slashCommandMatchesText(candidate, currentSlashText)
+          )
+        : undefined) ??
+      activeCommand ??
+      filteredSlashCommands[0]
+    );
+  };
+
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
       applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
@@ -10520,19 +10546,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.trimEnd().toLowerCase()
-      : undefined;
-    const exactSlashCommand = currentSlashText
-      ? filteredSlashCommands.find((command) =>
-          slashCommandMatchesText(command, currentSlashText)
-        )
-      : undefined;
-    applySlashCommand(
-      exactSlashCommand ??
-        filteredSlashCommands[activeSlashIndex] ??
-        filteredSlashCommands[0]!
-    );
+    const slashCommand = getActiveSlashCommand();
+    if (slashCommand) {
+      applySlashCommand(slashCommand);
+    }
   };
 
   const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
@@ -10564,25 +10581,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     return false;
-  };
-
-  const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
-    if (autocompleteKind !== "slash") {
-      return undefined;
-    }
-
-    const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.trimEnd().toLowerCase()
-      : undefined;
-    return (
-      (currentSlashText
-        ? filteredSlashCommands.find((candidate) =>
-            slashCommandMatchesText(candidate, currentSlashText)
-          )
-        : undefined) ??
-      filteredSlashCommands[activeSlashIndex] ??
-      filteredSlashCommands[0]
-    );
   };
 
   const restoreDeletedSkillToken = (
