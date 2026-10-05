@@ -1384,8 +1384,8 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const selectedLaunchpad = props.selectedLaunchpad;
   const pendingForkEnvironmentSetup = props.pendingForkEnvironmentSetup;
-  // The launchpad the composer serves, set exactly when the launchpad branch
-  // below renders. Without it the composer serves the thread branch.
+  // The launchpad the composer serves. The launchpad branch below renders
+  // exactly when this is set; otherwise the composer serves the thread.
   const composerLaunchpad =
     !pendingForkEnvironmentSetup && props.selectedDirectory
       ? selectedLaunchpad
@@ -3860,7 +3860,7 @@ export function ThreadView(props: ThreadViewProps) {
     </div>
   );
 
-  if (selectedLaunchpad && props.selectedDirectory) {
+  if (composerLaunchpad) {
     return (
       <section
         className="thread-view thread-view--launchpad"
@@ -3872,19 +3872,19 @@ export function ThreadView(props: ThreadViewProps) {
       >
         <ThreadPlaceholderHeader
           backendLabel={formatBackendLabel(
-            selectedLaunchpad.backend,
+            composerLaunchpad.backend,
             props.backends,
           )}
           desktopApi={props.desktopApi}
           contextLabel={
-            selectedLaunchpad.parentThreadTitle || selectedLaunchpad.parentThreadId
+            composerLaunchpad.parentThreadTitle || composerLaunchpad.parentThreadId
               ? `Grouped under ${
-                  selectedLaunchpad.parentThreadTitle ??
-                  selectedLaunchpad.parentThreadId
+                  composerLaunchpad.parentThreadTitle ??
+                  composerLaunchpad.parentThreadId
                 }`
               : undefined
           }
-          projectLabel={selectedLaunchpad.directoryLabel}
+          projectLabel={composerLaunchpad.directoryLabel}
           title="New thread"
           machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
           onOpenMessagingActivity={props.onOpenMessagingActivity}
@@ -3916,10 +3916,10 @@ export function ThreadView(props: ThreadViewProps) {
               <div className="pwrsuite-tiles">
                 {!launchpadMaterializing ? (
                   <PwrGitConnectionPrompt
-                    backend={selectedLaunchpad.backend}
+                    backend={composerLaunchpad.backend}
                     desktopApi={props.desktopApi}
                     enabled={
-                      selectedLaunchpad.mcpConnectionIds?.includes(
+                      composerLaunchpad.mcpConnectionIds?.includes(
                         PWRGIT_MCP_CONNECTION_ID,
                       ) === true
                     }
@@ -3930,10 +3930,10 @@ export function ThreadView(props: ThreadViewProps) {
                     }
                     onEnabledChange={async (enabled) => {
                       await props.onUpdateLaunchpad?.(
-                        selectedLaunchpad.directoryKey,
+                        composerLaunchpad.directoryKey,
                         {
                           mcpConnectionIds: pwrGitConnectionIds(
-                            selectedLaunchpad.mcpConnectionIds,
+                            composerLaunchpad.mcpConnectionIds,
                             enabled,
                           ),
                         },
@@ -3949,10 +3949,10 @@ export function ThreadView(props: ThreadViewProps) {
                     edit a remote thread's selection. */}
                 {!launchpadMaterializing ? (
                   <PwrSnapConnectionPrompt
-                    backend={selectedLaunchpad.backend}
+                    backend={composerLaunchpad.backend}
                     desktopApi={props.desktopApi}
                     enabled={
-                      selectedLaunchpad.mcpConnectionIds?.includes(
+                      composerLaunchpad.mcpConnectionIds?.includes(
                         PWRSNAP_MCP_CONNECTION_ID,
                       ) === true
                     }
@@ -3963,10 +3963,10 @@ export function ThreadView(props: ThreadViewProps) {
                     }
                     onEnabledChange={async (enabled) => {
                       await props.onUpdateLaunchpad?.(
-                        selectedLaunchpad.directoryKey,
+                        composerLaunchpad.directoryKey,
                         {
                           mcpConnectionIds: pwrSnapConnectionIds(
-                            selectedLaunchpad.mcpConnectionIds,
+                            composerLaunchpad.mcpConnectionIds,
                             enabled,
                           ),
                         },
@@ -3978,18 +3978,18 @@ export function ThreadView(props: ThreadViewProps) {
             </div>
             {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
               <McpAccessPanel
-                backend={selectedLaunchpad.backend}
+                backend={composerLaunchpad.backend}
                 desktopApi={props.desktopApi}
                 selection={{
-                  connectionIds: selectedLaunchpad.mcpConnectionIds ?? [],
+                  connectionIds: composerLaunchpad.mcpConnectionIds ?? [],
                   providerServersEnabled:
-                    selectedLaunchpad.mcpProviderServersEnabled !== false,
+                    composerLaunchpad.mcpProviderServersEnabled !== false,
                 }}
                 onDismiss={() => setLaunchpadMcpAccessOpen(false)}
                 onOpenSettings={openMcpConnectionSettings}
                 onSelectionChange={async (selection) => {
                   await props.onUpdateLaunchpad?.(
-                    selectedLaunchpad.directoryKey,
+                    composerLaunchpad.directoryKey,
                     {
                       mcpConnectionIds: selection.connectionIds,
                       mcpProviderServersEnabled:

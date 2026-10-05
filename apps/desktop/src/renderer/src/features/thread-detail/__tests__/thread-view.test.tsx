@@ -3377,10 +3377,13 @@ describe("ThreadView", () => {
     }
   });
 
-  // Composer rebuilds its editor on every other scope change, so the editor
-  // cannot tell a kept composer from a fresh one. Its root can: it survives
-  // only while React keeps the Composer instance.
-  it("keeps a launchpad's composer only for the thread it became", () => {
+  // The handoff test above covers the one move that keeps a composer. Every
+  // other move between a launchpad and a thread mounts a fresh one. Composer
+  // rebuilds its editor on any other scope change, so the editor cannot tell
+  // a kept composer from a fresh one. Its root can: it survives only while
+  // React keeps the Composer instance. Each case starts on a different side,
+  // so each direction fails on its own when the composer is reused.
+  it.each(["launchpad", "thread"] as const)("mounts a fresh composer when a %s switches sides", (start) => {
     const { result } = renderHook(useComposerDraftStore);
     const launchpad: NavigationLaunchpadDraft = {
       backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
@@ -3415,21 +3418,23 @@ describe("ThreadView", () => {
       />
     );
 
-    const view = render(<ThreadView {...props} />);
-    const launchpadComposer = composerRoot();
-    expect(launchpadComposer).not.toBeNull();
-
-    // No handoff names this thread, so it gets its own composer.
-    view.rerender(showThread("first-thread"));
-    const threadComposer = composerRoot();
-    expect(threadComposer).not.toBe(launchpadComposer);
-
-    // Threads share theirs.
-    view.rerender(showThread("second-thread"));
-    expect(composerRoot()).toBe(threadComposer);
-
-    view.rerender(<ThreadView {...props} />);
-    expect(composerRoot()).not.toBe(threadComposer);
+    if (start === "launchpad") {
+      const view = render(<ThreadView {...props} />);
+      const launchpadComposer = composerRoot();
+      expect(launchpadComposer).not.toBeNull();
+      // No handoff names this thread, so it gets its own composer.
+      view.rerender(showThread("first-thread"));
+      expect(composerRoot()).not.toBe(launchpadComposer);
+    } else {
+      const view = render(showThread("first-thread"));
+      const threadComposer = composerRoot();
+      expect(threadComposer).not.toBeNull();
+      // Threads share theirs.
+      view.rerender(showThread("second-thread"));
+      expect(composerRoot()).toBe(threadComposer);
+      view.rerender(<ThreadView {...props} />);
+      expect(composerRoot()).not.toBe(threadComposer);
+    }
   });
 
   it("opens submitted image previews while the launchpad is materializing", () => {
