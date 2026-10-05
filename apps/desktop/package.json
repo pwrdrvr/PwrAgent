@@ -76,7 +76,7 @@
     "@pwrdrvr/agent-transport": "^0.1.7",
     "@pwrdrvr/codex-app-server-protocol": "0.159.2",
     "@pwrdrvr/codex-discovery": "^0.4.0",
-    "@shutterstock/p-map-iterable": "1.2.0-prerelease.1",
+    "@shutterstock/p-map-iterable": "1.2.0",
     "@tiptap/extension-mention": "^3.22.5",
     "@tiptap/react": "^3.22.5",
     "@tiptap/starter-kit": "^3.22.5",
