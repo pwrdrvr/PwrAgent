@@ -14,6 +14,7 @@ export const COMPOSER_TIPS: readonly (() => string)[] = [
   () => "Type @ to mention a project folder, or a federated machine or profile",
   () => "Type # to mention another thread or a pull request by number",
   () => "Type / for commands, like /review to review uncommitted changes",
+  () => "Type $ to pick a Codex skill. Other harnesses list their skills under /",
   () => "Pinned threads are never auto-archived. Right-click a thread to pin it",
   () => "In Directories, right-click a thread and choose Keep at Top to hold it first",
   () => "Mention a #thread and say “Send that thread a message asking it to…”",
