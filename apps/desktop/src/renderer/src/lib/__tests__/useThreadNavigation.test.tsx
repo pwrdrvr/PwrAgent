@@ -12787,6 +12787,87 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  describe("when the owner index holds no threads", () => {
+    const emptyPopulation = (overrides: Partial<NavigationSnapshot> = {}): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+      ...overrides,
+    });
+
+    it("shows Directories and disables the thread lenses without saving the lens", async () => {
+      Object.defineProperty(window, "__pwragentNavigationPreferences", {
+        configurable: true,
+        value: { browseMode: "inbox" },
+      });
+      const setNavigationBrowseMode = vi.fn(async (request) => request);
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => emptyPopulation()),
+        onAgentEvent: () => () => undefined,
+        setNavigationBrowseMode,
+      };
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+      await waitFor(() => expect(result.current.browseMode).toBe("directories"));
+      expect(result.current.threadLensesEmpty).toBe(true);
+      expect(setNavigationBrowseMode).not.toHaveBeenCalled();
+    });
+
+    it("keeps the saved lens while providers are still checking", async () => {
+      Object.defineProperty(window, "__pwragentNavigationPreferences", {
+        configurable: true,
+        value: { browseMode: "recents" },
+      });
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => emptyPopulation({ providerRefresh: { state: "checking" } })),
+        onAgentEvent: () => () => undefined,
+      };
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      expect(result.current.browseMode).toBe("recents");
+      expect(result.current.threadLensesEmpty).toBe(false);
+    });
+
+    it("returns to the saved lens once the first thread lands", async () => {
+      Object.defineProperty(window, "__pwragentNavigationPreferences", {
+        configurable: true,
+        value: { browseMode: "recents" },
+      });
+      const thread: NavigationThreadSummary = {
+        id: "first-thread",
+        title: "First thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: true, reason: "new-thread" },
+        updatedAt: 2,
+      };
+      let population = emptyPopulation();
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => population),
+        onAgentEvent: () => () => undefined,
+      };
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.browseMode).toBe("directories"));
+
+      population = emptyPopulation({ fetchedAt: 2, inboxThreadKeys: ["codex:first-thread"], threads: [thread] });
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      await waitFor(() => expect(result.current.browseMode).toBe("recents"));
+      expect(result.current.threadLensesEmpty).toBe(false);
+    });
+  });
+
   it("persists and optimistically applies the Directory threads disclosure", async () => {
     const directory = {
       key: "directory:/Users/me/repos/PwrAgent",

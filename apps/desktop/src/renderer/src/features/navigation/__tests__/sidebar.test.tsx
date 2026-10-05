@@ -1010,6 +1010,48 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("disables the thread lenses, but keeps them explainable, when there are no threads", async () => {
+    const onBrowseModeChange = vi.fn();
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[]}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        threads={[]}
+        threadLensesEmpty
+        onBrowseModeChange={onBrowseModeChange}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const tablist = screen.getByRole("tablist", { name: "Thread lenses" });
+    const tabs = within(tablist).getAllByRole("tab");
+    const directoriesTab = within(tablist).getByRole("tab", { name: "Directories" });
+    for (const tab of tabs) {
+      if (tab === directoriesTab) continue;
+      expect(tab).toHaveAttribute("aria-disabled", "true");
+      // aria-disabled, not disabled: a disabled button takes no focus, so its
+      // tooltip could never tell a keyboard user why it is off.
+      expect(tab).not.toBeDisabled();
+      fireEvent.click(tab);
+    }
+    expect(onBrowseModeChange).not.toHaveBeenCalled();
+    expect(directoriesTab).not.toHaveAttribute("aria-disabled");
+    expect(directoriesTab).toHaveAttribute("aria-selected", "true");
+
+    const updatedTab = within(tablist).getByRole("tab", { name: "Updated" });
+    fireEvent.focus(updatedTab);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Updated — all threads, most recently updated first\nNo threads yet"
+    );
+  });
+
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {
     const onAddProjectDirectory = vi.fn(async () => undefined);
     const onCreateThread = vi.fn(async () => undefined);
