@@ -55,7 +55,7 @@ export function useThreadDisplayResource(params: {
       // Pricing includes Token Miser and subagent costs. Tools and subagent
       // collections must not refetch in response to unrelated ledger events.
       if (method === "turn/started" || method === "turn/completed"
-        || (resource === "pricing" && ["thread/pricing/updated", "thread/toolAccounting/updated", "thread/subAgents/updated"].includes(method))
+        || (resource === "pricing" && ["thread/pricing/updated", "thread/tokenUsage/updated", "thread/toolAccounting/updated", "thread/subAgents/updated"].includes(method))
         || (resource === "tools" && method === "thread/toolAccounting/updated")
         || (resource === "subagents" && method === "thread/subAgents/updated")) refresh();
     });

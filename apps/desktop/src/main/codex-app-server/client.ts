@@ -7578,10 +7578,12 @@ export class CodexAppServerClient {
   private pendingCloses = 0;
   private serverGeneration = 0;
   private readonly runningTurnIdsByThread = new Map<string, string>();
-  private readonly pricingSnapshotCache = new Map<string, { updatedAt?: number; tokens: ThreadUsageTokenBreakdown; serviceTier?: string }>();
+  private readonly liveUsageSnapshots = new Map<string, {
+    tokens: ThreadUsageTokenBreakdown;
+    model?: string;
+    serviceTier?: string;
+  }>();
   private readonly pricingSnapshotReads = new Map<string, Promise<ThreadPricingSnapshot>>();
-  private pricingSnapshotReaderQueue: Promise<void> = Promise.resolve();
-  private cancelPricingSnapshotReader?: () => Promise<void>;
   // Bumped whenever a turn may have ended (a terminal, a thread status change,
   // a helper turn's cleanup, or a close). History recovery waits on it rather
   // than on a clock when another turn still runs on this process.
@@ -7828,6 +7830,22 @@ export class CodexAppServerClient {
         return;
       }
 
+      // Retain totals in the owning connection before listener work. Read-only
+      // pricing must not resume an already-owned thread to obtain them.
+      if (normalized.method === "thread/tokenUsage/updated") {
+        const usage = asRecord(normalized.params.tokenUsage) ?? {};
+        const total = readTokenUsageBreakdown(asRecord(usage.total) ?? {});
+        if (total) rememberBoundedMap(this.liveUsageSnapshots, normalized.params.threadId, {
+          tokens: total,
+          model: pickString(asRecord(normalized.params) ?? {}, ["model"]) ?? pickString(usage, ["model"]),
+          serviceTier: pickString(usage, ["serviceTier"]),
+        }, 1_000);
+      } else if (normalized.method === "thread/compacted" || normalized.method === "thread/rewound" || method === "thread/closed"
+        || ((normalized.method === "item/started" || normalized.method === "item/completed")
+          && normalizeItemType(pickString(asRecord(normalized.params.item) ?? {}, ["type"])) === "contextcompaction")) {
+        if (helperThreadId) this.liveUsageSnapshots.delete(helperThreadId);
+      }
+
       const turnMetadata = extractRequestMetadata(normalized.params);
       const observedTurnId = turnMetadata.turnId
         ?? pickString(asRecord(asRecord(normalized.params)?.turn) ?? {}, ["id"]);
@@ -7913,10 +7931,6 @@ export class CodexAppServerClient {
     // A restart waiting out its backoff must not hold close open. Its
     // initialization sees the new close generation and gives up.
     this.cancelRestartBackoff?.();
-    // Snapshot resumes own a separate writer. Release its notification waiter
-    // and transport before the lifecycle barrier drains the admitted read.
-    const stoppedReader = this.cancelPricingSnapshotReader?.();
-    void stoppedReader?.catch(() => undefined);
     // Stop the transport now: pending RPC responses must not hold shutdown
     // (or a recovery waiting to drain those RPCs) until their timeouts expire.
     const stopped = this.stopTransport();
@@ -8082,6 +8096,7 @@ export class CodexAppServerClient {
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
+    this.liveUsageSnapshots.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
     this.availableHelperModels = [];
@@ -9540,69 +9555,49 @@ export class CodexAppServerClient {
       const thread = asRecord(asRecord(result)?.thread);
       if (thread?.id !== threadId) return {};
       const model = pickString(thread, ["model"]);
-      const updatedAt = pickNumber(thread, ["updatedAt"]);
-      const cached = this.pricingSnapshotCache.get(threadId);
-      if (cached && updatedAt !== undefined && cached.updatedAt === updatedAt) return {
-        model, tokens: cached.tokens, ...(cached.serviceTier ? { serviceTier: cached.serviceTier } : {}),
+      const live = this.liveUsageSnapshots.get(threadId);
+      if (live?.tokens) return {
+        model: model ?? live.model, tokens: live.tokens,
+        ...(live.serviceTier ? { serviceTier: live.serviceTier } : {}),
       };
 
-      // A resume emits saved cumulative usage, but also acquires the writer.
-      // Use a short-lived isolated process so the snapshot cannot become an
-      // observed turn charge or keep another app from opening the thread.
-      const closeGeneration = this.closeGeneration;
-      const read = this.pricingSnapshotReaderQueue.then(async () => {
-        if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) return { model };
-        const reader = new CodexAppServerClient({ ...this.options, connectionObserver: undefined, authenticationRecovery: false });
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let tokens: ThreadUsageTokenBreakdown | undefined;
-        let received = false;
-        let cancelled = false;
-        let readerClose: Promise<void> | undefined;
-        let finish!: () => void;
-        const receivedUsage = new Promise<void>((resolve) => { finish = resolve; });
-        const closeReader = () => readerClose ??= reader.close();
-        const cancelReader = () => {
-          cancelled = true;
-          if (timer) clearTimeout(timer);
-          finish();
-          return closeReader();
+      // account/usage/read supports thread estimates without loading a thread
+      // or acquiring its writer. Some billing routes/older servers supply no
+      // threadUsage; keep unknown counts unknown instead of resuming to get it.
+      try {
+        const usageResult = asRecord(await this.connection.request("account/usage/read", { threadId },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+        // A live notification may arrive while the read is in flight.
+        const latest = this.liveUsageSnapshots.get(threadId);
+        if (latest?.tokens) return {
+          model: model ?? latest.model, tokens: latest.tokens,
+          ...(latest.serviceTier ? { serviceTier: latest.serviceTier } : {}),
         };
-        this.cancelPricingSnapshotReader = cancelReader;
-        const unsubscribe = reader.onNotification((notification) => {
-          if (notification.method !== "thread/tokenUsage/updated" || notification.params.threadId !== threadId) return;
-          tokens = readTokenUsageBreakdown(asRecord(asRecord(notification.params.tokenUsage)?.total) ?? {});
-          received = true;
-          finish();
-        });
-        try {
-          await reader.ensureInitialized();
-          if (cancelled) return { model };
-          const resumed = asRecord(await reader.connection.request("thread/resume", { threadId, excludeTurns: true },
-            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
-          if (!received && !cancelled) {
-            // Bound compatibility with servers that do not emit a snapshot.
-            // Supported servers satisfy this through the notification, not a delay.
-            timer = setTimeout(finish, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
-            await receivedUsage;
+        const usage = asRecord(usageResult?.threadUsage);
+        if (usage?.threadId !== threadId || !Array.isArray(usage.groups) || usage.groups.length === 0) return { model };
+        const groups = usage.groups.map((group) => asRecord(group) ?? {});
+        const sum = (key: string): number | undefined => {
+          let total = 0;
+          for (const group of groups) {
+            const count = pickNumber(group, [key]);
+            if (count === undefined || !Number.isSafeInteger(count) || count < 0) return undefined;
+            total += count;
           }
-          if (cancelled) return { model };
-          const serviceTier = pickString(resumed ?? {}, ["serviceTier"]);
-          if (tokens && updatedAt !== undefined) rememberBoundedMap(this.pricingSnapshotCache, threadId, { updatedAt, tokens, serviceTier }, 1_000);
-          return { model: pickString(resumed ?? {}, ["model"]) ?? model, tokens, ...(serviceTier ? { serviceTier } : {}) };
-        } catch (error) {
-          // Another app may still own the writer. Keep counts unknown and
-          // let a later explicit panel read try again after that app closes.
-          codexClientLog.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
-          return { model };
-        } finally {
-          if (timer) clearTimeout(timer);
-          unsubscribe();
-          if (this.cancelPricingSnapshotReader === cancelReader) this.cancelPricingSnapshotReader = undefined;
-          await closeReader();
-        }
-      });
-      this.pricingSnapshotReaderQueue = read.then(() => undefined, () => undefined);
-      return await read;
+          return Number.isSafeInteger(total) ? total : undefined;
+        };
+        const tokens: ThreadUsageTokenBreakdown = {
+          inputTokens: sum("inputTokens"), cachedInputTokens: sum("cachedInputTokens"),
+          uncachedInputTokens: sum("netNewInputTokens"), outputTokens: sum("outputTokens"), totalTokens: sum("totalTokens"),
+        };
+        const estimatedCostMicros = pickNumber(usage, ["estimatedUsageUsdMicros"]);
+        return { model, tokens, pricingSource: "provider" as const,
+          ...(estimatedCostMicros !== undefined && Number.isSafeInteger(estimatedCostMicros) && estimatedCostMicros >= 0
+            ? { estimatedCostMicros } : {}),
+        };
+      } catch (error) {
+        codexClientLog.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
+        return { model };
+      }
     });
     this.pricingSnapshotReads.set(threadId, pending);
     try {
