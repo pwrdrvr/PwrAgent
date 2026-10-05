@@ -83,6 +83,10 @@ export function registerRendererErrorIpcHandlers(): void {
         summary.faultId ?? (typeof stack === "string" ? stack : undefined),
         summary.faultId ? undefined : (typeof componentStack === "string" ? componentStack : undefined),
       ])).digest("hex").slice(0, 16);
+      // Renderer windows start at capture, not IPC receipt. A fresh window must
+      // admit both its summary and sole snapshot even when delivery speeds up.
+      // Repeats share the ID; a new admission after renderer reload gets a new ID.
+      const budgetKey = summary.reportingWindowId ? `${stackId}:${summary.reportingWindowId}` : stackId;
       const context = { ...summary, webContentsId: event.sender.id, stackId };
       const inputRepeat = report.repeat;
       const repeat: RendererErrorRepeat | undefined = inputRepeat
@@ -93,17 +97,17 @@ export function registerRendererErrorIpcHandlers(): void {
         : undefined;
       // Recovery actions are explicit lifecycle evidence, including manual
       // retries. Never hide them behind an ordinary fault's summary window.
-      if (!summary.recovery && !coalescer.accept(`${repeat ? "repeats" : "fault"}:${stackId}`, () => context, repeat?.count)) return { ok: true };
+      if (!summary.recovery && !coalescer.accept(`${repeat ? "repeats" : "fault"}:${budgetKey}`, () => context, repeat)) return { ok: true };
       rendererErrorLog.error(repeat ? "report repeats" : "report", { ...context, ...(repeat ? { repeat } : {}) });
       if (repeat) return { ok: true };
       if (stackId) {
         const now = Date.now();
-        const previous = recentStackLogs.get(stackId);
+        const previous = recentStackLogs.get(budgetKey);
         if (previous === undefined
-          || now < previous
-          || now - previous >= STACK_LOG_REPEAT_INTERVAL_MS) {
-          recentStackLogs.delete(stackId);
-          recentStackLogs.set(stackId, now);
+          || (!summary.reportingWindowId && (now < previous
+            || now - previous >= STACK_LOG_REPEAT_INTERVAL_MS))) {
+          recentStackLogs.delete(budgetKey);
+          recentStackLogs.set(budgetKey, now);
           if (recentStackLogs.size > MAX_RECENT_STACK_LOGS) {
             const oldest = recentStackLogs.keys().next().value;
             if (oldest !== undefined) recentStackLogs.delete(oldest);

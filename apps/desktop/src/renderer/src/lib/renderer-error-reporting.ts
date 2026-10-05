@@ -90,7 +90,7 @@ export function installGlobalRendererErrorHandlers(): () => void {
     const faultId = hashes.map((hash) => (hash >>> 0).toString(16).padStart(8, "0")).join("");
     let report: RendererErrorReport | undefined;
     if (coalescer.accept(faultId, () => {
-      report = { ...buildRendererErrorReport(source, shape, details), faultId };
+      report = { ...buildRendererErrorReport(source, shape, details), faultId, reportingWindowId: crypto.randomUUID() };
       return rendererErrorSummary(report);
     }) && report) reportRendererError(report);
   }

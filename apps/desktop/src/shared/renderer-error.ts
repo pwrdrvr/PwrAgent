@@ -8,6 +8,8 @@ export type RendererErrorSource =
 export type RendererErrorReport = {
   /** Window-local fault fingerprint linking the first report and repeat summary. */
   faultId?: string;
+  /** Fixed-size ID for one admitted global-fault window, shared with its repeats. */
+  reportingWindowId?: string;
   colno?: number;
   componentStack?: string;
   filename?: string;

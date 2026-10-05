@@ -68,6 +68,14 @@ visible; a fault evicted by more than 64 reporting identities is admitted again.
 This limits reporting work, without suppressing browser warnings or resolving
 the observer/layout behavior that produced them.
 
+Each admitted renderer window carries a fixed-size ID shared with its repeat
+summary. Main keys both summary and detail budgets by this ID, so decreased IPC
+latency or out-of-order delivery cannot suppress a new window's sole snapshot.
+Callers without window metadata retain main's one-minute receipt-time budget.
+When repeat batches merge, their counts add and their occurrence ranges widen to
+the earliest first timestamp and latest last timestamp. Invalid ranges fall back
+to receipt time without losing their counts.
+
 The same React boundary protects auxiliary routes. Automatic native termination
 recovery is installed on main/federation shell windows; auxiliary BrowserWindows
 retain their existing native lifecycle. **View → Reload Window** is always

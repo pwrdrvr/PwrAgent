@@ -5,6 +5,27 @@ import type { RendererErrorReport } from "../renderer-error";
 afterEach(() => vi.useRealTimers());
 
 describe("renderer fault summary lifetime", () => {
+  it("merges occurrence ranges and keeps malformed batch timestamps from poisoning a flush", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(120_000);
+    const emit = vi.fn();
+    const gate = createRendererErrorCoalescer(emit);
+    gate.accept("fault", () => "original");
+    gate.accept("fault", () => "ignored", { count: 3,
+      firstTimestamp: new Date(10_000).toISOString(), lastTimestamp: new Date(20_000).toISOString() });
+    gate.accept("fault", () => "ignored", { count: 4,
+      firstTimestamp: new Date(5000).toISOString(), lastTimestamp: new Date(25_000).toISOString() });
+    // Unknown occurrence times fall back to receipt time, preserving the count.
+    gate.accept("fault", () => "ignored", { count: 2, firstTimestamp: "invalid", lastTimestamp: "invalid" });
+    gate.accept("fault", () => "ignored", { count: 1,
+      firstTimestamp: new Date(50_000).toISOString(), lastTimestamp: new Date(40_000).toISOString() });
+    gate.dispose();
+    expect(emit).toHaveBeenCalledWith("original", {
+      count: 10, firstTimestamp: new Date(5000).toISOString(), lastTimestamp: new Date(120_000).toISOString(),
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("reschedules the single timeout when an older fault starts repeating later", () => {
     vi.useFakeTimers();
     const emit = vi.fn();

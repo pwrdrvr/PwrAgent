@@ -52,13 +52,19 @@ export function createRendererErrorCoalescer<T>(
 
   return {
     // The factory runs only for an admitted fault, before its expensive capture.
-    accept(key: string, summary: () => T, count = 1): boolean {
+    accept(key: string, summary: () => T, occurrences: number | RendererErrorRepeat = 1): boolean {
       const now = Date.now();
       const previous = recent.get(key);
       let reschedule = false;
       if (previous && now >= previous.started && now - previous.started < RENDERER_ERROR_REPEAT_INTERVAL_MS) {
-        if (!previous.count) previous.first = now;
-        previous.last = now;
+        const count = typeof occurrences === "number" ? occurrences : occurrences.count;
+        const first = typeof occurrences === "number" ? now : Date.parse(occurrences.firstTimestamp);
+        const last = typeof occurrences === "number" ? now : Date.parse(occurrences.lastTimestamp);
+        const validRange = Number.isFinite(first) && Number.isFinite(last) && first <= last;
+        const firstOccurrence = validRange ? first : now;
+        const lastOccurrence = validRange ? last : now;
+        previous.first = previous.count ? Math.min(previous.first, firstOccurrence) : firstOccurrence;
+        previous.last = previous.count ? Math.max(previous.last, lastOccurrence) : lastOccurrence;
         previous.count = Math.min(previous.count + count, Number.MAX_SAFE_INTEGER);
         schedule(previous.started + RENDERER_ERROR_REPEAT_INTERVAL_MS);
         return false;
@@ -115,6 +121,10 @@ export function rendererErrorSummary(report: RendererErrorReport): Omit<Renderer
       ? report.source : "window-error",
     timestamp: text(report.timestamp, 64) ?? "", userAgent: text(report.userAgent, 512) ?? "",
     faultId: typeof report.faultId === "string" && /^[a-f0-9]{32}$/.test(report.faultId) ? report.faultId : undefined,
+    reportingWindowId: typeof report.faultId === "string" && /^[a-f0-9]{32}$/.test(report.faultId)
+      && typeof report.reportingWindowId === "string"
+      && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(report.reportingWindowId)
+      ? report.reportingWindowId : undefined,
     recovery: report.recovery && ["automatic-remount", "manual-remount", "stopped"].includes(report.recovery.action) ? {
       action: report.recovery.action, attempt: coordinate(report.recovery.attempt) ?? 0,
       limit: coordinate(report.recovery.limit) ?? 0,

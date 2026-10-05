@@ -12,6 +12,29 @@ afterEach(() => {
 });
 
 describe("renderer error reporting", () => {
+  it("identifies admitted windows across timer expiry and handler reinstallation", () => {
+    vi.useFakeTimers();
+    const bridge = vi.fn(async (_report: RendererErrorReport) => ({ ok: true }));
+    Object.defineProperty(window, "pwragent", { configurable: true, value: { reportRendererError: bridge } });
+    const uninstall = installGlobalRendererErrorHandlers();
+    const fail = (): void => { window.dispatchEvent(new ErrorEvent("error", { message: "same fault" })); };
+    fail();
+    fail();
+    vi.advanceTimersByTime(60_000);
+    fail();
+    uninstall();
+    const uninstallReplacement = installGlobalRendererErrorHandlers();
+    fail();
+    uninstallReplacement();
+    const reports = bridge.mock.calls.map(([report]) => report);
+    expect(reports).toHaveLength(4);
+    const windows = reports.map((report) => report.reportingWindowId);
+    expect(windows[0]).toMatch(/^[a-f0-9-]{36}$/);
+    expect(windows[1]).toBe(windows[0]);
+    expect(new Set([windows[0], windows[2], windows[3]]).size).toBe(3);
+    expect(new Set(reports.map((report) => report.faultId)).size).toBe(1);
+  });
+
   it("flushes pending counts on document teardown without capturing again", () => {
     vi.useFakeTimers();
     const bridge = vi.fn(async (_report: RendererErrorReport) => ({ ok: true }));

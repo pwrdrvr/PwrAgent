@@ -274,6 +274,68 @@ describe("renderer error ipc", () => {
     }));
   });
 
+  it("admits a new renderer window and its diagnostics when IPC latency decreases", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
+    registerRendererErrorIpcHandlers();
+    const first = {
+      faultId: "a".repeat(32), reportingWindowId: "00000000-0000-4000-8000-000000000001",
+      href: "http://localhost:5173/#star-map", source: "window-error", message: "same fault",
+      timestamp: new Date().toISOString(), userAgent: "Vitest",
+      updateDiagnostics: { version: 1, counts: [], events: [], total: 1 },
+    };
+    // Capture at t=0, deliver at t=1s. A duplicate of this window stays bounded.
+    vi.advanceTimersByTime(1000);
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, first);
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, first);
+    vi.advanceTimersByTime(59_000);
+    const next = { ...first, reportingWindowId: "00000000-0000-4000-8000-000000000002",
+      timestamp: new Date().toISOString(), updateDiagnostics: { ...first.updateDiagnostics, total: 1001 } };
+    // The next renderer window has zero latency: only 59s have elapsed in main.
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, next);
+    const summaries = errorLog.error.mock.calls.filter(([name]) => name === "report");
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0][1].stackId).toBe(summaries[1][1].stackId);
+    const details = errorLog.error.mock.calls.filter(([name]) => name === "report update diagnostics");
+    expect(details).toHaveLength(2);
+    expect(details.map(([, , serialized]) => JSON.parse(serialized).total)).toEqual([1, 1001]);
+    // Resending the new window cannot repeatedly capture or log its details.
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, next);
+    expect(errorLog.error.mock.calls.filter(([name]) => name === "report")).toHaveLength(2);
+    expect(errorLog.error.mock.calls.filter(([name]) => name === "report update diagnostics")).toHaveLength(2);
+  });
+
+  it("merges delayed repeat batches using their occurrence range rather than receipt time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(120_000);
+    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
+    registerRendererErrorIpcHandlers();
+    const report = {
+      faultId: "a".repeat(32), href: "http://localhost:5173/#star-map", source: "window-error",
+      message: "same fault", timestamp: new Date().toISOString(), userAgent: "Vitest",
+      repeat: { count: 1, firstTimestamp: new Date(0).toISOString(), lastTimestamp: new Date(1000).toISOString() },
+    };
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, report);
+    vi.advanceTimersByTime(1000);
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, { ...report,
+      repeat: { count: 3, firstTimestamp: new Date(10_000).toISOString(), lastTimestamp: new Date(20_000).toISOString() },
+    });
+    vi.advanceTimersByTime(1000);
+    // An out-of-order teardown batch widens both ends of the occurrence range.
+    await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, { ...report,
+      repeat: { count: 4, firstTimestamp: new Date(5000).toISOString(), lastTimestamp: new Date(25_000).toISOString() },
+    });
+    vi.advanceTimersByTime(58_000);
+    expect(errorLog.error).toHaveBeenLastCalledWith("report repeats", expect.objectContaining({
+      timestamp: new Date(25_000).toISOString(),
+      repeat: { count: 7, firstTimestamp: new Date(5000).toISOString(), lastTimestamp: new Date(25_000).toISOString() },
+    }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("does not throw away a report whose stack is not a string", async () => {
     const {
       registerRendererErrorIpcHandlers,

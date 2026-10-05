@@ -241,7 +241,10 @@ time; further notifications increment a count without capture or IPC. One traili
 timeout, eviction, or teardown flushes the repeat count and timestamps without
 replacing the retained snapshot. Renderer and main summary tables each have 64
 slots with bounded summary strings and fixed-size keys. Explicit recovery reports
-remain immediate. See [../../docs/renderer-recovery.md](../../docs/renderer-recovery.md)
+remain immediate. Each admitted renderer window has its own fixed-size ID, used
+by main for summary and detail admission so IPC latency cannot suppress the next
+window's snapshot. Merged repeat batches retain their earliest/latest occurrence
+timestamps. See [../../docs/renderer-recovery.md](../../docs/renderer-recovery.md)
 for the delivery and eviction limits.
 
 Normal recording has no timers, IPC, logging, or database writes. Fixed arrays
@@ -249,7 +252,8 @@ use 1,944 bytes for numeric storage and scope-reference slots, plus JavaScript
 object/string overhead. A reported error also retains one bounded snapshot.
 Main logs `report update diagnostics` as a separate JSON string, capped at
 8 KiB, associated with the existing `stackId`. Identical fault details are
-logged at most once per minute. The log includes event names and the number of
+budgeted by their renderer reporting window; reports without window metadata use
+main's one-minute interval. The log includes event names and the number of
 entries omitted to meet the limit. This history covers the instrumented edges;
 it does not identify every React setter or prove which request caused a loop.
 
