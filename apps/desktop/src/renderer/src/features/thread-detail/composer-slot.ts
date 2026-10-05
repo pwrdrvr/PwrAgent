@@ -7,16 +7,16 @@ import {
 } from "../composer/useComposerDraftStore";
 
 /**
- * ThreadView renders its launchpad and its thread as separate branches. It
- * builds one composer slot, and each branch places that slot in its own
- * layout, at a different position among different siblings. React keeps an
- * element across that move only by key. Without the key, starting a thread
- * would give the operator typing in the launchpad a new composer
- * mid-sentence: a new editor, a lost caret, and keys dropped while it mounts.
- * A launchpad slot and a thread slot always hold different keys, except that
- * the thread a launchpad just became takes the launchpad's key: the two keys
- * swap. React then keeps that composer, which retargets itself to the thread
- * (see `followsMaterialization` in Composer).
+ * ThreadView renders its launchpad and its thread in one tree, with one
+ * composer slot in the same place, so by position alone React would keep the
+ * composer through every move between them. Only one move should keep it:
+ * starting a thread, where a new composer would reach the operator typing in
+ * the launchpad mid-sentence, with a new editor, a lost caret, and keys
+ * dropped while it mounts. The slot's key decides. A launchpad slot and a
+ * thread slot always hold different keys, so React mounts a fresh composer,
+ * except that the thread a launchpad just became takes the launchpad's key:
+ * the two keys swap. React then keeps that composer, which retargets itself
+ * to the thread (see `followsMaterialization` in Composer).
  *
  * Every other move keeps its old behavior. A launchpad and a thread never
  * share a composer, and moving between threads, or between launchpads, keeps
