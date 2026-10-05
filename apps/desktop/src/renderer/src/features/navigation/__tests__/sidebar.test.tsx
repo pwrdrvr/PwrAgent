@@ -25,6 +25,7 @@ import type { FederationProjectDirectory } from "../../chrome/useFederationProje
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import type { ComponentProps } from "react";
 import {
   documentTabStops,
   pressEscape,
@@ -1058,6 +1059,96 @@ describe("Sidebar", () => {
     fireEvent.focus(attentionTab);
     expect((await screen.findByRole("tooltip")).querySelector(".attention-card__footer"))
       .toHaveTextContent("No threads yet");
+  });
+
+  describe("start actions at the end of the thread list", () => {
+    function renderStartActions(props: Partial<ComponentProps<typeof Sidebar>> = {}) {
+      const onCreateThreadWithoutDirectory = vi.fn(async () => undefined);
+      const onAddProjectDirectory = vi.fn(async () => undefined);
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          directories={[]}
+          inboxThreads={[]}
+          loading={false}
+          creatingThread={undefined}
+          threads={[]}
+          threadLensesEmpty
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onCreateThreadWithoutDirectory={onCreateThreadWithoutDirectory}
+          onAddProjectDirectory={onAddProjectDirectory}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          {...props}
+        />
+      );
+      return { onCreateThreadWithoutDirectory, onAddProjectDirectory };
+    }
+
+    it("offers Start Chat and Add Project Folder under the empty state", () => {
+      const { onCreateThreadWithoutDirectory, onAddProjectDirectory } = renderStartActions();
+
+      const startChat = screen.getByRole("button", { name: "Start Chat" });
+      const addFolder = screen.getByRole("button", { name: "Add Project Folder" });
+      expect(
+        screen.getByText("No threads yet.").compareDocumentPosition(startChat)
+          & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // The next step leads while nothing exists yet.
+      expect(startChat.closest(".sidebar-start-actions")).toHaveClass("sidebar-start-actions--lead");
+
+      fireEvent.click(startChat);
+      expect(onCreateThreadWithoutDirectory).toHaveBeenCalledTimes(1);
+      fireEvent.click(addFolder);
+      expect(onAddProjectDirectory).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows the last row once threads exist", () => {
+      renderStartActions({
+        browseMode: "inbox",
+        directories,
+        inboxThreads: [sharedThread],
+        threads: [sharedThread],
+        threadLensesEmpty: false,
+      });
+
+      const row = screen.getByRole("button", { name: /^Cross-project cleanup/ });
+      const startChat = screen.getByRole("button", { name: "Start Chat" });
+      expect(row.compareDocumentPosition(startChat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(startChat.closest(".sidebar-start-actions")).not.toHaveClass("sidebar-start-actions--lead");
+    });
+
+    it("stays out of the way until a provider can start a chat", () => {
+      renderStartActions({ backends: backends.map((backend) => ({ ...backend, available: false })) });
+
+      expect(screen.queryByRole("button", { name: "Start Chat" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add Project Folder" })).not.toBeInTheDocument();
+    });
+
+    it("waits for the list to load", () => {
+      renderStartActions({ loading: true });
+
+      expect(screen.queryByRole("button", { name: "Start Chat" })).not.toBeInTheDocument();
+    });
+
+    it("holds each action while it is already in flight", () => {
+      const { onCreateThreadWithoutDirectory, onAddProjectDirectory } = renderStartActions({
+        addingProjectDirectory: true,
+        creatingThread: { backend: "codex", executionMode: "default" },
+      });
+
+      const startChat = screen.getByRole("button", { name: "Start Chat" });
+      const addFolder = screen.getByRole("button", { name: "Adding Project Folder…" });
+      for (const button of [startChat, addFolder]) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+        expect(button).not.toBeDisabled();
+        fireEvent.click(button);
+      }
+      expect(onCreateThreadWithoutDirectory).not.toHaveBeenCalled();
+      expect(onAddProjectDirectory).not.toHaveBeenCalled();
+    });
   });
 
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {

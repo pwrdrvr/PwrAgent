@@ -14,6 +14,7 @@ import {
   DraftIcon,
   FileCodeIcon,
   FolderIcon,
+  FolderPlusIcon,
   GrokIcon,
   HistoryIcon,
   MattermostIcon,
@@ -44,6 +45,7 @@ afterEach(() => {
 
 const ALL_ICONS = [
   ["FolderIcon", FolderIcon],
+  ["FolderPlusIcon", FolderPlusIcon],
   ["FileCodeIcon", FileCodeIcon],
   ["BranchIcon", BranchIcon],
   ["CommitIcon", CommitIcon],
