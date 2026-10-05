@@ -220,7 +220,7 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accentBright: "#1a4f9f",
     buttonText: "#ffffff",
   },
-  "matrix-dark": {
+  "phosphor-dark": {
     bg: "#050a06",
     sidebar: "#030704",
     surface: "#0c160e",

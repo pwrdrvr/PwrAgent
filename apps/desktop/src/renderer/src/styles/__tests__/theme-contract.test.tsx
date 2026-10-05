@@ -2447,7 +2447,7 @@ describe("color theme contract", () => {
     "solarized-dark",
     "gray-dark",
     "blue-dark",
-    "matrix-dark",
+    "phosphor-dark",
   ];
   const LIGHT_THEMES = ["catppuccin-latte", "solarized-light", "gray-light", "blue-light"];
   const blockFor = (theme: string): Record<string, string> =>

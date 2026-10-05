@@ -666,7 +666,7 @@ describe("SettingsScreen color themes", () => {
       "Tangerine",
       "Gray",
       "Blue",
-      "Matrix",
+      "Phosphor",
       "Catppuccin Mocha",
       "Solarized Dark",
     ]);
@@ -741,9 +741,9 @@ describe("SettingsScreen color themes", () => {
     expect(controller.setDarkTheme).toHaveBeenCalledTimes(1);
     expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
 
-    // Matrix is dark only: it has no light pair to offer.
-    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), /Matrix/);
-    expect(controller.setDarkTheme).toHaveBeenLastCalledWith("matrix-dark");
+    // Phosphor is dark only: it has no light pair to offer.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), /Phosphor/);
+    expect(controller.setDarkTheme).toHaveBeenLastCalledWith("phosphor-dark");
     expect(within(darkRow).queryByRole("button", { name: /^Use / })).toBeNull();
   });
 });

@@ -342,10 +342,10 @@
   --theme-swatch-blue-light-sidebar: #e8eff8;
   --theme-swatch-blue-light-accent: #1c56ac;
   --theme-swatch-blue-light-text: #0f223b;
-  --theme-swatch-matrix-dark-app: #050a06;
-  --theme-swatch-matrix-dark-sidebar: #030704;
-  --theme-swatch-matrix-dark-accent: #00ff41;
-  --theme-swatch-matrix-dark-text: #c8f5d0;
+  --theme-swatch-phosphor-dark-app: #050a06;
+  --theme-swatch-phosphor-dark-sidebar: #030704;
+  --theme-swatch-phosphor-dark-accent: #00ff41;
+  --theme-swatch-phosphor-dark-text: #c8f5d0;
 }
 
 /* =============================================================}
@@ -621,10 +621,10 @@
    neutral charcoal or light-gray surfaces; Blue uses a blue accent on navy
    or pale-blue surfaces. Their terminals keep the Tangerine ANSI colors.
 
-   Matrix is a PwrAgent design after the film's look, dark only: the
-   phosphor code green (#00ff41) as the accent and terminal ink on
-   green-tinted near-black, with the red and blue pills as danger and info.
-   It borrows no published palette, so it carries no license notice.
+   Phosphor is a PwrAgent design after a green-phosphor CRT terminal, dark
+   only: phosphor green (#00ff41) as the accent and terminal ink on
+   green-tinted near-black, with red for danger and blue for info. It
+   borrows no published palette, so it carries no license notice.
    =========================================================================== */
 :root[data-color-theme="catppuccin-mocha"] {
   color-scheme: dark;
@@ -1217,7 +1217,7 @@
   --usage-series-5: #8a6d12;
 }
 
-:root[data-color-theme="matrix-dark"] {
+:root[data-color-theme="phosphor-dark"] {
   color-scheme: dark;
 
   /* Surfaces */
