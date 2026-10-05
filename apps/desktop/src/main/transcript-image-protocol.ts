@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
 import { isPwrSnapSignedMediaUrl } from "./pwrsnap-media-url";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
+import { existingThreadAssetAlias, isThreadAssetPath, storeThreadAsset, type ThreadAssetOwner } from "./app-server/thread-assets";
 
 export const TRANSCRIPT_IMAGE_PROTOCOL_SCHEME = "pwragent-image";
 
@@ -88,6 +89,7 @@ type TranscriptImageFetchResponse = {
 };
 
 export type TranscriptImageMaterializerDependencies = {
+  retainLocalImage?: (sourcePath: string, owner: ThreadAssetOwner) => Promise<string | undefined>;
   fetch: (
     url: string,
     init: { redirect: "error"; signal: AbortSignal },
@@ -142,6 +144,7 @@ function threadImagesSegment(backend: AppServerBackendKind, threadId: string): s
 }
 
 const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
+  retainLocalImage: retainLegacyThreadImage,
   fetch: async (url, init) => await globalThis.fetch(url, init),
   resolveRoot: ({ backend, threadId }) =>
     resolveActiveProfilePath(threadImagesSegment(backend, threadId)),
@@ -163,10 +166,38 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile,
 };
 
+async function retainLegacyThreadImage(sourcePath: string, owner: ThreadAssetOwner): Promise<string | undefined> {
+  if (isThreadAssetPath(sourcePath, owner)) return sourcePath;
+  if (!/[\\/]state[\\/](?:image-inputs|turn-input-attachments|thread-assets)[\\/]/u.test(sourcePath)) return undefined;
+  const alias = await existingThreadAssetAlias(owner, sourcePath);
+  if (alias) return alias;
+  const resolved = await resolveTranscriptImageFile(sourcePath);
+  if (!resolved.ok) return undefined;
+  const info = await stat(resolved.path);
+  if (info.size === 0 || info.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) return undefined;
+  return await storeThreadAsset(owner, await readFile(resolved.path), path.basename(sourcePath), resolved.path);
+}
+
 /** One read is one thread, so every missed image shares one profile scan. */
 function withMemoizedSiblingRoots(
   deps: TranscriptImageMaterializerDependencies,
 ): TranscriptImageMaterializerDependencies {
+  const retainLocalImage = deps.retainLocalImage;
+  if (retainLocalImage) {
+    const retained = new Map<string, Promise<string | undefined>>();
+    deps = {
+      ...deps,
+      retainLocalImage: (sourcePath, owner) => {
+        const key = `${owner.backend}\0${owner.threadId}\0${sourcePath}`;
+        let result = retained.get(key);
+        if (!result) {
+          result = retainLocalImage(sourcePath, owner).catch(() => undefined);
+          retained.set(key, result);
+        }
+        return result;
+      },
+    };
+  }
   const resolveSiblingRoots = deps.resolveSiblingRoots;
   if (!resolveSiblingRoots) {
     return deps;
@@ -514,10 +545,19 @@ async function materializeTranscriptMessagePartImageUrl(
     return part;
   }
 
-  if (isFileImageUrl(part.url)) {
+  const sourcePath = isFileImageUrl(part.url)
+    ? fileURLToPath(part.url)
+    : decodeTranscriptImageProtocolRequest(part.url);
+  if (sourcePath) {
+    const owner = { backend: response.backend, threadId: response.threadId };
+    const retained = isThreadAssetPath(sourcePath, owner)
+      ? sourcePath
+      : await deps.retainLocalImage?.(sourcePath, owner);
     return {
       ...part,
-      url: toTranscriptImageProtocolUrl(part.url),
+      url: retained
+        ? toTranscriptImageProtocolUrl(pathToFileURL(retained).toString())
+        : isFileImageUrl(part.url) ? toTranscriptImageProtocolUrl(part.url) : part.url,
     };
   }
 
@@ -1201,6 +1241,7 @@ function isFileImageUrl(url: string): boolean {
 function isMaterializableImageUrl(url: string): boolean {
   return (
     isFileImageUrl(url)
+    || url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`)
     || url.startsWith("data:image/")
     || isPwrSnapSignedMediaUrl(url)
   );

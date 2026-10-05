@@ -734,11 +734,12 @@ import {
   type QueuedMessageTitleRequest,
   type QueuedMessageTitleSettlement,
 } from "./queued-message-title";
-import { materializeLocalImageInputs } from "./image-input-files";
+import { deleteThreadAssets, type ThreadAssetOwner } from "./thread-assets";
 import { enrichLocalFileInputs } from "./local-file-input";
 import {
   portableTurnInputAttachments,
   stageQueuedFileInputs,
+  ownThreadInputAttachments,
   stageTurnInputAttachmentsForRetention,
 } from "./turn-input-attachment-files";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
@@ -8122,8 +8123,9 @@ type PendingThreadMessageContext = {
 
 async function pendingThreadMessageImageParts(
   input: AppServerTurnInputItem[] | undefined,
+  owner: ThreadAssetOwner,
 ): Promise<AppServerThreadImagePart[]> {
-  const materializedInput = await materializeLocalImageInputs(input ?? []);
+  const materializedInput = await stageTurnInputAttachmentsForRetention(input ?? [], { owner });
   return materializedInput.flatMap((item): AppServerThreadImagePart[] => {
     if (item.type === "localImage") {
       return [{
@@ -14004,14 +14006,20 @@ export class DesktopBackendRegistry {
       observeArchives: async (threads, now) => await this.overlayStore.observeArchivedThreads!(
         threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), now),
       confirmAbsent: async (state) => {
-        if (isAcpBackendId(state.backend)) return !this.acpBackend.getSession(state.backend, state.threadId);
+        if (isAcpBackendId(state.backend)) {
+          const absent = !this.acpBackend.getSession(state.backend, state.threadId);
+          if (absent) await deleteThreadAssets(state);
+          return absent;
+        }
         return await this.withCodexThreadClient(state.threadId, async (client) => {
           if (!client.readThreadSummary) return false;
           try { await client.readThreadSummary(state.threadId); return false; }
           catch (error) {
             // Only an explicit provider not-found response confirms deletion.
             // Transport errors, unloaded threads and profile changes retain refs.
-            return error instanceof Error && error.message.toLowerCase().includes("thread not found:");
+            const absent = error instanceof Error && error.message.toLowerCase().includes("thread not found:");
+            if (absent) await deleteThreadAssets(state);
+            return absent;
           }
         });
       },
@@ -14054,6 +14062,7 @@ export class DesktopBackendRegistry {
           throw new AutomaticArchiveCancelledError();
         }
         await remove(root.id);
+        await deleteThreadAssets({ backend: root.source, threadId: root.id });
         this.invalidateThreadListCache(root.source);
         this.invalidateArchiveCleanupReads(root.source);
       };
@@ -17542,6 +17551,7 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadTurnQueueSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, delivery, ...entry } = params;
+    entry.input = await ownThreadInputAttachments(entry.input, entry, this.localFilePrivateStorageRoots);
     const hasTurnSettings = [
       entry.executionMode,
       entry.approvalPolicy,
@@ -17590,6 +17600,7 @@ export class DesktopBackendRegistry {
       queueEntryId,
       ...entry
     } = params;
+    entry.input = await ownThreadInputAttachments(entry.input, entry, this.localFilePrivateStorageRoots);
     return await this.threadTurnQueue.submitHeld({
       ...entry,
       id: queueEntryId,
@@ -17612,6 +17623,7 @@ export class DesktopBackendRegistry {
     ) {
       return { status: "busy" };
     }
+    entry.input = await ownThreadInputAttachments(entry.input, entry, this.localFilePrivateStorageRoots);
     return await this.threadTurnQueue.submitIfIdle({
       ...entry,
       origin,
@@ -17695,13 +17707,14 @@ export class DesktopBackendRegistry {
     };
   }
 
-  replaceQueuedAgentMessage(request: {
+  async replaceQueuedAgentMessage(request: {
     backend: AppServerBackendKind;
     threadId: string;
     queueEntryId: string;
     input: AppServerTurnInputItem[];
     messageOrigin?: AppServerThreadMessageOrigin;
-  }): StartTurnResponse & { queueStatus: "queued" } {
+  }): Promise<StartTurnResponse & { queueStatus: "queued" }> {
+    const input = await ownThreadInputAttachments(request.input, request, this.localFilePrivateStorageRoots);
     // No await between lookup, ownership check, and replacement: admission
     // cannot consume the entry between validation and the edit.
     const entry = this.threadTurnQueue.getQueuedEntries(request)
@@ -17726,10 +17739,10 @@ export class DesktopBackendRegistry {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
     if (entry.agentMessages) {
-      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, request.input, sender);
+      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender);
       if (!updated) throw new Error("The sender's queued message is no longer waiting.");
       this.emitQueuedTurnInputUpdated(updated);
-    } else this.updateQueuedTurnInput(entry.id, request.input);
+    } else this.updateQueuedTurnInput(entry.id, input);
     return {
       backend: entry.backend,
       threadId: entry.threadId,
@@ -18568,9 +18581,13 @@ export class DesktopBackendRegistry {
         });
         // ACP adapters already accept data-URL image parts. Keeping those
         // intact avoids changing their established image payload contract.
-        const userInput = await enrichLocalFileInputs(preparedPdfInput.input, {
-          privateStorageRoots: this.localFilePrivateStorageRoots,
-        });
+        const userInput = await ownThreadInputAttachments(
+          await enrichLocalFileInputs(preparedPdfInput.input, {
+            privateStorageRoots: this.localFilePrivateStorageRoots,
+          }),
+          params,
+          this.localFilePrivateStorageRoots,
+        );
         const input = pendingManagedReviewContexts.length > 0
           ? [
               {
@@ -18749,10 +18766,12 @@ export class DesktopBackendRegistry {
         input: params.input,
       });
       pdfAttachments = preparedPdfInput.pdfAttachments;
-      input = await materializeLocalImageInputs(
+      input = await ownThreadInputAttachments(
         await enrichLocalFileInputs(preparedPdfInput.input, {
           privateStorageRoots: this.localFilePrivateStorageRoots,
         }),
+        params,
+        this.localFilePrivateStorageRoots,
       );
       turnParams = await this.resolveModelSettings(params.backend, {
         ...params,
@@ -19058,11 +19077,11 @@ export class DesktopBackendRegistry {
     turnId?: string;
     retainAttachments?: boolean;
   }): Promise<string | undefined> {
-    const imageParts = await pendingThreadMessageImageParts(params.input);
+    const imageParts = await pendingThreadMessageImageParts(params.input, params);
     const retainedInput = params.retainAttachments
       ? await stageTurnInputAttachmentsForRetention(
           params.input ?? [],
-          { privateStorageRoots: this.localFilePrivateStorageRoots },
+          { privateStorageRoots: this.localFilePrivateStorageRoots, owner: params },
         )
       : [];
     if (
@@ -20456,10 +20475,11 @@ export class DesktopBackendRegistry {
           };
         }
         if (request.messageOrigin?.kind === "agent") {
+          const input = await ownThreadInputAttachments(request.input ?? [], request, this.localFilePrivateStorageRoots);
           const queued = await this.threadTurnQueue.submitGroupedSteer({
             backend: request.backend,
             threadId: request.threadId,
-            input: request.input ?? [],
+            input,
             messageOrigin: request.messageOrigin,
             origin: "manual",
           }, { deferStart: true });
@@ -21192,9 +21212,13 @@ export class DesktopBackendRegistry {
     if (review?.mode === "native") {
       throw new Error("Native review steering is unsupported; queue a follow-up instead.");
     }
-    const input = await enrichLocalFileInputs(params.input, {
-      privateStorageRoots: this.localFilePrivateStorageRoots,
-    });
+    const input = await ownThreadInputAttachments(
+      await enrichLocalFileInputs(params.input, {
+        privateStorageRoots: this.localFilePrivateStorageRoots,
+      }),
+      params,
+      this.localFilePrivateStorageRoots,
+    );
     if (isAcpBackendId(params.backend)) {
       const acpBackend = params.backend;
       const promptPayload = await inputToAcpPrompt(input);
@@ -36158,7 +36182,7 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const attachments = await stageTurnInputAttachmentsForRetention(
       params.input,
-      { privateStorageRoots: this.localFilePrivateStorageRoots },
+      { privateStorageRoots: this.localFilePrivateStorageRoots, owner: params },
     );
     if (attachments.length === 0) {
       return;
@@ -37483,7 +37507,7 @@ export class DesktopBackendRegistry {
       } else {
         if (localThread) {
           if (request.args.replaceQueueEntryId) {
-            turn = this.replaceQueuedAgentMessage({
+            turn = await this.replaceQueuedAgentMessage({
               backend,
               threadId,
               queueEntryId: request.args.replaceQueueEntryId,
@@ -43034,7 +43058,11 @@ export class DesktopBackendRegistry {
       this.invalidateThreadListCache(event.backend);
       if (!this.closed) void this.sweepInactiveThreads();
     }
-    const emitted = this.emitEvent(event);
+    const emitted = event.notification.method === "thread/deleted"
+      ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
+          .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
+          .then(() => this.emitEvent(event))
+      : this.emitEvent(event);
     const method = event.notification.method;
     if (
       this.stoppingRunningTurnsForShutdown

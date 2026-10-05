@@ -1,200 +1,71 @@
-import { mkdtemp, readFile, rm, writeFile as writeFileFs } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import { materializeLocalImageInputs } from "../app-server/image-input-files";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ownThreadInputAttachments } from "../app-server/turn-input-attachment-files";
 
-describe("image input files", () => {
-  it("materializes named PNG data URLs with the pasted filename in the local image path", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
-    const dataUrl = "data:image/png;base64,AQID";
-    try {
-      const first = await materializeLocalImageInputs(
-        [
-          { type: "text", text: "Describe it" },
-          { type: "image", name: "original-paste.png", url: dataUrl },
-        ],
-        { resolveRoot: () => tempDir },
-      );
-      const second = await materializeLocalImageInputs(
-        [{ type: "image", url: dataUrl }],
-        { resolveRoot: () => tempDir },
-      );
+const owner = { backend: "codex" as const, threadId: "image-thread" };
+let testRoot: string;
 
-      expect(first[0]).toEqual({ type: "text", text: "Describe it" });
-      expect(first[1]).toMatchObject({ type: "localImage", name: "original-paste.png" });
-      const imagePath = first[1]?.type === "localImage" ? first[1].path : "";
-      expect(imagePath).toBe(
-        path.join(
-          tempDir,
-          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
-          "original-paste.png",
-        ),
-      );
-      expect(second[0]).toEqual({
-        type: "localImage",
-        path: path.join(
-          tempDir,
-          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81.png",
-        ),
-      });
-      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+beforeEach(async () => {
+  testRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
+  vi.stubEnv("PWRAGENT_HOME", testRoot);
+  vi.stubEnv("PWRAGENT_PROFILE", "test");
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await rm(testRoot, { recursive: true, force: true });
+});
+
+describe("thread image inputs", () => {
+  it("materializes PNG bytes under the receiving thread while preserving the pasted filename", async () => {
+    const input = await ownThreadInputAttachments([
+      { type: "text", text: "Describe it" },
+      { type: "image", name: "original-paste.png", url: "data:image/png;base64,AQID" },
+    ], owner);
+    expect(input[0]).toEqual({ type: "text", text: "Describe it" });
+    expect(input[1]).toMatchObject({ type: "localImage", name: "original-paste.png" });
+    const imagePath = input[1]?.type === "localImage" ? input[1].path : "";
+    expect(imagePath).toContain(path.join("thread-assets", "codex", "image-thread"));
+    expect(path.basename(imagePath)).toBe("original-paste.png");
+    await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 
-  it("leaves unsupported image URLs untouched", async () => {
-    const result = await materializeLocalImageInputs(
-      [
-        { type: "image", url: "data:image/gif;base64,R0lGODlh" },
-        { type: "image", url: "https://example.test/image.png" },
-      ],
-      { resolveRoot: () => "/tmp/unused-pwragent-image-inputs" },
-    );
-
-    expect(result).toEqual([
-      { type: "image", url: "data:image/gif;base64,R0lGODlh" },
+  it("leaves remote image URLs untouched", async () => {
+    await expect(ownThreadInputAttachments([
       { type: "image", url: "https://example.test/image.png" },
-    ]);
+    ], owner)).resolves.toEqual([{ type: "image", url: "https://example.test/image.png" }]);
   });
 
-  it("removes ASCII control characters from materialized image paths", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
-    try {
-      const result = await materializeLocalImageInputs(
-        [{
-          type: "image",
-          name: "unsafe\u0000\u001fname.png",
-          url: "data:image/png;base64,AQID",
-        }],
-        { resolveRoot: () => tempDir },
-      );
-
-      const imagePath = result[0]?.type === "localImage" ? result[0].path : "";
-      expect(imagePath).toBe(
-        path.join(
-          tempDir,
-          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
-          "unsafename.png",
-        ),
-      );
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+  it("sanitizes ASCII control characters in owned image filenames", async () => {
+    const [image] = await ownThreadInputAttachments([
+      { type: "image", name: "unsafe\u0000\u001fname.png", url: "data:image/png;base64,AQID" },
+    ], owner);
+    expect(image?.type === "localImage" ? path.basename(image.path) : "").toBe("unsafe_name.png");
   });
 
-  it("converts file URLs for supported local image paths", async () => {
-    const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
-    const materializedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
-    const sourcePath = path.join(sourceRoot, "screenshot one.jpg");
-    await writeFileFs(sourcePath, Buffer.from([1, 2, 3]));
-    try {
-      const result = await materializeLocalImageInputs(
-        [{
-          type: "image",
-          name: "friendly screenshot.jpg",
-          url: pathToFileURL(sourcePath).toString(),
-        }],
-        { resolveRoot: () => materializedRoot },
-      );
-
-      expect(result).toEqual([{
-        type: "localImage",
-        name: "friendly screenshot.jpg",
-        path: path.join(
-          materializedRoot,
-          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
-          "friendly screenshot.jpg",
-        ),
-      }]);
-      const imagePath = result[0]?.type === "localImage" ? result[0].path : "";
-      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
-    } finally {
-      await rm(sourceRoot, { recursive: true, force: true });
-      await rm(materializedRoot, { recursive: true, force: true });
-    }
+  it.each(["file-url", "local-image"])("owns a %s input without depending on its mutable original", async (kind) => {
+    const sourcePath = path.join(testRoot, "external.jpg");
+    await writeFile(sourcePath, Buffer.from([1, 2, 3]));
+    const [image] = await ownThreadInputAttachments(kind === "file-url"
+      ? [{ type: "image", name: "friendly.jpg", url: pathToFileURL(sourcePath).toString() }]
+      : [{ type: "localImage", name: "friendly.jpg", path: sourcePath }], owner);
+    if (image?.type !== "localImage") throw new Error("Expected an owned local image.");
+    expect(image.path).not.toBe(sourcePath);
+    expect(path.basename(image.path)).toBe("friendly.jpg");
+    await rm(sourcePath);
+    await expect(readFile(image.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 
-  it("copies external local images into the approved image-input root", async () => {
-    const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
-    const materializedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
-    const sourcePath = path.join(sourceRoot, "external.png");
-    await writeFileFs(sourcePath, Buffer.from([4, 5, 6]));
-    try {
-      const [result] = await materializeLocalImageInputs(
-        [{ type: "localImage", name: "external.png", path: sourcePath }],
-        { resolveRoot: () => materializedRoot },
-      );
-
-      expect(result).toMatchObject({
-        type: "localImage",
-        name: "external.png",
-      });
-      const imagePath = result?.type === "localImage" ? result.path : "";
-      expect(imagePath.startsWith(`${materializedRoot}${path.sep}`)).toBe(true);
-      expect(imagePath).not.toBe(sourcePath);
-      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
-    } finally {
-      await rm(sourceRoot, { recursive: true, force: true });
-      await rm(materializedRoot, { recursive: true, force: true });
-    }
-  });
-
-  it.each(["named", "unnamed"])("preserves old %s transcript images when a different image is submitted", async (layout) => {
-    const root = "/tmp/pwragent-image-inputs";
-    const now = 30 * 24 * 60 * 60 * 1000;
-    const oldPath = layout === "named"
-      ? path.join(root, "old-digest", "old-screenshot.png")
-      : path.join(root, "old-unnamed.png");
-    const oldBytes = Buffer.from([1, 2, 3]);
-    const files = new Map<string, Buffer>([[oldPath, oldBytes]]);
-    const directories = new Set([root, path.dirname(oldPath)]);
-    const removedPaths: string[] = [];
-    const dependencies = {
-      now: () => now,
-      resolveRoot: () => root,
-      mkdir: async (dirPath: string) => {
-        directories.add(dirPath);
-      },
-      writeFile: async (filePath: string, data: Buffer) => {
-        files.set(filePath, data);
-      },
-      readdir: async (dirPath: string) => {
-        const prefix = `${dirPath}${path.sep}`;
-        return [...new Set([...files.keys(), ...directories])]
-          .filter((candidate) => candidate.startsWith(prefix))
-          .map((candidate) => candidate.slice(prefix.length))
-          .filter((candidate) => candidate && !candidate.includes(path.sep));
-      },
-      stat: async (filePath: string) => ({
-        isFile: () => files.has(filePath),
-        isDirectory: () => directories.has(filePath),
-        mtimeMs: 0,
-      }),
-      unlink: async (filePath: string) => {
-        removedPaths.push(filePath);
-        files.delete(filePath);
-      },
-      rm: async (dirPath: string) => {
-        removedPaths.push(dirPath);
-        for (const filePath of files.keys()) {
-          if (filePath.startsWith(`${dirPath}${path.sep}`)) {
-            files.delete(filePath);
-          }
-        }
-      },
-    };
-
-    await materializeLocalImageInputs(
-      [{ type: "image", name: "new.png", url: "data:image/png;base64,BwgJ" }],
-      dependencies,
-    );
-    // Let the former fire-and-forget expiry sweep finish against this in-memory filesystem.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(removedPaths).toEqual([]);
-    expect(files.get(oldPath)).toEqual(oldBytes);
+  it.each(["old.png", undefined])("preserves an old image named %s when another image is submitted", async (name) => {
+    const [old] = await ownThreadInputAttachments([{ type: "image", name, url: "data:image/png;base64,AQID" }], owner);
+    if (old?.type !== "localImage") throw new Error("Expected an owned local image.");
+    const oldDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    await utimes(old.path, oldDate, oldDate);
+    await utimes(path.dirname(old.path), oldDate, oldDate);
+    await ownThreadInputAttachments([{ type: "image", name: "new.png", url: "data:image/png;base64,BAUG" }], owner);
+    await expect(readFile(old.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 });

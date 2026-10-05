@@ -1,5 +1,6 @@
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
+import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
@@ -25786,12 +25787,15 @@ command = "pnpm dev"
         {
           type: "localFile",
           name: "notes.txt",
-          path: filePath,
+          path: expect.stringContaining(path.join("thread-assets", "codex", "thread-local-file")),
           mimeType: "text/plain",
           sizeBytes: Buffer.byteLength(text),
           textPreview: text,
         },
       ]);
+      const retainedFile = codexClient.lastStartTurnParams?.input[1];
+      if (retainedFile?.type !== "localFile") throw new Error("Expected retained notes.");
+      await expect(readFile(retainedFile.path, "utf8")).resolves.toBe(text);
     } finally {
       await registry.close();
       await rm(root, { force: true, recursive: true });
@@ -28024,6 +28028,88 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("owns queued attachments before source deletion and retains assets when archiving", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-owned-queue-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["turn/start"] } }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    try {
+      const original = await stageTurnInputAttachment({
+        type: "localImage", name: "queued.png", data: Buffer.from([1, 2, 3]),
+      }, { backend: "codex", threadId: "asset-source" });
+      await registry.submitHeldTurn({
+        queueEntryId: "owned-image", backend: "codex", threadId: "asset-recipient",
+        input: [original], holdReason: "fixture",
+      });
+      const queued = await registry.readQueuedTurn({ backend: "codex", threadId: "asset-recipient", queueEntryId: "owned-image" });
+      const image = queued.input[0];
+      if (image?.type !== "localImage") throw new Error("Expected an owned queued image.");
+      expect(image.path).toContain(path.join("thread-assets", "codex", "asset-recipient"));
+      expect(image.path).not.toBe(original.path);
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "asset-source" } } });
+      await expect(readFile(original.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/deleted", params: { threadId: "asset-source" } } });
+      await expect(stat(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(image.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+      registry.cancelQueuedTurn("owned-image");
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/deleted", params: { threadId: "asset-recipient" } } });
+      await expect(stat(image.path)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await registry.close();
+      if (previousHome === undefined) delete process.env.PWRAGENT_HOME;
+      else process.env.PWRAGENT_HOME = previousHome;
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["replace", "steer"] as const)("owns %s attachments before they wait in the recipient queue", async (operation) => {
+    const original = await stageTurnInputAttachment({
+      type: "localImage", name: `${operation}.png`, data: Buffer.from([1, 2, 3]),
+    }, { backend: "codex", threadId: `source-${operation}` });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: `source-${operation}` } };
+    let release!: () => void;
+    const blockedSteer = new Promise<void>((resolve) => { release = resolve; });
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) => {
+      if (steers.mock.calls.length === 1) await blockedSteer;
+      return { threadId: params.threadId, turnId: params.expectedTurnId };
+    });
+    try {
+      await discoverCodexBackendForTest(registry);
+      const target = { backend: "codex" as const, threadId: `recipient-${operation}` };
+      let queueEntryId: string;
+      if (operation === "replace") {
+        queueEntryId = "replace-image";
+        await registry.submitHeldTurn({ ...target, queueEntryId, input: [{ type: "text", text: "Initial" }], holdReason: "fixture", messageOrigin });
+        await registry.replaceQueuedAgentMessage({ ...target, queueEntryId, input: [{ type: "text", text: "Replacement" }, original], messageOrigin });
+      } else {
+        await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started", params: { threadId: target.threadId, turnId: "active", turn: { id: "active" } },
+        } });
+        await registry.submitTurn({ ...target, input: [{ type: "text", text: "Already dispatching" }], messageOrigin });
+        await waitForCondition(() => steers.mock.calls.length === 1);
+        const result = await registry.controlActiveTurn({ ...target, operation: "steer", requestId: "image-steer", expectedTurnId: "active", input: [original], messageOrigin });
+        if (!result.ok) throw new Error("Expected queued steering.");
+        queueEntryId = result.turnId;
+      }
+      const queued = await registry.readQueuedTurn({ ...target, queueEntryId });
+      const image = queued.input.find((item) => item.type === "localImage");
+      if (image?.type !== "localImage") throw new Error("Expected a queued image.");
+      expect(image.path).toContain(path.join("thread-assets", "codex", target.threadId));
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/deleted", params: { threadId: `source-${operation}` } } });
+      await expect(readFile(image.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+      registry.cancelQueuedTurn(queueEntryId);
+    } finally {
+      release();
+      await registry.close();
+    }
+  });
+
   it("materializes data URL images before starting Codex turns", async () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-turn-"));
     const previousHome = process.env.PWRAGENT_HOME;
@@ -28053,7 +28139,7 @@ command = "pnpm dev"
       expect(input).toHaveLength(1);
       expect(input?.[0]).toMatchObject({ type: "localImage" });
       const imagePath = input?.[0]?.type === "localImage" ? input[0].path : "";
-      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(imagePath).toContain(path.join("state", "thread-assets", "codex", "thread-image"));
       expect(path.basename(path.dirname(imagePath))).toBe(
         "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
       );
@@ -28104,7 +28190,7 @@ command = "pnpm dev"
       });
       const imageInput = codexClient.lastStartTurnParams?.input[1];
       const imagePath = imageInput?.type === "localImage" ? imageInput.path : "";
-      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(imagePath).toContain(path.join("state", "thread-assets", "codex", "thread-image"));
       expect(imagePath).not.toBe(sourcePath);
 
       await codexClient.emit({
@@ -36319,7 +36405,7 @@ command = "pnpm dev"
     expect(remembered).toEqual([expect.objectContaining({
       type: "localImage",
       name: "migration.png",
-      path: expect.stringContaining("turn-input-attachments"),
+      path: expect.stringContaining(path.join("thread-assets", "acp%3Akimi", "kimi-parent")),
     })]);
     expect(JSON.stringify(remembered)).not.toContain("base64");
     await registry.publishLocalEvent({
@@ -36367,7 +36453,7 @@ command = "pnpm dev"
         expect.objectContaining({
           type: "localImage",
           name: "migration.png",
-          path: expect.stringContaining("image-inputs"),
+          path: expect.stringContaining(path.join("thread-assets", "codex", "thread-1")),
         }),
       ],
     });
@@ -41370,9 +41456,16 @@ script = "printf setup"
     await registry.submitHeldTurn({ backend, threadId: "recipient", queueEntryId: "held-one", input, holdReason: "Fixture hold" });
     await registry.submitTurn({ backend, threadId: "recipient", queueEntryId: "held-two", input: [{ type: "text", text: "Next" }] });
     const content = await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" });
-    expect(content.input).toEqual(input);
+    const ownedInput = [input[0], {
+      type: "localFile", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3,
+      path: expect.stringContaining(path.join("thread-assets", encodeURIComponent(backend), "recipient")),
+    }];
+    expect(content.input).toEqual(ownedInput);
+    const retainedFile = content.input[1];
+    if (retainedFile?.type !== "localFile") throw new Error("Expected owned queued notes.");
+    await expect(readFile(retainedFile.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
     content.input.splice(0);
-    expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" })).input).toEqual(input);
+    expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" })).input).toEqual(ownedInput);
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")]?.map((entry) => entry.queueEntryId)).toEqual(["held-one", "held-two"]);
   });
 
@@ -41414,7 +41507,7 @@ script = "printf setup"
       expect(text).toContain(`Evidence ${index}`);
       expect(text).toContain(`Sender ${index}`);
     }
-    registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
+    await registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
       input: [{ type: "text", text: "Sender 7 consolidated evidence" }],
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
     });
@@ -41736,10 +41829,10 @@ script = "printf setup"
       { backend: "codex" as const, threadId: "other" },
       { backend: "codex" as const, threadId: "sender", instanceId: "other-machine" },
     ]) {
-      expect(() => registry.replaceQueuedAgentMessage({ ...target, input, messageOrigin: { kind: "agent", sourceThread } })).toThrow("Only the sending thread");
+      await expect(registry.replaceQueuedAgentMessage({ ...target, input, messageOrigin: { kind: "agent", sourceThread } })).rejects.toThrow("Only the sending thread");
     }
-    expect(() => registry.replaceQueuedAgentMessage({ ...target, queueEntryId: "operator-next", input, messageOrigin: original.messageOrigin })).toThrow("Only the sending thread");
-    expect(() => registry.replaceQueuedAgentMessage({ ...target, threadId: "sender", input, messageOrigin: original.messageOrigin })).toThrow("not found or already started");
+    await expect(registry.replaceQueuedAgentMessage({ ...target, queueEntryId: "operator-next", input, messageOrigin: original.messageOrigin })).rejects.toThrow("Only the sending thread");
+    await expect(registry.replaceQueuedAgentMessage({ ...target, threadId: "sender", input, messageOrigin: original.messageOrigin })).rejects.toThrow("not found or already started");
     const replacement = await send("Complete consolidated findings", queueEntryId);
     expect(replacement.response).toMatchObject({ success: true });
     expect(replacement.payload).toMatchObject({ queueStatus: "queued", queueEntryId });
@@ -42070,7 +42163,7 @@ script = "printf setup"
       expect(remembered).toEqual([expect.objectContaining({
         type: "localImage",
         name: "screen.png",
-        path: expect.stringContaining("turn-input-attachments"),
+        path: expect.stringContaining(path.join("thread-assets", "codex", "source-thread")),
       })]);
       expect(JSON.stringify(remembered)).not.toContain("base64");
 

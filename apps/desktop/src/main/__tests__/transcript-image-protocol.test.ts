@@ -33,7 +33,55 @@ describe("transcript image protocol", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("promotes legacy image references and resolves them after the shared source is removed", async () => {
+    vi.stubEnv("PWRAGENT_HOME", tempDir);
+    vi.stubEnv("PWRAGENT_PROFILE", "test");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const bytes = Buffer.from([1, 2, 3]);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const legacyPath = path.join(tempDir, "profiles", "test", "state", "turn-input-attachments", digest, "image.png");
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, bytes);
+    const input = {
+      backend: "codex" as const, threadId: "legacy-thread", fetchedAt: 0,
+      replay: {
+        entries: [],
+        messages: [{ id: "legacy", role: "user" as const, text: "Image", parts: [{ type: "image" as const, url: toProtocolUrl(legacyPath) }] }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    const first = await materializeTranscriptImageUrlsForRenderer(input);
+    const part = first.replay.messages[0]?.parts?.[0];
+    if (part?.type !== "image") throw new Error("Expected retained image.");
+    const ownedPath = filePathFromProtocolUrl(part.url);
+    expect(ownedPath).toContain(path.join("thread-assets", "codex", "legacy-thread"));
+    await expect(readFile(ownedPath)).resolves.toEqual(bytes);
+    await rm(legacyPath);
+    const second = await materializeTranscriptImageUrlsForRenderer(input);
+    expect(second.replay.messages[0]?.parts).toEqual(first.replay.messages[0]?.parts);
+  });
+
+  it("does no retention work for images already owned by the displayed thread", async () => {
+    vi.stubEnv("PWRAGENT_HOME", tempDir);
+    vi.stubEnv("PWRAGENT_PROFILE", "test");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const retainLocalImage = vi.fn(async () => { throw new Error("Unexpected retention work"); });
+    const url = pathToFileURL(path.join(tempDir, "profiles", "test", "state", "thread-assets", "codex", "fast-thread", "digest", "image.png")).toString();
+    const input = {
+      backend: "codex" as const, threadId: "fast-thread", fetchedAt: 0,
+      replay: {
+        entries: [],
+        messages: [{ id: "owned", role: "user" as const, text: "Image", parts: [{ type: "image" as const, url }] }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    await materializeTranscriptImageUrlsForRenderer(input, { retainLocalImage });
+    await materializeTranscriptImageUrlsForRenderer(input, { retainLocalImage });
+    expect(retainLocalImage).not.toHaveBeenCalled();
   });
 
   it("registers a secure custom image protocol", async () => {

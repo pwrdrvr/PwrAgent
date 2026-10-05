@@ -57,7 +57,7 @@ describe("retained turn input attachments", () => {
       type,
       name: type === "localImage" ? "old.png" : "old.txt",
       data,
-    });
+    }, { backend: "codex", threadId: "old-thread" });
     await settleFileOperations();
     const staleDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     await utimes(staged.path, staleDate, staleDate);
@@ -71,7 +71,7 @@ describe("retained turn input attachments", () => {
     await settleFileOperations();
 
     await expect(readFile(staged.path)).resolves.toEqual(data);
-    const retained = await stageTurnInputAttachmentsForRetention([staged]);
+    const retained = await stageTurnInputAttachmentsForRetention([staged], { owner: { backend: "codex", threadId: "old-thread" } });
     expect(retained).toEqual([staged]);
     await expect(readFile(staged.path)).resolves.toEqual(data);
   });
