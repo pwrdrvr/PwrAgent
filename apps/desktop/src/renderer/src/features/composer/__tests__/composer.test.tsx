@@ -15048,49 +15048,45 @@ describe("Composer", () => {
       await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(worktreeThread, "same-worktree"));
     });
 
-    it("shows muted parameters and completes an argument before executing", async () => {
-      const { onForkThread, container } = renderForkComposer();
-      const input = screen.getByLabelText("Reply");
-      fireEvent.change(input, { target: { value: "/fork " } });
-      const commands = screen.getByRole("listbox", { name: "Commands" });
-      expect(within(commands).getByText("[--wt same|new] [--no-history]")).toHaveClass("composer__autocomplete-arguments");
-      fireEvent.change(input, { target: { value: "/fork --wt n" } });
-      expect(container.querySelector(".composer__autocomplete-arguments")).toHaveTextContent("--wt new");
-      fireEvent.keyDown(input, { key: "Enter" });
-      expect(input).toHaveValue("/fork --wt new ");
-      expect(onForkThread).not.toHaveBeenCalled();
-      await flushReactUpdates();
-      fireEvent.keyDown(input, { key: "Enter" });
-      await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(thread, "new-worktree"));
-    });
-
-    it.each([
-      ["Tab", 2, "/fork --wt new", "new-worktree", false],
-      ["Enter", 2, "/fork --wt new", "new-worktree", false],
-      ["Tab", 3, "/fork --no-history", "local", true],
-      ["Enter", 3, "/fork --no-history", "local", true],
-      ["Tab", 5, "/fork --wt new --no-history", "new-worktree", true],
-      ["Enter", 5, "/fork --wt new --no-history", "new-worktree", true],
-    ] as const)("honors %s on highlighted fork option %i (%s)", async (key, index, text, mode, noHistory) => {
+    it("offers one plain /fork entry and hints its parameters in the input", async () => {
       const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer();
       const input = screen.getByLabelText("Reply");
-      fireEvent.change(input, { target: { value: "/fork " } });
-      for (let step = 0; step < index; step += 1) {
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-      }
+      const tiptapInput = screen.getByTestId("composer-tiptap-input");
+      fireEvent.change(input, { target: { value: "/fo" } });
       const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
-      expect(options[index]).toHaveAttribute("aria-selected", "true");
+      expect(options).toHaveLength(1);
+      expect(options[0]).toHaveTextContent("/fork");
+      expect(options[0]).toHaveTextContent("Fork a new child thread, with or without history");
+      expect(options[0]).not.toHaveTextContent("--wt");
+      // The menu owns the row until it closes; no ghost text competes with it.
+      expect(tiptapInput).not.toHaveAttribute("data-inline-hint");
 
-      fireEvent.keyDown(input, { key });
-      expect(input).toHaveValue(`${text} `);
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(input).toHaveValue("/fork ");
       expect(onForkThread).not.toHaveBeenCalled();
       expect(onCreateSubthread).not.toHaveBeenCalled();
       await flushReactUpdates();
+      expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+      expect(tiptapInput).toHaveClass("has-inline-hint");
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new] [--no-history]");
+      expect(tiptapInput.style.getPropertyValue("--composer-inline-hint"))
+        .toBe('"[--wt same|new] [--no-history]"');
+
+      fireEvent.change(input, { target: { value: "/fork --wt n" } });
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "ew [--no-history]");
+      fireEvent.change(input, { target: { value: "/fork --wt new --no-history" } });
+      expect(tiptapInput).not.toHaveAttribute("data-inline-hint");
+      expect(tiptapInput).not.toHaveClass("has-inline-hint");
 
       fireEvent.keyDown(input, { key: "Enter" });
-      await waitFor(() => expect(noHistory ? onCreateSubthread : onForkThread).toHaveBeenCalledWith(thread, mode));
-      expect(noHistory ? onForkThread : onCreateSubthread).not.toHaveBeenCalled();
+      await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "new-worktree"));
       expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("draws no parameter hint for ordinary drafts", () => {
+      renderForkComposer();
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Please fork this later" } });
+      expect(screen.getByTestId("composer-tiptap-input")).not.toHaveAttribute("data-inline-hint");
     });
 
     it.each(["/fork --wt", "/fork --wt other", "/fork unexpected", "/fork --no-history --no-history"])("retains invalid command %s and never sends it to the agent", async (text) => {
@@ -15118,8 +15114,8 @@ describe("Composer", () => {
       const input = screen.getByLabelText("Reply");
       fireEvent.change(input, { target: { value: "/fork" } });
       const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
-      expect(options).toHaveLength(3);
-      for (const option of options) expect(option).toHaveTextContent("--no-history");
+      expect(options).toHaveLength(1);
+      expect(options[0]).toHaveTextContent("Fork a new child thread, with or without history");
       fireEvent.click(screen.getByRole("button", { name: "Fork" }));
       expect(await screen.findByText("This provider cannot fork history. Use /fork --no-history to start a sub-thread.")).toBeInTheDocument();
       expect(startTurn).not.toHaveBeenCalled();
@@ -15154,7 +15150,8 @@ describe("Composer", () => {
       const draftStore = result.current;
       const deleteDraft = vi.spyOn(draftStore, "delete");
       const { rerender } = renderForkComposer({ onForkThread, draftStore });
-      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork" } });
+      // The trailing space closes the command menu, so Enter submits.
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork " } });
       fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
       rerender(<Composer disabled={false} skills={[]} thread={{ ...thread, id: "child" }} draftStore={draftStore} />);
       fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Child draft" } });
@@ -15168,12 +15165,12 @@ describe("Composer", () => {
       const onForkThread = vi.fn(() => pending.promise);
       renderForkComposer({ onForkThread });
       const input = screen.getByLabelText("Reply");
-      fireEvent.change(input, { target: { value: "/fork" } });
+      fireEvent.change(input, { target: { value: "/fork " } });
       fireEvent.keyDown(input, { key: "Enter" });
       fireEvent.keyDown(input, { key: "Enter" });
       expect(onForkThread).toHaveBeenCalledTimes(1);
       await act(async () => pending.resolve(false));
-      expect(input).toHaveValue("/fork");
+      expect(input).toHaveValue("/fork ");
       expect(screen.getByRole("button", { name: "Fork" })).toBeEnabled();
     });
   });

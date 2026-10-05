@@ -211,7 +211,11 @@ import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./Environmen
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
-import { parseForkCommand, type ComposerForkCommand } from "./composer-fork-command";
+import {
+  forkCommandHint,
+  parseForkCommand,
+  type ComposerForkCommand,
+} from "./composer-fork-command";
 import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
@@ -704,7 +708,6 @@ type ModelOption = NonNullable<
 >[number];
 
 type SlashCommandSuggestion = {
-  argumentHint?: string;
   aliases?: string[];
   description: string;
   id: string;
@@ -875,22 +878,16 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
   },
 ];
 
-const FORK_SLASH_COMMANDS: SlashCommandSuggestion[] = [
-  ["", "[--wt same|new] [--no-history]", "Fork with history in the same workspace (default)"],
-  [" --wt same", "--wt same", "Fork with history in the same worktree or directory"],
-  [" --wt new", "--wt new", "Fork with history in a new worktree"],
-  [" --no-history", "--no-history", "Start a sub-thread without history in the same workspace"],
-  [" --wt same --no-history", "--wt same --no-history", "Start a sub-thread without history in the same worktree or directory"],
-  [" --wt new --no-history", "--wt new --no-history", "Start a sub-thread without history in a new worktree"],
-].map(([args, argumentHint, description]) => ({
-  id: `fork${args}`,
-  label: `/fork${args}`,
-  insertText: `/fork${args}`,
-  argumentHint,
-  description,
+// One plain entry: the parameters are taught by the muted hint the input draws
+// after "/fork ", not by a row per flag combination.
+const FORK_SLASH_COMMAND: SlashCommandSuggestion = {
+  id: "fork",
+  label: "/fork",
+  insertText: "/fork",
+  description: "Fork a new child thread, with or without history",
   source: "pwragent",
   sourceLabel: "PwrAgent",
-}));
+};
 
 const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -4774,11 +4771,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (supportsMcpInventory) {
       localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
     }
-    localCommands.push(...FORK_SLASH_COMMANDS.filter((command) =>
-      command.insertText.includes("--no-history")
-        ? supportsSubthreadCommand
-        : supportsForkCommand,
-    ));
+    if (supportsForkCommand || supportsSubthreadCommand) {
+      localCommands.push(FORK_SLASH_COMMAND);
+    }
     return [...localCommands, ...commands];
   }, [
     props.backends,
@@ -4793,8 +4788,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return [];
     }
 
-    const query = slashTrigger.query.toLowerCase().trimEnd();
-    const typed = `/${query}`;
+    const typed = `/${slashTrigger.query}`.toLowerCase();
+    const query = slashTrigger.query.toLowerCase();
     return slashCommandSuggestions.filter((command) => {
       const aliases = command.aliases ?? [];
       return (
@@ -8609,7 +8604,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (!command.id.startsWith("fork") && shouldQueueThreadSubmit()) {
+    if (command.id !== FORK_SLASH_COMMAND.id && shouldQueueThreadSubmit()) {
       void queueCurrentDraft();
       return;
     }
@@ -10202,6 +10197,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     : forkCommand
       ? "Fork"
       : turnSubmitButtonLabel;
+  // The command menu owns the "/fork" row until it closes; after that the
+  // input draws the parameters still available as muted text after the caret.
+  const forkInlineHint =
+    (supportsForkCommand || supportsSubthreadCommand)
+    && autocompleteKind !== "slash"
+    && !forking
+      ? forkCommandHint(draft)
+      : undefined;
   // Queue is the primary mid-turn; the steer chord is its keyboard-only
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =
@@ -10486,32 +10489,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
         (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
 
-  const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
-    if (autocompleteKind !== "slash") {
-      return undefined;
-    }
-
-    const activeCommand = filteredSlashCommands[activeSlashIndex];
-    // Fork variants change the workspace and history action, so completion
-    // must honor the highlighted row even when /fork is an exact text match.
-    if (activeCommand?.id.startsWith("fork")) {
-      return activeCommand;
-    }
-
-    const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.trimEnd().toLowerCase()
-      : undefined;
-    return (
-      (currentSlashText
-        ? filteredSlashCommands.find((candidate) =>
-            slashCommandMatchesText(candidate, currentSlashText)
-          )
-        : undefined) ??
-      activeCommand ??
-      filteredSlashCommands[0]
-    );
-  };
-
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
       applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
@@ -10546,20 +10523,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    const slashCommand = getActiveSlashCommand();
-    if (slashCommand) {
-      applySlashCommand(slashCommand);
-    }
+    const currentSlashText = slashTrigger
+      ? `/${slashTrigger.query}`.toLowerCase()
+      : undefined;
+    const exactSlashCommand = currentSlashText
+      ? filteredSlashCommands.find((command) =>
+          slashCommandMatchesText(command, currentSlashText)
+        )
+      : undefined;
+    applySlashCommand(
+      exactSlashCommand ??
+        filteredSlashCommands[activeSlashIndex] ??
+        filteredSlashCommands[0]!
+    );
   };
 
   const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
-    if (command.id.startsWith("fork")) {
-      if (!forkCommand || command.insertText.toLowerCase() !== draft.trim().toLowerCase()) {
-        return false;
-      }
-      void submitForkCommand(forkCommand);
-      return true;
-    }
     if (command.id === "review-current") {
       enterReviewComposer();
       return true;
@@ -10581,6 +10560,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     return false;
+  };
+
+  const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
+    if (autocompleteKind !== "slash") {
+      return undefined;
+    }
+
+    const currentSlashText = slashTrigger
+      ? `/${slashTrigger.query}`.toLowerCase()
+      : undefined;
+    return (
+      (currentSlashText
+        ? filteredSlashCommands.find((candidate) =>
+            slashCommandMatchesText(candidate, currentSlashText)
+          )
+        : undefined) ??
+      filteredSlashCommands[activeSlashIndex] ??
+      filteredSlashCommands[0]
+    );
   };
 
   const restoreDeletedSkillToken = (
@@ -12321,6 +12319,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             disabled={composerDisabled}
             readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
+            inlineHint={forkInlineHint}
             markdownConversion
             placeholder={composerPlaceholder}
             resolveThreadLink={(ref) => {
@@ -12444,14 +12443,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               >
                 <span className="composer__autocomplete-title">
                   <HighlightedAutocompleteLabel
-                    label={command.argumentHint ? "/fork" : command.label}
+                    label={command.label}
                     query={slashTrigger ? `/${slashTrigger.query}` : "/"}
                   />
-                  {command.argumentHint ? (
-                    <span className="composer__autocomplete-arguments">
-                      {command.argumentHint}
-                    </span>
-                  ) : null}
                   <span
                     className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
                   >

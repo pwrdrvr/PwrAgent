@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseForkCommand } from "../composer-fork-command";
+import { forkCommandHint, parseForkCommand } from "../composer-fork-command";
 import { findSlashCommandTrigger } from "../composer-slash-commands";
 
 describe("fork command parsing", () => {
@@ -28,10 +28,43 @@ describe("fork command parsing", () => {
     (text) => expect(parseForkCommand(text)).toBeUndefined(),
   );
 
-  it("keeps fork parameter suggestions open after a space", () => {
-    const text = "/fork --wt ";
-    expect(findSlashCommandTrigger(text, text.length)?.query).toBe("fork --wt ");
-    expect(findSlashCommandTrigger("/review ", 8)).toBeUndefined();
-    expect(findSlashCommandTrigger("/forklift ", 10)).toBeUndefined();
+  it("closes the command menu once /fork takes arguments", () => {
+    expect(findSlashCommandTrigger("/fork", 5)?.query).toBe("fork");
+    expect(findSlashCommandTrigger("/fork ", 6)).toBeUndefined();
+    expect(findSlashCommandTrigger("/fork --wt ", 11)).toBeUndefined();
+  });
+});
+
+describe("fork command hint", () => {
+  it.each([
+    ["/fork", " [--wt same|new] [--no-history]"],
+    ["/fork ", "[--wt same|new] [--no-history]"],
+    ["/fork --w", "t same|new [--no-history]"],
+    ["/fork --wt", " same|new [--no-history]"],
+    ["/fork --wt ", "same|new [--no-history]"],
+    ["/fork --wt n", "ew [--no-history]"],
+    ["/fork --wt new", " [--no-history]"],
+    ["/fork --wt new ", "[--no-history]"],
+    ["/fork --n", "o-history [--wt same|new]"],
+    ["/fork --no-history ", "[--wt same|new]"],
+    ["/fork --no-history --wt ", "same|new"],
+    ["/FORK ", "[--wt same|new] [--no-history]"],
+  ])("hints %j with %j", (text, hint) => {
+    expect(forkCommandHint(text)).toBe(hint);
+  });
+
+  it.each([
+    "/forklift",
+    "Please /fork",
+    "/fork --wt new --no-history",
+    "/fork --wt new --no-history ",
+    "/fork --",
+    "/fork --wt x",
+    "/fork --wt other ",
+    "/fork please",
+    "/fork --no-history --no-history",
+    "/fork\n",
+  ])("has no hint for %j", (text) => {
+    expect(forkCommandHint(text)).toBeUndefined();
   });
 });

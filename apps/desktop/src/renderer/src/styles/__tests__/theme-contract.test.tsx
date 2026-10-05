@@ -548,6 +548,10 @@ describe("Tangerine Terminal theme contract", () => {
       // so the hover actions' fade matches each row tone. Every value it
       // resolves to is a theme token.
       "queued-row-bg",
+      // A slash command's remaining parameters, set inline on
+      // `.composer-tiptap-input` as a CSS string and drawn by the last
+      // paragraph's ::after. Content, not theme.
+      "composer-inline-hint",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

@@ -32396,6 +32396,17 @@ button.pricing-token-miser__folded:focus-visible {
   pointer-events: none;
 }
 
+/* A slash command's remaining parameters, drawn after the draft in the
+   placeholder's color. The empty alt text keeps the hint out of the
+   textbox's accessible value. */
+.composer-tiptap-input.has-inline-hint
+  .composer-tiptap-input__editor
+  > p:last-child::after {
+  content: var(--composer-inline-hint) / "";
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
 /* Inline mention chips inside the composer: `$skill`, `@file`, `@directory`,
    `#thread`, PR pills. They interrupt running prose, so they are sized in `em`
    off the paragraph rather than off `.chip` (24px / 12px), which is row and
@@ -36655,13 +36666,6 @@ button.pricing-token-miser__folded:focus-visible {
 .composer__autocomplete-option.is-active {
   background: var(--accent-soft);
   color: var(--accent-bright);
-}
-
-.composer__autocomplete-arguments {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 400;
 }
 
 .composer__autocomplete-title {

@@ -140,7 +140,7 @@ test("thread reply Tiptap slash review autocomplete stays open on exact command 
   }
 });
 
-test("thread reply Tiptap fork autocomplete shows parameters and completes workspace flags", async () => {
+test("thread reply Tiptap fork autocomplete stays plain and hints parameters in the input", async () => {
   const app = await launchElectronApp({
     fixturePath,
     windowSize: { width: 1180, height: 760 },
@@ -150,25 +150,31 @@ test("thread reply Tiptap fork autocomplete shows parameters and completes works
     await openSkillAutocompleteThread(app);
     const textbox = app.window.getByRole("textbox", { name: "Reply", exact: true });
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await textbox.fill("/fork ");
+    await textbox.fill("/fo");
     const commands = app.window.getByRole("listbox", { name: "Commands" });
     await expect(commands).toBeVisible();
-    await expect(commands.getByRole("option")).toHaveCount(6);
-    await expect(commands.locator(".composer__autocomplete-arguments").first())
-      .toHaveText("[--wt same|new] [--no-history]");
-    await expect(commands.getByRole("option", { name: /Start a sub-thread without history in a new worktree/ }))
-      .toBeVisible();
-    await app.window.screenshot({ path: test.info().outputPath("fork-command-menu.png") });
+    const fork = commands.getByRole("option", { name: /\/fork/i });
+    await expect(fork).toHaveCount(1);
+    await expect(fork).toContainText("Fork a new child thread, with or without history");
+    await expect(fork).not.toContainText("--wt");
 
-    await textbox.fill("/fork --wt n");
-    await expect(commands.getByRole("option")).toHaveCount(2);
-    await expect(commands.getByRole("option").first()).toContainText("Fork with history in a new worktree");
-    await expect(commands.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
-    await textbox.press("Tab");
-    // Completion can dismiss the menu; the inserted draft is the result.
-    await expect(tiptapInput).toHaveAttribute("data-value", "/fork --wt new ");
+    await textbox.press("Enter");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/fork ");
+    await expect(commands).toBeHidden();
+    await expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new] [--no-history]");
+    // The hint is drawn by the paragraph's ::after, outside the draft text.
+    const hint = await textbox.locator("p").last().evaluate((paragraph) => {
+      const after = getComputedStyle(paragraph, "::after");
+      return { content: after.content, text: paragraph.textContent };
+    });
+    expect(hint.content).toContain("[--wt same|new] [--no-history]");
+    expect(hint.text).toBe("/fork ");
+    await app.window.screenshot({ path: test.info().outputPath("fork-command-hint.png") });
+
+    await textbox.pressSequentially("--wt n");
+    await expect(tiptapInput).toHaveAttribute("data-inline-hint", "ew [--no-history]");
     await expect(app.window.getByRole("button", { name: "Fork", exact: true })).toBeVisible();
-    // Completion inserts a command; it must not submit a provider turn.
+    // Picking the command inserts it; it must not submit a provider turn.
     expect(await app.getLastStartTurn()).toBeUndefined();
   } finally {
     await app.close();

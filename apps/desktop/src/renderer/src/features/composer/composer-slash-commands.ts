@@ -20,7 +20,7 @@ export function findSlashCommandTrigger(
   start: number;
 } | undefined {
   const prefix = text.slice(0, caret);
-  if (/\s$/.test(prefix) && !/^\/fork(?:[ \t]|$)/i.test(prefix)) {
+  if (/\s$/.test(prefix)) {
     return undefined;
   }
   const match = /^\/([^\r\n]*)$/.exec(prefix);

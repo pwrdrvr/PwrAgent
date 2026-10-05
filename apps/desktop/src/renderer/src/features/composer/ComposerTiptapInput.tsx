@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -62,6 +63,11 @@ type ComposerTiptapInputProps = {
   readOnly?: boolean;
   editorDocument?: JSONContent;
   id: string;
+  /**
+   * Muted text drawn after the draft's last character, such as the
+   * parameters a slash command still accepts. It is not part of the value.
+   */
+  inlineHint?: string;
   label: string;
   markdownConversion?: boolean;
   onChange: (
@@ -3415,10 +3421,16 @@ export const ComposerTiptapInput = forwardRef<
 
   return (
     <div
-      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}${props.readOnly ? " is-readonly" : ""}`}
+      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}${props.readOnly ? " is-readonly" : ""}${props.inlineHint ? " has-inline-hint" : ""}`}
+      data-inline-hint={props.inlineHint}
       data-placeholder={props.placeholder}
       data-testid="composer-tiptap-input"
       data-value={props.value}
+      // ProseMirror owns the editor's own attributes, so the hint rides in a
+      // custom property that the last paragraph's ::after inherits.
+      style={props.inlineHint
+        ? { "--composer-inline-hint": JSON.stringify(props.inlineHint) } as CSSProperties
+        : undefined}
       onContextMenu={(event) => {
         const target = event.target instanceof Element
           ? event.target.closest<HTMLElement>('[data-mention-kind="thread"]')
