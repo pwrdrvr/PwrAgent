@@ -138,7 +138,7 @@ import {
   registerProfilesIpcHandlers,
 } from "./ipc/profiles";
 import { buildDockProfileMenuTemplate } from "./dock-menu";
-import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
+import { disposeRendererErrorIpcHandlers, registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import {
   disposeRuntimeIdentityIpcHandlers,
   registerRuntimeIdentityIpcHandlers,
@@ -599,6 +599,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
+  disposeRendererErrorIpcHandlers();
   disposeFederationIpcHandlers();
   disposeStarMapIpcHandlers();
   disposeImageNormalizationIpcHandlers();
