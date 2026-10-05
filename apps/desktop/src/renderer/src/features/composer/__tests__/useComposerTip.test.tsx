@@ -76,9 +76,11 @@ describe("useComposerTip", () => {
 });
 
 describe("COMPOSER_TIPS", () => {
-  it("keeps every tip short enough for one line of the reply box", () => {
+  it("keeps every tip short enough for one line of the default-width reply box", () => {
+    // No desktop bridge here, so shortcut tips render their longer
+    // Windows/Linux form ("Ctrl+Shift+F"), which is the one to budget for.
     for (const render of COMPOSER_TIPS) {
-      expect(render().length).toBeLessThanOrEqual(80);
+      expect(render().length).toBeLessThanOrEqual(58);
     }
   });
 

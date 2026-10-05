@@ -19452,6 +19452,14 @@ a.button {
   cursor: text;
 }
 
+.compact-composer
+  .composer-tiptap-input.is-empty
+  .composer-tiptap-input__editor::before {
+  top: 6px;
+  right: 8px;
+  left: 8px;
+}
+
 .compact-composer__attachments {
   display: flex;
   flex: 0 0 auto;
@@ -33265,24 +33273,20 @@ button.pricing-token-miser__folded:focus-visible {
   padding-left: 20px;
 }
 
-/* The reply placeholder rotates through usage tips, and a tip can run past
-   one line in a narrow window. An absolutely positioned placeholder adds no
-   height, so its second line spilled under the toolbar. While empty, the
-   editor is a one-cell grid and the placeholder shares that cell with the
-   empty paragraph: the box grows to fit the tip and the caret stays on its
-   first line. */
-.composer-tiptap-input.is-empty .composer-tiptap-input__editor {
-  display: grid;
-}
-
-.composer-tiptap-input.is-empty .composer-tiptap-input__editor > *,
-.composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
-  grid-area: 1 / 1;
-}
-
+/* The reply placeholder rotates through usage tips (composer-tips.ts). The
+   empty box stays one line tall, so a placeholder too long for a narrow box
+   ends in an ellipsis instead of wrapping, which the box's floor would clip
+   mid-line. */
 .composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
   content: attr(data-placeholder);
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  left: 12px;
+  overflow: hidden;
   color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   pointer-events: none;
 }
 
