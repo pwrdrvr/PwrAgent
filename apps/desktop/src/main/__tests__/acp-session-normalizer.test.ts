@@ -1898,7 +1898,12 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
-  it.each([false, true])("keeps Grok memory flushes out of the transcript and turn lifecycle (idle: %s)", (idle) => {
+  it.each([
+    { lifecycle: "flush", idle: false },
+    { lifecycle: "flush", idle: true },
+    { lifecycle: "dream", idle: false },
+    { lifecycle: "dream", idle: true },
+  ])("keeps Grok memory $lifecycle updates out of the transcript and turn lifecycle (idle: $idle)", ({ lifecycle, idle }) => {
     const normalizer = new AcpSessionReplayNormalizer();
     normalizer.recordUserPrompt({
       sessionId: "session-1",
@@ -1917,16 +1922,17 @@ describe("AcpSessionReplayNormalizer", () => {
     }
     const before = structuredClone(normalizer.replay());
 
-    // Grok runs these before compaction and in the background while idle.
+    // Background memory work must not change active or settled turns.
     // Completion may report a written file, or omit the optional path.
     for (const update of [
-      { sessionUpdate: "memory_flush_started" },
+      ...(lifecycle === "dream" ? [{ sessionUpdate: "memory_dream_queued" }] : []),
+      { sessionUpdate: `memory_${lifecycle}_started` },
       {
-        sessionUpdate: "memory_flush_completed",
+        sessionUpdate: `memory_${lifecycle}_completed`,
         result: "written",
         path: "/fixture/.grok/memory/project/sessions/log.md",
       },
-      { sessionUpdate: "memory_flush_completed", result: "skipped" },
+      { sessionUpdate: `memory_${lifecycle}_completed`, result: "skipped" },
     ]) {
       expect(normalizer.apply({
         sessionId: "session-1",
