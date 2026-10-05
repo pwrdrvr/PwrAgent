@@ -16,7 +16,8 @@
 .storage-maintenance__choice input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .storage-maintenance__choice input:disabled { opacity: 0.6; }
 .storage-maintenance__detail { font-size: 12px; }
-.storage-maintenance__progress { padding: 12px 0; min-height: 36px; }
+.storage-maintenance__progress { padding: 12px 0; min-height: 36px; font-variant-numeric: tabular-nums; }
+.storage-maintenance__count { display: inline-block; text-align: right; }
 .storage-maintenance footer { display: flex; gap: 8px; align-items: center; }
 .storage-maintenance footer span { flex: 1; font-size: 11px; color: var(--text-muted); }
 .storage-maintenance button { background: var(--bg-panel-hover); border: 1px solid var(--border-strong); color: var(--text-primary); padding: 8px 12px; border-radius: 8px; cursor: pointer; }
