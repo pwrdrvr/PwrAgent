@@ -929,6 +929,17 @@ export class DesktopSettingsService {
           config.general?.attentionPromoteOnTurnEnd,
           true,
         ),
+        // Default off for both: an SVG's scripts are untrusted code, so the
+        // lightbox shows the static preview and asks before running them
+        // until the operator says otherwise.
+        interactiveSvgSkipNotice: this.resolveConfigBoolean(
+          config.general?.interactiveSvgSkipNotice,
+          false,
+        ),
+        interactiveSvgAutoOpen: this.resolveConfigBoolean(
+          config.general?.interactiveSvgAutoOpen,
+          false,
+        ),
         // Default on: the gateway only does work for connections the
         // operator explicitly added and authorized, so an empty registry
         // costs nothing. The switch exists to revoke thread access

@@ -33725,6 +33725,112 @@ button.pricing-token-miser__folded:focus-visible {
   white-space: nowrap;
 }
 
+/* The notice before an SVG's own scripts run. It stands just above the
+   bottom cluster, centred on the axis of the pill whose Interact button (or
+   the image above it) opened it, so it never reaches either top corner the
+   OS owns. Opaque rather than the pill's translucent plate: it is prose the
+   operator has to read, and the picture runs under it. */
+.image-lightbox__svg-notice {
+  position: absolute;
+  bottom: calc(var(--lightbox-band-bottom) + 8px);
+  left: 50%;
+  z-index: 2;
+  width: min(400px, calc(100% - 32px));
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
+  transform: translateX(-50%);
+  -webkit-app-region: no-drag;
+}
+
+.image-lightbox__svg-notice-title {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.image-lightbox__svg-notice-body {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.image-lightbox__svg-notice-foot {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.image-lightbox__svg-notice-error {
+  margin: 10px 0 0;
+  color: var(--danger-text);
+}
+
+.image-lightbox__svg-notice-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+/* The lasting choice: an outline, so it never reads as the default. */
+.image-lightbox__svg-notice-always {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-lightbox__svg-notice-always:hover:not([aria-disabled="true"]) {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.image-lightbox__svg-notice-always:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-lightbox__svg-notice-always[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The notice's one accent action, matching the SVG search field's Find. */
+.image-lightbox__svg-notice-run {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-lightbox__svg-notice-run:hover:not([aria-disabled="true"]) {
+  background: var(--accent-strong);
+}
+
+.image-lightbox__svg-notice-run:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-lightbox__svg-notice-run[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .image-lightbox__image {
   flex: none;
   max-width: 100%;
@@ -33740,6 +33846,11 @@ button.pricing-token-miser__folded:focus-visible {
 .image-lightbox__image[style] {
   max-width: none;
   max-height: none;
+}
+
+/* A click on an SVG with scripts offers interaction; a drag still pans. */
+.image-lightbox__image[data-interact-on-click="true"] {
+  cursor: pointer;
 }
 
 .image-lightbox__image[data-panning="true"] {

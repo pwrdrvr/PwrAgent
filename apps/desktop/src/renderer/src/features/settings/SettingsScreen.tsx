@@ -913,6 +913,9 @@ function SettingsSectionBody(props: {
             general: { attentionPromoteOnTurnEnd },
           });
         }}
+        onInteractiveSvgChange={async (patch) => {
+          await props.settings.writeConfig({ general: patch });
+        }}
         onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },

@@ -2,6 +2,10 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "../ImageLightbox";
+import {
+  InteractiveSvgPreferencesProvider,
+  type InteractiveSvgPreferences,
+} from "../../../lib/interactive-svg-preferences";
 import { addTabSentinels, pressTab, walkTab } from "../../../test/tab-walk";
 
 afterEach(() => {
@@ -41,6 +45,7 @@ describe("ImageLightbox", () => {
     expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
     expect(await screen.findByText("This SVG has interactive controls")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
     const frame = await screen.findByTitle("Interactive SVG: Flamegraph");
     expect(frame).toHaveAttribute("sandbox", "allow-scripts");
     expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
@@ -351,6 +356,241 @@ describe("ImageLightbox", () => {
     unmount();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+const SCRIPTED_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" onload="init()"><script>function init() {}</script></svg>';
+
+async function renderScriptedSvg(preferences?: InteractiveSvgPreferences, onClose = () => {}) {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    blob: async () => new Blob([SCRIPTED_SVG], { type: "image/svg+xml" }),
+  }));
+  const lightbox = <ImageLightbox src="pwragent-image://file/graph.svg"
+    alt="Flamegraph" interactiveSvg onClose={onClose} />;
+  render(preferences
+    ? <InteractiveSvgPreferencesProvider value={preferences}>{lightbox}</InteractiveSvgPreferencesProvider>
+    : lightbox);
+  await screen.findByText("This SVG has interactive controls");
+}
+
+function scriptNotice() {
+  return screen.queryByRole("dialog", { name: "Run this SVG\u2019s scripts?" });
+}
+
+describe("ImageLightbox, SVG script notice", () => {
+  it("asks before running scripts when the image itself is clicked", async () => {
+    await renderScriptedSvg();
+    const image = stubPointerCapture(screen.getByRole("img", { name: "Flamegraph" }));
+
+    // The Interact button sits at the far end of the bottom pill; the picture
+    // is where an operator actually reaches, so it says what a click does.
+    expect(image).toHaveAttribute("data-interact-on-click", "true");
+    fireEvent.mouseEnter(image, { clientX: 300, clientY: 200 });
+    const hint = document.body.querySelector<HTMLElement>(".viewport-tooltip");
+    expect(hint).toHaveTextContent("Click to enable SVG interaction");
+    // Beside the cursor, not above the image's edge.
+    expect(hint?.style.left).toBe("312px");
+    expect(hint?.style.top).toBe("220px");
+    fireEvent.mouseLeave(image);
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+
+    pressAndClick(image);
+    expect(scriptNotice()).toBeInTheDocument();
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+    // Focus starts on the safe choice, not on running the code.
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    expect(scriptNotice()).toBeNull();
+  });
+
+  it("raises the hint on movement when the pointer was already on the image", async () => {
+    await renderScriptedSvg();
+    const image = screen.getByRole("img", { name: "Flamegraph" });
+
+    // No enter event: the pointer arrived before the SVG was read.
+    fireEvent.mouseMove(image, { buttons: 1 });
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+    fireEvent.mouseMove(image, { buttons: 0 });
+    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Click to enable SVG interaction");
+
+    pressAndClick(stubPointerCapture(image));
+    expect(scriptNotice()).toBeInTheDocument();
+    fireEvent.mouseMove(image, { buttons: 0 });
+    fireEvent.mouseEnter(image);
+    expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+  });
+
+  it("reads a press that travelled as a pan, not a request to interact", async () => {
+    await renderScriptedSvg();
+    const image = stubPointerCapture(screen.getByRole("img", { name: "Flamegraph" }));
+
+    pointer(image, "pointerdown", { clientX: 120, clientY: 120 });
+    fireEvent.click(image, { clientX: 140, clientY: 120, detail: 1 });
+    expect(scriptNotice()).toBeNull();
+  });
+
+  it("runs nothing on Cancel or Escape, and Escape leaves the lightbox open", async () => {
+    const onClose = vi.fn();
+    await renderScriptedSvg(undefined, onClose);
+    const interact = screen.getByRole("button", { name: "Interact with SVG" });
+
+    interact.focus();
+    fireEvent.click(interact);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(scriptNotice()).toBeNull();
+    expect(interact).toHaveFocus();
+
+    fireEvent.click(interact);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect(scriptNotice()).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+  });
+
+  it("offers no lasting choice it could not save", async () => {
+    await renderScriptedSvg();
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    expect(screen.queryByRole("button", { name: "Always Run" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Run Once" })).toBeInTheDocument();
+  });
+
+  it("asks one question: no display preference rides on the notice", async () => {
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(scriptNotice()).toHaveTextContent("Turn it off in Settings \u2192 General.");
+  });
+
+  it("runs once without saving anything", async () => {
+    const save = vi.fn().mockResolvedValue(true);
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
+
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("saves Always Run as trust only, then runs", async () => {
+    const save = vi.fn().mockResolvedValue(true);
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
+
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    // Opening SVGs interactive is Settings' to change, never the notice's.
+    expect(save).toHaveBeenCalledWith({ interactiveSvgSkipNotice: true });
+  });
+
+  it("keeps the notice and runs nothing when Always Run could not be saved", async () => {
+    const save = vi.fn().mockResolvedValue(false);
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn\u2019t save that choice");
+    expect(scriptNotice()).toBeInTheDocument();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+  });
+
+  it("runs nothing when the operator cancels while Always Run is still saving", async () => {
+    let finishSave: (saved: boolean) => void = () => {};
+    const save = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
+    // aria-disabled, so the focused Always Run keeps focus in Chromium.
+    expect(screen.getByRole("button", { name: "Always Run" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await act(async () => { finishSave(true); });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(scriptNotice()).toBeNull();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+  });
+
+  it("keeps the original opener when asked again while asking", async () => {
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
+    const interact = screen.getByRole("button", { name: "Interact with SVG" });
+    interact.focus();
+    fireEvent.click(interact);
+
+    pressAndClick(stubPointerCapture(screen.getByRole("img", { name: "Flamegraph" })));
+    expect(scriptNotice()).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(interact).toHaveFocus();
+  });
+
+  it("returns focus to the opener once the scripts run", async () => {
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
+    const interact = screen.getByRole("button", { name: "Interact with SVG" });
+    interact.focus();
+    fireEvent.click(interact);
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
+
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show image preview" })).toHaveFocus();
+  });
+
+  it("does not let a later ready-to-use setting undo a Preview the operator chose", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([SCRIPTED_SVG], { type: "image/svg+xml" }),
+    }));
+    const lightbox = (preferences: InteractiveSvgPreferences) => (
+      <InteractiveSvgPreferencesProvider value={preferences}>
+        <ImageLightbox src="pwragent-image://file/graph.svg"
+          alt="Flamegraph" interactiveSvg onClose={() => {}} />
+      </InteractiveSvgPreferencesProvider>
+    );
+    const view = render(lightbox({ skipNotice: true, autoOpen: false }));
+    await screen.findByText("This SVG has interactive controls");
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show image preview" }));
+
+    // A Settings change to open SVGs interactive lands while this one is open.
+    view.rerender(lightbox({ skipNotice: true, autoOpen: true }));
+    await act(async () => {});
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
+  });
+
+  it("goes straight to the frame once the operator stopped being asked", async () => {
+    await renderScriptedSvg({ skipNotice: true, autoOpen: false });
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
+    expect(scriptNotice()).toBeNull();
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+  });
+
+  it("opens interactive when set, and Preview then stays on the preview", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob([SCRIPTED_SVG], { type: "image/svg+xml" }),
+    }));
+    render(
+      <InteractiveSvgPreferencesProvider value={{ skipNotice: true, autoOpen: true }}>
+        <ImageLightbox src="pwragent-image://file/graph.svg"
+          alt="Flamegraph" interactiveSvg onClose={() => {}} />
+      </InteractiveSvgPreferencesProvider>,
+    );
+
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    expect(scriptNotice()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show image preview" }));
+    await act(async () => {});
+    expect(screen.getByRole("img", { name: "Flamegraph" })).toBeInTheDocument();
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
   });
 });
 
