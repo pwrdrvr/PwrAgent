@@ -1,4 +1,5 @@
 import type { ThreadSubAgentSummary } from "./contracts/navigation";
+import type { AppServerThreadSubAgentCallDetail } from "./contracts/normalized-app-server";
 
 export type SubAgentLens = "harness" | "token-miser" | "pwragent";
 
@@ -20,6 +21,13 @@ export function shortSubAgentThreadId(threadId: string): string {
 
 export function isCodexNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
   return subAgent.monitorId.startsWith("codex-native:");
+}
+
+/** Execution thread IDs also exist for ephemeral workers; they do not imply a reloadable transcript. */
+export function hasDurableSubAgentTranscript(
+  subAgent: Pick<AppServerThreadSubAgentCallDetail, "backend" | "origin">,
+): boolean {
+  return subAgent.backend !== "codex" || subAgent.origin === "codex-native";
 }
 
 export function isSystemTitleHelperSubAgent(
