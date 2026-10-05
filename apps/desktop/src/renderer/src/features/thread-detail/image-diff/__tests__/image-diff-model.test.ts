@@ -58,6 +58,13 @@ describe("image diff model", () => {
     expect(resolvedSides(entry, (side) => (side === "before" ? "missing" : "present"))).toEqual(["after"]);
   });
 
+  it("drops a status-known side that reads missing, as a rename's Before does", () => {
+    const renamed = change("art/renamed.png", "modified");
+    expect(resolvedSides(renamed, (side) => (side === "before" ? "missing" : "present"))).toEqual(["after"]);
+    // A delete whose one side also reads missing keeps it, to say so.
+    expect(resolvedSides(change("art/gone.png", "deleted"), () => "missing")).toEqual(["before"]);
+  });
+
   it("keeps the viewer on the same file when its current item disappears", () => {
     const entry: ImageDiffEntry = commitFileImageEntry(
       commit,

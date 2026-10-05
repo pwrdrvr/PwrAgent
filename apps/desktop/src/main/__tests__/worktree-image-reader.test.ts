@@ -82,13 +82,25 @@ describe("readWorktreeImage", () => {
       path: path.join(worktree, "art", "boiler.png"),
       revision: { kind: "commitParent", sha: SHA },
     }, { runGit, runGitBinary });
-    expect(runGit).toHaveBeenCalledWith(worktree, ["--no-optional-locks", "cat-file", "-s", `${SHA}^:art/boiler.png`]);
+    expect(runGit).toHaveBeenCalledWith(worktree, ["--no-optional-locks", "cat-file", "-s", `${SHA}^:./art/boiler.png`]);
     expect(runGitBinary).toHaveBeenCalledWith(
       worktree,
-      ["--no-optional-locks", "cat-file", "blob", `${SHA}^:art/boiler.png`],
+      ["--no-optional-locks", "cat-file", "blob", `${SHA}^:./art/boiler.png`],
       PNG_BYTES.length + 1024,
     );
     expect(result).toEqual({ kind: "image", mediaType: "image/png", bytes: new Uint8Array(PNG_BYTES) });
+  });
+
+  it("names a blob from the worktree root, which can sit below the repository root", async () => {
+    // `HEAD:art/x.png` would resolve from the repository root; `./` resolves
+    // from git's cwd, which is the worktree root the renderer named.
+    const runGit = vi.fn(async () => `${PNG_BYTES.length}\n`);
+    await readWorktreeImage({
+      worktreePath: worktree,
+      path: path.join(worktree, "art", "boiler.png"),
+      revision: { kind: "head" },
+    }, { runGit, runGitBinary: async () => PNG_BYTES });
+    expect(runGit).toHaveBeenCalledWith(worktree, ["--no-optional-locks", "cat-file", "-s", "HEAD:./art/boiler.png"]);
   });
 
   it("reports an add's missing parent blob as missing, and never buffers an oversized one", async () => {

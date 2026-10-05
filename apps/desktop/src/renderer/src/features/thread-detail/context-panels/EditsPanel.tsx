@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerThreadActivityDetail,
@@ -11,6 +11,7 @@ import type {
 } from "@pwragent/shared";
 import { ArrowUpIcon, EditorIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { formatFileSize } from "../../../lib/format-bytes";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import { DiffStat } from "../../../lib/DiffStat";
 import {
@@ -407,21 +408,8 @@ function otherChangesSummary(totalChanges: number): string {
   }`;
 }
 
-function formatByteSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return "";
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes.toLocaleString()} B`;
-}
-
 function FileSizeStat(props: { bytes: number }) {
-  const label = formatByteSize(props.bytes);
+  const label = formatFileSize(props.bytes);
   if (!label) {
     return null;
   }
@@ -433,7 +421,7 @@ function FileSizeStat(props: { bytes: number }) {
 }
 
 /**
- * The panel's image previews: one store for the life of the panel, forgetting
+ * The panel's image previews: one store for the life of the panel, re-reading
  * the working tree and HEAD whenever the working state refreshes, and the
  * lightbox's position when one is open.
  */
@@ -458,19 +446,23 @@ function useImageDiffs(params: {
   const [generation, setGeneration] = useState(0);
   const lastRefreshKey = useRef(refreshKey);
   useEffect(() => {
-    if (lastRefreshKey.current === refreshKey) return;
+    if (!store || lastRefreshKey.current === refreshKey) return;
     lastRefreshKey.current = refreshKey;
-    store?.invalidateMutable();
-    setGeneration((current) => current + 1);
+    // Not cancelled by a newer key: a round that swapped a side must still
+    // repaint, or the next round finds nothing changed and never does.
+    void store.revalidateMutable().then((changed) => {
+      if (changed) setGeneration((current) => current + 1);
+    });
   }, [refreshKey, store]);
   const [lightbox, setLightbox] = useState<ImageDiffStop>();
+  const closeLightbox = useCallback(() => setLightbox(undefined), []);
   const controller = useMemo<ImageDiffController | undefined>(
     () => store
       ? { store, generation, open: (entryKey, item) => setLightbox({ entryKey, item }) }
       : undefined,
     [store, generation],
   );
-  return { controller, lightbox, closeLightbox: () => setLightbox(undefined) };
+  return { controller, lightbox, closeLightbox };
 }
 
 /**

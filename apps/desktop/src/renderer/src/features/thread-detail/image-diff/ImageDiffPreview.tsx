@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
+import { formatFileSize } from "../../../lib/format-bytes";
 import {
   formatExtent,
-  formatImageBytes,
   resolvedSides,
   type ImageDiffEntry,
   type ImageDiffItem,
@@ -27,7 +27,7 @@ export type ImageDiffController = {
  *  enlarge as pixels rather than blur. */
 const SMALL_IMAGE_EDGE = 128;
 
-export const ImageDiffContext =createContext<ImageDiffController | undefined>(undefined);
+export const ImageDiffContext = createContext<ImageDiffController | undefined>(undefined);
 
 export function useImageDiffController(): ImageDiffController | undefined {
   return useContext(ImageDiffContext);
@@ -41,7 +41,7 @@ export function sideNote(state: ImageSideState): string {
     case "missing":
       return "Not in this revision";
     case "tooLarge":
-      return `Too large to preview (${formatImageBytes(state.sizeBytes)})`;
+      return `Too large to preview (${formatFileSize(state.sizeBytes)})`;
     case "lfsPointer":
       return "Git LFS pointer";
     case "unavailable":
@@ -94,7 +94,7 @@ export function ImageDiffPreview({ entry }: { entry: ImageDiffEntry }) {
         const state = states[side];
         const label = sideLabel(side, sides);
         const meta = state.kind === "image"
-          ? [state.extent ? formatExtent(state.extent) : undefined, formatImageBytes(state.bytes)]
+          ? [state.extent ? formatExtent(state.extent) : undefined, formatFileSize(state.bytes)]
             .filter(Boolean)
             .join(" · ")
           : sideNote(state);

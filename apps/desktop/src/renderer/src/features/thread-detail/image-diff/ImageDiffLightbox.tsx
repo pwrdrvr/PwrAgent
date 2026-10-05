@@ -8,6 +8,7 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from "../../../icons";
+import { formatFileSize } from "../../../lib/format-bytes";
 import { useModalDialog } from "../../../lib/useModalDialog";
 import {
   tooltipHandlers,
@@ -20,7 +21,6 @@ import { useLightboxGestures } from "../useLightboxGestures";
 import {
   buildSequence,
   formatExtent,
-  formatImageBytes,
   indexOfStop,
   itemsForSides,
   planDiff,
@@ -105,6 +105,12 @@ export function ImageDiffLightbox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [entries, sidesOf, resolved, generation],
   );
+  // The file on screen left the panel — committed, reverted, or the thread
+  // moved on. Close rather than land on whichever file happens to be first.
+  const present = entries.some((candidate) => candidate.key === stop.entryKey);
+  useEffect(() => {
+    if (!present) onClose();
+  }, [onClose, present]);
   const position = indexOfStop(sequence, stop);
   const current = sequence[position];
   const entryIndex = entries.findIndex((entry) => entry.key === current?.entryKey);
@@ -171,7 +177,7 @@ export function ImageDiffLightbox({
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [moveTo, position, sequence]);
 
-  if (typeof document === "undefined" || !entry || !current) {
+  if (typeof document === "undefined" || !present || !entry || !current) {
     return null;
   }
   const sides = sidesOf(entry);
@@ -225,7 +231,7 @@ export function ImageDiffLightbox({
         {`${label}, ${basename(entry.repoPath)}, ${position + 1} of ${sequence.length}`}
       </span>
       <ImageDiffFileView
-        key={`${entry.key}\u0000${generation}`}
+        key={entry.key}
         entry={entry}
         item={current.item}
         sides={sides}
@@ -343,9 +349,20 @@ function ImageDiffFileView({ entry, item, sides, controller, position, total, to
     ? (diff.kind === "ready" ? diff.url : undefined)
     : (shown?.kind === "image" ? shown.url : undefined);
 
+  // A side that settled without a picture (too large, an LFS pointer, an
+  // unreadable blob) means there is no plan and never will be; say which.
+  const blocker = (["before", "after"] as const).find((side) => {
+    const state = states[side];
+    return state.kind !== "image" && state.kind !== "loading";
+  });
+  const noCompare = blocker
+    ? `Nothing to compare. ${sideLabel(blocker, sides)}: ${sideNote(states[blocker])}`
+    : undefined;
+
   let overlay: string | undefined;
   if (item === "diff") {
-    if (diff.kind === "working" || (diff.kind === "idle" && !plan)) overlay = "Comparing…";
+    if (noCompare) overlay = noCompare;
+    else if (diff.kind === "working" || (diff.kind === "idle" && !plan)) overlay = "Comparing…";
     else if (diff.kind === "failed") overlay = `Couldn’t compare: ${diff.reason}`;
   } else if (shown && shown.kind !== "image") {
     overlay = sideNote(shown);
@@ -355,13 +372,14 @@ function ImageDiffFileView({ entry, item, sides, controller, position, total, to
   if (item === "diff") {
     detail = diff.kind === "ready"
       ? `${((diff.changed / diff.total) * 100).toFixed(2)}% changed · ${diff.changed.toLocaleString()} px`
+      : noCompare ? "Nothing to compare"
       : diff.kind === "failed" ? "Couldn’t compare" : "Comparing…";
     if (plan?.mismatch) {
       detail += ` · sizes differ: ${formatExtent(plan.mismatch.before)} vs ${formatExtent(plan.mismatch.after)}`;
     }
   } else if (shown?.kind === "image") {
     const extent = extentOf(item);
-    detail = [extent ? formatExtent(extent) : undefined, formatImageBytes(shown.bytes)]
+    detail = [extent ? formatExtent(extent) : undefined, formatFileSize(shown.bytes)]
       .filter(Boolean)
       .join(" · ");
   } else {

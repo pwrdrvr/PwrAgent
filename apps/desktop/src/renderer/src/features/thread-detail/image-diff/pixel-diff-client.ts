@@ -34,7 +34,10 @@ const pending = new Map<number, {
 }>();
 
 function ensureWorker(): Promise<Worker> {
-  worker ??= import("./pixel-diff.worker?worker&inline").then(({ default: PixelDiffWorker }) => {
+  if (worker) {
+    return worker;
+  }
+  const loading = import("./pixel-diff.worker?worker&inline").then(({ default: PixelDiffWorker }) => {
     const created = new PixelDiffWorker();
     created.addEventListener("message", (event: MessageEvent<PixelDiffReply>) => {
       const reply = event.data;
@@ -59,7 +62,13 @@ function ensureWorker(): Promise<Worker> {
     });
     return created;
   });
-  return worker;
+  // A failed import (a chunk that would not load) is not cached: the next
+  // Diff tries again instead of failing for the rest of the session.
+  loading.catch(() => {
+    if (worker === loading) worker = undefined;
+  });
+  worker = loading;
+  return loading;
 }
 
 export async function computePixelDiff(

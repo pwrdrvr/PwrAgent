@@ -96,24 +96,21 @@ export function commitFileImageEntry(
 export type SideResolution = "pending" | "present" | "missing";
 
 /**
- * The sides one entry contributes. Known from the status when the source has
- * one; otherwise both, until a side resolves `missing`. Unresolved sides stay
- * in, so the walk only ever shrinks as previews arrive, and only for files
- * that turned out to be adds or deletes.
+ * The sides one entry contributes: the status's sides when the source has
+ * one, otherwise both, less any that resolve `missing`. A status can still be
+ * wrong about a side — a rename's new path is not in HEAD — so the status is
+ * where the walk starts, not what it ends with. Unresolved sides stay in, so
+ * the walk only ever shrinks as previews arrive.
  */
 export function resolvedSides(
   entry: ImageDiffEntry,
   resolution: (side: ImageSideKey) => SideResolution,
 ): ImageSideKey[] {
-  if (entry.sides) {
-    return entry.sides;
-  }
-  const sides = (["before", "after"] as const).filter(
-    (side) => resolution(side) !== "missing",
-  );
-  // Both missing means the read failed in a way that looks like absence; keep
-  // the after side so the stop can say so rather than vanish from the walk.
-  return sides.length > 0 ? sides : ["after"];
+  const candidates = entry.sides ?? ["before", "after"];
+  const sides = candidates.filter((side) => resolution(side) !== "missing");
+  // Every side missing means the read failed in a way that looks like
+  // absence; keep the last so the stop can say so rather than vanish.
+  return sides.length > 0 ? sides : candidates.slice(-1);
 }
 
 export function itemsForSides(sides: readonly ImageSideKey[]): ImageDiffItem[] {
@@ -262,16 +259,6 @@ export function planDiff(before: Extent, after: Extent, stretch?: boolean): Diff
     mismatch: { before, after },
     canStretch,
   };
-}
-
-export function formatImageBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes.toLocaleString()} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function formatExtent(extent: Extent): string {

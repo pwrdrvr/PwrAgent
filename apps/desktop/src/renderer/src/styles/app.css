@@ -34212,8 +34212,20 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
-/* Transparent sprites are most of what this shows, so the frame is a
-   checkerboard rather than a flat panel that hides where the alpha is. */
+/* Transparent sprites are most of what this shows, so the rail's frames and
+   the lightbox canvas are a checkerboard rather than a flat panel that hides
+   where the alpha is. Each sets only its own tile size. */
+.image-diff-preview__frame,
+.image-diff-lightbox__canvas {
+  background-color: var(--bg-panel);
+  background-image: conic-gradient(
+    var(--image-diff-checker) 25%,
+    transparent 0 50%,
+    var(--image-diff-checker) 0 75%,
+    transparent 0
+  );
+}
+
 .image-diff-preview__frame {
   display: flex;
   align-items: center;
@@ -34223,13 +34235,6 @@ button.pricing-token-miser__folded:focus-visible {
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background-color: var(--bg-panel);
-  background-image: conic-gradient(
-    var(--image-diff-checker) 25%,
-    transparent 0 50%,
-    var(--image-diff-checker) 0 75%,
-    transparent 0
-  );
   background-size: 12px 12px;
 }
 
@@ -34283,13 +34288,6 @@ button.pricing-token-miser__folded:focus-visible {
    Diff. */
 .image-diff-lightbox__canvas {
   position: relative;
-  background-color: var(--bg-panel);
-  background-image: conic-gradient(
-    var(--image-diff-checker) 25%,
-    transparent 0 50%,
-    var(--image-diff-checker) 0 75%,
-    transparent 0
-  );
   background-size: 16px 16px;
 }
 

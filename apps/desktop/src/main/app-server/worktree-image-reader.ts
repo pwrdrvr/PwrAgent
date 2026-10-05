@@ -31,14 +31,21 @@ export type WorktreeImageReaderDeps = {
   runGitBinary?: (cwd: string, args: string[], maxBuffer: number) => Promise<Buffer>;
 };
 
-function revisionSpec(revision: WorktreeImageRevision, repoPath: string): string | undefined {
+/**
+ * `<rev>:<path>` names a path from the repository root; `<rev>:./<path>`
+ * names it from git's working directory. Git runs in the worktree root the
+ * renderer named, which can sit below the repository root, and `relativePath`
+ * is relative to it — so the `./` is what makes the two agree.
+ */
+function revisionSpec(revision: WorktreeImageRevision, relativePath: string): string | undefined {
+  const local = `./${relativePath}`;
   switch (revision.kind) {
     case "head":
-      return `HEAD:${repoPath}`;
+      return `HEAD:${local}`;
     case "commit":
-      return SHA_PATTERN.test(revision.sha) ? `${revision.sha}:${repoPath}` : undefined;
+      return SHA_PATTERN.test(revision.sha) ? `${revision.sha}:${local}` : undefined;
     case "commitParent":
-      return SHA_PATTERN.test(revision.sha) ? `${revision.sha}^:${repoPath}` : undefined;
+      return SHA_PATTERN.test(revision.sha) ? `${revision.sha}^:${local}` : undefined;
     default:
       return undefined;
   }
@@ -103,8 +110,8 @@ export async function readWorktreeImage(
     return await readWorkingTreeImage(worktreePath, absolutePath, mediaType);
   }
 
-  const repoPath = path.relative(worktreePath, absolutePath).replace(/\\/g, "/");
-  const spec = revisionSpec(request.revision, repoPath);
+  const relativePath = path.relative(worktreePath, absolutePath).replace(/\\/g, "/");
+  const spec = revisionSpec(request.revision, relativePath);
   if (!spec) {
     return { kind: "unsupported" };
   }

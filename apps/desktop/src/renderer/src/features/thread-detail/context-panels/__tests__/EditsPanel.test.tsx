@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   GetWorktreeOtherChangeDiffRequest,
   GetWorktreeOtherChangeDiffResponse,
@@ -822,6 +822,102 @@ describe("EditsPanel", () => {
       for (const src of shown) {
         expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(src);
       }
+    });
+
+    it("re-reads on a working-state refresh, repainting only a picture that changed", async () => {
+      let worktreeBytes = png.bytes;
+      const readWorktreeImage = vi.fn(async (request: { revision: { kind: string } }) =>
+        request.revision.kind === "worktree" ? { ...png, bytes: worktreeBytes } : png);
+      const listWorktreeOtherChanges = imageChanges();
+      const panel = (refreshKey: string) => (
+        <EditsPanel
+          groups={[]}
+          dock="sidebar"
+          onDockChange={vi.fn()}
+          worktreeRoot="/repo"
+          workingStateRefreshKey={refreshKey}
+          desktopApi={{ listWorktreeOtherChanges, readWorktreeImage }}
+        />
+      );
+      const { rerender } = render(panel("first"));
+      fireEvent.click(await screen.findByRole("button", { name: /Update boiler\.png/i }));
+      const afterSrc = () =>
+        screen.getByRole("button", { name: "Open after of art/boiler.png" }).querySelector("img")?.getAttribute("src");
+      await waitFor(() => {
+        expect(afterSrc()).toMatch(/^blob:/);
+      });
+      const original = afterSrc();
+
+      // The probe ran, nothing changed: same picture, nothing revoked.
+      const reads = readWorktreeImage.mock.calls.length;
+      rerender(panel("second"));
+      await waitFor(() => {
+        expect(readWorktreeImage.mock.calls.length).toBeGreaterThan(reads);
+      });
+      await act(async () => {});
+      expect(afterSrc()).toBe(original);
+      expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(original);
+
+      worktreeBytes = new Uint8Array([137, 80, 78, 71, 1]);
+      rerender(panel("third"));
+      await waitFor(() => {
+        expect(afterSrc()).not.toBe(original);
+      });
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith(original);
+      expect(screen.getByRole("button", { name: "Open after of art/boiler.png" })).toHaveTextContent("5 B");
+    });
+
+    it("closes the lightbox when its file leaves the panel", async () => {
+      const readWorktreeImage = vi.fn(async () => png);
+      const listWorktreeOtherChanges = imageChanges();
+      const panel = (refreshKey: string) => (
+        <EditsPanel
+          groups={[]}
+          dock="sidebar"
+          onDockChange={vi.fn()}
+          worktreeRoot="/repo"
+          workingStateRefreshKey={refreshKey}
+          desktopApi={{ listWorktreeOtherChanges, readWorktreeImage }}
+        />
+      );
+      const { rerender } = render(panel("first"));
+      fireEvent.click(await screen.findByRole("button", { name: /Update boiler\.png/i }));
+      fireEvent.click(await screen.findByRole("button", { name: "Open after of art/boiler.png" }));
+      await screen.findByRole("dialog", { name: "Image changes: art/boiler.png" });
+      expect(document.body.style.overflow).toBe("hidden");
+
+      // Committed between probes: only the crate is still uncommitted.
+      const [, crate] = (await listWorktreeOtherChanges.mock.results[0]!.value).changes;
+      listWorktreeOtherChanges.mockResolvedValue({ changes: [crate!], totalChanges: 1, truncated: false, maxFiles: 50 });
+      rerender(panel("second"));
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      });
+      expect(document.body.style.overflow).toBe("");
+      // Arrows belong to the page again rather than a dialog nobody can see.
+      const arrow = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+      window.dispatchEvent(arrow);
+      expect(arrow.defaultPrevented).toBe(false);
+    });
+
+    it("says why a Diff has nothing to compare instead of comparing forever", async () => {
+      const readWorktreeImage = vi.fn(async (request: { revision: { kind: string } }) =>
+        request.revision.kind === "head" ? { kind: "lfsPointer" as const } : png);
+      render(
+        <EditsPanel
+          groups={[]}
+          dock="sidebar"
+          onDockChange={vi.fn()}
+          worktreeRoot="/repo"
+          desktopApi={{ listWorktreeOtherChanges: imageChanges(), readWorktreeImage }}
+        />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /Update boiler\.png/i }));
+      fireEvent.click(await screen.findByRole("button", { name: "Open after of art/boiler.png" }));
+      const dialog = await screen.findByRole("dialog", { name: "Image changes: art/boiler.png" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Diff" }));
+      expect(await within(dialog).findByText("Nothing to compare. Before: Git LFS pointer")).toBeInTheDocument();
+      expect(within(dialog).queryByText("Comparing…")).not.toBeInTheDocument();
     });
 
     it("keeps the size chip when the window cannot read images", async () => {
