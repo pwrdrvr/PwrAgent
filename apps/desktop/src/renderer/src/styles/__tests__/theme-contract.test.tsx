@@ -2614,11 +2614,13 @@ describe("color theme contract", () => {
         expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${name}: ${text}`)
           .toBeGreaterThanOrEqual(4.5);
       }
-      for (const fill of ["accent", "accent-strong", "accent-bright"]) {
-        expect(
-          contrastRatio(theme["button-text"], paint(theme, theme[fill], "#000000")),
-          `${name}: button-text on ${fill}`,
-        ).toBeGreaterThanOrEqual(4.5);
+      for (const fill of ["accent-fill", "accent-fill-strong"]) {
+        for (const ink of ["button-text", "accent-on"]) {
+          expect(
+            contrastRatio(theme[ink], paint(theme, theme[fill], "#000000")),
+            `${name}: ${ink} on ${fill}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
       }
       expect(
         contrastRatio(
@@ -2641,15 +2643,88 @@ describe("color theme contract", () => {
     }
   });
 
-  it("holds Catppuccin's floor tokens at the lowest compliant contrast", () => {
-    // Catppuccin is deliberately low-contrast: its floor tokens sit just
-    // above AA instead of drifting up when someone retunes them by eye.
-    for (const name of ["catppuccin-mocha", "catppuccin-latte"]) {
-      const theme = themes[name];
+  it("keeps borrowed palettes on their upstream colors unless AA moves them", () => {
+    // Each token starts from Catppuccin's own color. One that clears its
+    // floor there keeps it; one that fails moves by lightness only, so it
+    // lands just above the floor instead of wherever it looked right.
+    // Latte's text ladder is the exception: subtext0 needs AA, which leaves
+    // no room under Catppuccin's text, so primary darkens to keep a ladder.
+    const UPSTREAM: Record<string, Record<string, string>> = {
+      "catppuccin-mocha": {
+        "text-primary": "#cdd6f4",
+        "text-secondary": "#bac2de",
+        "text-muted": "#a6adc8",
+        accent: "#fab387",
+        "danger-base": "#f38ba8",
+        "danger-text": "#f38ba8",
+        "danger-text-light": "#eba0ac",
+        "success-text": "#a6e3a1",
+        "info-text": "#89b4fa",
+        "info-teal": "#94e2d5",
+        "brand-purple": "#cba6f7",
+        "status-ok": "#a6e3a1",
+        "status-warning": "#f9e2af",
+        "status-error": "#eba0ac",
+        "status-suspended": "#6c7086",
+        "usage-series-2": "#89b4fa",
+        "usage-series-3": "#94e2d5",
+        "usage-series-4": "#cba6f7",
+        "usage-series-5": "#f9e2af",
+      },
+      "catppuccin-latte": {
+        "text-muted": "#6c6f85",
+        accent: "#fe640b",
+        "accent-fill": "#fe640b",
+        "danger-base": "#d20f39",
+        "danger-text": "#d20f39",
+        "danger-text-light": "#e64553",
+        "success-text": "#40a02b",
+        "info-text": "#1e66f5",
+        "info-teal": "#179299",
+        "brand-purple": "#8839ef",
+        "status-ok": "#40a02b",
+        "status-warning": "#df8e1d",
+        "status-error": "#e64553",
+        "status-suspended": "#9ca0b0",
+        "usage-series-2": "#1e66f5",
+        "usage-series-3": "#179299",
+        "usage-series-4": "#8839ef",
+        "usage-series-5": "#df8e1d",
+      },
+    };
+    const MARKS = ["danger-base", "status-suspended", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
+    const SOFT: Record<string, string> = {
+      "danger-text": "danger-soft",
+      "success-text": "success-soft",
+      "info-text": "info-soft",
+    };
+    /** [worst-case contrast, floor] for a token as the AA tests measure it,
+     *  with the 0.05 of margin app.css tunes to. */
+    const measure = (theme: Record<string, string>, token: string): [number, number] => {
       const backgrounds = textBackgrounds(theme);
-      for (const token of ["text-muted", "accent"]) {
-        expect(worstCase(theme, token, backgrounds), `${name}: ${token}`)
-          .toBeLessThan(4.7);
+      if (MARKS.includes(token)) {
+        const flat = ["bg-app", "bg-sidebar", "bg-panel", "bg-panel-elevated", "bg-panel-hover", "bg-input"]
+          .map((name) => paint(theme, theme[name], "#000000"));
+        return [worstCase(theme, token, flat), 3.05];
+      }
+      if (token === "accent-fill") {
+        return [contrastRatio(theme["button-text"], paint(theme, theme[token], "#000000")), 4.55];
+      }
+      const soft = SOFT[token];
+      const tinted = soft
+        ? backgrounds.map((background) => paint(theme, theme[soft], background))
+        : [];
+      return [worstCase(theme, token, [...backgrounds, ...tinted]), 4.55];
+    };
+    for (const [name, upstream] of Object.entries(UPSTREAM)) {
+      const theme = themes[name];
+      for (const [token, color] of Object.entries(upstream)) {
+        if (theme[token] === color) continue;
+        const [atUpstream, floor] = measure({ ...theme, [token]: color }, token);
+        expect(atUpstream, `${name}: ${token} moved off ${color}, which passes`)
+          .toBeLessThan(floor);
+        expect(measure(theme, token)[0], `${name}: ${token} moved past the floor`)
+          .toBeLessThan(floor + 0.3);
       }
     }
   });
@@ -2720,6 +2795,35 @@ describe("color theme contract", () => {
     }
   });
 
+  it("keeps every palette's own terminal ANSI colors", () => {
+    // Programs pick ANSI colors without knowing the background, and the
+    // terminal is where operators compare PwrAgent with their own setup, so
+    // a borrowed palette's terminal stays upstream even below AA.
+    expect(blockFor("catppuccin-latte")).toMatchObject({
+      "terminal-ansi-black": "#5c5f77",
+      "terminal-ansi-green": "#40a02b",
+      "terminal-ansi-yellow": "#df8e1d",
+      "terminal-ansi-white": "#acb0be",
+      "terminal-ansi-bright-white": "#bcc0cc",
+    });
+    expect(blockFor("catppuccin-mocha")).toMatchObject({
+      "terminal-ansi-black": "#45475a",
+      "terminal-ansi-yellow": "#f9e2af",
+      "terminal-ansi-white": "#bac2de",
+    });
+  });
+
+  it("puts --button-text and --accent-on ink only on --accent-fill", () => {
+    // Latte fills with peach under dark ink and reads accent as a darker
+    // orange; a rule that paints ink on --accent is dark text on rust.
+    const offenders = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) =>
+        /background(?:-color)?:\s*var\(--accent(?:-strong|-bright)?\)/.test(body)
+        && /(?:^|[;\s])color:\s*var\(--(?:button-text|accent-on)\)/.test(body))
+      .map(([, selector]) => selector.trim());
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps Solarized's canonical canvas and terminal", () => {
     // Text moves off Solarized's values only as far as AA needs; the
     // surfaces and the terminal stay the published palette.
@@ -2738,15 +2842,5 @@ describe("color theme contract", () => {
       "terminal-ansi-red": "#dc322f",
       "terminal-ansi-blue": "#268bd2",
     });
-  });
-
-  it("keeps Latte terminal ANSI colors readable on its canvas", () => {
-    const theme = themes["catppuccin-latte"];
-    for (const color of ["red", "green", "yellow", "blue", "magenta", "cyan", "white"]) {
-      expect(
-        contrastRatio(theme[`terminal-ansi-${color}`], theme["terminal-bg"]),
-        `latte: terminal-ansi-${color}`,
-      ).toBeGreaterThanOrEqual(4.5);
-    }
   });
 });

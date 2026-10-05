@@ -235,6 +235,15 @@ describe("quit dialog color theme palettes", () => {
           `--${token}: ${palette[field as keyof typeof fields]};`,
         );
       }
+      // A theme that fills with a color of its own lists it; the rest
+      // inherit :root's --accent-fill, the accent.
+      if (palette.accentFill) {
+        expect(block, `${theme}: accentFill`).toContain(
+          `--accent-fill: ${palette.accentFill};`,
+        );
+      } else {
+        expect(block, `${theme}: accentFill`).not.toContain("--accent-fill:");
+      }
     }
   });
 });

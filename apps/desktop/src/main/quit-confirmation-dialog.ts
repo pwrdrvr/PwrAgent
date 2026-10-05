@@ -59,6 +59,8 @@ type QuitDialogPalette = {
   textMuted: string;
   accent: string;
   accentBright: string;
+  /** app.css's --accent-fill, where a theme sets one; else the accent. */
+  accentFill?: string;
   buttonText: string;
 };
 
@@ -114,12 +116,12 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     surface: "#252536",
     rowActive: "#342d37",
     panelHover: "#28293a",
-    border: "rgba(208, 216, 245, 0.1)",
-    textPrimary: "#d0d8f5",
-    textSecondary: "#b9bed4",
-    textMuted: "#a4a9be",
-    accent: "#d99d7a",
-    accentBright: "#e4a47e",
+    border: "rgba(205, 214, 244, 0.1)",
+    textPrimary: "#cdd6f4",
+    textSecondary: "#bac2de",
+    textMuted: "#a7aec9",
+    accent: "#fab387",
+    accentBright: "#febd96",
     buttonText: "#11111b",
   },
   "catppuccin-latte": {
@@ -134,7 +136,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     textMuted: "#545666",
     accent: "#983801",
     accentBright: "#8e3401",
-    buttonText: "#eff1f5",
+    accentFill: "#fe640b",
+    buttonText: "#11111b",
   },
   "solarized-dark": {
     bg: "#002b36",
@@ -142,10 +145,10 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     surface: "#073642",
     rowActive: "#163731",
     panelHover: "#04313c",
-    border: "rgba(188, 197, 197, 0.1)",
-    textPrimary: "#bcc5c5",
-    textSecondary: "#aeb9ba",
-    textMuted: "#a0b1b7",
+    border: "rgba(177, 191, 191, 0.1)",
+    textPrimary: "#b1bfbf",
+    textSecondary: "#a7b9bb",
+    textMuted: "#a0b2b4",
     accent: "#dba600",
     accentBright: "#e7af00",
     buttonText: "#002b36",
@@ -156,10 +159,10 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     surface: "#fffcf5",
     rowActive: "#f5e7d2",
     panelHover: "#f6efdc",
-    border: "rgba(60, 76, 80, 0.09)",
-    textPrimary: "#3c4c50",
-    textSecondary: "#45545a",
-    textMuted: "#4f5a5a",
+    border: "rgba(58, 79, 86, 0.09)",
+    textPrimary: "#3a4f56",
+    textSecondary: "#40555c",
+    textMuted: "#465b63",
     accent: "#9a3911",
     accentBright: "#8e3510",
     buttonText: "#fdf6e3",
@@ -881,6 +884,7 @@ export function buildQuitConfirmationHtml(options: {
         --text-muted: ${p.textMuted};
         --accent: ${p.accent};
         --accent-bright: ${p.accentBright};
+        --accent-fill: ${p.accentFill ?? p.accent};
         --button-text: ${p.buttonText};
         /* Derived exactly like app.css's --accent-border. */
         --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
@@ -1076,7 +1080,7 @@ export function buildQuitConfirmationHtml(options: {
         font-weight: 600;
       }
       .primary:hover {
-        background: var(--accent);
+        background: var(--accent-fill);
         color: var(--button-text);
       }
       /* Close (top-right of the strip) → maps to "Stay Open". */
