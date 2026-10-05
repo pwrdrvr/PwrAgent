@@ -732,6 +732,7 @@ import {
   QueuedMessageTitler,
   queuedMessageTitleSource,
   type QueuedMessageTitleRequest,
+  type QueuedMessageTitleSettlement,
 } from "./queued-message-title";
 import { materializeLocalImageInputs } from "./image-input-files";
 import { enrichLocalFileInputs } from "./local-file-input";
@@ -6971,6 +6972,74 @@ function titleHelperSubAgentId(
   return `system:title-helper:${backend}:${threadId}`;
 }
 
+/**
+ * One row per thread, not per message: a messaging thread handed dozens of
+ * long messages would otherwise fill the Sub-agents rail with a card each.
+ */
+function queuedMessageTitleHelperSubAgentId(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `system:queued-message-titles:${backend}:${threadId}`;
+}
+
+const QUEUED_MESSAGE_TITLE_COUNT_PATTERN = /^Named (\d+) queued messages?\./u;
+
+/**
+ * How many titles the row has landed so far. The count rides at the head of
+ * the row's message because the summary has no counter field, and adding one
+ * would change a shape that peers already read.
+ */
+function queuedMessageTitleHelperCount(
+  subAgent: ThreadSubAgentSummary | undefined,
+): number {
+  const match = QUEUED_MESSAGE_TITLE_COUNT_PATTERN.exec(subAgent?.lastMessage ?? "");
+  return match ? Number(match[1]) : 0;
+}
+
+function queuedMessageTitleHelperSubAgentMessage(params: {
+  count: number;
+  settlement: QueuedMessageTitleSettlement;
+}): string {
+  const { result, title, applied } = params.settlement;
+  const run = title === undefined
+    ? result.status === "ok"
+      ? "Latest title rejected: the helper returned no usable title."
+      : `Latest title failed: ${result.reason}`
+    : applied
+      ? `Latest: ${title}`
+      : `Latest title not applied: ${title}. The message changed or left the queue.`;
+  if (params.count === 0) return run;
+  return `Named ${params.count} queued ${params.count === 1 ? "message" : "messages"}. ${run}`;
+}
+
+/**
+ * Adds one run's usage to a row's running total. Token counts sum exactly;
+ * the list price is re-estimated at the latest run's model, which is the one
+ * Helper model setting every run reads.
+ */
+function addTaskMonitorUsageSnapshots(
+  previous: TaskMonitorUsageSnapshot | undefined,
+  run: TaskMonitorUsageSnapshot | undefined,
+): TaskMonitorUsageSnapshot | undefined {
+  if (!previous) return run;
+  if (!run) return previous;
+  const sum = (key: keyof TaskMonitorUsageSnapshot["tokenUsage"]) =>
+    (previous.tokenUsage[key] ?? 0) + (run.tokenUsage[key] ?? 0);
+  return buildTaskMonitorUsageSnapshot({
+    model: run.model ?? previous.model,
+    serviceTier: run.serviceTier ?? previous.serviceTier,
+    tokenUsage: {
+      cacheWriteInputTokens: sum("cacheWriteInputTokens"),
+      cachedInputTokens: sum("cachedInputTokens"),
+      inputTokens: sum("inputTokens"),
+      outputTokens: sum("outputTokens"),
+      reasoningOutputTokens: sum("reasoningOutputTokens"),
+      totalTokens: sum("totalTokens"),
+    },
+  }) ?? run;
+}
+
 function titleHelperSubAgentMessage(params: {
   result?: ThreadTitleHelperResult;
   status: "pending" | "running" | "success" | "failed" | "cancelled";
@@ -8964,6 +9033,8 @@ export class DesktopBackendRegistry {
         helper: "queued_message_titles",
       }),
     apply: (request, title) => this.applyQueuedMessageTitle(request, title),
+    settle: async (request, settlement) =>
+      await this.recordQueuedMessageTitle(request, settlement),
     log: (message, fields) => backendRegistryLog.info(message, fields),
   });
   private automationInspectionHandler?: AutomationInspectionHandler;
@@ -17709,7 +17780,12 @@ export class DesktopBackendRegistry {
       this.queuedMessageTitler.forget(entry.id);
       return;
     }
-    this.queuedMessageTitler.request({ entryId: entry.id, source });
+    this.queuedMessageTitler.request({
+      entryId: entry.id,
+      backend: entry.backend,
+      threadId: entry.threadId,
+      source,
+    });
   }
 
   /**
@@ -17720,15 +17796,15 @@ export class DesktopBackendRegistry {
   private applyQueuedMessageTitle(
     request: QueuedMessageTitleRequest,
     title: string,
-  ): void {
+  ): boolean {
     const current = this.threadTurnQueue
       .getAllQueuedEntries()
       .find((entry) => entry.id === request.entryId);
     if (!current || queuedMessageTitleSource(current.input) !== request.source) {
-      return;
+      return false;
     }
     const entry = this.threadTurnQueue.setQueuedEntryTitle(request.entryId, title);
-    if (!entry) return;
+    if (!entry) return false;
     void this.emit({
       backend: entry.backend,
       notification: {
@@ -17749,6 +17825,82 @@ export class DesktopBackendRegistry {
       backendRegistryLog.error("Could not publish queued message title", {
         error: error instanceof Error ? error.message : String(error),
       });
+    });
+    return true;
+  }
+
+  /**
+   * Shows a finished title run on the thread's "Name queued messages" row and
+   * charges its usage to the thread as a system helper, the way thread naming
+   * does. Only finished runs are written, with no running state in between:
+   * a title costs two commits (the row and its usage line), not three.
+   */
+  private async recordQueuedMessageTitle(
+    request: QueuedMessageTitleRequest,
+    settlement: QueuedMessageTitleSettlement,
+  ): Promise<void> {
+    const { result } = settlement;
+    // No helper ran, so there is nothing to show and nothing to charge.
+    if (result.status === "unavailable") return;
+    const now = Date.now();
+    const monitorId = queuedMessageTitleHelperSubAgentId(
+      request.backend,
+      request.threadId,
+    );
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    const ok = result.status === "ok" ? result : undefined;
+    const runUsage = ok?.tokenUsage
+      ? buildTaskMonitorUsageSnapshot({
+          model: ok.model,
+          serviceTier: ok.serviceTier,
+          tokenUsage: ok.tokenUsage,
+        })
+      : undefined;
+    const monitorUsage = addTaskMonitorUsageSnapshots(existing?.monitorUsage, runUsage);
+    const succeeded = settlement.title !== undefined;
+    const preferredModel = ok?.model ?? existing?.preferredModel;
+    const preferredReasoningEffort =
+      ok?.reasoningEffort ?? existing?.preferredReasoningEffort;
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId,
+      task: "Name queued messages",
+      status: succeeded ? "success" : "failed",
+      // Each run is a new attempt, so the card's timing is the latest run's.
+      createdAt: settlement.startedAt,
+      updatedAt: now,
+      ownerRuntimeInstanceId: this.runtimeInstanceId,
+      ownerRegistrySessionId: this.registrySessionId,
+      backend: request.backend,
+      agentName: "PwrAgent",
+      ...(preferredModel ? { preferredModel } : {}),
+      ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
+      ...(ok?.helperThreadId ? { monitorThreadId: ok.helperThreadId } : {}),
+      ...(ok?.helperTurnId ? { monitorTurnId: ok.helperTurnId } : {}),
+      lastMessage: queuedMessageTitleHelperSubAgentMessage({
+        count: queuedMessageTitleHelperCount(existing) + (settlement.applied ? 1 : 0),
+        settlement,
+      }),
+      outcome: succeeded ? "success" : "failure",
+      completedAt: now,
+      completionSource: {
+        type: "pwragent_fallback",
+        reason: "system_queued_message_title_helper",
+        recoveryAttempted: false,
+        terminalStatus: succeeded ? "completed" : "failed",
+      },
+      ...(monitorUsage ? { monitorUsage } : {}),
+    };
+    await this.writeSystemHelperSubAgent({
+      backend: request.backend,
+      threadId: request.threadId,
+      subAgent,
+      ...(ok && runUsage ? { usage: { result: ok, snapshot: runUsage } } : {}),
     });
   }
 
@@ -33686,10 +33838,40 @@ export class DesktopBackendRegistry {
       ...(usageSnapshot ? { monitorUsage: usageSnapshot } : {}),
     };
 
-    await this.overlayStore.upsertThreadSubAgent({
+    await this.writeSystemHelperSubAgent({
       backend: params.backend,
       threadId: params.threadId,
       subAgent,
+      ...(params.result && usageSnapshot
+        ? { usage: { result: params.result, snapshot: usageSnapshot } }
+        : {}),
+    });
+  }
+
+  /**
+   * Lands a PwrAgent system helper's row on its thread and, when the run
+   * reported usage, the run's usage line, which the Pricing rail counts as a
+   * system helper by its `system:` monitor id. Remote viewers pick both up
+   * through the existing `thread/subAgents/updated` and pricing refreshes.
+   */
+  private async writeSystemHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    subAgent: ThreadSubAgentSummary;
+    usage?: {
+      result: {
+        helperThreadId?: string;
+        helperTurnId?: string;
+        model?: string;
+        serviceTier?: string;
+      };
+      snapshot: TaskMonitorUsageSnapshot;
+    };
+  }): Promise<void> {
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgent: params.subAgent,
     });
     this.invalidateThreadListCache(params.backend);
     await this.emit({
@@ -33701,21 +33883,21 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    const usage = params.usage;
     if (
-      usageSnapshot &&
-      params.result?.helperThreadId &&
+      usage?.result.helperThreadId &&
       typeof this.overlayStore.upsertThreadUsageLine === "function"
     ) {
       const line = buildTaskMonitorUsageLine({
         backend: params.backend,
-        model: params.result.model,
-        monitorId,
-        monitorThreadId: params.result.helperThreadId,
-        monitorTurnId: params.result.helperTurnId,
+        model: usage.result.model,
+        monitorId: params.subAgent.monitorId,
+        monitorThreadId: usage.result.helperThreadId,
+        monitorTurnId: usage.result.helperTurnId,
         parentThreadId: params.threadId,
-        serviceTier: params.result.serviceTier,
+        serviceTier: usage.result.serviceTier,
         source: "monitor",
-        usage: usageSnapshot,
+        usage: usage.snapshot,
       });
       logUnpricedThreadUsageLine(line);
       await this.overlayStore.upsertThreadUsageLine({ line });
