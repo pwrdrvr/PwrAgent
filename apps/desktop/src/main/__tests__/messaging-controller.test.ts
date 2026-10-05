@@ -19225,7 +19225,7 @@ describe("MessagingController", () => {
 
   describe.each(["telegram", "discord", "slack"] as const)("monitor messaging eligibility on %s", (channel) => {
     async function monitorHarness(mode: MessagingToolUpdateMode) {
-      const harness = await createHarness({ channel, toolUpdateDefaultMode: mode });
+      const harness = await createHarness({ channel, toolUpdateDefaultMode: mode, now: () => Date.now() });
       await harness.store.upsertBinding({
         id: "binding-monitor",
         authorizedActorIds: ["user-1"],
@@ -19278,7 +19278,7 @@ describe("MessagingController", () => {
           await harness.controller.handleBackendEvent(monitorEvent("agentMessage", "synthetic-final", { transient: false }));
           await harness.controller.handleBackendEvent(monitorEvent("taskMonitorUsage", "usage"));
           await vi.advanceTimersByTimeAsync(60_000);
-          expect(harness.delivered).toEqual([]);
+          expect(harness.delivered).toHaveLength(0);
         } finally {
           harness.controller.dispose();
           vi.useRealTimers();
@@ -19302,7 +19302,9 @@ describe("MessagingController", () => {
             expect(harness.delivered).toHaveLength(3);
           }
           await vi.advanceTimersByTimeAsync(60_000);
-          expect(harness.delivered).toHaveLength(mode === "show_none" ? 0 : mode === "show_less" ? 1 : 3);
+          await vi.waitFor(() => {
+            expect(harness.delivered).toHaveLength(mode === "show_none" ? 0 : mode === "show_less" ? 1 : 3);
+          });
           for (const intent of harness.delivered) {
             expect(messagingDeliveryPriority(intent)).toBe("tool_progress");
             if (intent.kind === "working_card") {
@@ -19315,6 +19317,29 @@ describe("MessagingController", () => {
         }
       },
     );
+
+    it("coalesces repeated standalone lifecycle notices at Some without a completion bypass", async () => {
+      vi.useFakeTimers();
+      const harness = await monitorHarness("show_some");
+      try {
+        for (let index = 0; index < 10; index += 1) {
+          const event = monitorEvent("taskMonitorCompletion", `success-${index}`, { outcome: "success", monitorId: `monitor-${index}` });
+          await harness.controller.handleBackendEvent(event);
+          await harness.controller.handleBackendEvent(event);
+        }
+        expect(harness.delivered).toHaveLength(3);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.waitFor(() => expect(harness.delivered).toHaveLength(4));
+        for (let index = 10; index < 20; index += 1) {
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", `success-${index}`, { outcome: "success", monitorId: `monitor-${index}` }));
+        }
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(harness.delivered).toHaveLength(4);
+      } finally {
+        harness.controller.dispose();
+        vi.useRealTimers();
+      }
+    });
 
     it("shares the Some budget with the parent and does not terminal-flush on monitor success", async () => {
       vi.useFakeTimers();
@@ -19338,8 +19363,24 @@ describe("MessagingController", () => {
         await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", "success", { outcome: "success" }));
         expect(harness.delivered).toHaveLength(3);
         await vi.advanceTimersByTimeAsync(30_000);
-        expect(harness.delivered).toHaveLength(4);
+        await vi.waitFor(() => expect(harness.delivered).toHaveLength(4));
         expect(messagingDeliveryPriority(harness.delivered[3]!)).toBe("tool_progress");
+
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "monitor:monitor-1", turn: { id: "monitor:monitor-1", status: "completed", output: [{ type: "text", text: "Monitor finished" }] } },
+          },
+        });
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "unbound-child", turnId: "child-turn", turn: { id: "child-turn", status: "completed", output: [{ type: "text", text: "Private child final" }] } },
+          },
+        });
+        expect(harness.delivered).toHaveLength(4);
 
         // Both a parent item final and the terminal output replay remain valid.
         await harness.controller.handleBackendEvent({
@@ -19353,16 +19394,14 @@ describe("MessagingController", () => {
           backend: "codex",
           notification: {
             method: "turn/completed",
-            params: { threadId: "thread-1", turn: { id: "parent-turn", output: [
-              { type: "agentMessage", text: "Private child progress", data: { source: "pwragent_task_monitor", transient: true } },
-              { type: "agentMessage", text: "The release is ready." },
+            params: { threadId: "thread-1", turnId: "parent-turn", turn: { id: "parent-turn", status: "completed", output: [
+              { type: "text", text: "The release is ready." },
             ] } },
           },
         });
         const texts = harness.delivered.flatMap((intent) => intent.kind === "message"
           ? intent.parts.flatMap((part) => "text" in part ? [part.text] : []) : []);
         expect(texts.filter((text) => text === "The release is ready.")).toHaveLength(1);
-        expect(texts.join("\n")).not.toContain("Private child progress");
       } finally {
         harness.controller.dispose();
         vi.useRealTimers();

@@ -39233,6 +39233,25 @@ export class DesktopBackendRegistry {
     record.monitorThreadId = startedMonitor.threadId;
     record.monitorTurnId = startedMonitor.turnId;
     await this.persistTaskMonitorSubAgent(record, { status: "running" });
+    await this.emit({
+      backend: record.parentBackend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: record.parentThreadId,
+          turnId: `monitor:${monitorId}`,
+          item: {
+            id: `${monitorId}:created`,
+            type: "taskMonitorCreated",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              task: record.task,
+            },
+          },
+        },
+      },
+    });
 
     return {
       ok: true,
@@ -39933,6 +39952,7 @@ export class DesktopBackendRegistry {
       outcome: params.outcome,
       parentBackend: params.record.parentBackend,
       parentThreadId: params.record.parentThreadId,
+      task: params.record.task,
     });
 
     let parentTurn:
@@ -40424,6 +40444,7 @@ export class DesktopBackendRegistry {
     outcome: CompleteMonitoringToolArgs["outcome"];
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
+    task: string;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
@@ -40439,6 +40460,7 @@ export class DesktopBackendRegistry {
             data: {
               source: "pwragent_task_monitor",
               monitorId: params.monitorId,
+              task: params.task,
               outcome: params.outcome,
               completionSource: params.completionSource,
               fallbackGenerated:

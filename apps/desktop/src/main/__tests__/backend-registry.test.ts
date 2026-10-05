@@ -48934,6 +48934,25 @@ script = "printf setup"
       ],
     });
 
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: {
+            id: `${monitorId}:created`,
+            type: "taskMonitorCreated",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              task: "Watch PR #123 checks until they finish.",
+            },
+          },
+        },
+      },
+    }));
+
     const progressEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
