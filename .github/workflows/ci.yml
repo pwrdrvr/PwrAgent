@@ -114,7 +114,6 @@ jobs:
         with:
           sparse-checkout: |
             **/package.json
-            .npmrc
             .pnpmfile.cjs
             patches/**
             pnpm-lock.yaml
@@ -124,7 +123,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -142,7 +141,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -210,7 +209,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -231,7 +230,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -257,7 +256,6 @@ jobs:
         with:
           sparse-checkout: |
             **/package.json
-            .npmrc
             .pnpmfile.cjs
             patches/**
             pnpm-lock.yaml
@@ -267,7 +265,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -287,7 +285,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -318,7 +316,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -332,8 +330,8 @@ jobs:
         # mount initialization (fatal add_item, errno 1).
         # https://github.com/git-for-windows/git/issues/1135#issuecomment-4757184373
         shell: bash
-        # The deploy-isolation test launches pnpm's JS entry directly to avoid
-        # Windows .cmd handoffs. pnpm run supplies npm_execpath; exec does not.
+        # The deploy-isolation test launches pnpm's native executable directly
+        # to avoid Windows .cmd handoffs; pnpm supplies it in npm_execpath.
         run: pnpm test --project desktop-main --shard=${{ matrix.lane }}/2
 
   windows-renderer-packages:
@@ -352,7 +350,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -387,7 +385,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 15
         with:
           node-version: "^24.21.0"
@@ -461,7 +459,7 @@ jobs:
           lfs: true
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -598,7 +596,6 @@ jobs:
         with:
           sparse-checkout: |
             **/package.json
-            .npmrc
             .pnpmfile.cjs
             patches/**
             pnpm-lock.yaml
@@ -608,7 +605,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -667,7 +664,7 @@ jobs:
         run: git lfs pull
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.21.0"
@@ -750,7 +747,7 @@ jobs:
         # `visual-regression.spec.ts` skips off darwin/arm64.
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
           node-version: "^24.21.0"
           working-directory: .

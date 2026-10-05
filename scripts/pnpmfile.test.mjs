@@ -2,6 +2,7 @@
 // `scripts/` because that is the directory the root Vitest project already
 // globs for repository-tooling tests (`scripts/**/*.test.mjs`); the subject is
 // the repository root file one level up.
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -380,7 +381,7 @@ describe("first-party coverage", () => {
       const root = seed(["packages/*"]);
       write(
         "pnpm-workspace.yaml",
-        "packages:\n  # a comment\n  - packages/*\n\nminimumReleaseAge: 10080\nonlyBuiltDependencies:\n  - esbuild\n",
+        "packages:\n  # a comment\n  - packages/*\n\nminimumReleaseAge: 10080\nallowBuilds:\n  esbuild: true\n",
       );
       write("packages/lib/package.json", JSON.stringify({ name: "only-me" }));
 
@@ -475,7 +476,16 @@ describe("pnpm.overrides and resolutions", () => {
     // `pnpm install` for everyone.
     const root = require("../package.json");
     expect(() => readPackage(structuredClone(root))).not.toThrow();
-    expect(Object.keys(root.pnpm?.overrides ?? {}).length).toBeGreaterThan(0);
+    const result = spawnSync(process.env.npm_execpath, ["config", "get", "overrides", "--json"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const overrides = JSON.parse(result.stdout);
+    expect(Object.keys(overrides).length).toBeGreaterThan(0);
+    expect(() => pnpmfile.hooks.updateConfig({ overrides })).not.toThrow();
   });
 
   it("ignores a transitive package's own overrides", () => {
@@ -497,17 +507,54 @@ describe("pnpm.overrides and resolutions", () => {
   });
 });
 
-describe("fetchers", () => {
-  it("hands pnpm both git fetcher blocks as factories returning a thrower", async () => {
-    const { fetchers } = pnpmfile.hooks;
-    expect(Object.keys(fetchers).sort()).toEqual(["git", "gitHostedTarball"]);
-
-    for (const factory of Object.values(fetchers)) {
-      // pnpm calls the entry once to build its registry, then calls the result.
-      // A hook that threw from the factory would break every install.
-      const fetcher = factory({ defaultFetchers: {} });
-      expect(typeof fetcher).toBe("function");
-      await expect(fetcher()).rejects.toThrow(/Blocked pnpm git dependency fetch/);
+describe("workspace overrides", () => {
+  it("blocks workspace git overrides during an actual offline pnpm install", () => {
+    const root = mkdtempSync(join(tmpdir(), "pwragent-pnpm-policy-"));
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "pwragent-workspace", private: true }));
+      writeFileSync(join(root, ".pnpmfile.cjs"), readFileSync(join(repoRoot, ".pnpmfile.cjs")));
+      writeFileSync(join(root, "pnpm-workspace.yaml"), [
+        "globalPnpmfile: null",
+        "overrides:",
+        "  is-number: git+file:///missing-pwragent-policy-fixture.git",
+        "",
+      ].join("\n"));
+      const result = spawnSync(process.env.npm_execpath, ["install", "--lockfile-only", "--offline", "--no-frozen-lockfile"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("Blocked git dependency");
+      expect(`${result.stdout}\n${result.stderr}`).toContain("workspace.yaml.overrides");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it.each(GIT_SPECS)("blocks the git override %s before resolution", (spec) => {
+    expect(() => pnpmfile.hooks.updateConfig({ overrides: { "is-number": spec } })).toThrow(
+      `Blocked git dependency is-number@${spec} (in pnpm-workspace.yaml.overrides)`,
+    );
+  });
+
+  it("preserves unrelated workspace configuration", () => {
+    const config = { minimumReleaseAge: 10080, overrides: { "is-number": "7.0.0" } };
+    expect(pnpmfile.hooks.updateConfig(config)).toBe(config);
+    expect(pnpmfile.hooks.updateConfig({})).toEqual({});
+  });
+});
+
+describe("fetchers", () => {
+  it("blocks git and hosted tarballs through pnpm's custom fetcher API", async () => {
+    const [fetcher] = pnpmfile.fetchers;
+    expect(fetcher.canFetch("git-package", { type: "git", repo: "https://example.com/repo.git" })).toBe(true);
+    for (const host of ["github", "gitlab", "bitbucket"]) {
+      expect(fetcher.canFetch("hosted-package", { tarball: `https://${host}.com/user/repo/archive/main.tar.gz` })).toBe(true);
+    }
+    expect(fetcher.canFetch("registry-package", { integrity: "sha512-fixture" })).toBe(false);
+    expect(fetcher.canFetch("registry-package", { tarball: "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz" })).toBe(false);
+    await expect(fetcher.fetch()).rejects.toThrow(/Blocked pnpm git dependency fetch/);
   });
 });
