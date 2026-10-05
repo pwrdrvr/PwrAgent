@@ -1118,6 +1118,10 @@ describe("Sidebar", () => {
       const startChat = screen.getByRole("button", { name: "Start Chat" });
       expect(row.compareDocumentPosition(startChat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(startChat.closest(".sidebar-start-actions")).not.toHaveClass("sidebar-start-actions--lead");
+      // In the scrolling lane, so it scrolls with the rows, but not in the
+      // thread list, so it is not counted as a thread.
+      expect(startChat.closest(".sidebar-list--dense")).not.toBeNull();
+      expect(startChat.closest('[role="list"]')).toBeNull();
     });
 
     it("stays out of the way until a provider can start a chat", () => {

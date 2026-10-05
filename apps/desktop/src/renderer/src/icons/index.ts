@@ -25,6 +25,7 @@ export { FeishuIcon } from "./FeishuIcon";
 export { FileCodeIcon } from "./FileCodeIcon";
 export { FitToWindowIcon } from "./FitToWindowIcon";
 export { FolderIcon } from "./FolderIcon";
+export { FolderPlusIcon } from "./FolderPlusIcon";
 export { GitHubIcon } from "./GitHubIcon";
 export { GitLabIcon } from "./GitLabIcon";
 export { GitIcon } from "./GitIcon";
