@@ -890,10 +890,14 @@ describe("EditsPanel", () => {
       const [, crate] = (await listWorktreeOtherChanges.mock.results[0]!.value).changes;
       listWorktreeOtherChanges.mockResolvedValue({ changes: [crate!], totalChanges: 1, truncated: false, maxFiles: 50 });
       rerender(panel("second"));
+      // The dialog leaves the DOM a commit before the lightbox unmounts: it
+      // renders nothing first, then its effect closes it. Waiting on the
+      // dialog alone races that second commit under load, so wait for the
+      // unmount itself, which is what releases the scroll lock and the arrows.
       await waitFor(() => {
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(document.body.style.overflow).toBe("");
       });
-      expect(document.body.style.overflow).toBe("");
       // Arrows belong to the page again rather than a dialog nobody can see.
       const arrow = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
       window.dispatchEvent(arrow);
