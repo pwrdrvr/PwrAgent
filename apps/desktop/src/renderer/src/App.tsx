@@ -706,6 +706,11 @@ function DesktopAppShell(props: {
       liveFederationHealth,
     ],
   );
+  // Every known machine, the window's owner included, for naming one.
+  const federationMachines = useMemo(
+    () => buildFederationThreadTargets(liveFederationHealth),
+    [liveFederationHealth],
+  );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
       refreshFederationHealth();
@@ -2704,6 +2709,17 @@ function DesktopAppShell(props: {
       federatedTargetHasProject({ scope: "remote", instanceId }, directory),
     [federatedTargetHasProject],
   );
+  // This instance, as the machine chips name it.
+  const localMachine: MachineChipValue = {
+    label: liveFederationHealth?.localLabel ?? "This machine",
+    shortLabel: federationLocalDisplayLabel(liveFederationHealth),
+    ...(liveFederationHealth?.localCelestialIcon
+      ? { celestialIcon: liveFederationHealth.localCelestialIcon }
+      : {}),
+    ...(liveFederationHealth?.instanceId
+      ? { instanceId: liveFederationHealth.instanceId }
+      : {}),
+  };
   const selectedLaunchpadForMachine = navigation.selectedLaunchpad;
   const launchpadMachine = ((): LaunchpadMachineControl | undefined => {
     const windowTarget = readRendererFederationTarget();
@@ -2714,7 +2730,7 @@ function DesktopAppShell(props: {
       return undefined;
     }
     const windowOwner = windowTarget
-      ? buildFederationThreadTargets(liveFederationHealth).find((candidate) =>
+      ? federationMachines.find((candidate) =>
           candidate.instanceId === windowTarget.instanceId)
       : undefined;
     const launchpadTarget = selectedLaunchpadForMachine.federationTarget;
@@ -2761,16 +2777,7 @@ function DesktopAppShell(props: {
               ? { celestialIcon: windowOwner.celestialIcon }
               : {}),
           }
-        : {
-            label: liveFederationHealth?.localLabel ?? "This machine",
-            shortLabel: federationLocalDisplayLabel(liveFederationHealth),
-            ...(liveFederationHealth?.localCelestialIcon
-              ? { celestialIcon: liveFederationHealth.localCelestialIcon }
-              : {}),
-            ...(liveFederationHealth?.instanceId
-              ? { instanceId: liveFederationHealth.instanceId }
-              : {}),
-          },
+        : localMachine,
       targets: newThreadFederationTargets,
       project,
       localHasProject:
@@ -2803,15 +2810,8 @@ function DesktopAppShell(props: {
     const ownerId = target && isRemoteFederationTarget(target)
       ? target.instanceId
       : windowTarget?.instanceId;
-    if (!ownerId) {
-      return {
-        label: liveFederationHealth?.localLabel ?? "This machine",
-        shortLabel: federationLocalDisplayLabel(liveFederationHealth),
-        celestialIcon: liveFederationHealth?.localCelestialIcon,
-        instanceId: liveFederationHealth?.instanceId,
-      };
-    }
-    const owner = buildFederationThreadTargets(liveFederationHealth).find(
+    if (!ownerId) return localMachine;
+    const owner = federationMachines.find(
       (candidate) => candidate.instanceId === ownerId,
     );
     return {

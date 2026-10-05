@@ -3849,6 +3849,7 @@ export function ThreadView(props: ThreadViewProps) {
                 </div>
               ) : null}
               <Composer
+                key="composer"
                 backends={props.backends}
                 applications={props.applications}
                 codexFastAllowed={props.codexFastAllowed}
@@ -4164,9 +4165,8 @@ export function ThreadView(props: ThreadViewProps) {
           {/* `display: contents`: the slot only carries the key that lets a
               launchpad's composer become this thread's. */}
           <div key={composerSlot} className="thread-view__composer-slot">
-            {/* The launchpad's slot holds its submitted message first. */}
-            {null}
             <Composer
+              key="composer"
               activeTurnId={props.activeTurnId}
               addOptimisticReviewEntry={props.addOptimisticReviewEntry}
               addOptimisticUserMessage={props.addOptimisticUserMessage}

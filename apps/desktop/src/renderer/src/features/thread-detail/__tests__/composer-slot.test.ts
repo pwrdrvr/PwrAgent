@@ -8,9 +8,7 @@ import {
 } from "../../composer/useComposerDraftStore";
 import {
   composerSlotKey,
-  LAUNCHPAD_COMPOSER_SLOT_KEY,
   nextComposerSlotLineage,
-  THREAD_COMPOSER_SLOT_KEY,
   threadComposerScope,
   type ComposerSlotLineage,
 } from "../composer-slot";
@@ -42,63 +40,72 @@ function walk(
   });
 }
 
+/** Same key as the view before it: React keeps that view's composer. */
+function sharesComposerWithPrevious(keys: string[]): boolean[] {
+  return keys.slice(1).map((key, index) => key === keys[index]);
+}
+
 describe("composer slot", () => {
-  it("keeps the launchpad's slot for the thread it became", () => {
+  it("keeps the launchpad's composer for the thread it became", () => {
     const store = createStore();
     const created = thread("created");
     handoffLaunchpadComposer(store, launchpadScope, created);
 
-    expect(walk(store, [
+    expect(sharesComposerWithPrevious(walk(store, [
       { launchpadScope },
       { threadScope: threadComposerScope(created) },
       { threadScope: threadComposerScope(created) },
-    ])).toEqual([
-      LAUNCHPAD_COMPOSER_SLOT_KEY,
-      LAUNCHPAD_COMPOSER_SLOT_KEY,
-      LAUNCHPAD_COMPOSER_SLOT_KEY,
-    ]);
+    ]))).toEqual([true, true]);
   });
 
-  it("gives any other thread the thread slot", () => {
+  it("gives any other thread a fresh composer", () => {
     const store = createStore();
     const created = thread("created");
     handoffLaunchpadComposer(store, launchpadScope, created);
 
-    expect(walk(store, [
+    expect(sharesComposerWithPrevious(walk(store, [
       { launchpadScope },
       // Navigated somewhere else before the created thread showed.
       { threadScope: threadComposerScope(thread("other")) },
+      // Thread to thread keeps the composer, as it always did.
       { threadScope: threadComposerScope(created) },
-    ])).toEqual([
-      LAUNCHPAD_COMPOSER_SLOT_KEY,
-      THREAD_COMPOSER_SLOT_KEY,
-      THREAD_COMPOSER_SLOT_KEY,
-    ]);
+    ]))).toEqual([false, true]);
   });
 
   it("does not adopt a launchpad that was never handed off", () => {
     const store = createStore();
-    expect(walk(store, [
+    expect(sharesComposerWithPrevious(walk(store, [
       { launchpadScope },
       { threadScope: threadComposerScope(thread("created")) },
-    ])).toEqual([LAUNCHPAD_COMPOSER_SLOT_KEY, THREAD_COMPOSER_SLOT_KEY]);
+    ]))).toEqual([false]);
   });
 
-  it("returns to the thread slot once the created thread is left", () => {
+  it("keeps the created thread's composer across later threads", () => {
     const store = createStore();
     const created = thread("created");
     handoffLaunchpadComposer(store, launchpadScope, created);
 
-    expect(walk(store, [
+    expect(sharesComposerWithPrevious(walk(store, [
       { launchpadScope },
       { threadScope: threadComposerScope(created) },
       { threadScope: threadComposerScope(thread("other")) },
       { threadScope: threadComposerScope(created) },
-    ])).toEqual([
-      LAUNCHPAD_COMPOSER_SLOT_KEY,
-      LAUNCHPAD_COMPOSER_SLOT_KEY,
-      THREAD_COMPOSER_SLOT_KEY,
-      THREAD_COMPOSER_SLOT_KEY,
-    ]);
+    ]))).toEqual([true, true, true]);
+  });
+
+  it("gives the next launchpad a fresh composer after one was adopted", () => {
+    const store = createStore();
+    const created = thread("created");
+    handoffLaunchpadComposer(store, launchpadScope, created);
+    const nextLaunchpad = "launchpad:directory:/repo";
+
+    expect(sharesComposerWithPrevious(walk(store, [
+      { launchpadScope },
+      { threadScope: threadComposerScope(created) },
+      { launchpadScope: nextLaunchpad },
+      // Launchpad to launchpad keeps the composer, as it always did.
+      { launchpadScope },
+      { threadScope: threadComposerScope(thread("other")) },
+    ]))).toEqual([true, false, true, false]);
   });
 });

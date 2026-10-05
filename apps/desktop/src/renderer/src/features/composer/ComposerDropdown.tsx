@@ -121,6 +121,22 @@ export function ComposerDropdown(props: {
     onOpenChange?.(false);
   }, [onOpenChange]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
+  // Right-aligned to the trigger: it sits toward the window's right.
+  const placeBelowMenu = useCallback((): void => {
+    const trigger = buttonRef.current?.getBoundingClientRect();
+    if (!trigger) return;
+    setBelowMenuPosition({
+      right: Math.max(8, window.innerWidth - trigger.right),
+      top: trigger.bottom + 8,
+    });
+  }, []);
+  // A fixed menu does not follow its trigger, so follow it on resize.
+  const belowMenuOpen = open && props.menuPlacement === "below";
+  useEffect(() => {
+    if (!belowMenuOpen) return undefined;
+    window.addEventListener("resize", placeBelowMenu);
+    return () => window.removeEventListener("resize", placeBelowMenu);
+  }, [belowMenuOpen, placeBelowMenu]);
   const Icon = props.icon;
   const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
     const composerSetup = target.closest<HTMLElement>(".composer__setup");
@@ -292,14 +308,7 @@ export function ComposerDropdown(props: {
         onClick={() => {
           hide();
           const nextOpen = !open;
-          const trigger = buttonRef.current?.getBoundingClientRect();
-          if (nextOpen && props.menuPlacement === "below" && trigger) {
-            // Right-aligned to the trigger: it sits toward the window's right.
-            setBelowMenuPosition({
-              right: Math.max(8, window.innerWidth - trigger.right),
-              top: trigger.bottom + 8,
-            });
-          }
+          if (nextOpen && props.menuPlacement === "below") placeBelowMenu();
           setOpen(nextOpen);
           if (nextOpen) {
             setShowOther(false);

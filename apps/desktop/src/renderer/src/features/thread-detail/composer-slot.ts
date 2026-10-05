@@ -11,23 +11,24 @@ import {
  * each branch mounts its own composer. Starting a thread switches branches,
  * so the operator typing in the launchpad would get a new composer
  * mid-sentence: a new editor, a lost caret, and keys dropped while it mounts.
- * Both branches therefore wrap the composer in one keyed slot, and the thread
- * a launchpad just became takes the launchpad's key. React then keeps the
- * same composer, which retargets itself to the thread (see
- * `followsMaterialization` in Composer).
+ * Both branches therefore wrap the composer in a keyed slot. The launchpad
+ * slot and the thread slot always hold different keys, except that the
+ * thread a launchpad just became takes the launchpad's key: the two keys
+ * swap. React then keeps that composer, which retargets itself to the thread
+ * (see `followsMaterialization` in Composer).
  *
- * Every other move between a launchpad and a thread keeps the thread key, so
- * it still mounts a fresh composer.
+ * Every other move keeps its old behavior. A launchpad and a thread never
+ * share a composer, and moving between threads, or between launchpads, keeps
+ * the one composer each branch already had.
  */
 export type ComposerSlotLineage = {
-  /** The composer scope of the launchpad this view last showed. */
+  /** The composer scope of the launchpad this view showed last, until a thread shows. */
   launchpadScope?: string;
-  /** The thread that launchpad became, once this view has shown it. */
-  threadScope?: string;
+  /** Whether the two slot keys have swapped an odd number of times. */
+  swapped?: boolean;
 };
 
-export const LAUNCHPAD_COMPOSER_SLOT_KEY = "launchpad-composer";
-export const THREAD_COMPOSER_SLOT_KEY = "thread-composer";
+const COMPOSER_SLOT_KEYS = ["composer-slot-a", "composer-slot-b"] as const;
 
 /** The scope a launchpad Composer uses, from the props ThreadView passes it. */
 export function launchpadComposerScope(
@@ -60,32 +61,27 @@ export function nextComposerSlotLineage(
   store: ComposerDraftStore | undefined,
 ): ComposerSlotLineage {
   if (view.launchpadScope) {
-    return current.launchpadScope === view.launchpadScope && !current.threadScope
+    return current.launchpadScope === view.launchpadScope
       ? current
-      : { launchpadScope: view.launchpadScope };
+      : { ...current, launchpadScope: view.launchpadScope };
   }
-  if (current.launchpadScope && view.threadScope) {
-    if (current.threadScope === view.threadScope) return current;
-    // The handoff records where the launchpad's draft went. Only the thread
-    // it went to adopts the launchpad's composer.
-    if (
-      !current.threadScope
-      && store
-      && resolveLaunchpadComposerScope(store, current.launchpadScope)
-        === view.threadScope
-    ) {
-      return { launchpadScope: current.launchpadScope, threadScope: view.threadScope };
-    }
-  }
-  return current.launchpadScope ? {} : current;
+  if (!current.launchpadScope) return current;
+  // The first view after a launchpad decides. The handoff records where the
+  // launchpad's draft went, and only the thread it went to adopts the
+  // launchpad's composer.
+  const adopted = view.threadScope !== undefined
+    && store !== undefined
+    && resolveLaunchpadComposerScope(store, current.launchpadScope)
+      === view.threadScope;
+  return { swapped: adopted ? !current.swapped : current.swapped };
 }
 
 export function composerSlotKey(
   lineage: ComposerSlotLineage,
-  view: { launchpadScope?: string; threadScope?: string },
+  view: { launchpadScope?: string },
 ): string {
-  return view.launchpadScope
-    || (view.threadScope !== undefined && lineage.threadScope === view.threadScope)
-    ? LAUNCHPAD_COMPOSER_SLOT_KEY
-    : THREAD_COMPOSER_SLOT_KEY;
+  const [launchpadKey, threadKey] = lineage.swapped
+    ? [COMPOSER_SLOT_KEYS[1], COMPOSER_SLOT_KEYS[0]]
+    : COMPOSER_SLOT_KEYS;
+  return view.launchpadScope ? launchpadKey : threadKey;
 }

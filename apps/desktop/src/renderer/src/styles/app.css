@@ -19791,6 +19791,15 @@ a.button {
   display: none;
 }
 
+/* `.thread-header *` makes every box a window-drag region and only opts
+   bare controls back out, so the chip's own boxes and its fixed menu would
+   drag the window instead of taking the click. The extra class outranks
+   that rule wherever it sits in the file. */
+.thread-header .thread-header__machine,
+.thread-header .thread-header__machine * {
+  -webkit-app-region: no-drag;
+}
+
 .thread-header__machine .composer-dropdown__button,
 .thread-header__machine .composer__fixed-value {
   min-height: 24px;
