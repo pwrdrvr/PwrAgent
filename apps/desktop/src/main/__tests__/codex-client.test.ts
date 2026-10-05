@@ -221,8 +221,7 @@ class MockTransport implements JsonRpcTransport {
   static threadResumeError:
     | { code?: number; message: string }
     | undefined = undefined;
-  static threadResumeUsage: unknown;
-  static threadResumeUsageTiming: "before" | "after" = "after";
+  static accountUsageError: { code: number; message: string } | undefined;
   static threadSettingsUpdateError: string | undefined;
 
   readonly sentMessages: string[] = [];
@@ -237,6 +236,10 @@ class MockTransport implements JsonRpcTransport {
   constructor(options?: unknown) {
     this.options = options;
     MockTransport.instances.push(this);
+  }
+
+  notify(method: string, params: unknown): void {
+    this.messageHandler(JSON.stringify({ method, params }));
   }
 
   async connect(): Promise<void> {
@@ -880,6 +883,10 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "account/usage/read") {
+      if (MockTransport.accountUsageError) {
+        this.messageHandler(JSON.stringify({ id: payload.id, error: MockTransport.accountUsageError }));
+        return;
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1187,12 +1194,6 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
       this.loadedThreads.add(String(payload.params?.threadId));
-      const emitUsage = () => {
-        if (MockTransport.threadResumeUsage && payload.params?.excludeTurns) this.messageHandler!(JSON.stringify({
-          method: "thread/tokenUsage/updated", params: { threadId: payload.params.threadId, turnId: "historical-turn", tokenUsage: MockTransport.threadResumeUsage },
-        }));
-      };
-      if (MockTransport.threadResumeUsageTiming === "before") emitUsage();
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1200,7 +1201,6 @@ class MockTransport implements JsonRpcTransport {
           result: MockTransport.threadResumeResult
         })
       );
-      if (MockTransport.threadResumeUsageTiming === "after") queueMicrotask(emitUsage);
       return;
     }
 
@@ -1947,8 +1947,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
-    MockTransport.threadResumeUsage = undefined;
-    MockTransport.threadResumeUsageTiming = "after";
+    MockTransport.accountUsageError = undefined;
     MockTransport.threadSettingsUpdateError = undefined;
   });
 
@@ -3742,104 +3741,95 @@ describe("CodexAppServerClient", () => {
     );
   });
 
-  it.each(["before", "after"] as const)("reads saved totals emitted %s the resume response in an isolated reader", async (timing) => {
-    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+  it("reads historical pricing through the existing read-only connection without acquiring a writer", async () => {
     const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100, status: { type: "notLoaded" } };
     MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
-    MockTransport.threadResumeResult = { model: thread.model, thread };
-    MockTransport.threadResumeUsage = { total: tokens, last: { ...tokens, inputTokens: 100, totalTokens: 200 } };
-    MockTransport.threadResumeUsageTiming = timing;
+    MockTransport.threadResumeError = { message: "thread already has an active writer" };
+    MockTransport.accountUsageResult = { threadUsage: { threadId: thread.id, estimatedUsageUsdMicros: 42_000, groups: [
+      { model: "gpt-6-astra", inputTokens: 1_000, cachedInputTokens: 800, netNewInputTokens: 200, outputTokens: 100, totalTokens: 1_100 },
+      { model: "gpt-6.1-sol", inputTokens: 500, cachedInputTokens: 100, netNewInputTokens: 400, outputTokens: 50, totalTokens: 550 },
+    ] } };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const client = new CodexAppServerClient({ command: "codex" });
     const observer = vi.fn();
     client.onNotification(observer);
     try {
       const results = await Promise.all([client.readThreadPricingSnapshot(thread.id), client.readThreadPricingSnapshot(thread.id)]);
-      expect(results).toEqual([{ model: thread.model, tokens }, { model: thread.model, tokens }]);
-      expect(MockTransport.instances).toHaveLength(2);
-      const [parent, reader] = MockTransport.instances;
-      expect(reader.closeCount).toBeGreaterThan(0);
-      expect(parent.closeCount).toBe(0);
-      expect(observer.mock.calls.some(([event]) => event.method === "thread/tokenUsage/updated")).toBe(false);
-      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
-      expect(requests.filter((request) => request.method === "thread/resume").map((request) => request.params)).toEqual([{ threadId: thread.id, excludeTurns: true }]);
-      expect(requests.some((request) => ["thread/settings/update", "turn/start", "fs/readFile"].includes(request.method))).toBe(false);
-      MockTransport.readThreadResultByThreadId.set(thread.id, { thread: { ...thread, model: "gpt-6-astra" } });
-      expect(await client.readThreadPricingSnapshot(thread.id)).toEqual({ model: "gpt-6-astra", tokens });
-      expect(MockTransport.instances).toHaveLength(2);
-      MockTransport.readThreadResultByThreadId.set(thread.id, { thread: { ...thread, updatedAt: 101 } });
-      MockTransport.threadResumeUsage = { total: { ...tokens, inputTokens: 2_000, totalTokens: 2_100 } };
+      expect(results).toEqual([expect.objectContaining({ model: thread.model, pricingSource: "provider", estimatedCostMicros: 42_000,
+        tokens: { inputTokens: 1_500, cachedInputTokens: 900, uncachedInputTokens: 600, outputTokens: 150, totalTokens: 1_650 },
+      }), expect.objectContaining({ estimatedCostMicros: 42_000 })]);
+      expect(MockTransport.instances).toHaveLength(1);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+      expect(observer).not.toHaveBeenCalled();
+      const requests = MockTransport.instances[0].sentMessages.map((message) => JSON.parse(message));
+      expect(requests.filter((request) => request.method === "account/usage/read").map((request) => request.params)).toEqual([{ threadId: thread.id }]);
+      expect(requests.some((request) => ["thread/resume", "thread/start", "turn/start", "fs/readFile"].includes(request.method))).toBe(false);
+      // updatedAt is second-granular: do not reuse stale historical counts.
+      MockTransport.accountUsageResult = { threadUsage: { threadId: thread.id, groups: [{ totalTokens: 2_100 }] } };
       expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(2_100);
-      expect(MockTransport.instances).toHaveLength(3);
-      expect(MockTransport.instances[2].closeCount).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-    }
+    } finally { await client.close(); }
   });
 
-  it("keeps totals unknown while another app owns the writer and tries again after it closes", async () => {
-    const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100 };
-    MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
-    MockTransport.threadResumeError = { message: "thread already has an active writer" };
+  it.each([null, { threadId: "other", groups: [{ totalTokens: 100 }] }, { threadId: "external-thread", groups: [] }])(
+    "keeps unavailable or unrelated historical totals unknown: %j", async (threadUsage) => {
+      MockTransport.readThreadResultByThreadId.set("external-thread", { thread: { id: "external-thread", model: "gpt-6.1-sol" } });
+      MockTransport.accountUsageResult = { summary: { lifetimeTokens: 999_999 }, threadUsage };
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex" });
+      try {
+        expect(await client.readThreadPricingSnapshot("external-thread")).toEqual({ model: "gpt-6.1-sol" });
+        expect(MockTransport.instances).toHaveLength(1);
+        expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+      } finally { await client.close(); }
+    },
+  );
+
+  it("keeps partial historical counts unknown and rejects unsafe counts", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history" } });
+    MockTransport.accountUsageResult = { threadUsage: { threadId: "history", estimatedUsageUsdMicros: -1, groups: [
+      { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: Number.MAX_SAFE_INTEGER },
+      { inputTokens: 0, cachedInputTokens: null, outputTokens: -1, totalTokens: 1 },
+    ] } };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
-      expect(await client.readThreadPricingSnapshot(thread.id)).toEqual({ model: thread.model });
-      expect(MockTransport.instances[1].closeCount).toBeGreaterThan(0);
-      MockTransport.threadResumeError = undefined;
-      MockTransport.threadResumeResult = { model: thread.model, thread };
-      MockTransport.threadResumeUsage = { total: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, totalTokens: 1_100 } };
-      expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(1_100);
-      expect(MockTransport.instances[2].closeCount).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-    }
+      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: undefined, pricingSource: "provider", tokens: {
+        inputTokens: 0, cachedInputTokens: undefined, uncachedInputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
+      } });
+    } finally { await client.close(); }
   });
 
-  it("bounds a successful resume that supplies no token notification", async () => {
-    MockTransport.readThreadResultByThreadId.set("no-usage", { thread: { id: "no-usage", model: "gpt-6.1-sol" } });
-    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 10 });
-    try {
-      expect(await client.readThreadPricingSnapshot("no-usage")).toEqual({ model: "gpt-6.1-sol", tokens: undefined });
-      expect(MockTransport.instances[1].closeCount).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-    }
-  });
-
-  it("closes the isolated reader and cancels queued snapshot reads when its parent closes", async () => {
-    for (const id of ["no-usage", "queued-usage"]) {
-      MockTransport.readThreadResultByThreadId.set(id, { thread: { id, model: "gpt-6.1-sol" } });
-    }
-    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
+  it("does not resume as a fallback when the read-only usage API is unsupported", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history", model: "gpt-6.1-sol" } });
+    MockTransport.accountUsageError = { code: -32601, message: "Method not found" };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
-    vi.useFakeTimers();
-    const reads = Promise.all([client.readThreadPricingSnapshot("no-usage"), client.readThreadPricingSnapshot("queued-usage")]);
-    let closing: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(MockTransport.instances).toHaveLength(2);
-      const reader = MockTransport.instances[1];
-      expect(reader.loadedThreads.has("no-usage")).toBe(true);
-      let closed = false;
-      closing = client.close().then(() => { closed = true; });
-      await vi.advanceTimersByTimeAsync(0);
-      // No clock advance: shutdown must release the writer and notification
-      // waiter immediately, rather than waiting out the snapshot timeout.
-      expect(reader.closeCount).toBeGreaterThan(0);
-      expect(reader.loadedThreads.size).toBe(0);
-      expect(closed).toBe(true);
-      await reads;
-      expect(MockTransport.instances).toHaveLength(2);
-    } finally {
-      await vi.runAllTimersAsync();
-      await reads;
-      await (closing ?? client.close());
-      vi.useRealTimers();
-    }
+      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: "gpt-6.1-sol" });
+      expect(MockTransport.instances).toHaveLength(1);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+    } finally { await client.close(); }
+  });
+
+  it.each(["thread/compacted", "thread/rewound", "thread/closed", "item/completed"] as const)("uses owning-client totals for read-only pricing and invalidates them on %s", async (invalidation) => {
+    const total = { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const last = { inputTokens: 100, cachedInputTokens: 80, outputTokens: 10, totalTokens: 110 };
+    MockTransport.readThreadResultByThreadId.set("owned", { thread: { id: "owned", model: "gpt-6.1-sol", turns: [] } });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.getInitializeResult();
+      const transport = MockTransport.instances[0];
+      transport.notify("thread/tokenUsage/updated", { threadId: "owned", turnId: "active", tokenUsage: { total, last, modelContextWindow: 128_000 } });
+      expect(await client.readThreadPricingSnapshot("owned")).toMatchObject({ model: "gpt-6.1-sol", tokens: total });
+      expect(transport.sentMessages.map((message) => JSON.parse(message)).some((request) => ["thread/resume", "account/usage/read"].includes(request.method))).toBe(false);
+      transport.notify("thread/tokenUsage/updated", { threadId: "owned", tokenUsage: { total: { ...total, totalTokens: 2_100 } } });
+      expect((await client.readThreadPricingSnapshot("owned")).tokens?.totalTokens).toBe(2_100);
+      transport.notify(invalidation, { threadId: "owned", ...(invalidation === "item/completed" ? { item: { type: "contextCompaction", id: "compact" } } : {}) });
+      expect((await client.readThreadPricingSnapshot("owned")).tokens).toBeUndefined();
+      await client.close();
+      expect((await client.readThreadPricingSnapshot("owned")).tokens).toBeUndefined();
+    } finally { await client.close(); }
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {

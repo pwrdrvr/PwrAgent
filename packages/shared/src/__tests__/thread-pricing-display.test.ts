@@ -59,6 +59,18 @@ describe("buildPricingRunningTotals", () => {
 describe("unobserved thread pricing", () => {
   const tokens = { inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 20_000, reasoningOutputTokens: 10_000, totalTokens: 1_020_000 };
 
+  it("preserves the provider estimate across model switches and unavailable USD estimates", () => {
+    const provider = { pricingSource: "provider" as const, estimatedCostMicros: 123_456, tokens };
+    for (const model of ["gpt-6.1-sol", "gpt-6-astra"]) {
+      expect(buildThreadPricingSnapshotEstimate({ ...provider, model, localModel: true }).totalCostMicros).toBe(123_456);
+    }
+    expect(buildThreadPricingSnapshotEstimate({ ...provider, estimatedCostMicros: undefined, model: "gpt-6.1-sol" }).totalCostMicros).toBeUndefined();
+    const display = buildThreadPricingDisplay({ pricing: { lines: [], summaries: [], snapshot: provider } });
+    expect(display.rows).toEqual([]);
+    expect(display.observedCostMicros).toBe(0);
+    expect(display.fallbackEstimate?.totalCostMicros).toBe(123_456);
+  });
+
   it("prices the entire snapshot at the current model's rates without adding ledger rows", () => {
     const pricing = { lines: [], summaries: [], snapshot: { model: "gpt-6.1-sol", tokens } };
     const display = buildThreadPricingDisplay({ pricing });
