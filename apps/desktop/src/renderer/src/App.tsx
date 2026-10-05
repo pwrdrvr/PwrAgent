@@ -3847,7 +3847,7 @@ function DesktopAppShell(props: {
           onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
         />
         <CodexLaunchNotice
-          discovery={settings.snapshot?.models.codex.discovery}
+          discovery={settings.snapshot?.models?.codex?.discovery}
           onNoticeChanged={syncCodexLaunchNotice}
           onOpenCodexSettings={openCodexSettings}
         />
