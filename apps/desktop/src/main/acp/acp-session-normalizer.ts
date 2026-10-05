@@ -55,6 +55,11 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     // They are background bookkeeping, not user turns or transcript items.
     || kind === "memory_flush_started"
     || kind === "memory_flush_completed"
+    // Grok also emits lifecycle notifications for background memory dreams.
+    // Keep their lifecycle bookkeeping out of live and replay transcripts too.
+    || kind === "memory_dream_queued"
+    || kind === "memory_dream_started"
+    || kind === "memory_dream_completed"
   );
 }
 

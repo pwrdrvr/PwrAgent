@@ -429,14 +429,15 @@ describe("AcpRolloutStore", () => {
     expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
   });
 
-  it("does not persist Grok memory flush notifications", () => {
+  it.each(["flush", "dream"])("does not persist Grok memory %s notifications", (lifecycle) => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:grok" as AcpBackendId;
 
     for (const update of [
-      { sessionUpdate: "memory_flush_started" },
+      ...(lifecycle === "dream" ? [{ sessionUpdate: "memory_dream_queued" }] : []),
+      { sessionUpdate: `memory_${lifecycle}_started` },
       {
-        sessionUpdate: "memory_flush_completed",
+        sessionUpdate: `memory_${lifecycle}_completed`,
         result: "written",
         path: "/fixture/.grok/memory/project/sessions/log.md",
       },
@@ -452,15 +453,16 @@ describe("AcpRolloutStore", () => {
     expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
   });
 
-  it("omits memory flush notifications already stored by older versions", () => {
+  it.each(["flush", "dream"])("omits memory %s notifications already stored by older versions", (lifecycle) => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:grok" as AcpBackendId;
     const rolloutPath = path.join(tempDir, "acp_grok", "session-1", "rollout.jsonl");
     const updates = [
       { sessionUpdate: "agent_message_chunk", content: "Done." },
       { sessionUpdate: "turn_completed" },
-      { sessionUpdate: "memory_flush_started" },
-      { sessionUpdate: "memory_flush_completed", result: "written" },
+      ...(lifecycle === "dream" ? [{ sessionUpdate: "memory_dream_queued" }] : []),
+      { sessionUpdate: `memory_${lifecycle}_started` },
+      { sessionUpdate: `memory_${lifecycle}_completed`, result: "written" },
     ];
     const contents = updates.map((update, index) => JSON.stringify({
       type: "update",
