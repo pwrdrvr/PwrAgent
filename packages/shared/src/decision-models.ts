@@ -28,7 +28,7 @@ export const DECISION_PROVIDER_LINKS = {
 } as const;
 
 export type DesktopDecisionModelSettings = {
-  /** The decision model PwrAgent uses. Absent = the local model. */
+  /** The decision model PwrAgent uses. Absent = off: nothing is set up. */
   model?: DecisionModelChoice;
   /** Live voice sends camera frames to the decision model. Absent = on. */
   cameraCues?: boolean;
@@ -56,7 +56,7 @@ export function resolveDecisionModelSettings(
   settings: DesktopDecisionModelSettings | undefined,
 ): DecisionModelResolution {
   return {
-    model: settings?.model ?? "local",
+    model: settings?.model ?? "off",
     localEndpoint: settings?.local?.endpoint ?? DECISION_LOCAL_DEFAULT_ENDPOINT,
     localModel: settings?.local?.model ?? DECISION_LOCAL_DEFAULT_MODEL,
     jevModel: settings?.jev?.model ?? DECISION_JEV_DEFAULT_MODEL,
@@ -115,6 +115,9 @@ export function decisionCameraCueAvailability(
   settings: DesktopDecisionModelSettings | undefined,
 ): DecisionCameraCueAvailability {
   const resolved = resolveDecisionModelSettings(settings);
+  if (resolved.model === "off") {
+    return { available: false, reason: "Choose a decision model in Settings → AI Providers to use camera cues." };
+  }
   if (!resolved.cameraCues) {
     return { available: false, reason: "Camera cues are off in Settings → AI Providers." };
   }

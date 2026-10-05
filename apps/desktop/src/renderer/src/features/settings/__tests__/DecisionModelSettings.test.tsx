@@ -24,7 +24,7 @@ afterEach(cleanup);
 describe("Defaults → Decisions", () => {
   it("picks the decision model and saves the whole section", async () => {
     const onSave = vi.fn(async (_next: DesktopDecisionModelSettings) => undefined);
-    render(<DecisionModelDefaults snapshot={snapshot({ cameraCues: true })} saving={false} onSave={onSave} />);
+    render(<DecisionModelDefaults snapshot={snapshot({ model: "local", cameraCues: true })} saving={false} onSave={onSave} />);
     const picker = screen.getByRole("combobox", { name: "Decision model" });
     expect(selectOptionLabels(picker)).toEqual(["Local decision model", "TypeSafe Jev", "Off"]);
     expect(screen.getByText(/Runs clef-flash at http:\/\/127\.0\.0\.1:8787/)).toBeInTheDocument();
@@ -32,13 +32,23 @@ describe("Defaults → Decisions", () => {
     expect(onSave).toHaveBeenCalledWith({ cameraCues: true, model: "jev" });
   });
 
+  it("starts with nothing set up, so live voice offers no camera", () => {
+    render(<DecisionModelDefaults snapshot={snapshot({})} saving={false} onSave={vi.fn(async () => undefined)} />);
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveTextContent("Off");
+    expect(screen.getByText(/Not set up/)).toBeInTheDocument();
+    const toggle = screen.getByRole("switch", { name: "Camera cues in live voice" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Choose the local decision model to use camera cues.")).toBeInTheDocument();
+  });
+
   it("lets live voice use camera cues only with the local model, and says why otherwise", async () => {
     const onSave = vi.fn(async (_next: DesktopDecisionModelSettings) => undefined);
-    const result = render(<DecisionModelDefaults snapshot={snapshot({})} saving={false} onSave={onSave} />);
+    const result = render(<DecisionModelDefaults snapshot={snapshot({ model: "local" })} saving={false} onSave={onSave} />);
     const toggle = screen.getByRole("switch", { name: "Camera cues in live voice" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.click(toggle);
-    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith({ cameraCues: false }));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: "local", cameraCues: false }));
 
     result.rerender(<DecisionModelDefaults snapshot={snapshot({ model: "jev" })} saving={false} onSave={onSave} />);
     const locked = screen.getByRole("switch", { name: "Camera cues in live voice" });

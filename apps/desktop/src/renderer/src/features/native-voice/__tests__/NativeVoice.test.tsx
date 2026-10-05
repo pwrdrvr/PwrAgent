@@ -39,7 +39,7 @@ function voiceFixture() {
   vi.stubGlobal("Audio", class Audio { constructor() { return audio; } });
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: capture } });
   const api: NativeVoiceApi = {
-    nativeVoiceCapability: vi.fn(async () => ({ available: true })),
+    nativeVoiceCapability: vi.fn(async () => ({ available: true, camera: { available: true } })),
     startNativeVoice: vi.fn(async (request) => {
       for (const listener of listeners) listener({ type: "started", version: "v3", sessionId: request.sessionId });
     }),

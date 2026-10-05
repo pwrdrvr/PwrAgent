@@ -89,7 +89,7 @@ export function DecisionModelDefaults(props: {
       : resolved.model === "jev" ? secrets.jevApiKey.configured
         ? <>Runs {resolved.jevModel} on TypeSafe.</>
         : <>Runs {resolved.jevModel} on TypeSafe once it has an API key, under Providers → {DECISION_PROVIDER_NAMES.jev}.</>
-        : "Nothing uses a decision model.";
+        : "Not set up. Live voice offers camera cues once the local decision model is chosen.";
   return (
     <SettingsSection
       eyebrow="Defaults"
@@ -121,9 +121,9 @@ export function DecisionModelDefaults(props: {
           checked={resolved.cameraCues && resolved.model === "local"}
           disabled={props.saving}
           sub="Live voice can send camera frames to the decision model, so it can react to a gesture or to you stepping away."
-          lockedReason={resolved.model === "local"
-            ? undefined
-            : "Camera frames go only to the local decision model, so they never leave this Mac."}
+          lockedReason={resolved.model === "local" ? undefined
+            : resolved.model === "off" ? "Choose the local decision model to use camera cues."
+              : "Camera frames go only to the local decision model, so they never leave this Mac."}
           onChange={async (cameraCues) => await save({ cameraCues })}
         />
       </div>

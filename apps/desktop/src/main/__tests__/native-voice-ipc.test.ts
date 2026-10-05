@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
   classify: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
   inFlight: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
-  decisionSettings: {} as DesktopDecisionModelSettings,
+  decisionSettings: { model: "local" } as DesktopDecisionModelSettings,
   decisionApiKey: vi.fn(async (): Promise<string | undefined> => undefined),
   disconnects: new Set<() => void>(),
   mainWindowIds: new Set<number>(), text: vi.fn(async () => {}),
@@ -54,7 +54,7 @@ vi.mock("../window-channels", () => ({
 import { registerNativeVoiceIpcHandlers } from "../ipc/native-voice";
 import { readOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
 
-beforeEach(() => { vi.clearAllMocks(); mocks.decisionSettings = {}; mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.decisionSettings = { model: "local" }; mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
 afterEach(() => vi.useRealTimers());
 
 describe("native voice IPC permission boundary", () => {
@@ -131,6 +131,10 @@ describe("native voice IPC permission boundary", () => {
     const frame = { ...target, image: "data:image/jpeg;base64,AA==" };
     const capability = () => mocks.handlers.get(NATIVE_VOICE_CAPABILITY_CHANNEL)!() as unknown as Promise<{ camera?: { available: boolean; reason?: string } }>;
     await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-settings-thread", sdp: "v=0\r\nfixture" });
+    // Nothing set up: no camera.
+    mocks.decisionSettings = {};
+    await expect(capability()).resolves.toMatchObject({ camera: { available: false, reason: expect.stringContaining("Choose a decision model") } });
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true })).rejects.toThrow("Choose a decision model");
     // A hosted decision model never receives camera frames.
     mocks.decisionSettings = { model: "jev" };
     await expect(capability()).resolves.toMatchObject({ camera: { available: false, reason: expect.stringContaining("frames stay on this Mac") } });

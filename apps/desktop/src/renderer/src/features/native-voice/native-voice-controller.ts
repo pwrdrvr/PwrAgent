@@ -48,8 +48,8 @@ export type VoiceView = {
   cameraWarming?: boolean;
   cameraCue?: string;
   cameraError?: string;
-  /** Why Settings keeps camera cues off for this session, if it does. */
-  cameraUnavailable?: string;
+  /** Settings has a decision model that can read camera cues. Without one the camera is not offered. */
+  cameraOffered?: boolean;
   cameraDiagnostics?: VoiceCameraDiagnostics;
   endedAfterAway?: boolean;
   /** When the session went live, for the elapsed-time label. Billing runs from here. */
@@ -258,7 +258,7 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraUnavailable: undefined, cameraDiagnostics: undefined, transcript: [], actions: [], cameraCues: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraOffered: undefined, cameraDiagnostics: undefined, transcript: [], actions: [], cameraCues: [],
     });
     this.watchTurns(resources, threadId);
     try {
@@ -267,7 +267,7 @@ export class NativeVoiceController {
       if (!capability.available) throw new Error(capability.reason ?? "Live voice is unavailable.");
       this.publish({
         status: "connecting",
-        cameraUnavailable: capability.camera?.available === false ? capability.camera.reason ?? "Camera cues are off." : undefined,
+        cameraOffered: capability.camera?.available === true,
       });
       const peer = this.platform.peer();
       resources.peer = peer;

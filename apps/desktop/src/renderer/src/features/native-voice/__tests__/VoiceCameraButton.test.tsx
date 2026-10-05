@@ -24,7 +24,7 @@ function diagnostics(change: Partial<VoiceCameraDiagnostics> = {}): VoiceCameraD
 }
 
 beforeEach(() => {
-  view = { status: "listening", muted: false, transcript: [], actions: [] };
+  view = { status: "listening", muted: false, cameraOffered: true, transcript: [], actions: [] };
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); });
@@ -38,13 +38,12 @@ describe("camera voice control", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("says why Settings keeps cues off instead of trying to turn them on", () => {
-    render(<VoiceCameraButton controller={controller} view={{ ...view, cameraUnavailable: "Camera cues are off in Settings → AI Providers." }} />);
-    const button = screen.getByRole("button", { name: "Turn on camera cues" });
-    expect(button).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(button);
-    expect(controller.setCamera).not.toHaveBeenCalled();
-    expect(screen.getByText("Camera cues are off in Settings → AI Providers.")).toBeInTheDocument();
+  it("is absent without a decision model that reads camera cues, but stays to turn a running camera off", () => {
+    const result = render(<VoiceCameraButton controller={controller} view={{ ...view, cameraOffered: false }} />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    result.rerender(<VoiceCameraButton controller={controller} view={{ ...view, cameraOffered: false, camera: "on" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Turn off camera cues" }));
+    expect(controller.setCamera).toHaveBeenCalledWith(false);
   });
 
   it("keeps opt-out available during permission and warmup waiting, with the preview in the dock", () => {

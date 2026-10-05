@@ -397,7 +397,8 @@ realtime model incorporated the observation into its next answer.
 
 Settings → AI Providers configures the decision model. **Defaults →
 Decisions** picks it (the local decision model, TypeSafe Jev, or Off) and holds
-the **Camera cues in live voice** switch. Both providers speak TypeSafe's
+the **Camera cues in live voice** switch. Off is the default: with nothing set
+up, live voice has no camera button and none of the camera features below. Both providers speak TypeSafe's
 [System One API](https://docs.typesafe.ai/api): `POST <base URL>/v1/systemone`
 with `model`, `state` and typed `questions`. The Providers index lists both,
 each with its own screen:
@@ -412,9 +413,10 @@ each with its own screen:
   console and docs.
 
 Camera frames go only to the local decision model, and the endpoint must be an
-address on this Mac: `localhost`, `127.0.0.0/8` or `::1`, with no path. Jev
-takes text only, so choosing it, or turning the switch off, keeps the camera
-button reachable but inert, with the reason in its tooltip. Main re-reads the
+address on this Mac: `localhost`, `127.0.0.0/8` or `::1`, with no path. The
+camera button appears only when the local decision model is chosen and the
+switch is on; Jev takes text only, so choosing it hides the button too. A
+session reads this when it starts, and main re-reads the
 setting before every frame, so turning cues off mid-session stops the next
 frame; the local API key is read once, when the camera turns on.
 

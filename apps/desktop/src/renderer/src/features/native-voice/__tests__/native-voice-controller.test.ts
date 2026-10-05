@@ -308,17 +308,21 @@ describe("voice camera ownership", () => {
     await f.controller.stop();
   });
 
-  it("carries Settings' reason for keeping camera cues off into the session", async () => {
-    const f = fixture();
-    vi.mocked(f.api.nativeVoiceCapability).mockResolvedValue({
-      available: true, camera: { available: false, reason: "Camera cues need the local decision model, so frames stay on this Mac." },
-    });
-    const start = f.controller.start("fixture-thread");
-    await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce());
-    f.connect();
-    await start;
-    expect(f.controller.getView().cameraUnavailable).toContain("local decision model");
-    await f.controller.stop();
+  it("offers the camera only when Settings has a decision model that reads it", async () => {
+    for (const [camera, offered] of [
+      [{ available: true }, true],
+      [{ available: false, reason: "Choose a decision model in Settings → AI Providers to use camera cues." }, false],
+      [undefined, false],
+    ] as const) {
+      const f = fixture();
+      vi.mocked(f.api.nativeVoiceCapability).mockResolvedValue({ available: true, ...(camera ? { camera } : {}) });
+      const start = f.controller.start("fixture-thread");
+      await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce());
+      f.connect();
+      await start;
+      expect(f.controller.getView().cameraOffered).toBe(offered);
+      await f.controller.stop();
+    }
   });
 
   it("shows a camera failure without Electron's IPC wrapper", async () => {
