@@ -84,6 +84,25 @@ describe("Codex launch recovery notice", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Another working Codex installation is available.");
   });
 
+  it.each([
+    ["codex.CMD", "Command failed: cmd.exe /d /s /c \"C:\\Tools\\codex.CMD --version\"\n'node' is not recognized"],
+    ["codex.EXE", "Command failed: C:\\Tools\\codex.EXE --version"],
+    ["CODEX.EXE", "Error: spawn C:\\Tools\\CODEX.EXE ENOENT"],
+  ])("reports a failed Windows %s executable", (executable, failureReason) => {
+    render(<NoticeHarness discovery={{
+      candidates: [{
+        command: `C:\\Tools\\${executable}`,
+        executable: true,
+        selected: false,
+        source: "path",
+        versionFailureReason: failureReason,
+      }],
+    }} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
+    expect(screen.getByRole("button", { name: "Open Codex settings" })).toBeInTheDocument();
+  });
+
   it.each(["not_found", "codex_too_old", "version_not_reported", "version_probe_timed_out"])(
     "does not misdiagnose %s as a broken installation", (failureReason) => {
       expect(findCodexLaunchFailure({

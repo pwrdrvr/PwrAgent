@@ -229,6 +229,14 @@ export function ModelsSettings(props: {
     }
     setRefreshingCatalog(true);
     try {
+      if (refreshModels) {
+        if (!props.desktopApi.refreshCodexDiscovery) {
+          throw new Error("Codex executable discovery is unavailable in this build.");
+        }
+        await props.desktopApi.refreshCodexDiscovery({
+          discoveryIntent: "settings-user-action",
+        });
+      }
       const response = await props.desktopApi.listBackends({
         includeUnavailable: true,
         ...(refreshModels

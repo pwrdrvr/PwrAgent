@@ -10,8 +10,8 @@ type CodexLaunchFailure = { command: string; reason: string };
 export function isCodexLaunchFailureReason(reason: string): boolean {
   return reason === "not_executable"
     || reason.startsWith("Codex CLI failed to launch:")
-    || /^Command failed: [^\n]*\bcodex(?:\.cmd|\.exe)?(?:\s|$)/.test(reason)
-    || /\bspawn\b[^\n]*[\\/]codex(?:\.exe)?\s+(?:ENOENT|ENOTDIR|EACCES|EPERM)\b/.test(reason)
+    || /^Command failed: [^\n]*\bcodex(?:\.cmd|\.exe)?(?:\s|$)/i.test(reason)
+    || /\bspawn\b[^\n]*[\\/]codex(?:\.exe)?\s+(?:ENOENT|ENOTDIR|EACCES|EPERM)\b/i.test(reason)
     || reason.includes("Missing optional dependency @openai/codex");
 }
 
