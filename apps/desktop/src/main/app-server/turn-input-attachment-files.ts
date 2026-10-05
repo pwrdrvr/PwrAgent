@@ -2,10 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
-  readdir,
   realpath,
   rename,
-  rm,
   stat,
   unlink,
   utimes,
@@ -22,7 +20,6 @@ import { resolveActiveProfilePath } from "../profile";
 import { imageInputFileRoot } from "./image-input-files";
 import { resolveReadableLocalFilePath } from "./local-file-input";
 
-export const TURN_INPUT_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_TURN_INPUT_ATTACHMENT_BYTES = 128 * 1024 * 1024;
 
 export type TurnInputAttachmentUpload = {
@@ -91,9 +88,8 @@ export async function stageTurnInputAttachment(
     ]);
   }
 
-  void cleanupOldTurnInputAttachments(root, new Set([filePath])).catch(
-    () => undefined,
-  );
+  // Replay and retained cross-thread inputs keep these paths. Preserve their
+  // bytes until removal is based on references rather than attachment age.
 
   return upload.type === "localImage"
     ? {
@@ -350,27 +346,4 @@ export function sanitizeTurnAttachmentName(
   return sanitized && sanitized !== "." && sanitized !== ".."
     ? sanitized
     : fallback;
-}
-
-async function cleanupOldTurnInputAttachments(
-  root: string,
-  excludedFiles: ReadonlySet<string>,
-): Promise<void> {
-  const cutoff = Date.now() - TURN_INPUT_ATTACHMENT_MAX_AGE_MS;
-  const entries = await readdir(root).catch(() => []);
-  await Promise.all(
-    entries.map(async (entry) => {
-      const entryPath = path.join(root, entry);
-      const children = await readdir(entryPath).catch(() => []);
-      if (children.some((child) => excludedFiles.has(path.join(entryPath, child)))) {
-        return;
-      }
-      const info = await stat(entryPath).catch(() => undefined);
-      if (info?.isDirectory() && info.mtimeMs < cutoff) {
-        await rm(entryPath, { recursive: true, force: true }).catch(
-          () => undefined,
-        );
-      }
-    }),
-  );
 }
