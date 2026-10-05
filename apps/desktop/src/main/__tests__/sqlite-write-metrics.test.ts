@@ -2848,7 +2848,7 @@ describe("sqlite write metrics", () => {
     });
   });
 
-  it("serves one non-owner MCP broker request without sqlite writes", async () => {
+  it("serves 100 non-owner MCP broker requests without sqlite writes", async () => {
     const instances = new AppRuntimeInstanceStore(stateDb);
     const discovery = new McpConnectionBrokerDiscovery({
       filePath: path.join(tempDir, "mcp-broker.json"),
@@ -2899,12 +2899,13 @@ describe("sqlite write metrics", () => {
         effectiveMessagingEnabled: false,
       });
       await viewer.start();
-      const { result, writes } = await measureSqliteWrites(async () =>
-        await viewer.listConnections(),
-      );
-      expect(result.map((connection) => connection.id)).toContain("pwrsnap");
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let request = 0; request < 100; request++) {
+          expect((await viewer.listConnections()).map((connection) => connection.id)).toContain("pwrsnap");
+        }
+      });
       expectSqliteWriteBudget({
-        note: "serve one non-owner MCP broker list request",
+        note: "serve 100 non-owner MCP broker list requests: read-only, 0 MB/day of SQLite writes",
         scenario: "mcp-broker-request",
         writes,
       });
