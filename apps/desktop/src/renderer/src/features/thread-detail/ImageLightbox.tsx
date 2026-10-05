@@ -292,6 +292,8 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   /** Bumped whenever the notice closes, so a save still in flight when the
    *  operator cancels cannot go on to run the scripts. */
   const noticeGeneration = useRef(0);
+  /** Where focus goes once the interactive frame is up. */
+  const focusAfterStart = useRef<HTMLElement | null>(null);
   const closeNotice = (): void => {
     noticeGeneration.current += 1;
     setNoticeOpen(false);
@@ -329,6 +331,15 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     autoOpened.current = true;
     setSvgActive(true);
   }, [preferences.autoOpen, svgDocument]);
+  // The notice that held focus is gone, and the viewport stops being a tab
+  // stop in interactive mode, so either would leave focus on <body>.
+  useEffect(() => {
+    const target = focusAfterStart.current;
+    focusAfterStart.current = null;
+    if (!svgActive || !target?.isConnected) return;
+    if (target.tabIndex >= 0) target.focus();
+    else target.closest<HTMLElement>(".image-lightbox")?.focus();
+  }, [svgActive]);
   useEffect(() => {
     if (!svgActive) return;
     const handleMessage = (event: MessageEvent) => {
@@ -354,6 +365,8 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
     autoOpened.current = true;
     noticeGeneration.current += 1;
     setNoticeOpen(false);
+    focusAfterStart.current = noticeOpener.current
+      ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     noticeOpener.current = null;
     setSvgSearchOpen(false);
     setSvgActive(true);
@@ -378,6 +391,7 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
   /** The notice asks one thing: whether to trust SVG scripts. Opening SVGs
    *  interactive is a display preference, and lives only in Settings. */
   const acceptNotice = async (always: boolean): Promise<void> => {
+    if (noticeSaving) return;
     if (always && preferences.save) {
       const generation = noticeGeneration.current;
       setNoticeSaving(true);
@@ -531,14 +545,16 @@ function LightboxImage({ src, alt, meta, actions, tooltip, interactiveSvg, onClo
             autoFocus onClick={closeNotice}>
             Cancel
           </button>
-          {/* Offered only where the choice can be kept. */}
+          {/* Offered only where the choice can be kept. aria-disabled, not
+              disabled, while saving: Chromium drops focus from a control that
+              disables itself, and a failed save needs focus still here. */}
           {preferences.save ? (
-            <button type="button" className="image-lightbox__svg-notice-always" disabled={noticeSaving}
+            <button type="button" className="image-lightbox__svg-notice-always" aria-disabled={noticeSaving || undefined}
               onClick={() => { void acceptNotice(true); }}>
               Always Run
             </button>
           ) : null}
-          <button type="button" className="image-lightbox__svg-notice-run" disabled={noticeSaving}
+          <button type="button" className="image-lightbox__svg-notice-run" aria-disabled={noticeSaving || undefined}
             onClick={() => { void acceptNotice(false); }}>
             Run Once
           </button>

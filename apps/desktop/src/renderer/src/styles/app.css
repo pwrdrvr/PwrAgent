@@ -33420,7 +33420,7 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: pointer;
 }
 
-.image-lightbox__svg-notice-always:hover:not(:disabled) {
+.image-lightbox__svg-notice-always:hover:not([aria-disabled="true"]) {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
 }
@@ -33430,7 +33430,7 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
-.image-lightbox__svg-notice-always:disabled {
+.image-lightbox__svg-notice-always[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }
@@ -33447,7 +33447,7 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: pointer;
 }
 
-.image-lightbox__svg-notice-run:hover:not(:disabled) {
+.image-lightbox__svg-notice-run:hover:not([aria-disabled="true"]) {
   background: var(--accent-strong);
 }
 
@@ -33456,7 +33456,7 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
-.image-lightbox__svg-notice-run:disabled {
+.image-lightbox__svg-notice-run[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }

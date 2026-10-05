@@ -504,7 +504,10 @@ describe("ImageLightbox, SVG script notice", () => {
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save });
     fireEvent.click(screen.getByRole("button", { name: "Interact with SVG" }));
     fireEvent.click(screen.getByRole("button", { name: "Always Run" }));
-    expect(screen.getByRole("button", { name: "Run Once" })).toBeDisabled();
+    // aria-disabled, so the focused Always Run keeps focus in Chromium.
+    expect(screen.getByRole("button", { name: "Always Run" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
+    expect(screen.queryByTitle("Interactive SVG: Flamegraph")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await act(async () => { finishSave(true); });
@@ -524,6 +527,17 @@ describe("ImageLightbox, SVG script notice", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(interact).toHaveFocus();
+  });
+
+  it("returns focus to the opener once the scripts run", async () => {
+    await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
+    const interact = screen.getByRole("button", { name: "Interact with SVG" });
+    interact.focus();
+    fireEvent.click(interact);
+    fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
+
+    expect(await screen.findByTitle("Interactive SVG: Flamegraph")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show image preview" })).toHaveFocus();
   });
 
   it("does not let a later ready-to-use setting undo a Preview the operator chose", async () => {

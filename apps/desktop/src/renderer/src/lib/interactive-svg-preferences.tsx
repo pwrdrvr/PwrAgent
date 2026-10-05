@@ -11,7 +11,7 @@ export type InteractiveSvgPreferences = {
   /** Open an SVG with scripts straight into its interactive frame. */
   autoOpen: boolean;
   /** Absent where the profile's settings cannot be written; the notice then
-   *  offers no "remember" choices it could not keep. */
+   *  offers only Run Once, never an Always Run it could not keep. */
   save?: (patch: InteractiveSvgPreferencePatch) => Promise<boolean>;
 };
 

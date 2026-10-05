@@ -139,6 +139,11 @@ export function GeneralSettings(props: {
   // always implied it, as the lightbox reads it.
   const trustsSvgScripts =
     interactiveSvgSkipNotice.value || interactiveSvgAutoOpen.value;
+  // The badge names whichever key turned trust on.
+  const svgTrustSource =
+    interactiveSvgSkipNotice.value || !interactiveSvgAutoOpen.value
+      ? interactiveSvgSkipNotice
+      : interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const messagingAcknowledgment =
@@ -248,7 +253,7 @@ export function GeneralSettings(props: {
             disabled={props.saving}
             label="Run SVG scripts without asking"
             sub="Clicking an SVG runs its scripts in an isolated frame, with no notice first."
-            source={sourceBadge(interactiveSvgSkipNotice)}
+            source={sourceBadge(svgTrustSource)}
             onChange={(next) => {
               // Opening interactive runs scripts too, so it goes off with trust.
               return props.onInteractiveSvgChange(next
