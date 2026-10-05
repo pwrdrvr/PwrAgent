@@ -50,6 +50,8 @@ export type ComposerQueuedTurnSnapshot = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /** Owner-generated display title for a long message; see `ThreadQueuedTurnSummary`. */
+  title?: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];

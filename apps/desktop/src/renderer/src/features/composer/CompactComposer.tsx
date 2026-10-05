@@ -88,6 +88,14 @@ export type CompactComposerSettingsMenu = {
   onToggleFastMode?: (enabled: boolean) => void;
 };
 
+/** A queued message the host took back so the operator can edit it. */
+export type CompactComposerDraftRestore = {
+  id: number;
+  draft: string;
+  imageAttachments: NavigationLaunchpadImageAttachment[];
+  fileAttachments: NavigationLaunchpadFileAttachment[];
+};
+
 export type CompactComposerProps = {
   busy?: boolean;
   /**
@@ -101,6 +109,14 @@ export type CompactComposerProps = {
   /** Shared draft store for a failed submission displaced by newer text. */
   draftStore?: ComposerDraftStore;
   draftScopeKey?: string;
+  /**
+   * Loads a message into the field, after anything already typed there, so
+   * taking a queued message back never costs the operator a draft. Applied
+   * once per `id`; the host clears it in `onDraftRestoreApplied`, so a
+   * remount does not load it a second time.
+   */
+  draftRestore?: CompactComposerDraftRestore;
+  onDraftRestoreApplied?: (id: number) => void;
   executionMode?: ThreadExecutionMode;
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
@@ -368,6 +384,40 @@ export function CompactComposer(props: CompactComposerProps) {
     props.draftScopeKey,
     props.draftStore,
   ]);
+
+  const appliedDraftRestoreIdRef = useRef<number | undefined>(undefined);
+  const { draftRestore, onDraftRestoreApplied } = props;
+  useEffect(() => {
+    if (!draftRestore || appliedDraftRestoreIdRef.current === draftRestore.id) {
+      return;
+    }
+    appliedDraftRestoreIdRef.current = draftRestore.id;
+    const current = latestMentionSnapshotRef.current;
+    const keepCurrent = current.draft.trim().length > 0;
+    const next = {
+      draft: keepCurrent
+        ? `${current.draft.trimEnd()}\n\n${draftRestore.draft}`
+        : draftRestore.draft,
+      skillTokens: keepCurrent ? current.skillTokens : [],
+    };
+    const images = [
+      ...latestImageAttachmentsRef.current,
+      ...draftRestore.imageAttachments,
+    ];
+    const files = [
+      ...latestFileAttachmentsRef.current,
+      ...draftRestore.fileAttachments,
+    ];
+    mentions.clear();
+    mentions.restore(next);
+    setImageAttachments(images);
+    setFileAttachments(files);
+    latestMentionSnapshotRef.current = next;
+    latestImageAttachmentsRef.current = images;
+    latestFileAttachmentsRef.current = files;
+    onDraftRestoreApplied?.(draftRestore.id);
+    requestAnimationFrame(() => mentions.inputRef.current?.focus());
+  }, [draftRestore, mentions, onDraftRestoreApplied]);
 
   useEffect(() => {
     if (!imagesSupported && imageAttachments.length > 0) {

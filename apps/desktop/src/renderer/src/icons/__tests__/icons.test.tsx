@@ -21,6 +21,7 @@ import {
   NewThreadIcon,
   OpenAIIcon,
   PackageIcon,
+  PencilIcon,
   PinIcon,
   PlugIcon,
   PopoutIcon,
@@ -30,6 +31,7 @@ import {
   SkillIcon,
   SmileyIcon,
   TelegramIcon,
+  TrashIcon,
   UnlinkedDotIcon,
   UserIcon,
   WorktreeIcon,
@@ -64,6 +66,8 @@ const ALL_ICONS = [
   ["UserIcon", UserIcon],
   ["PlugIcon", PlugIcon],
   ["PackageIcon", PackageIcon],
+  ["PencilIcon", PencilIcon],
+  ["TrashIcon", TrashIcon],
   ["ShieldIcon", ShieldIcon],
 ] as const;
 

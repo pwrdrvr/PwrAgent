@@ -98,6 +98,50 @@ describe("composer band bounds", () => {
     expect(combinedFailure).toMatch(/min-height:\s*132px/);
   });
 
+  it("bounds the Star Map chat card's band the same way", () => {
+    // The floating chat stacked its queued turns as loose children of a body
+    // that clips, so a long queue pushed the compact composer out of the card.
+    const band = cssRuleBody(".star-map-chat-card__band");
+    expect(band).toMatch(/flex:\s*0 1 auto/);
+    expect(band).toMatch(/min-height:\s*0/);
+    expect(band).toMatch(/overflow-y:\s*auto/);
+    // Unlike the composer's, a percentage is right here: the card's height is
+    // inline, so the body it resolves against is definite.
+    expect(band).toMatch(/max-height:\s*\d+%/);
+    expect(ruleBody(".star-map-chat-card__band:empty")).toMatch(
+      /display:\s*none/,
+    );
+    // The composer itself never gives up height to the rows above it.
+    expect(ruleBody(".compact-composer")).toMatch(/flex:\s*0 0 auto/);
+    // The transcript takes the remainder. An `auto` basis made it shrink in
+    // proportion to its content, which held a long thread's band to a few
+    // rows no matter how far under its cap the band was.
+    expect(cssRuleBody(".star-map-chat-card__transcript")).toMatch(
+      /flex:\s*1 1 0;/,
+    );
+  });
+
+  it("fades a band's edges only while content lies past them", () => {
+    // macOS hides overlay scrollbars, so without this a band of twenty queued
+    // turns reads as a band of three.
+    for (const band of [
+      ".composer > .composer__pending-controls > .composer__band",
+      ".star-map-chat-card__band",
+    ]) {
+      expect(cssRuleBody(band)).toMatch(/container-type:\s*scroll-state/);
+    }
+    expect(appCss).toMatch(/@container scroll-state\(scrollable: top\)/);
+    expect(appCss).toMatch(/@container scroll-state\(scrollable: bottom\)/);
+    // A scroll-driven animation keeps the last value of a timeline that goes
+    // inactive, which left a top fade over a band that had drained below its
+    // cap while scrolled to the end.
+    expect(cssRuleBody(".composer > .composer__pending-controls > .composer__band"))
+      .not.toMatch(/animation-timeline/);
+    expect(cssRuleBody(".star-map-chat-card__band")).not.toMatch(
+      /animation-timeline/,
+    );
+  });
+
   it("insets a history error even when no transcript list was created", () => {
     expect(ruleBody(".transcript-panel > .transcript-error")).toMatch(
       /margin:\s*12px 16px/,

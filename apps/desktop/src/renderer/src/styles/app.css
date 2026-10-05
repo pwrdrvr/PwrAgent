@@ -18268,9 +18268,12 @@ a.button {
    keeps room for the thinking indicator. So no padding here, and no
    override of the items rule either: the card takes the transcript's own
    spacing rather than restating it. */
+/* A zero basis, so the transcript takes what the band and composer leave.
+   With `auto` it shrank in proportion to its content height, and a long
+   transcript squeezed the band to three rows, well under its cap. */
 .star-map-chat-card__transcript {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
@@ -18441,16 +18444,54 @@ a.button {
   user-select: text;
 }
 
+/* The card's band: every transient row between the transcript and the
+   compact composer — live work, the send error or notice, queued turns —
+   the same set of rows the full thread view keeps in `.composer__band`.
+   Before it existed these were loose children of the body that could not
+   shrink, so a long queue pushed the composer past the card's clipped bottom
+   edge. Now the band is capped at a share of the body and scrolls, and the
+   order the body gives up height in is the main window's: transcript first,
+   then the band, never the composer. The body's height is the card's own
+   inline height, so the percentage resolves. See
+   `styles/__tests__/composer-band-bounds.test.ts`. */
+.star-map-chat-card__band {
+  --rail-band-gap: 6px;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--rail-band-gap);
+  min-height: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.star-map-chat-card__band:empty {
+  display: none;
+}
+
+/* The rows keep their content height and let the band scroll; a flex item's
+   default `min-height: auto` already guarantees that, this says it aloud. */
+.star-map-chat-card__band > * {
+  flex-shrink: 0;
+}
+
 /* The full thread view surfaces monitor jobs and native sub-agents in the
    band above its composer. A floating chat is still an operating surface for
    that same thread, so carry the shared strip into the equivalent position
    instead of making the operator open the full window to discover live work.
    The component returns null while empty, leaving no reserved gap. */
-.star-map-chat-card > .live-strip {
-  flex: 0 0 auto;
+.star-map-chat-card__band > .live-strip {
   padding: 4px 0;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
+}
+
+/* The band draws the divider and the inset now. */
+.star-map-chat-card__band > .star-map-chat-card__error,
+.star-map-chat-card__band > .star-map-chat-card__notice {
+  padding: 0 2px;
+  border-top: 0;
 }
 
 /* Compact composer: for surfaces with no vertical budget. The field sits
@@ -31828,10 +31869,11 @@ button.pricing-token-miser__folded:focus-visible {
    stops a tall display from handing the band half the column. See
    `styles/__tests__/composer-band-bounds.test.ts`. */
 .composer > .composer__pending-controls > .composer__band {
+  --rail-band-gap: 12px;
   display: flex;
   flex: 0 1 auto;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--rail-band-gap);
   min-height: 0;
   max-height: min(40vh, 300px);
   overflow-y: auto;
@@ -31849,6 +31891,89 @@ button.pricing-token-miser__folded:focus-visible {
 /* Same specificity as the rule above, so `display: none` wins by order. */
 .composer > .composer__pending-controls > .composer__band:empty {
   display: none;
+}
+
+/* Overflow cue for the capped bands (this one and the Star Map chat card's).
+   macOS draws no scrollbar until the operator scrolls, so a band holding
+   twenty queued messages looked like a band holding three, with the fourth
+   sliced at the edge. Each edge now fades into the surface while content
+   lies past it.
+
+   The band is a scroll-state container and its own ::before / ::after are
+   the fades: sticky to the scrollport edges, zero net height (each pulls
+   back its own height plus the band's gap), and shown by a scroll-state
+   query. The query is re-evaluated on every layout, so a band that drains
+   below its cap while scrolled to the end drops the fade with it. A
+   scroll-driven `animation-timeline: scroll(self)` mask was tried first and
+   does not: Chromium holds the last value of a timeline that goes inactive,
+   which left a fade over the first row of a two-row band.
+
+   The fades paint the band's surface color, so each band names it. */
+.composer > .composer__pending-controls > .composer__band {
+  container-type: scroll-state;
+  --rail-band-fade-color: var(--bg-app);
+}
+
+.star-map-chat-card__band {
+  container-type: scroll-state;
+  --rail-band-fade-color: var(--bg-panel-elevated);
+}
+
+.composer__band::before,
+.composer__band::after,
+.star-map-chat-card__band::before,
+.star-map-chat-card__band::after {
+  content: "";
+  position: sticky;
+  z-index: 2;
+  flex-shrink: 0;
+  height: 24px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.composer__band::before,
+.star-map-chat-card__band::before {
+  top: 0;
+  margin-bottom: calc(-24px - var(--rail-band-gap));
+  background: linear-gradient(
+    to bottom,
+    var(--rail-band-fade-color) 0%,
+    transparent 100%
+  );
+}
+
+.composer__band::after,
+.star-map-chat-card__band::after {
+  bottom: 0;
+  margin-top: calc(-24px - var(--rail-band-gap));
+  background: linear-gradient(
+    to top,
+    var(--rail-band-fade-color) 0%,
+    transparent 100%
+  );
+}
+
+@container scroll-state(scrollable: top) {
+  .composer__band::before,
+  .star-map-chat-card__band::before {
+    opacity: 1;
+  }
+}
+
+@container scroll-state(scrollable: bottom) {
+  .composer__band::after,
+  .star-map-chat-card__band::after {
+    opacity: 1;
+  }
+}
+
+/* A control that Tab scrolls to an edge stops clear of the fade (24px plus
+   the ring's reach), the same way the transcript's fades are handled. */
+.composer__band :where(:focus-visible),
+.star-map-chat-card__band :where(:focus-visible) {
+  scroll-margin-block: 28px;
 }
 
 /* In the thread column the composer may shrink — only its band can — so a
@@ -32326,8 +32451,24 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
+/* A queued message is one line: chevron, short state label, title. Actions
+   float over the line's right end on hover or focus, and anything longer — an
+   error, the opened message — takes a line of its own below. Twenty queued
+   messages are twenty 32px rows, not twenty cards. */
 .composer__queued--message {
-  grid-template-columns: minmax(0, 1fr) auto;
+  --queued-row-bg: var(--bg-panel-elevated);
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  min-height: 32px;
+  padding: 0 8px 0 4px;
+  background: var(--queued-row-bg);
+}
+
+.composer__queued--message:hover {
+  border-color: var(--border-strong);
 }
 
 .composer__queued--steer {
@@ -32345,6 +32486,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__queued--scheduled {
+  --queued-row-bg: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
   border-color: var(--accent-border);
   background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
 }
@@ -32355,6 +32497,10 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__queued--failed {
   border-color: color-mix(in srgb, var(--status-error) 60%, var(--border-subtle));
+}
+
+.composer__queued--message.composer__queued--failed {
+  --queued-row-bg: color-mix(in srgb, var(--danger-soft) 40%, var(--bg-panel-elevated));
 }
 
 .composer__queued--failed .composer__queued-label,
@@ -32432,6 +32578,213 @@ button.pricing-token-miser__folded:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.composer__queued-line {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 30px;
+}
+
+.composer__queued--message .composer__queued-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.composer__queued--message .composer__queued-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* No title yet, or a message short enough to be its own: shown as typed, a
+   step quieter than a title. */
+.composer__queued-text--raw {
+  color: var(--text-secondary);
+}
+
+/* The chevron button's hit area covers the whole line (the row is the
+   positioned ancestor), so the summary opens on a click anywhere. The actions
+   stack above it. */
+.composer__queued-disclosure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.composer__queued-disclosure::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.composer__queued-disclosure:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+/* The rail's 8px border chevron (`.composer__queued-env-action-chevron`). */
+.composer__queued-chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.composer__queued-disclosure[data-open="true"] .composer__queued-chevron {
+  transform: rotate(45deg);
+}
+
+.composer__queued--message > .composer__queued-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 6px 0 36px;
+  border-radius: 0 8px 8px 0;
+  background: linear-gradient(to right, transparent, var(--queued-row-bg) 30px);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.composer__queued--message:hover > .composer__queued-actions,
+.composer__queued--message:focus-within > .composer__queued-actions,
+.composer__queued--pinned-actions > .composer__queued-actions {
+  opacity: 1;
+}
+
+.composer__queued--message > .composer__queued-actions .composer__secondary-action {
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.composer__queued-icon-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.composer__queued-icon-action:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__queued-icon-action--danger:hover:not(:disabled) {
+  color: var(--danger-text);
+}
+
+.composer__queued-icon-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.composer__queued-icon-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.composer__queued-image-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px 0 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.composer__queued-image-chip img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+/* The Star Map card's row: a size down to match the compact composer below
+   it. The opened message stays inside the band, which scrolls. */
+.composer__queued--message.composer__queued--compact {
+  min-height: 28px;
+}
+
+.composer__queued--compact .composer__queued-disclosure::after {
+  height: 28px;
+}
+
+.composer__queued--compact > .queued-message-inspector {
+  max-height: 180px;
+  margin-left: 28px;
+  font-size: 12px;
+}
+
+.composer__queued--compact .composer__queued-line {
+  gap: 6px;
+  height: 26px;
+}
+
+.composer__queued--compact .composer__queued-label {
+  font-size: 10px;
+}
+
+.composer__queued--compact .composer__queued-text {
+  font-size: 12px;
+}
+
+.composer__queued--compact > .composer__queued-actions {
+  height: 26px;
+  padding-right: 2px;
+}
+
+.composer__queued--compact .composer__queued-icon-action {
+  width: 22px;
+  height: 22px;
+}
+
+/* Second-line content sits under the label, past the chevron. */
+.composer__queued-detail,
+.composer__queued--message > .queued-message-inspector {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-left: 30px;
+}
+
+.composer__queued-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
 }
 
 /* Env-action anchor: collapsed-by-default <details> with chevron, body
@@ -40433,21 +40786,8 @@ button.pricing-token-miser__folded:focus-visible {
 
 .federation-activity__sizes { margin-top: 18px; }
 
-.queued-message-inspector-shell {
-  grid-column: 1 / -1;
-  min-width: 0;
-}
-
-.queued-message-inspector-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .queued-message-inspector {
-  margin-top: 8px;
+  margin-bottom: 8px;
   max-height: 320px;
   overflow: auto;
   padding: 8px;

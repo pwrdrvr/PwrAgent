@@ -2312,6 +2312,11 @@ export type AppServerNotification =
         displayText?: string;
         /** The owner replaced pending input, so existing previews must refresh. */
         inputUpdated?: boolean;
+        /**
+         * Generated display title. Sent on a refresh once the helper answers;
+         * an `inputUpdated` refresh without one clears the previous title.
+         */
+        title?: string;
         position?: number;
         turnId?: string;
         automationRunId?: string;

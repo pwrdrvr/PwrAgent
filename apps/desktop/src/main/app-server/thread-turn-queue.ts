@@ -37,6 +37,11 @@ export type ThreadTurnQueueEntry = {
   automationName?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /**
+   * Display-only label from `queued-message-title.ts`, set after admission
+   * for messages too long to show as typed. Never sent with the turn.
+   */
+  title?: string;
   createdAt: number;
 };
 
@@ -240,8 +245,10 @@ export class ThreadTurnQueue {
       const current = index >= 0 ? queue[index] : undefined;
       const messages = [...(current?.agentMessages ?? []), message];
       const holdReason = this.heldQueues.get(key);
+      // A title named the batch before this message joined it.
+      const { title: _staleTitle, ...base } = current ?? input;
       const entry: ThreadTurnQueueEntry = {
-        ...(current ?? input),
+        ...base,
         id: current?.id ?? input.id ?? `thread-turn:${randomUUID()}`,
         createdAt: current?.createdAt ?? input.createdAt ?? message.receivedAt,
         delivery: "queued-steer",
@@ -467,8 +474,10 @@ export class ThreadTurnQueue {
       if (index === -1) continue;
       const current = queue[index];
       if (!current) return undefined;
+      // The title named the input being replaced.
+      const { title: _staleTitle, ...rest } = current;
       const updated = {
-        ...current,
+        ...rest,
         input,
         // An operator edit replaces the complete batch. Do not subsequently
         // rebuild it from stale per-sender input when another message arrives.
@@ -497,9 +506,28 @@ export class ThreadTurnQueue {
       return [{ ...message, input }];
     });
     if (!replaced) return undefined;
-    const entry = { ...found.entry, agentMessages: messages, input: groupedAgentInput(messages) };
+    // The title named the input being replaced.
+    const { title: _staleTitle, ...rest } = found.entry;
+    const entry = { ...rest, agentMessages: messages, input: groupedAgentInput(messages) };
     this.queueFor(found.key)[found.position - 1] = entry;
     return entry;
+  }
+
+  /** Sets a still-queued entry's display title. Undefined once it has left. */
+  setQueuedEntryTitle(
+    entryId: string,
+    title: string,
+  ): ThreadTurnQueueEntry | undefined {
+    for (const queue of this.queuedEntries.values()) {
+      const index = queue.findIndex((entry) => entry.id === entryId);
+      if (index === -1) continue;
+      const current = queue[index];
+      if (!current) return undefined;
+      const updated = { ...current, title };
+      queue[index] = updated;
+      return updated;
+    }
+    return undefined;
   }
 
   async releaseEntryWithDisposition(

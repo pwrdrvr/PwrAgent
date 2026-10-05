@@ -1777,7 +1777,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Queued message").textContent).toBe(
-        "Queued nextwait your turn",
+        "Nextwait your turn",
       );
     });
     expect(startTurn).toHaveBeenCalledWith(
@@ -1795,6 +1795,158 @@ describe("StarMapChatCard start-turn queue handling", () => {
         text: "wait your turn",
       }),
     ]);
+  });
+
+  async function queueOne(overrides: Partial<DesktopApi> = {}) {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      turnId: "turn-queued",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-1",
+      queueEntryCreatedAt: 123,
+    }));
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({
+      startTurn,
+      // `messages` too, so the transcript renders the optimistic bubble.
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        replay: { entries: [], messages: [], pagination: undefined },
+      })),
+      ...overrides,
+    } as Partial<DesktopApi>);
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+    const input = await typeAndSend("Local work", "wait your turn");
+    const row = await screen.findByLabelText("Queued message");
+    await waitFor(() => {
+      expect(
+        (within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
+    return { desktopApi, input, row, store: result.current };
+  }
+
+  it("deletes a queued message through the owner and retires its transcript copy", async () => {
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: true,
+      disposition: "cancelled" as const,
+    }));
+    const { row, store } = await queueOne({ cancelQueuedTurn });
+    // The optimistic transcript bubble and the row both show the text.
+    expect(screen.getAllByText("wait your turn").length).toBeGreaterThan(1);
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    });
+
+    expect(cancelQueuedTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ queueEntryId: "queue-owner-1" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).toBeNull();
+    });
+    expect(screen.queryByText("wait your turn")).toBeNull();
+    expect(
+      store.getQueuedTurns(buildThreadComposerScopeKey("codex", "t-local")),
+    ).toEqual([]);
+  });
+
+  it("keeps a queued message the owner already started", async () => {
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: false,
+      disposition: "not_found" as const,
+    }));
+    const { row } = await queueOne({ cancelQueuedTurn });
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The queued turn is no longer waiting.",
+    );
+    expect(screen.queryByLabelText("Queued message")).not.toBeNull();
+  });
+
+  it("opens a queued message's full text from the row's chevron", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const { row } = await queueOne({ readQueuedTurn });
+    const chevron = within(row).getByRole("button", { name: "View full message" });
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(chevron);
+    });
+
+    expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "t-local",
+      queueEntryId: "queue-owner-1",
+    }));
+    const region = await within(row).findByRole("region", {
+      name: "Full queued message",
+    });
+    await waitFor(() => {
+      expect(region.textContent).toContain("wait your turn, in full");
+    });
+    const hide = within(row).getByRole("button", { name: "Hide message" });
+    expect(hide.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.click(hide);
+    });
+    expect(within(row).queryByRole("region")).toBeNull();
+  });
+
+  it("takes a queued message back into the composer, after the current draft", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: true,
+      disposition: "cancelled" as const,
+    }));
+    const { input, row } = await queueOne({ cancelQueuedTurn, readQueuedTurn });
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "half-typed note" } });
+    });
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    });
+
+    expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "t-local",
+      queueEntryId: "queue-owner-1",
+      forEdit: true,
+    }));
+    // The cancel is pinned to the content that was read, so a message that
+    // changed in between stays queued instead of being edited stale.
+    expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({
+      queueEntryId: "queue-owner-1",
+      expectedContentHash: "hash-1",
+    }));
+    await waitFor(() => {
+      expect(input.value).toBe("half-typed note\n\nwait your turn, in full");
+    });
+    expect(screen.queryByLabelText("Queued message")).toBeNull();
   });
 
   it("clears a remote queue entry only for its owning peer's lifecycle event", async () => {
@@ -1858,6 +2010,57 @@ describe("StarMapChatCard start-turn queue handling", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Queued message")).toBeNull();
     });
+  });
+
+  it("takes a generated title and drops it when the owner replaces the input", async () => {
+    const listeners: Array<(event: AgentEvent) => void> = [];
+    const onAgentEvent = vi.fn((listener: (event: AgentEvent) => void) => {
+      listeners.push(listener);
+      return () => undefined;
+    });
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      turnId: "turn-queued",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-titled",
+      queueEntryCreatedAt: 123,
+    }));
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({ onAgentEvent, startTurn });
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+    await typeAndSend("Local work", "a long queued message");
+    const row = await screen.findByLabelText("Queued message");
+    const emit = (params: Record<string, unknown>): void => {
+      act(() => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            notification: {
+              method: "thread/turnQueue/updated",
+              params: {
+                queueEntryId: "queue-owner-titled",
+                status: "queued",
+                threadId: "t-local",
+                ...params,
+              },
+            },
+          } as AgentEvent);
+        }
+      });
+    };
+    const text = (): string =>
+      row.querySelector(".composer__queued-text")?.textContent ?? "";
+
+    emit({ displayText: "a long queued message", title: "Queued work" });
+    await waitFor(() => expect(text()).toBe("Queued work"));
+
+    emit({ displayText: "the replaced message", inputUpdated: true });
+    await waitFor(() => expect(text()).toBe("the replaced message"));
   });
 });
 

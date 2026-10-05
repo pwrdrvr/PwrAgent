@@ -63,6 +63,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   resolveThreadTerminalCwd,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
@@ -1352,9 +1353,11 @@ export function ThreadView(props: ThreadViewProps) {
   const envActionRuns = readCodexEnvironmentActionRuns(
     selectedThread?.codexEnvironmentRuntime,
   );
-  const visibleEnvActionRuns = envActionRuns.filter(
-    (run) => !dismissedEnvActionRunIds.has(run.runId),
-  );
+  // Superseded first, then dismissed: dismissing the newest result must not
+  // bring back the one it replaced.
+  const visibleEnvActionRuns = withoutSupersededCodexEnvironmentActionRuns(
+    envActionRuns,
+  ).filter((run) => !dismissedEnvActionRunIds.has(run.runId));
   const selectedThreadBackend = useMemo(
     () =>
       selectedThread

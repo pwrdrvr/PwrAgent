@@ -41404,6 +41404,121 @@ script = "printf setup"
     await waitForCondition(() => codexClient.startTurnCallCount === 1);
   });
 
+  it("titles a long queued message once and drops a title the input outgrew", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "recipient", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const helperTurns: Array<{ prompt: string; resolve: (title: string) => void }> = [];
+    (
+      codexClient as unknown as {
+        generateStructuredObject: (request: { prompt: string }) => Promise<unknown>;
+      }
+    ).generateStructuredObject = (request) => new Promise((resolve) => {
+      helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const longText = "Docs child: the migration guide now covers the renamed config keys and the new default port.";
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "short", input: [{ type: "text", text: "bump the lint config" }] });
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "long", input: [{ type: "text", text: longText }] });
+    const snapshot = () => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")];
+
+    await waitForCondition(() => helperTurns.length === 1);
+    expect(helperTurns[0]!.prompt).toContain(JSON.stringify(longText));
+    // The edit lands while the first helper turn is still out, so its title
+    // names text the entry no longer holds.
+    registry.updateQueuedTurnInput("long", [{ type: "text", text: `${longText}\nAlso moved the upgrade notes.` }]);
+    helperTurns[0]!.resolve("Migration guide covers renamed keys.");
+    await waitForCondition(() => helperTurns.length === 2);
+    expect(snapshot()?.find((entry) => entry.queueEntryId === "long")?.title).toBeUndefined();
+    helperTurns[1]!.resolve("Migration guide and upgrade notes");
+    await registry.queuedMessageTitlesIdle();
+
+    expect(helperTurns).toHaveLength(2);
+    expect(snapshot()?.map((entry) => [entry.queueEntryId, entry.title])).toEqual([
+      ["short", undefined],
+      ["long", "Migration guide and upgrade notes"],
+    ]);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.title !== undefined));
+    const titled = events.filter((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.title !== undefined);
+    expect(titled).toEqual([expect.objectContaining({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: expect.objectContaining({
+          threadId: "recipient",
+          queueEntryId: "long",
+          status: "queued",
+          title: "Migration guide and upgrade notes",
+        }),
+      },
+    })]);
+  });
+
+  it("still titles a queued message whose start was refused and held", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnErrors: [new Error("start refused")],
+      threads: ["busy", "held"].map((id) => ({
+        id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
+      })),
+    });
+    const helperTurns: Array<{ prompt: string; resolve: (title: string) => void }> = [];
+    (
+      codexClient as unknown as {
+        generateStructuredObject: (request: { prompt: string }) => Promise<unknown>;
+      }
+    ).generateStructuredObject = (request) => new Promise((resolve) => {
+      helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    for (const threadId of ["busy", "held"]) {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId, turnId: `active-${threadId}`, turn: { id: `active-${threadId}` } },
+      } });
+    }
+    const busyText = "Busy child: the release notes now list every renamed setting and its replacement key.";
+    const heldText = "Held child: the import script skips archived rows and reports how many it left behind.";
+    await registry.submitTurn({ backend: "codex", threadId: "busy", queueEntryId: "busy-entry", input: [{ type: "text", text: busyText }] });
+    await registry.submitTurn({ backend: "codex", threadId: "held", queueEntryId: "held-entry", input: [{ type: "text", text: heldText }] });
+    await waitForCondition(() => helperTurns.length === 1);
+
+    // The held thread's message is still waiting behind the busy one's helper
+    // turn when its release is refused. `blocked` forgets the request; the
+    // `held` that follows for the same entry must ask again.
+    await codexClient.emit({
+      method: "turn/completed", params: { threadId: "held", turnId: "active-held", turn: { id: "active-held", status: "completed", output: [] } },
+    });
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.status === "blocked"));
+    helperTurns[0]!.resolve("Release notes list renamed settings");
+
+    await waitForCondition(() => helperTurns.length === 2);
+    expect(helperTurns[1]!.prompt).toContain(JSON.stringify(heldText));
+    helperTurns[1]!.resolve("Import script skips archived rows");
+    await registry.queuedMessageTitlesIdle();
+    expect(
+      registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "held")]
+        ?.find((entry) => entry.queueEntryId === "held-entry")?.title,
+    ).toBe("Import script skips archived rows");
+  });
+
   it("consolidates only the sender's queued message without adding a turn", async () => {
     const correspondenceStore = new ThreadCorrespondenceStore();
     const codexClient = new MockBackendClient({

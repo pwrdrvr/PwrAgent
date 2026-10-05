@@ -722,12 +722,17 @@ import {
 } from "./codex-environment-hydration-store";
 import {
   ThreadTurnQueue,
-  type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueEntry,
+  type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueImmediateSubmissionResult,
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
+import {
+  QueuedMessageTitler,
+  queuedMessageTitleSource,
+  type QueuedMessageTitleRequest,
+} from "./queued-message-title";
 import { materializeLocalImageInputs } from "./image-input-files";
 import { enrichLocalFileInputs } from "./local-file-input";
 import {
@@ -8952,6 +8957,15 @@ export class DesktopBackendRegistry {
   >();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
+  private readonly queuedMessageTitler = new QueuedMessageTitler({
+    generate: async (params) =>
+      await this.generateStructuredObject({
+        ...params,
+        helper: "queued_message_titles",
+      }),
+    apply: (request, title) => this.applyQueuedMessageTitle(request, title),
+    log: (message, fields) => backendRegistryLog.info(message, fields),
+  });
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
@@ -11141,6 +11155,14 @@ export class DesktopBackendRegistry {
   private async emitTurnQueueLifecycle(
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
+    if (event.type === "queued" || event.type === "held") {
+      // Re-queued entries (a release that put the queue back) keep the
+      // title they already have. A grouped steer that took another message
+      // arrives here untitled, so the larger batch is named again.
+      if (!event.entry.title) this.requestQueuedMessageTitle(event.entry);
+    } else {
+      this.queuedMessageTitler.forget(event.entry.id);
+    }
     const origins = event.type === "queued" && event.inputUpdated
       ? event.entry.agentMessageOrigins?.slice(-1) ?? []
       : event.entry.agentMessageOrigins
@@ -17655,6 +17677,7 @@ export class DesktopBackendRegistry {
   }
 
   private emitQueuedTurnInputUpdated(entry: ThreadTurnQueueEntry): void {
+    this.requestQueuedMessageTitle(entry);
     // This is an input refresh, not another queue admission. In particular,
     // do not replay sender correspondence lifecycle transitions.
     void this.emit({
@@ -17678,6 +17701,60 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  private requestQueuedMessageTitle(entry: ThreadTurnQueueEntry): void {
+    const source = queuedMessageTitleSource(entry.input);
+    if (!source) {
+      this.queuedMessageTitler.forget(entry.id);
+      return;
+    }
+    this.queuedMessageTitler.request({ entryId: entry.id, source });
+  }
+
+  /**
+   * Lands a generated title on its entry if the entry is still queued and
+   * still holds the text the title was written from, then refreshes every
+   * window's row the way an input edit does.
+   */
+  private applyQueuedMessageTitle(
+    request: QueuedMessageTitleRequest,
+    title: string,
+  ): void {
+    const current = this.threadTurnQueue
+      .getAllQueuedEntries()
+      .find((entry) => entry.id === request.entryId);
+    if (!current || queuedMessageTitleSource(current.input) !== request.source) {
+      return;
+    }
+    const entry = this.threadTurnQueue.setQueuedEntryTitle(request.entryId, title);
+    if (!entry) return;
+    void this.emit({
+      backend: entry.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: entry.threadId,
+          queueEntryId: entry.id,
+          queueEntryCreatedAt: entry.createdAt,
+          origin: entry.origin,
+          status: entry.manualReleaseRequired ? "held" : "queued",
+          displayText: queuedTurnDisplayText(entry.input),
+          title,
+          manualReleaseRequired: entry.manualReleaseRequired === true,
+          ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
+        },
+      },
+    }).catch((error) => {
+      backendRegistryLog.error("Could not publish queued message title", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /** Resolves once queued-message titles in flight have landed. Tests only. */
+  async queuedMessageTitlesIdle(): Promise<void> {
+    await this.queuedMessageTitler.idle();
   }
 
   canStartThreadTurnImmediately(params: {
@@ -21296,6 +21373,7 @@ export class DesktopBackendRegistry {
         position: position++,
         ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.title ? { title: entry.title } : {}),
       };
     }
   }
@@ -21320,6 +21398,7 @@ export class DesktopBackendRegistry {
           ? { manualReleaseRequired: true }
           : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.title ? { title: entry.title } : {}),
       });
       snapshot[threadKey] = queue;
     }
