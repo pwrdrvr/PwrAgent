@@ -21,11 +21,15 @@ const dependency: ThreadDependency = {
 describe("Continue after", () => {
   it("creates a dependency before the prerequisite has a PR and can cancel it", async () => {
     const manage = vi.fn(async (request) => ({ dependencies: request.action === "list" ? [] : request.action === "create" ? [dependency] : [] }));
-    const api = { manageThreadDependencies: manage, getNavigationSnapshot: vi.fn(async () => ({ threads: [thread, target] })) } as unknown as DesktopApi;
+    const query = vi.fn(async (_request: unknown, _consumerId: string) => ({ entries: [thread, target].map((row) => ({ row })), complete: true, coverage: { state: "complete" } }));
+    const release = vi.fn(async () => {});
+    const api = { manageThreadDependencies: manage, getNavigationQueryPage: query, releaseNavigationQuery: release } as unknown as DesktopApi;
     render(<ThreadDependenciesPanel thread={thread} desktopApi={api} />);
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "list", backend: "codex", threadId: "waiting" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue after…" }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Prerequisite thread" })).toBeEnabled());
+    expect(query).toHaveBeenCalledWith({ protocol: 2, consumer: "search", inventory: "owner", query: { kind: "lens", lens: "recents" }, pageSize: 100 }, expect.any(String));
+    expect(release).toHaveBeenCalledWith(query.mock.calls[0][1]);
     chooseSelectOption(screen.getByRole("combobox", { name: "Prerequisite thread" }), "Foundation · codex");
     fireEvent.change(screen.getByRole("textbox", { name: "Continuation (optional)" }), { target: { value: "Start the dependency upgrades" } });
     fireEvent.click(screen.getByRole("button", { name: "Save dependency" }));
@@ -48,6 +52,19 @@ describe("Continue after", () => {
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss after review" }));
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "dismiss", backend: "codex", threadId: "waiting", dependencyId: "dependency-1" }));
+  });
+
+  it("filters a bounded target page and releases its navigation consumer", async () => {
+    const query = vi.fn(async (_request: unknown, _consumerId: string) => ({ entries: [{ row: target }], complete: false, coverage: { state: "complete" } }));
+    const release = vi.fn(async () => {});
+    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })), getNavigationQueryPage: query, releaseNavigationQuery: release } as unknown as DesktopApi;
+    render(<ThreadDependenciesPanel thread={thread} desktopApi={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue after…" }));
+    expect(await screen.findByText("Showing a bounded page. Refine the filter to find another thread.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Find thread" }), { target: { value: "Foundation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find threads" }));
+    await waitFor(() => expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ query: { kind: "lens", lens: "recents", filter: "Foundation" }, pageSize: 100 }), expect.any(String)));
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
   });
 
   it("ignores stale responses after switching threads", async () => {
