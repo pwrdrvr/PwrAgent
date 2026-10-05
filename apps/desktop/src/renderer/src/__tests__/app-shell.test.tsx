@@ -499,7 +499,6 @@ describe("App", () => {
   });
 
   it("puts the caret in the new-thread composer after jumping to a project", async () => {
-    const threadViewImported = createDeferred<void>();
     const project = (label: string) => ({
       key: `directory:/Users/me/repos/${label}`,
       kind: "directory" as const,
@@ -547,11 +546,6 @@ describe("App", () => {
           },
         }),
         ensureDirectoryLaunchpad,
-        recordStartupProfileEvent: (event: string) => {
-          if (event === "thread-view-import:end") {
-            threadViewImported.resolve(undefined);
-          }
-        },
       }),
     });
 
@@ -605,14 +599,13 @@ describe("App", () => {
       });
     };
 
-    // The first jump loads the thread view. The second runs at the speed an
-    // operator sees, where the composer focuses itself before the sidebar
-    // reveals the project a frame later. The reveal must leave the caret
-    // where the operator will type.
+    // The first jump loads the thread view; the second uses the mounted view.
+    // Both the sidebar reveal and scoped composer focus must finish with the
+    // caret where the operator will type.
     await jumpTo("PwrAgent");
-    // The import event precedes React's component update. Keep the deferred
-    // renderer readiness and import completion in the same act scope.
-    await act(async () => { await threadViewImported.promise; });
+    // The composer becomes available after deferred readiness and the import
+    // have committed. Await that visible state: awaiting the import inside act
+    // can hold the readiness update that starts the import in act's queue.
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
     });
@@ -621,7 +614,11 @@ describe("App", () => {
     scrollIntoView.mockClear();
     await jumpTo("PwrSnap");
     await revealed("PwrSnap");
-    expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    // Changing the composer scope schedules focus in a timer, then Tiptap's
+    // animation frame. The sidebar's reveal frame can finish first.
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
   });
 
   // Settings and Automations draw over the whole shell. The sidebar and main
@@ -729,7 +726,6 @@ describe("App", () => {
 
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
-    const threadViewImported = createDeferred<void>();
     const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
     const remoteWorkspace = {
       key: "workspace:new-thread",
@@ -833,11 +829,6 @@ describe("App", () => {
         },
         onWindowFocus: () => () => undefined,
         readFederationHealth,
-        recordStartupProfileEvent: (event: string) => {
-          if (event === "thread-view-import:end") {
-            threadViewImported.resolve(undefined);
-          }
-        },
       }),
     });
 
@@ -867,13 +858,9 @@ describe("App", () => {
       federationTarget: remoteTarget,
       preferredBackend: undefined,
     }));
-    // The menu intentionally fire-and-forgets its async target callback, and
-    // thread detail is loaded after two animation frames. The bridge call can
-    // therefore finish before the composer module is ready on a loaded CI
-    // runner. Synchronize on the app's startup-profile readiness event rather
-    // than extending the query timeout.
-    await threadViewImported.promise;
-    await flushReactUpdates();
+    // The menu fire-and-forgets its target callback and the bridge can finish
+    // before lazy renderer readiness. Await the committed composer; the import
+    // event itself precedes the React update that installs the component.
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
     // The composer says where the thread will start, before anything is sent.

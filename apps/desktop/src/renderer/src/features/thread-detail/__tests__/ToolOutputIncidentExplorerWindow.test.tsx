@@ -993,7 +993,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // Await the selected output read as well as the initial accounting read.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(
@@ -1038,7 +1041,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // Await the selected output read as well as the initial accounting read.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
 
     // Gating happened, so the savings lens opens first rather than the
     // raw-output view: the question the operator has here is what it bought.
@@ -1121,7 +1127,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // Await the selected output read as well as the initial accounting read.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
 
     fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
     expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
