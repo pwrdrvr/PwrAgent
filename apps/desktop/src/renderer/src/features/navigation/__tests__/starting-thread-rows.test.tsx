@@ -136,6 +136,34 @@ describe("a thread that is still starting", () => {
     expect(screen.queryByText("No threads in this directory yet.")).not.toBeInTheDocument();
   });
 
+  it("still shows the first thread starting before any project is indexed", () => {
+    // An empty index is when navigation shows Directories in place of the
+    // thread lenses, so the operator's first thread has to surface here.
+    const starting = creation();
+    render(
+      <Sidebar
+        backends={[]}
+        browseMode="directories"
+        directories={[]}
+        inboxThreads={[]}
+        loaded
+        loading={false}
+        pendingLaunchpadCreations={[starting]}
+        selectedItemKey={starting.selectionKey}
+        threads={[]}
+        threadLensesEmpty
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(within(screen.getByRole("list", { name: "Starting threads" }))
+      .getByRole("button", { name: /^Add a crop tool, starting/ })).toBeInTheDocument();
+    expect(screen.queryByText("No directory-linked threads.")).not.toBeInTheDocument();
+  });
+
   it("lands last among the pins when its project's rows are collapsed under them", () => {
     const pinnedDirectories = [{ ...directories[0]!, directoryThreadsCollapsed: true }] as NavigationDirectorySummary[];
     const starting = creation();

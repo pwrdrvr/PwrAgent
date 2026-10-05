@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { federationReconnectDelayMs } from "../federation/federation-reconnect-policy";
 
 describe("federation reconnect policy", () => {
-  it("backs off from one second and caps every later attempt at thirty seconds", () => {
+  it("backs off from one second and caps every later attempt at one minute", () => {
     expect(
       Array.from({ length: 8 }, (_, attempt) =>
         federationReconnectDelayMs(attempt)
@@ -13,9 +13,9 @@ describe("federation reconnect policy", () => {
       4_000,
       8_000,
       16_000,
-      30_000,
-      30_000,
-      30_000,
+      32_000,
+      60_000,
+      60_000,
     ]);
   });
 });

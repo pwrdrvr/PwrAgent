@@ -24,6 +24,11 @@ type ThreadPlaceholderLayoutControls = {
 
 type ThreadPlaceholderHeaderProps = {
   backendLabel?: string;
+  /**
+   * The launchpad's machine chip portals into this slot, beside the
+   * backend chip, where the thread header names the machine afterwards.
+   */
+  machineSlotRef?: (element: HTMLSpanElement | null) => void;
   contextLabel?: string;
   desktopApi?: DesktopApi;
   projectLabel?: string;
@@ -92,6 +97,9 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
               ) : null}
               <h2 className="thread-header__compact-title">{props.title}</h2>
             </div>
+            {props.machineSlotRef ? (
+              <span className="thread-header__machine" ref={props.machineSlotRef} />
+            ) : null}
             {props.backendLabel ? (
               <span className="chip chip--backend">{props.backendLabel}</span>
             ) : null}

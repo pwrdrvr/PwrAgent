@@ -180,7 +180,7 @@ describe("McpConnectionGatewayService", () => {
     const publish = vi.spyOn(McpConnectionBrokerDiscovery.prototype, "publish");
     const service = new McpConnectionGatewayService({
       settings: createSettings(),
-      leaseManager: { id: "bootstrap-test", acquire, release: vi.fn(), snapshot: vi.fn() },
+      leaseManager: { id: "bootstrap-test", profile: "dev", acquire, release: vi.fn(), snapshot: vi.fn(), shouldRetryAcquisition: vi.fn() },
     });
     services.push(service);
     const git = new PwrGitConnectionService({

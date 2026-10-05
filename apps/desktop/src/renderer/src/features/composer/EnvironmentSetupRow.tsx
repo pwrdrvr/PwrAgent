@@ -40,17 +40,6 @@ export type EnvironmentSetupRowModel = {
   };
 };
 
-function lastOutputLine(output: string): string | undefined {
-  const lines = output.split(/\r?\n/u);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]!.trim();
-    if (line) {
-      return line;
-    }
-  }
-  return undefined;
-}
-
 /**
  * Wall clock for the elapsed counter while a run is live. Re-read when a run
  * starts: the launchpad row mounts before its first progress event, so its
@@ -115,7 +104,6 @@ export function EnvironmentSetupRow(props: {
   if (!running && model.durationMs) {
     meta.push(`ran ${formatDurationMs(model.durationMs)}`);
   }
-  const tail = lastOutputLine(output);
   const decision = model.decision;
   const actionsDisabled = Boolean(
     decision?.disabled || decision?.busy || props.retrying,
@@ -161,15 +149,11 @@ export function EnvironmentSetupRow(props: {
             <span className="composer__queued-label" aria-live="polite">
               {label}
             </span>
-            <span className="composer__queued-text">
-              {meta.join(" · ")}
-              {tail ? (
-                <>
-                  {meta.length > 0 ? " · " : ""}
-                  <span className="environment-setup-row__tail">{tail}</span>
-                </>
-              ) : null}
-            </span>
+            {/* Name, elapsed time, exit code: never a line of the output.
+                A live last line changed width with every write, so the
+                summary wrapped and unwrapped and the band jumped; the
+                output is one click away in the body. */}
+            <span className="composer__queued-text">{meta.join(" · ")}</span>
           </span>
         </button>
         <span className="composer__queued-env-action-actions">

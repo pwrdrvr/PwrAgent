@@ -1010,6 +1010,56 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("disables the thread lenses, but keeps them explainable, when there are no threads", async () => {
+    const onBrowseModeChange = vi.fn();
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[]}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        threads={[]}
+        threadLensesEmpty
+        onBrowseModeChange={onBrowseModeChange}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const tablist = screen.getByRole("tablist", { name: "Thread lenses" });
+    const tabs = within(tablist).getAllByRole("tab");
+    const directoriesTab = within(tablist).getByRole("tab", { name: "Directories" });
+    for (const tab of tabs) {
+      if (tab === directoriesTab) continue;
+      expect(tab).toHaveAttribute("aria-disabled", "true");
+      // aria-disabled, not disabled: a disabled button takes no focus, so its
+      // tooltip could never tell a keyboard user why it is off.
+      expect(tab).not.toBeDisabled();
+      fireEvent.click(tab);
+    }
+    expect(onBrowseModeChange).not.toHaveBeenCalled();
+    expect(directoriesTab).not.toHaveAttribute("aria-disabled");
+    expect(directoriesTab).toHaveAttribute("aria-selected", "true");
+
+    const updatedTab = within(tablist).getByRole("tab", { name: "Updated" });
+    fireEvent.focus(updatedTab);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Updated — all threads, most recently updated first\nNo threads yet"
+    );
+    fireEvent.blur(updatedTab);
+
+    // Attention hovers a card, not a line of text, so it carries the reason
+    // as the card's footer.
+    const attentionTab = within(tablist).getByRole("tab", { name: /^Attention/ });
+    fireEvent.focus(attentionTab);
+    expect((await screen.findByRole("tooltip")).querySelector(".attention-card__footer"))
+      .toHaveTextContent("No threads yet");
+  });
+
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {
     const onAddProjectDirectory = vi.fn(async () => undefined);
     const onCreateThread = vi.fn(async () => undefined);
@@ -9292,7 +9342,7 @@ it("reveals an added project's selected folder after its descriptor arrives and 
   }
 });
 
-it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {
+it("opens a project launchpad from the palette and reveals its folder without taking focus", async () => {
   const { scrollIntoView, restore } = withMockScrollIntoView();
   const onOpenLaunchpad = vi.fn(async () => undefined);
   const onBrowseModeChange = vi.fn();
@@ -9304,40 +9354,53 @@ it("opens a project launchpad from the palette and reveals its expanded, focused
     threads: [sharedThread], onBrowseModeChange, onCreateThread: async () => undefined,
     onOpenLaunchpad, onSelectThread: () => undefined, onThreadJumpOpenChange,
   };
+  // Stands in for the launchpad composer, which focuses itself as it opens.
+  // The reveal lands a frame later and must leave the caret there.
+  const view = (sidebarProps: Partial<Parameters<typeof Sidebar>[0]>) => (
+    <>
+      <input aria-label="New thread message" />
+      <Sidebar {...props} browseMode="directories" {...sidebarProps} />
+    </>
+  );
+  const projectHeader = (label: string): HTMLElement | undefined =>
+    [...document.querySelectorAll<HTMLElement>(".directory-row__summary")]
+      .find((header) => header.textContent?.includes(label));
   try {
-    const { rerender } = render(<Sidebar {...props} browseMode="inbox" threadJumpOpen />);
+    const { rerender } = render(view({ browseMode: "inbox", threadJumpOpen: true }));
+    const composer = screen.getByRole("textbox", { name: "New thread message" });
     const input = screen.getByRole("textbox", { name: "Jump to thread or project" });
     fireEvent.change(input, { target: { value: "PwrAgent" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }));
     expect(onBrowseModeChange).toHaveBeenCalledWith("directories");
     expect(onThreadJumpOpenChange).toHaveBeenCalledWith(false);
-    rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
-      selectedItemKey={`launchpad:${directories[0]!.key}`} />);
+    rerender(view({ threadJumpOpen: false, selectedItemKey: `launchpad:${directories[0]!.key}` }));
+    composer.focus();
     await waitFor(() => {
-      expect(document.activeElement).toHaveClass("directory-row__summary");
-      expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+      const header = projectHeader(directories[0]!.label);
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(header?.closest(".directory-row"));
     });
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
-    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+    expect(composer).toHaveFocus();
 
     // Visit another project, then return to the already expanded first one.
     // Its sticky header may be visible while its threads are above the viewport;
     // the normal-flow section must remain the scroll target on repeated jumps.
     for (const project of [props.directories[1]!, props.directories[0]!]) {
-      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen />);
+      rerender(view({ threadJumpOpen: true }));
       const search = screen.getByRole("textbox", { name: "Jump to thread or project" });
       fireEvent.change(search, { target: { value: project.label } });
       fireEvent.keyDown(search, { key: "Enter" });
       scrollIntoView.mockClear();
-      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
-        selectedItemKey={`launchpad:${project.key}`} />);
+      rerender(view({ threadJumpOpen: false, selectedItemKey: `launchpad:${project.key}` }));
+      composer.focus();
       await waitFor(() => {
-        expect(document.activeElement).toHaveClass("directory-row__summary");
-        expect(document.activeElement).toHaveTextContent(project.label);
-        expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
-        expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+        const header = projectHeader(project.label);
+        expect(header).toHaveAttribute("aria-expanded", "true");
+        expect(scrollIntoView.mock.contexts.at(-1)).toBe(header?.closest(".directory-row"));
       });
+      expect(composer).toHaveFocus();
     }
   } finally {
     restore();

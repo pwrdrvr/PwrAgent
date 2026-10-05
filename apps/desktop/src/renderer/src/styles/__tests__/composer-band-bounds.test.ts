@@ -44,9 +44,12 @@ describe("composer band bounds", () => {
   it("lets the composer shrink in the thread column", () => {
     // Without `min-height: 0` the composer keeps its content height however
     // short the window is, and its toolbar lands past the clip.
-    const composer = ruleBody(".thread-view__primary > .composer");
+    const composer = ruleBody(".thread-view__composer-slot > .composer");
     expect(composer).toMatch(/flex:\s*0 1 auto/);
     expect(composer).toMatch(/min-height:\s*0/);
+    // The slot must generate no box, or the composer stops being a flex item
+    // of the column and the rule above shrinks nothing.
+    expect(ruleBody(".thread-view__composer-slot")).toMatch(/display:\s*contents/);
   });
 
   it("never shrinks the input, attachments tray or toolbar", () => {
@@ -92,7 +95,7 @@ describe("composer band bounds", () => {
     expect(error).toMatch(/overflow-y:\s*auto/);
 
     const combinedFailure = ruleBody(
-      ".thread-view__primary:has(> .composer .environment-setup-row) > .transcript-panel:has(.transcript-error)",
+      ".thread-view__primary:has(> .thread-view__composer-slot > .composer .environment-setup-row) > .transcript-panel:has(.transcript-error)",
     );
     expect(combinedFailure).toMatch(/flex-basis:\s*132px/);
     expect(combinedFailure).toMatch(/min-height:\s*132px/);

@@ -55,7 +55,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
   const { config } = props;
   const [busy, setBusy] = useState<"connect" | "other">();
   const [error, setError] = useState<string>();
-  const { status, setStatus, refresh, unreachable } =
+  const { status, setStatus, refresh, unreachable, readError } =
     usePwrSuiteConnectionStatus(config.readStatus, () => setError(undefined));
   const backendSupported =
     props.backend === "codex" || isAcpBackendId(props.backend);
@@ -92,7 +92,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
       <span>{visibleLabel}</span>
       <SettingsSwitch
         checked={props.enabled}
-        disabled={busy !== undefined || !backendSupported}
+        disabled={busy !== undefined || !backendSupported || unreachable}
         label={label}
         onChange={(enabled) => {
           void runAction("other", async () => await props.onEnabledChange(enabled));
@@ -115,9 +115,9 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
         icon={config.icon}
         ariaLabel={`Remote ${config.name} connection`}
         tag={remoteOwnerLabel}
-        connected
+        connected={!unreachable}
         line={
-          error ?? (
+          error ?? readError ?? (
             backendSupported ? (
               <>
                 Runs on <b>{remoteOwnerLabel}</b>, where this thread runs
@@ -127,7 +127,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
             )
           )
         }
-        lineTone={error ? "error" : backendSupported ? "pitch" : "state"}
+        lineTone={error ? "error" : readError ? "state" : backendSupported ? "pitch" : "state"}
         action={threadSwitch(
           `Enable ${config.name} on ${remoteOwnerLabel} in this thread`,
           "Use in thread",
@@ -158,6 +158,8 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
   let tone: PwrSuiteTileLineTone = "pitch";
   if (error) {
     [line, tone] = [error, "error"];
+  } else if (readError) {
+    [line, tone] = [readError, "state"];
   } else if (busy === "connect") {
     [line, tone] = [config.waitingLine, "state"];
   } else if (installLine) {
@@ -172,7 +174,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
 
   const canConnect = !configured && (running || (installed && config.connectsWhileClosed));
   let action;
-  if (!status) {
+  if (!status || unreachable) {
     action = (
       <span className="pwrsuite-tile__state">
         {unreachable ? "Can’t check right now" : "Checking…"}
@@ -218,7 +220,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
       icon={config.icon}
       ariaLabel={`${config.name} connection`}
       about={config.about}
-      connected={configured && running}
+      connected={configured && running && !unreachable}
       line={line}
       lineTone={tone}
       action={action}

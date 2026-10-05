@@ -193,6 +193,11 @@ type SidebarProps = {
   inert?: boolean;
   backends: BackendSummary[];
   browseMode: BrowseMode;
+  /**
+   * The owner index holds no threads, so every lens but Directories is empty.
+   * Those tabs go `aria-disabled` while Directories is shown in their place.
+   */
+  threadLensesEmpty?: boolean;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
@@ -474,6 +479,9 @@ function formatDraftThreadCount(count: number): string {
   return `${count} threads with unsent drafts`;
 }
 
+// The line a thread lens's tooltip gains while no threads exist to show.
+const NO_THREADS_TOOLTIP_LINE = "No threads yet";
+
 function formatThreadCount(count: number): string {
   return `${count} ${count === 1 ? "Thread" : "Threads"}`;
 }
@@ -515,7 +523,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string; focus?: boolean }>();
+  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -964,7 +972,7 @@ export function Sidebar(props: SidebarProps) {
     if (browseMode === "directories" && selectedItemKey.startsWith("launchpad:")) {
       handledRevealRequestRef.current = request;
       releaseHoverStableSnapshot();
-      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length), focus: false });
+      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length) });
       return;
     }
 
@@ -2233,6 +2241,8 @@ export function Sidebar(props: SidebarProps) {
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
+            // The reveal leaves focus alone: the launchpad's composer takes
+            // it, so the operator can type the new thread straight away.
             setProjectReveal({ key: directory.key });
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
@@ -2444,6 +2454,7 @@ export function Sidebar(props: SidebarProps) {
                   remoteSignalVisible ? attentionCounts.activeRemote : undefined
                 }
                 reviewThreadCount={attentionCounts.review}
+                disabled={props.threadLensesEmpty}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
             ) : (
@@ -2462,6 +2473,7 @@ export function Sidebar(props: SidebarProps) {
                     : undefined
                 }
                 tooltipText={browseModeTooltips[mode]}
+                disabled={props.threadLensesEmpty && mode !== "directories"}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
             ),
@@ -3606,6 +3618,8 @@ function AttentionLensTab(props: {
    */
   remoteActiveThreadCount?: number;
   reviewThreadCount: number;
+  /** No threads exist, so the lens would be empty. See `LensTab`'s `disabled`. */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const counts = {
@@ -3618,6 +3632,7 @@ function AttentionLensTab(props: {
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
     reviewLabel: "To review",
+    ...(props.disabled ? { footer: NO_THREADS_TOOLTIP_LINE } : {}),
   });
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
@@ -3635,12 +3650,14 @@ function AttentionLensTab(props: {
         // absent element is a dangling reference.
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
+        aria-disabled={props.disabled || undefined}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
         }`}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
+          if (props.disabled) return;
           tooltip.hide();
           props.onSelect();
         }}
@@ -3682,6 +3699,12 @@ function LensTab(props: {
    */
   countLabel?: string;
   tooltipText: string;
+  /**
+   * No threads exist, so the lens would be empty. `aria-disabled` rather than
+   * `disabled`: a disabled button takes no focus, so a keyboard user could
+   * never reach the tooltip that says why the tab is off.
+   */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -3689,9 +3712,11 @@ function LensTab(props: {
   const label = props.countLabel
     ? `${browseModeLabels[props.mode]}, ${props.countLabel}`
     : browseModeLabels[props.mode];
-  const tooltipText = props.countLabel
-    ? [props.tooltipText, props.countLabel].join("\n")
-    : props.tooltipText;
+  const tooltipText = [
+    props.tooltipText,
+    props.countLabel,
+    props.disabled ? NO_THREADS_TOOLTIP_LINE : undefined,
+  ].filter(Boolean).join("\n");
 
   return (
     <>
@@ -3705,10 +3730,12 @@ function LensTab(props: {
         // whole accessible name.
         aria-label={label}
         aria-selected={props.active}
+        aria-disabled={props.disabled || undefined}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
+          if (props.disabled) return;
           tooltip.hide();
           props.onSelect();
         }}

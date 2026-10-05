@@ -151,8 +151,8 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
       '@shutterstock/p-map-iterable':
-        specifier: ^1.1.2
-        version: 1.1.2(aggregate-error@3.1.0)
+        specifier: ^1.2.0
+        version: 1.2.0(aggregate-error@3.1.0)
       '@tiptap/extension-mention':
         specifier: ^3.22.5
         version: 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@tiptap/suggestion@3.31.3(@floating-ui/dom@1.8.0)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3))
@@ -207,6 +207,9 @@ importers:
       pdfjs-dist:
         specifier: 6.3.289
         version: 6.3.289
+      pixelmatch:
+        specifier: ^7.2.0
+        version: 7.2.0
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -245,8 +248,8 @@ importers:
         version: 8.22.0
     devDependencies:
       '@agentclientprotocol/sdk':
-        specifier: 1.5.0
-        version: 1.5.0(zod@4.4.3)
+        specifier: 1.5.1
+        version: 1.5.1(zod@4.4.3)
       '@axe-core/playwright':
         specifier: ^4.11.3
         version: 4.13.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))
@@ -266,8 +269,8 @@ importers:
         specifier: ^14.6.7
         version: 14.6.7(@testing-library/dom@10.4.1)
       '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
+        specifier: ^9.6.0
+        version: 9.6.0
       '@types/proper-lockfile':
         specifier: ^4.1.4
         version: 4.1.4
@@ -401,8 +404,8 @@ importers:
         specifier: ^1.46.0
         version: 1.46.0(encoding@0.1.13)
       marked:
-        specifier: 18.0.13
-        version: 18.0.13
+        specifier: 18.0.14
+        version: 18.0.14
     devDependencies:
       vitest:
         specifier: ^5.0.1
@@ -422,8 +425,8 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@agentclientprotocol/sdk@1.5.0':
-    resolution: {integrity: sha512-524jwbB2iYWA+kWWyv9fhKbhU89dH/lu9u5EXwVNmfYzopV8BujCDxByBDZhxRUkB7RWIJzISCnwivdDk+bdVg==}
+  '@agentclientprotocol/sdk@1.5.1':
+    resolution: {integrity: sha512-nSUIrC1fOR9+ppKfx9KdwjBBND2sAPzFHo4yVQrGbXZHnayUYpwL8CDVR5LSxbapY/oKMOzNP0wvwfyx3PS2KA==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -1393,10 +1396,10 @@ packages:
     resolution: {integrity: sha512-xzvBr1Q1c4lCe7i6sRnrofxeO1QTP/LKQ6A6qy0iB4x5yfiSfARMEQEghojzTNALDTcv8En04qYNIco9/K9eZQ==}
     engines: {node: '>=v14.0.0', npm: '>=7.0.0'}
 
-  '@shutterstock/p-map-iterable@1.1.2':
-    resolution: {integrity: sha512-zNPPB2cro7fr+gPsNPoEir6pzYfJngkik7EnsSD5uMqwzGB8qtMmausS5XO10KM5c1Hfw/hpe1oXf/UoHNZFlg==}
+  '@shutterstock/p-map-iterable@1.2.0':
+    resolution: {integrity: sha512-waqNJVOz35MaGZgxNl+kxDCxeBLOOVHL/XvgcZDAy9gazjRRkt9ZmUz48S3AoejC3EUJKjEYgjQW1UtRKJLb0g==}
     peerDependencies:
-      aggregate-error: ^3.0.0
+      aggregate-error: ^3.1.0
 
   '@sigstore/bundle@5.0.0':
     resolution: {integrity: sha512-wefjygudENbzbQMks1t5u34EP0fFoD0XvaEP7DOUP/sXKvogzEJYFw5E6pegGyp3onGWzVEYKVa3bNZWyTYX+A==}
@@ -1670,8 +1673,8 @@ packages:
   '@types/babel__traverse@7.28.0':
     resolution: {integrity: sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q==}
 
-  '@types/better-sqlite3@7.6.13':
-    resolution: {integrity: sha512-NMv9ASNARoKksWtsq/SHakpYAYnhBrQgGD8zkLYk/jaK8jUGn08CfEdTRgYhMypUQAfzSP8W6gNLe0q19/t4VA==}
+  '@types/better-sqlite3@9.6.0':
+    resolution: {integrity: sha512-ZEEwBSgMu7GYJOynoagg5X9JbxfL6dTJDsgViJIqh67jV44kyOr9RXfmFjLK5rzC4MWssP06t9hu/JwGDnUbCg==}
 
   '@types/cacheable-request@6.0.3':
     resolution: {integrity: sha512-IQ3EbTzGxIigb1I3qPZc1rWJnH0BmSKv5QYTalEwweFvyBDLSAe24zP0le/hyi7ecGfZVlIVAg4BZqb8WBwKqw==}
@@ -3543,8 +3546,8 @@ packages:
     engines: {node: '>= 20'}
     hasBin: true
 
-  marked@18.0.13:
-    resolution: {integrity: sha512-xTxVzZsBFwunP6HDmtBkabUQEYArnP7/rMDGmPj9SlrKlQ4i8MdYVow+nJL0eOqwpUqhzBoTBRADGN6uYwPyOw==}
+  marked@18.0.14:
+    resolution: {integrity: sha512-mBHK6FBHuBAlhgRe88w9F0O1AbwwXJUcQibUbC/QcdTbVGAD7aWza+xt3N6oT/jCZx3/OMeS+8rnuiHZcQ9s7A==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -3979,6 +3982,10 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
+  pixelmatch@7.2.0:
+    resolution: {integrity: sha512-xhcb4yHu9sM/G7foGzoLtXYcC0zHEaOXXjRKhGup0fw78Nf2Tkiapv4EQyMzrbcmQPsllAI7DbFY2UT7PlI9Pg==}
+    hasBin: true
+
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
@@ -4000,6 +4007,10 @@ packages:
   plist@3.1.0:
     resolution: {integrity: sha512-uysumyrvkUX0rX/dEVqt8gC3sTBzd4zoWfLeS29nb53imdaXVvLINYXTI2GNqzaMuvacNx4uJQ8+b3zXR0pkgQ==}
     engines: {node: '>=10.4.0'}
+
+  pngjs@7.0.0:
+    resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
+    engines: {node: '>=14.19.0'}
 
   points-on-curve@0.2.0:
     resolution: {integrity: sha512-0mYKnYYe9ZcqMCWhUjItv/oHjvgEsfKvnUTg8sAtnHr3GVy7rGkXCb6d5cSyqrWqL4k81b9CPg3urd+T7aop3A==}
@@ -4936,7 +4947,7 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@agentclientprotocol/sdk@1.5.0(zod@4.4.3)':
+  '@agentclientprotocol/sdk@1.5.1(zod@4.4.3)':
     dependencies:
       zod: 4.4.3
 
@@ -5905,7 +5916,7 @@ snapshots:
 
   '@sapphire/snowflake@3.5.5': {}
 
-  '@shutterstock/p-map-iterable@1.1.2(aggregate-error@3.1.0)':
+  '@shutterstock/p-map-iterable@1.2.0(aggregate-error@3.1.0)':
     dependencies:
       aggregate-error: 3.1.0
 
@@ -5946,7 +5957,7 @@ snapshots:
 
   '@slack/logger@5.0.0':
     dependencies:
-      '@types/node': 24.13.4
+      '@types/node': 24.19.0
 
   '@slack/socket-mode@3.0.1(undici@8.11.2)':
     dependencies:
@@ -6225,9 +6236,9 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.7
 
-  '@types/better-sqlite3@7.6.13':
+  '@types/better-sqlite3@9.6.0':
     dependencies:
-      '@types/node': 24.13.4
+      '@types/node': 24.19.0
 
   '@types/cacheable-request@6.0.3':
     dependencies:
@@ -8376,7 +8387,7 @@ snapshots:
 
   marked@16.4.2: {}
 
-  marked@18.0.13: {}
+  marked@18.0.14: {}
 
   matcher@3.0.0:
     dependencies:
@@ -9025,6 +9036,10 @@ snapshots:
 
   picomatch@4.0.7: {}
 
+  pixelmatch@7.2.0:
+    dependencies:
+      pngjs: 7.0.0
+
   pkce-challenge@5.0.1: {}
 
   pkijs@3.4.0:
@@ -9047,6 +9062,8 @@ snapshots:
       '@xmldom/xmldom': 0.8.15
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
+
+  pngjs@7.0.0: {}
 
   points-on-curve@0.2.0: {}
 

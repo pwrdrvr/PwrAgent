@@ -29,7 +29,7 @@ import type {
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   App,
   inferReplayCodexProfileModel,
@@ -496,6 +496,129 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Search" }),
     ).toBeInTheDocument();
+  });
+
+  it("puts the caret in the new-thread composer after jumping to a project", async () => {
+    const threadViewImported = createDeferred<void>();
+    const project = (label: string) => ({
+      key: `directory:/Users/me/repos/${label}`,
+      kind: "directory" as const,
+      label,
+      path: `/Users/me/repos/${label}`,
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    });
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (request: EnsureDirectoryLaunchpadRequest) => ({
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+    );
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [project("PwrAgent"), project("PwrSnap")],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        recordStartupProfileEvent: (event: string) => {
+          if (event === "thread-view-import:end") {
+            threadViewImported.resolve(undefined);
+          }
+        },
+      }),
+    });
+
+    render(<App />);
+
+    const jumpTo = async (label: string): Promise<void> => {
+      fireEvent.keyDown(window, {
+        metaKey: true,
+        code: "KeyK",
+        key: "k",
+      });
+      const quickSearch = await screen.findByRole("dialog", {
+        name: "Jump to thread or project",
+      });
+      const field = within(quickSearch).getByRole("textbox", {
+        name: "Jump to thread or project",
+      });
+      fireEvent.change(field, { target: { value: label } });
+      await within(quickSearch).findByRole("option", { name: new RegExp(label) });
+      fireEvent.keyDown(field, { key: "Enter" });
+      await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+        expect.objectContaining({ directoryLabel: label }),
+      ));
+    };
+    // The reveal ends by scrolling the project's row, in the same frame that
+    // used to focus its header, so a scroll of that row is the moment to
+    // check where focus is.
+    const scrollIntoView = vi.fn<(this: HTMLElement) => void>();
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    onTestFinished(() => {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    });
+    const revealed = async (label: string): Promise<void> => {
+      await waitFor(() => {
+        expect(scrollIntoView.mock.contexts.some((row) =>
+          row.querySelector(".directory-row__summary")?.textContent?.includes(label)))
+          .toBe(true);
+      });
+    };
+
+    // The first jump loads the thread view. The second runs at the speed an
+    // operator sees, where the composer focuses itself before the sidebar
+    // reveals the project a frame later. The reveal must leave the caret
+    // where the operator will type.
+    await jumpTo("PwrAgent");
+    await threadViewImported.promise;
+    await flushReactUpdates();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
+    await revealed("PwrAgent");
+
+    scrollIntoView.mockClear();
+    await jumpTo("PwrSnap");
+    await revealed("PwrSnap");
+    expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
   });
 
   // Settings and Automations draw over the whole shell. The sidebar and main

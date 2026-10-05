@@ -60,7 +60,10 @@ import {
   type SendThreadToMachineSource,
 } from "./features/federation/SendThreadToMachineDialog";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
-import type { LaunchpadMachineControl } from "./features/composer/LaunchpadMachineChip";
+import type {
+  LaunchpadMachineControl,
+  MachineChipValue,
+} from "./features/composer/LaunchpadMachineChip";
 import { findPeerCounterpartDirectory } from "./lib/federation-project-match";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
@@ -141,6 +144,10 @@ import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import {
+  CODEX_LAUNCH_NOTICE_ID,
+  CodexLaunchNotice,
+} from "./features/notifications/CodexLaunchNotice";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import {
@@ -703,6 +710,11 @@ function DesktopAppShell(props: {
       liveFederationHealth,
     ],
   );
+  // Every known machine, the window's owner included, for naming one.
+  const federationMachines = useMemo(
+    () => buildFederationThreadTargets(liveFederationHealth),
+    [liveFederationHealth],
+  );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
       refreshFederationHealth();
@@ -899,6 +911,12 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const syncCodexLaunchNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
+    if (notice) showAppNotice(notice);
+  }, [showAppNotice]);
   const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
     const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
     if (saved) {
@@ -1431,6 +1449,7 @@ function DesktopAppShell(props: {
             errorNoticeContext: event.errorNoticeContext,
             originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,
+            onOpenCodexSettings: openCodexSettings,
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
@@ -1515,6 +1534,7 @@ function DesktopAppShell(props: {
     acknowledgeThreadSpendAlert,
     desktopApi,
     openCodexLogin,
+    openCodexSettings,
     props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
   ]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
@@ -2701,6 +2721,17 @@ function DesktopAppShell(props: {
       federatedTargetHasProject({ scope: "remote", instanceId }, directory),
     [federatedTargetHasProject],
   );
+  // This instance, as the machine chips name it.
+  const localMachine: MachineChipValue = {
+    label: liveFederationHealth?.localLabel ?? "This machine",
+    shortLabel: federationLocalDisplayLabel(liveFederationHealth),
+    ...(liveFederationHealth?.localCelestialIcon
+      ? { celestialIcon: liveFederationHealth.localCelestialIcon }
+      : {}),
+    ...(liveFederationHealth?.instanceId
+      ? { instanceId: liveFederationHealth.instanceId }
+      : {}),
+  };
   const selectedLaunchpadForMachine = navigation.selectedLaunchpad;
   const launchpadMachine = ((): LaunchpadMachineControl | undefined => {
     const windowTarget = readRendererFederationTarget();
@@ -2711,7 +2742,7 @@ function DesktopAppShell(props: {
       return undefined;
     }
     const windowOwner = windowTarget
-      ? buildFederationThreadTargets(liveFederationHealth).find((candidate) =>
+      ? federationMachines.find((candidate) =>
           candidate.instanceId === windowTarget.instanceId)
       : undefined;
     const launchpadTarget = selectedLaunchpadForMachine.federationTarget;
@@ -2758,16 +2789,7 @@ function DesktopAppShell(props: {
               ? { celestialIcon: windowOwner.celestialIcon }
               : {}),
           }
-        : {
-            label: liveFederationHealth?.localLabel ?? "This machine",
-            shortLabel: federationLocalDisplayLabel(liveFederationHealth),
-            ...(liveFederationHealth?.localCelestialIcon
-              ? { celestialIcon: liveFederationHealth.localCelestialIcon }
-              : {}),
-            ...(liveFederationHealth?.instanceId
-              ? { instanceId: liveFederationHealth.instanceId }
-              : {}),
-          },
+        : localMachine,
       targets: newThreadFederationTargets,
       project,
       localHasProject:
@@ -2785,6 +2807,35 @@ function DesktopAppShell(props: {
               ),
           }
         : {}),
+    };
+  })();
+  // The thread header names the thread's machine wherever the launchpad
+  // showed its machine chip, so starting a thread leaves the machine put.
+  const selectedThreadForMachine = navigation.selectedThread;
+  const threadMachine = ((): MachineChipValue | undefined => {
+    const windowTarget = readRendererFederationTarget();
+    if (!selectedThreadForMachine
+      || (!windowTarget && newThreadFederationTargets.length === 0)) {
+      return undefined;
+    }
+    const target = selectedThreadForMachine.federation?.ref.target;
+    const ownerId = target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : windowTarget?.instanceId;
+    if (!ownerId) return localMachine;
+    const owner = federationMachines.find(
+      (candidate) => candidate.instanceId === ownerId,
+    );
+    return {
+      label: owner?.label
+        ?? selectedThreadForMachine.federation?.instanceLabel
+        ?? readRendererFederationLabel()
+        ?? ownerId,
+      shortLabel: owner?.shortLabel,
+      celestialIcon: owner?.celestialIcon,
+      instanceId: ownerId,
+      remote: true,
+      offline: owner?.availability === "offline",
     };
   })();
   const mastheadActions = {
@@ -3068,6 +3119,7 @@ function DesktopAppShell(props: {
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     launchpadMachine,
+    threadMachine,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
@@ -3347,6 +3399,7 @@ function DesktopAppShell(props: {
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}
           selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
@@ -3793,6 +3846,11 @@ function DesktopAppShell(props: {
           onOpenCodexSettings={openCodexSettings}
           onManagedBuildsChange={changeCodexManagedBuilds}
           onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
+        />
+        <CodexLaunchNotice
+          discovery={settings.snapshot?.models?.codex?.discovery}
+          onNoticeChanged={syncCodexLaunchNotice}
+          onOpenCodexSettings={openCodexSettings}
         />
         <CodexRestartNotice
           desktopApi={desktopApi}
