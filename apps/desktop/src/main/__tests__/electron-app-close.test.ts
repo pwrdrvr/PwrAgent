@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import type { ElectronApplication } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,17 +67,49 @@ describe("closeElectronApplication", () => {
     });
   });
 
-  it.each([true, false])("uses the owned shutdown signal when installed (%s), without opening a quit dialog", async (installed) => {
+  it.each([true, false])("lets Playwright prepare close before the owned shutdown signal (%s)", async (installed) => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const quit = vi.fn();
-    const emit = vi.fn();
+    const order: string[] = [];
+    let rendererClosed = false;
+    const app = new EventEmitter();
+    const quit = vi.fn(() => {
+      order.push("native-quit");
+      app.emit("before-quit");
+      rendererClosed = true;
+    });
+    Object.assign(app, { quit });
+    const emit = vi.fn(() => {
+      order.push("owned-shutdown");
+      rendererClosed = true;
+    });
     const listenerCount = vi.fn(() => installed ? 1 : 0);
-    const child = { exitCode: null as number | null, signalCode: null };
-    const close = vi.fn(async () => { child.exitCode = 0; });
+    app.on("before-quit", () => {
+      order.push("production-before-quit");
+      // The owned signal must authorize immediate quit before the product's
+      // listener runs, otherwise federation can open a confirmation dialog.
+      expect(emit).toHaveBeenCalledTimes(installed ? 1 : 0);
+    });
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill: vi.fn(() => {
+        child.signalCode = "SIGKILL";
+        return true;
+      }),
+    };
+    const close = vi.fn(async () => {
+      // Model Playwright's context preparation before it calls app.quit().
+      // A prior SIGTERM removes the renderer before this work can finish.
+      expect(rendererClosed).toBe(false);
+      order.push("prepare-playwright-close");
+      quit();
+      order.push("detach-inspector");
+      child.exitCode = 0;
+    });
     const electronApp = {
       process: () => child,
       evaluate: async (callback: unknown) => runInNewContext(`(${String(callback)})({ app })`, {
-        app: { quit }, process: { emit, listenerCount },
+        app, process: { emit, listenerCount },
       }),
       close,
     } as unknown as ElectronApplication;
@@ -84,8 +117,17 @@ describe("closeElectronApplication", () => {
       classification: "healthy", forceExitOutcome: "not-needed",
     });
     expect(emit.mock.calls).toEqual(installed ? [["SIGTERM", "SIGTERM"]] : []);
-    expect(quit).toHaveBeenCalledTimes(installed ? 0 : 1);
+    expect(quit).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(order).toEqual([
+      "prepare-playwright-close",
+      "native-quit",
+      ...(installed ? ["owned-shutdown"] : []),
+      "production-before-quit",
+      "detach-inspector",
+    ]);
+    expect(app.listenerCount("before-quit")).toBe(1);
   });
 
   it("is a no-op when Playwright throws for an exited Electron handle", async () => {

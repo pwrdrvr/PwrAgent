@@ -1694,9 +1694,15 @@ test.describe("federation remote window", () => {
         .poll(async () => (await readViewerRelationship()).parentThread)
         .toBeUndefined();
     } finally {
-      await viewer?.close();
-      await owner?.close();
-      await rm(fixtureRoot, { force: true, recursive: true });
+      try {
+        await viewer?.close();
+      } finally {
+        try {
+          await owner?.close();
+        } finally {
+          await rm(fixtureRoot, { force: true, recursive: true });
+        }
+      }
     }
   });
 
