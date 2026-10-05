@@ -626,6 +626,8 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
+  /** Durable cross-thread prerequisite admission. */
+  dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
@@ -1676,6 +1678,10 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | {
+      method: "thread/dependencies/updated";
+      params: { threadId: string; dependencyId: string };
+    }
   | NavigationThreadGitWorkingStateUpdatedNotification
   | {
       method: "error";

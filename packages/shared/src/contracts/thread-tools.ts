@@ -56,6 +56,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "check_thread_pull_request_status",
   "watch_thread_pull_request",
   "rename_current_thread",
+  "manage_thread_dependencies",
   "mutate_thread",
   "mark_project_read",
 ] as const;
@@ -653,6 +654,7 @@ export type ThreadReadEvaluationTokenMiser = {
 };
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {
+  manage_thread_dependencies: import("./thread-dependencies").ManageThreadDependenciesRequest;
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
@@ -684,6 +686,9 @@ export type PwrAgentThreadInspectionResponse =
   | {
       ok: true;
       data:
+        | {
+            threadDependencies: import("./thread-dependencies").ManageThreadDependenciesResponse;
+          }
         | {
             threads: ThreadInspectionSummary[];
             totalCount: number;

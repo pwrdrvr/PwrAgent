@@ -899,6 +899,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  manageThreadDependencies?: (
+    request: import("@pwragent/shared").ManageThreadDependenciesRequest,
+  ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;

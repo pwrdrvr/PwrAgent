@@ -30987,6 +30987,49 @@ div.composer-error-row__toggle {
   flex: 0 0 auto;
 }
 
+.thread-dependencies__form {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.thread-dependencies__form label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-dependencies__form .select-trigger,
+.thread-dependencies__form input,
+.thread-dependencies__form textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.thread-dependencies__form textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.thread-dependencies__form input:focus-visible,
+.thread-dependencies__form textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-dependencies__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .context-list__action {
   flex: 0 0 auto;
   border: 1px solid var(--border-subtle);

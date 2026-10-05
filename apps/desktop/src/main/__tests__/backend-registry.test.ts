@@ -46964,6 +46964,26 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("routes durable dependencies with the trusted waiting thread defaults", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
+      namespace: "pwragent", tool: "manage_thread_dependencies",
+      arguments: { action: "create", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+    } } as AppServerPendingRequestNotification);
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ action: "create", backend: "codex", threadId: "waiting-thread",
+      conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }],
+    });
+    expect(response).toMatchObject({ success: true });
+    await registry.close();
+  });
+
   it("routes one-shot PR watches with invoking thread defaults", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
