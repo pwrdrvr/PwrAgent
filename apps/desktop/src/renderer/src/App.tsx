@@ -2901,6 +2901,17 @@ function DesktopAppShell(props: {
     }
   });
 
+  const handleDismissTaskMonitorOverlapWarning = useEventCallback(async () => {
+    const saved = await settings.writeConfig({
+      experimental: {
+        taskMonitorFollowupWarningDismissed: true,
+      },
+    });
+    if (!saved) {
+      throw new Error("Could not save the task monitor warning preference.");
+    }
+  });
+
   const handleCancelLaunchpad = useEventCallback((directoryKey: string) => {
     const restoredSourceThread = navigation.discardLaunchpad(directoryKey);
     if (!restoredSourceThread) {
@@ -3124,16 +3135,7 @@ function DesktopAppShell(props: {
     onOpenAutomations: () => {
       setMainView("automations");
     },
-    onDismissTaskMonitorOverlapWarning: async () => {
-      const saved = await settings.writeConfig({
-        experimental: {
-          taskMonitorFollowupWarningDismissed: true,
-        },
-      });
-      if (!saved) {
-        throw new Error("Could not save the task monitor warning preference.");
-      }
-    },
+    onDismissTaskMonitorOverlapWarning: handleDismissTaskMonitorOverlapWarning,
     onOpenMessagingActivity: openMessagingActivityWindow,
     onOpenMessagingSettings: openMessagingSettings,
     onOpenPluginSettings: openPluginSettings,
