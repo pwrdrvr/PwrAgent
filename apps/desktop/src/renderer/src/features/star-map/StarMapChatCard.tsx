@@ -1126,7 +1126,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }
       }
 
-      if (!desktopApi?.startTurn || startRequestPendingRef.current) return false;
+      // Say why, as the steer branch does: the primary mid-turn action lands
+      // here, and a bare `false` only hands the text back without a reason.
+      if (!desktopApi?.startTurn) {
+        setSendError("Sending is not available for this thread.");
+        return false;
+      }
+      if (startRequestPendingRef.current) {
+        setSendError("Still sending the previous message — try again in a moment.");
+        return false;
+      }
       startRequestPendingRef.current = true;
       const queueEntryId = createQueuedTurnId();
       const queuedProjection: ComposerQueuedTurnSnapshot = {

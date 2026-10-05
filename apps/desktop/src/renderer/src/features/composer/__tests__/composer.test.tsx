@@ -10082,9 +10082,9 @@ describe("Composer", () => {
         queueStatus: "queued" as const,
         queueEntryId: "queue-1",
       }));
-      render(
+      const element = (activeTurnId: string | undefined) => (
         <Composer
-          activeTurnId="turn-1"
+          activeTurnId={activeTurnId}
           backends={[
             {
               ...backendSummary("codex", {
@@ -10122,9 +10122,15 @@ describe("Composer", () => {
           }}
         />
       );
+      const view = render(element("turn-1"));
       const textarea = screen.getByLabelText("Reply");
       fireEvent.change(textarea, { target: { value: "Change direction" } });
-      return { startTurn, steerTurn, textarea };
+      return {
+        endTurn: () => view.rerender(element(undefined)),
+        startTurn,
+        steerTurn,
+        textarea,
+      };
     }
 
     it("steers on Ctrl+Enter on Windows", async () => {
@@ -10156,6 +10162,19 @@ describe("Composer", () => {
       expect((await screen.findByRole("tooltip")).textContent).toBe(
         "Queue after this turn · Ctrl+Enter to steer it in",
       );
+    });
+
+    it("takes the tooltip down when the turn ends under the pointer", async () => {
+      const { endTurn } = renderSteerable("darwin");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+
+      endTurn();
+
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
     });
   });
 

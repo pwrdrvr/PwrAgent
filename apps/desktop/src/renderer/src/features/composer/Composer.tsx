@@ -246,10 +246,7 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
-import {
-  formatQueueButtonTooltip,
-  isSteerShortcut,
-} from "./steer-shortcut";
+import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
@@ -2836,7 +2833,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const reviewPullRequestSelectRef = useRef<HTMLSelectElement | null>(null);
   const skillListboxId = useId();
-  const submitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const slashListboxId = useId();
   const directoryRefListboxId = useId();
   const hashReferenceListboxId = useId();
@@ -10079,11 +10075,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =
     submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
-  // A turn that ends under the pointer must not leave the hint up.
-  const hideSubmitTooltip = submitTooltip.hide;
-  useEffect(() => {
-    if (!submitButtonSteerHint) hideSubmitTooltip();
-  }, [hideSubmitTooltip, submitButtonSteerHint]);
+  const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -13625,25 +13617,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </button>
               ) : null}
               <button
-                aria-describedby={
-                  submitButtonSteerHint && submitTooltip.visible
-                    ? submitTooltip.tooltipId
-                    : undefined
-                }
+                {...submitTooltip.buttonProps}
                 className="button composer__send-submit-button"
                 disabled={sendButtonDisabled}
-                onBlur={submitTooltip.hide}
-                onFocus={(event) => {
-                  if (submitButtonSteerHint) {
-                    submitTooltip.show(event.currentTarget, formatQueueButtonTooltip());
-                  }
-                }}
-                onMouseEnter={(event) => {
-                  if (submitButtonSteerHint) {
-                    submitTooltip.show(event.currentTarget, formatQueueButtonTooltip());
-                  }
-                }}
-                onMouseLeave={submitTooltip.hide}
                 type="submit"
               >
                 {preparingSend ? (

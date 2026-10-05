@@ -6,10 +6,12 @@
  * reading as one. Both composers share this so the chord and its tooltip
  * cannot drift apart.
  */
+import { useCallback, useEffect, type ReactNode } from "react";
 import {
   formatPrimaryAccel,
   isPlatformPrimaryAccel,
 } from "../../lib/keyboard-accel";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 export function isSteerShortcut(
   event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">,
@@ -20,4 +22,43 @@ export function isSteerShortcut(
 /** Tooltip for a Queue button whose running turn can take a steer. */
 export function formatQueueButtonTooltip(): string {
   return `Queue after this turn · ${formatPrimaryAccel("Enter")} to steer it in`;
+}
+
+/**
+ * Names the steer chord on a Queue button while `enabled`. Spread
+ * `buttonProps` on the button and render `tooltipNode` beside it. A turn
+ * that ends under the pointer takes the hint down with it.
+ */
+export function useQueueSteerTooltip(enabled: boolean): {
+  buttonProps: {
+    "aria-describedby": string | undefined;
+    onBlur: () => void;
+    onFocus: (event: { currentTarget: HTMLElement }) => void;
+    onMouseEnter: (event: { currentTarget: HTMLElement }) => void;
+    onMouseLeave: () => void;
+  };
+  tooltipNode: ReactNode;
+} {
+  const { hide, show, tooltipId, tooltipNode, visible } = useViewportTooltip({
+    className: "viewport-tooltip",
+  });
+  useEffect(() => {
+    if (!enabled) hide();
+  }, [enabled, hide]);
+  const showHint = useCallback(
+    (event: { currentTarget: HTMLElement }) => {
+      if (enabled) show(event.currentTarget, formatQueueButtonTooltip());
+    },
+    [enabled, show],
+  );
+  return {
+    buttonProps: {
+      "aria-describedby": enabled && visible ? tooltipId : undefined,
+      onBlur: hide,
+      onFocus: showHint,
+      onMouseEnter: showHint,
+      onMouseLeave: hide,
+    },
+    tooltipNode,
+  };
 }

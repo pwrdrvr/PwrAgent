@@ -520,6 +520,25 @@ describe("CompactComposer", () => {
     });
   });
 
+  it("takes Queue's tooltip down when the turn ends under the pointer", async () => {
+    const onSend = vi.fn();
+    const onSteer = vi.fn();
+    const { rerender } = renderComposer({ busy: true, onSend, onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+
+    rerender(
+      <CompactComposer onSend={onSend} onSteer={onSteer} threadTitle="Thread t1" />,
+    );
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
   it("keeps Queue's tooltip off when the turn cannot take a steer", () => {
     renderComposer({ busy: true, canSteer: false, onSteer: vi.fn() });
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });

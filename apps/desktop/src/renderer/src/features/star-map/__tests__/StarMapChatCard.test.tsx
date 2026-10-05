@@ -2760,6 +2760,22 @@ describe("StarMapChatCard sending into a live turn", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("says why when the bridge cannot queue", async () => {
+    const desktopApi = busyApi({ startTurn: undefined } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    await screen.findByRole("button", { name: "Queue" });
+    const input = await typeAndSend("Local work", "nowhere to go");
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Sending is not available for this thread.",
+    );
+    // Nothing reached the backend, so the operator keeps what they typed.
+    await waitFor(() => {
+      expect(input.value).toBe("nowhere to go");
+    });
+    expect(desktopApi.steerTurn).not.toHaveBeenCalled();
+  });
+
   it("queues a peer's message with that peer", async () => {
     const startTurn = queuedStartTurn("t-remote");
     const desktopApi = busyApi({ startTurn });

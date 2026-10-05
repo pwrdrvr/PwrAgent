@@ -23,7 +23,6 @@ import {
   CloseIcon,
 } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   normalizeImageFile,
   type ImageFallbackRequest,
@@ -44,10 +43,7 @@ import {
   useComposerMentions,
   type ComposerMentionSources,
 } from "./useComposerMentions";
-import {
-  formatQueueButtonTooltip,
-  isSteerShortcut,
-} from "./steer-shortcut";
+import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import type { ComposerDraftStore } from "./useComposerDraftStore";
 
 export type CompactComposerAction = {
@@ -282,12 +278,7 @@ export function CompactComposer(props: CompactComposerProps) {
   } = props;
   const steerAvailable = Boolean(props.busy && onSteer);
   const canSteerNow = steerAvailable && props.canSteer !== false;
-  const queueTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  // A turn that ends under the pointer must not leave the hint up.
-  const hideQueueTooltip = queueTooltip.hide;
-  useEffect(() => {
-    if (!canSteerNow) hideQueueTooltip();
-  }, [canSteerNow, hideQueueTooltip]);
+  const queueTooltip = useQueueSteerTooltip(canSteerNow);
   const imagesSupported = props.imagesSupported !== false;
   const imagesUnsupportedMessage = `${
     props.imagesUnsupportedLabel ?? "This mode"
@@ -339,8 +330,8 @@ export function CompactComposer(props: CompactComposerProps) {
     delivery: "send" | "steer" = "send",
   ) => {
     if (sendingRef.current || props.disabled) return;
-    const steering = delivery === "steer" && Boolean(onSteer);
-    const deliver = steering && onSteer ? onSteer : onSend;
+    const steerWith = delivery === "steer" ? onSteer : undefined;
+    const deliver = steerWith ?? onSend;
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
     const text = (commandText ?? mentions.text).trim();
@@ -358,7 +349,7 @@ export function CompactComposer(props: CompactComposerProps) {
     const previousImages = imageAttachments;
     const previousFiles = fileAttachments;
     sendingRef.current = true;
-    setSending(steering ? "steer" : "send");
+    setSending(steerWith ? "steer" : "send");
     mentions.clear();
     setImageAttachments([]);
     setFileAttachments([]);
@@ -1165,26 +1156,10 @@ export function CompactComposer(props: CompactComposerProps) {
             action queues behind the running turn, as the main composer's
             does; the steer chord, named in its tooltip, delivers into it. */}
         <button
-          aria-describedby={
-            canSteerNow && queueTooltip.visible
-              ? queueTooltip.tooltipId
-              : undefined
-          }
+          {...queueTooltip.buttonProps}
           className="compact-composer__send"
           disabled={sendDisabled}
-          onBlur={queueTooltip.hide}
           onClick={() => void send()}
-          onFocus={(event) => {
-            if (canSteerNow) {
-              queueTooltip.show(event.currentTarget, formatQueueButtonTooltip());
-            }
-          }}
-          onMouseEnter={(event) => {
-            if (canSteerNow) {
-              queueTooltip.show(event.currentTarget, formatQueueButtonTooltip());
-            }
-          }}
-          onMouseLeave={queueTooltip.hide}
           type="button"
         >
           {sending === "steer"
