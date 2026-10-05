@@ -40,7 +40,7 @@ export function StorageMaintenance() {
     <div className="storage-maintenance__progress" role="status" aria-live="polite" aria-busy={Boolean(status && !ready && !terminal)}>
       {status?.message ?? (status?.phase === "complete" && status.afterBytes !== undefined
         ? `${size(status.beforeBytes)} → ${size(status.afterBytes)}. ${size(Math.max(0, status.beforeBytes - status.afterBytes))} recovered.`
-        : status?.phase === "cleanup" ? `${status.completedThreads} of ${status.eligibleThreads} eligible archived threads checked.`
+        : status?.phase === "cleanup" ? <><span className="storage-maintenance__count" style={{ minWidth: `${String(status.eligibleThreads).length}ch` }}>{status.completedThreads}</span> of {status.eligibleThreads} eligible archived threads checked.</>
           : status?.phase === "vacuum" ? "Reclaiming unused space. You can stop safely."
             : ready ? "Changes to this checkbox are saved for future checks." : "Your app will continue starting when this step finishes.")}
     </div>
