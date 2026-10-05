@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   Suspense,
+  type ComponentProps,
   type CSSProperties,
 } from "react";
 import type {
@@ -1383,21 +1384,25 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const selectedLaunchpad = props.selectedLaunchpad;
   const pendingForkEnvironmentSetup = props.pendingForkEnvironmentSetup;
-  // The launchpad and thread branches below share one keyed composer slot,
+  // The launchpad the composer serves, set exactly when the launchpad branch
+  // below renders. Without it the composer serves the thread branch.
+  const composerLaunchpad =
+    !pendingForkEnvironmentSetup && props.selectedDirectory
+      ? selectedLaunchpad
+      : undefined;
+  // The launchpad and thread branches below place one keyed composer slot,
   // so the thread a launchpad becomes keeps the composer being typed in.
-  // See `composer-slot.ts`. These mirror the branch conditions.
-  const composerSlotView = pendingForkEnvironmentSetup
-    ? {}
-    : selectedLaunchpad && props.selectedDirectory
-      ? {
-          launchpadScope: launchpadComposerScope(
-            selectedLaunchpad.directoryKey,
-            props.pendingLaunchpadCreation?.composerScopeKey,
-          ),
-        }
-      : selectedThread
-        ? { threadScope: threadComposerScope(selectedThread) }
-        : {};
+  // See `composer-slot.ts`.
+  const composerSlotView = composerLaunchpad
+    ? {
+        launchpadScope: launchpadComposerScope(
+          composerLaunchpad.directoryKey,
+          props.pendingLaunchpadCreation?.composerScopeKey,
+        ),
+      }
+    : !pendingForkEnvironmentSetup && selectedThread
+      ? { threadScope: threadComposerScope(selectedThread) }
+      : {};
   const [composerSlotLineage, setComposerSlotLineage] =
     useState<ComposerSlotLineage>({});
   const nextSlotLineage = nextComposerSlotLineage(
@@ -3649,20 +3654,213 @@ export function ThreadView(props: ThreadViewProps) {
     />
   ) : null;
 
+  const launchpadBackend = composerLaunchpad
+    ? props.backends.find(
+        (backend) => backend.kind === composerLaunchpad.backend
+      )
+    : undefined;
+  const launchpadMachineOffline = composerLaunchpad
+    ? describeLaunchpadMachineOffline(props.launchpadMachine)
+    : undefined;
+  const selectedLaunchpadCodexEnvironment =
+    composerLaunchpad?.codexEnvironmentOptions?.find(
+      (environment) => environment.id === composerLaunchpad.codexEnvironmentId,
+    );
+  const launchpadRunningCodexEnvironmentSetup = Boolean(
+    selectedLaunchpadCodexEnvironment?.setupScript,
+  );
+  // What only one mode's composer receives. Everything both modes receive is
+  // written once on the `<Composer>` below, so the two cannot drift apart.
+  const composerModeProps: Partial<ComponentProps<typeof Composer>> =
+    composerLaunchpad
+      ? {
+          providerModelDefaults: props.providerModelDefaults,
+          onProviderSelected: props.onProviderSelected,
+          launchpad: composerLaunchpad,
+          launchpadMachine: props.launchpadMachine,
+          launchpadMachineChipHost: launchpadMachineSlot,
+          launchpadComposerScopeKey: props.pendingLaunchpadCreation?.composerScopeKey,
+          launchpadMaterializing,
+          launchpadError: props.launchpadError,
+          launchpadConfigurationError: props.launchpadConfigurationError,
+          onReloadLaunchpadConfiguration: props.onReloadLaunchpadConfiguration,
+          onMaterializeLaunchpad: handleMaterializeLaunchpad,
+          onCancelLaunchpad: props.onCancelLaunchpad,
+          onUpdateLaunchpad: props.onUpdateLaunchpad,
+          onSelectDirectoryFromPicker: props.onSelectDirectoryFromPicker,
+          onSelectNoDirectoryFromPicker: props.onSelectNoDirectoryFromPicker,
+          onPickAndRegisterDirectory: props.onPickAndRegisterDirectory,
+          onPickAndAttachDirectoryToThread: props.onPickAndAttachDirectoryToThread,
+          onClearPickDirectoryError: props.onClearPickDirectoryError,
+          pickDirectoryError: props.pickDirectoryError,
+          pickingDirectory: props.pickingDirectory,
+        }
+      : {
+          activeTurnId: props.activeTurnId,
+          addOptimisticReviewEntry: props.addOptimisticReviewEntry,
+          addOptimisticUserMessage: props.addOptimisticUserMessage,
+          onShowMcpInventory: showMcpInventory,
+          mcpConnectionCount: threadMcpConnectionCount,
+          replySubmission: asyncQuestionReply,
+          onReplySubmissionSettled: handleReplySubmissionSettled,
+          workspaceActionsBlocked: props.workspaceActionsBlocked,
+          contextWindow: props.contextWindow,
+          onActiveTurnIdChange: props.onActiveTurnIdChange,
+          onPendingStatusChange: props.onPendingStatusChange,
+          onUserRepliedToThread: props.onUserRepliedToThread,
+          onRefreshNavigation: props.onRefreshNavigation,
+          onHandoffThreadWorkspace: props.onHandoffThreadWorkspace,
+          onBeforeStartTurn:
+            selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
+              ? handleBeforeStartTurn
+              : undefined,
+          onBeforeSendTurn: handleBeforeSendTurn,
+          onMoveEnvActionsToSidebar:
+            actionRunsDock === "above" && envActionRuns.length > 0
+              ? moveActionRunsToSidebar
+              : undefined,
+          onDismissEnvActionRun: dismissEnvActionRun,
+          onStopEnvActionRun: stopEnvActionRun,
+          hiddenEnvActionRunIds: dismissedEnvActionRunIds,
+          showEnvActionAnchors: actionRunsDock === "above",
+          onSetExecutionMode: props.onSetExecutionMode,
+          onSetAcpRuntimeOption: props.onSetAcpRuntimeOption,
+          onCancelExecutionModeQueue: props.onCancelExecutionModeQueue,
+          onSetThreadModelSettings: props.onSetThreadModelSettings,
+          onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
+          onCancelThreadPrAutoDispatch: props.onCancelThreadPrAutoDispatch,
+          onSendThreadPrAutoDispatchNow: props.onSendThreadPrAutoDispatchNow,
+          backgroundPrPollingEnabled: props.backgroundPrPollingEnabled,
+          prAutoDispatchAllowed: props.prAutoDispatchAllowed,
+          onAttachDirectoryReferences: props.onAttachDirectoryReferences,
+          pendingRequestActive: Boolean(props.pendingRequest),
+          pendingUserInputActive: Boolean(
+            props.pendingUserInput || props.pendingMcpInteraction
+          ),
+          removeOptimisticMessage: props.removeOptimisticMessage,
+          setExecutionModeError: props.setExecutionModeError,
+          threadModelSettingsError: props.setThreadModelSettingsError,
+          thread: selectedThread,
+          threadBusy: props.threadBusy,
+          updatingExecutionMode: props.updatingExecutionMode,
+        };
+  // ThreadView's one composer. Both branches below place this element where
+  // their layout wants it: the launchpad's centred column, or a flex item of
+  // the thread's `.thread-view__primary` (the thread slot is
+  // `display: contents`). The key decides when the composer survives a move
+  // between the branches; see `composer-slot.ts`.
+  const composerSlotElement = (
+    <div
+      key={composerSlot}
+      className={
+        composerLaunchpad
+          ? `thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`
+          : "thread-view__composer-slot"
+      }
+    >
+      {composerLaunchpad && launchpadMaterializing ? (
+        <div className="thread-view__launchpad-transcript">
+          <article className="launchpad-submitted-message" aria-label="Submitted message">
+            <div className="transcript-list__content">
+              <TranscriptMessage
+                applications={props.applications}
+                desktopApi={props.desktopApi}
+                message={launchpadSubmittedMessage}
+                parentThreadId=""
+                skills={props.skills}
+                onOpenImage={openImageGallery}
+              />
+            </div>
+          </article>
+          {launchpadMaterializeError ? (
+            <LaunchpadMaterializeFailure
+              directoryLabel={composerLaunchpad.directoryLabel}
+              error={launchpadMaterializeError}
+              onClose={() => {
+                setLaunchpadMaterializing(false);
+                setLaunchpadMaterializeError(undefined);
+              }}
+            />
+          ) : (
+            <section
+              className="transcript-panel transcript-panel--pending"
+              aria-label="Preparing transcript"
+            >
+              <div className="launchpad-pending">
+                <p className="eyebrow">Preparing transcript</p>
+                <h3>Starting {composerLaunchpad.directoryLabel}</h3>
+                <p>
+                  {launchpadRunningCodexEnvironmentSetup
+                    ? `Running the ${
+                        selectedLaunchpadCodexEnvironment?.name ?? "environment"
+                      } setup first. The transcript will appear here when the thread is ready.`
+                    : "Your prompt was sent. The transcript will appear here when the thread is ready."}
+                </p>
+              </div>
+            </section>
+          )}
+        </div>
+      ) : null}
+      {/* Second child in both modes, so React matches it by position when
+          the slot itself survives. */}
+      <Composer
+        backends={props.backends}
+        applications={props.applications}
+        codexFastAllowed={props.codexFastAllowed}
+        desktopApi={props.desktopApi}
+        onShowNotice={props.onShowNotice}
+        onShowMcpAccess={
+          props.activeFederationTarget
+            ? undefined
+            : composerLaunchpad
+              ? showLaunchpadMcpAccess
+              : showThreadMcpAccess
+        }
+        composerImplementation={props.composerImplementation}
+        draftStore={props.composerDraftStore}
+        directory={props.selectedDirectory}
+        directories={props.directories}
+        disabled={
+          composerLaunchpad
+            ? props.launchpadConfigurationReady === false
+              || !launchpadBackend?.available
+              || launchpadMachineOffline !== undefined
+            : props.composerDisabled
+        }
+        unavailableReason={
+          composerLaunchpad
+            ? launchpadMachineOffline ?? launchpadBackend?.unavailableReason
+            : selectedThreadBackend?.unavailableReason
+        }
+        environmentSetup={
+          composerLaunchpad
+            ? launchpadEnvironmentSetup
+            : selectedThreadEnvironmentSetup
+        }
+        fullAccessRiskWarningDismissed={
+          props.fullAccessRiskWarningDismissed
+        }
+        onDismissFullAccessRiskWarning={
+          props.onDismissFullAccessRiskWarning
+        }
+        onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+        onPickDirectoryForReference={props.onPickDirectoryForReference}
+        pastedImageMaxPatches={props.pastedImageMaxPatches}
+        pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+        tokenMiserEnabled={props.tokenMiserEnabled}
+        tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
+        monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
+        skillError={props.skillError}
+        skillLoading={props.skillLoading}
+        providerCommands={props.providerCommands ?? []}
+        skills={props.skills}
+        threads={props.threads}
+        {...composerModeProps}
+      />
+    </div>
+  );
+
   if (selectedLaunchpad && props.selectedDirectory) {
-    const launchpadBackend = props.backends.find(
-      (backend) => backend.kind === selectedLaunchpad.backend
-    );
-    const launchpadMachineOffline = describeLaunchpadMachineOffline(
-      props.launchpadMachine,
-    );
-    const selectedLaunchpadCodexEnvironment =
-      selectedLaunchpad.codexEnvironmentOptions?.find(
-        (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
-      );
-    const launchpadRunningCodexEnvironmentSetup = Boolean(
-      selectedLaunchpadCodexEnvironment?.setupScript,
-    );
     return (
       <section
         className="thread-view thread-view--launchpad"
@@ -3801,118 +3999,7 @@ export function ThreadView(props: ThreadViewProps) {
                 }}
               />
             ) : null}
-            <div
-              key={composerSlot}
-              className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}
-            >
-              {launchpadMaterializing ? (
-                <div className="thread-view__launchpad-transcript">
-                  <article className="launchpad-submitted-message" aria-label="Submitted message">
-                    <div className="transcript-list__content">
-                      <TranscriptMessage
-                        applications={props.applications}
-                        desktopApi={props.desktopApi}
-                        message={launchpadSubmittedMessage}
-                        parentThreadId=""
-                        skills={props.skills}
-                        onOpenImage={openImageGallery}
-                      />
-                    </div>
-                  </article>
-                  {launchpadMaterializing && launchpadMaterializeError ? (
-                    <LaunchpadMaterializeFailure
-                      directoryLabel={selectedLaunchpad.directoryLabel}
-                      error={launchpadMaterializeError}
-                      onClose={() => {
-                        setLaunchpadMaterializing(false);
-                        setLaunchpadMaterializeError(undefined);
-                      }}
-                    />
-                  ) : launchpadMaterializing ? (
-                    <section
-                      className="transcript-panel transcript-panel--pending"
-                      aria-label="Preparing transcript"
-                    >
-                      <div className="launchpad-pending">
-                        <p className="eyebrow">Preparing transcript</p>
-                        <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-                        <p>
-                          {launchpadRunningCodexEnvironmentSetup
-                            ? `Running the ${
-                                selectedLaunchpadCodexEnvironment?.name ?? "environment"
-                              } setup first. The transcript will appear here when the thread is ready.`
-                            : "Your prompt was sent. The transcript will appear here when the thread is ready."}
-                        </p>
-                      </div>
-                    </section>
-                  ) : null}
-                </div>
-              ) : null}
-              <Composer
-                key="composer"
-                backends={props.backends}
-                applications={props.applications}
-                codexFastAllowed={props.codexFastAllowed}
-                environmentSetup={launchpadEnvironmentSetup}
-                onShowMcpAccess={
-                  props.activeFederationTarget
-                    ? undefined
-                    : showLaunchpadMcpAccess
-                }
-                providerModelDefaults={props.providerModelDefaults}
-                desktopApi={props.desktopApi}
-                onShowNotice={props.onShowNotice}
-                onProviderSelected={props.onProviderSelected}
-                composerImplementation={props.composerImplementation}
-                draftStore={props.composerDraftStore}
-                directory={props.selectedDirectory}
-                directories={props.directories}
-                disabled={
-                  props.launchpadConfigurationReady === false
-                  || !launchpadBackend?.available
-                  || launchpadMachineOffline !== undefined
-                }
-                unavailableReason={launchpadMachineOffline ?? launchpadBackend?.unavailableReason}
-                launchpad={selectedLaunchpad}
-                launchpadMachine={props.launchpadMachine}
-                launchpadMachineChipHost={launchpadMachineSlot}
-                launchpadComposerScopeKey={props.pendingLaunchpadCreation?.composerScopeKey}
-                launchpadMaterializing={launchpadMaterializing}
-                launchpadError={props.launchpadError}
-                launchpadConfigurationError={props.launchpadConfigurationError}
-                onReloadLaunchpadConfiguration={props.onReloadLaunchpadConfiguration}
-                pastedImageMaxPatches={props.pastedImageMaxPatches}
-                pdfAnalysisEnabled={props.pdfAnalysisEnabled}
-                tokenMiserEnabled={props.tokenMiserEnabled}
-                tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
-                monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
-                fullAccessRiskWarningDismissed={
-                  props.fullAccessRiskWarningDismissed
-                }
-                onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-                onDismissFullAccessRiskWarning={
-                  props.onDismissFullAccessRiskWarning
-                }
-                onMaterializeLaunchpad={handleMaterializeLaunchpad}
-                onCancelLaunchpad={props.onCancelLaunchpad}
-                onUpdateLaunchpad={props.onUpdateLaunchpad}
-                onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
-                onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
-                onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
-                threads={props.threads}
-                onPickAndAttachDirectoryToThread={
-                  props.onPickAndAttachDirectoryToThread
-                }
-                onPickDirectoryForReference={props.onPickDirectoryForReference}
-                onClearPickDirectoryError={props.onClearPickDirectoryError}
-                pickDirectoryError={props.pickDirectoryError}
-                pickingDirectory={props.pickingDirectory}
-                skillError={props.skillError}
-                skillLoading={props.skillLoading}
-                providerCommands={props.providerCommands ?? []}
-                skills={props.skills}
-              />
-            </div>
+            {composerSlotElement}
           </div>
           <ThreadContextPanel
             activeTab={activeContextTab}
@@ -4162,97 +4249,7 @@ export function ThreadView(props: ThreadViewProps) {
             />
           ) : null}
 
-          {/* `display: contents`: the slot only carries the key that lets a
-              launchpad's composer become this thread's. */}
-          <div key={composerSlot} className="thread-view__composer-slot">
-            <Composer
-              key="composer"
-              activeTurnId={props.activeTurnId}
-              addOptimisticReviewEntry={props.addOptimisticReviewEntry}
-              addOptimisticUserMessage={props.addOptimisticUserMessage}
-              backends={props.backends}
-              applications={props.applications}
-              codexFastAllowed={props.codexFastAllowed}
-              desktopApi={props.desktopApi}
-              onShowNotice={props.onShowNotice}
-              onShowMcpInventory={showMcpInventory}
-              onShowMcpAccess={
-                props.activeFederationTarget
-                  ? undefined
-                  : showThreadMcpAccess
-              }
-              mcpConnectionCount={threadMcpConnectionCount}
-              composerImplementation={props.composerImplementation}
-              draftStore={props.composerDraftStore}
-              replySubmission={asyncQuestionReply}
-              onReplySubmissionSettled={handleReplySubmissionSettled}
-              directory={props.selectedDirectory}
-              directories={props.directories}
-              disabled={props.composerDisabled}
-              workspaceActionsBlocked={props.workspaceActionsBlocked}
-              unavailableReason={selectedThreadBackend?.unavailableReason}
-              contextWindow={props.contextWindow}
-              fullAccessRiskWarningDismissed={
-                props.fullAccessRiskWarningDismissed
-              }
-              onActiveTurnIdChange={props.onActiveTurnIdChange}
-              onDismissFullAccessRiskWarning={
-                props.onDismissFullAccessRiskWarning
-              }
-              onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-              onPendingStatusChange={props.onPendingStatusChange}
-              onUserRepliedToThread={props.onUserRepliedToThread}
-              onRefreshNavigation={props.onRefreshNavigation}
-              onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
-              onBeforeStartTurn={
-                selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
-                  ? handleBeforeStartTurn
-                  : undefined
-              }
-              onBeforeSendTurn={handleBeforeSendTurn}
-              onMoveEnvActionsToSidebar={
-                actionRunsDock === "above" && envActionRuns.length > 0
-                  ? moveActionRunsToSidebar
-                  : undefined
-              }
-              onDismissEnvActionRun={dismissEnvActionRun}
-              onStopEnvActionRun={stopEnvActionRun}
-              hiddenEnvActionRunIds={dismissedEnvActionRunIds}
-              showEnvActionAnchors={actionRunsDock === "above"}
-              environmentSetup={selectedThreadEnvironmentSetup}
-              onSetExecutionMode={props.onSetExecutionMode}
-              onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
-              onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
-              onSetThreadModelSettings={props.onSetThreadModelSettings}
-              onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
-              onCancelThreadPrAutoDispatch={props.onCancelThreadPrAutoDispatch}
-              onSendThreadPrAutoDispatchNow={props.onSendThreadPrAutoDispatchNow}
-              backgroundPrPollingEnabled={props.backgroundPrPollingEnabled}
-              prAutoDispatchAllowed={props.prAutoDispatchAllowed}
-              onAttachDirectoryReferences={props.onAttachDirectoryReferences}
-              onPickDirectoryForReference={props.onPickDirectoryForReference}
-              pendingRequestActive={Boolean(props.pendingRequest)}
-              pendingUserInputActive={Boolean(
-                props.pendingUserInput || props.pendingMcpInteraction
-              )}
-              pastedImageMaxPatches={props.pastedImageMaxPatches}
-              pdfAnalysisEnabled={props.pdfAnalysisEnabled}
-              tokenMiserEnabled={props.tokenMiserEnabled}
-              tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
-              monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}
-              removeOptimisticMessage={props.removeOptimisticMessage}
-              setExecutionModeError={props.setExecutionModeError}
-              threadModelSettingsError={props.setThreadModelSettingsError}
-              skillError={props.skillError}
-              skillLoading={props.skillLoading}
-              providerCommands={props.providerCommands ?? []}
-              skills={props.skills}
-              thread={selectedThread!}
-              threads={props.threads}
-              threadBusy={props.threadBusy}
-              updatingExecutionMode={props.updatingExecutionMode}
-            />
-          </div>
+          {composerSlotElement}
 
           {terminals.panes.map((terminal) => {
             const terminalVisible =

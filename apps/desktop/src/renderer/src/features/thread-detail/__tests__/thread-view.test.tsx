@@ -3377,6 +3377,61 @@ describe("ThreadView", () => {
     }
   });
 
+  // Composer rebuilds its editor on every other scope change, so the editor
+  // cannot tell a kept composer from a fresh one. Its root can: it survives
+  // only while React keeps the Composer instance.
+  it("keeps a launchpad's composer only for the thread it became", () => {
+    const { result } = renderHook(useComposerDraftStore);
+    const launchpad: NavigationLaunchpadDraft = {
+      backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+      directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+      prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+    };
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      composerDraftStore: result.current,
+      transcriptEntries: [],
+      loading: false,
+      loadingMore: false,
+      messageCount: 0,
+      selectedDirectory: {
+        key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+      },
+      selectedLaunchpad: launchpad,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+    };
+    const composerRoot = () =>
+      screen.getByRole("textbox", { name: /^(New thread|Reply)$/ }).closest(".composer");
+    const showThread = (id: string) => (
+      <ThreadView
+        {...props}
+        selectedLaunchpad={undefined}
+        selectedThread={buildTimestampTargetThread(id, id)}
+      />
+    );
+
+    const view = render(<ThreadView {...props} />);
+    const launchpadComposer = composerRoot();
+    expect(launchpadComposer).not.toBeNull();
+
+    // No handoff names this thread, so it gets its own composer.
+    view.rerender(showThread("first-thread"));
+    const threadComposer = composerRoot();
+    expect(threadComposer).not.toBe(launchpadComposer);
+
+    // Threads share theirs.
+    view.rerender(showThread("second-thread"));
+    expect(composerRoot()).toBe(threadComposer);
+
+    view.rerender(<ThreadView {...props} />);
+    expect(composerRoot()).not.toBe(threadComposer);
+  });
+
   it("opens submitted image previews while the launchpad is materializing", () => {
     const dataUrl = "data:image/png;base64,aGVsbG8=";
     render(
