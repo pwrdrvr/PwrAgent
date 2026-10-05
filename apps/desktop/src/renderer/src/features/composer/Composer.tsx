@@ -2820,6 +2820,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const terminalTurnKeysRef = useRef(new Set<string>());
+  // Queued rows with an owner-side Edit or Delete in flight. A second click
+  // would cancel an entry the first already took and report it as no longer
+  // waiting.
+  const queuedRowActionIdsRef = useRef(new Set<string>());
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -4409,6 +4413,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     } catch (error) {
       reportError(error instanceof Error ? error.message : String(error));
       return "failed";
+    }
+  };
+  /** Runs one owner-side Edit or Delete per row; a click while one runs is dropped. */
+  const runQueuedRowAction = async (
+    queued: QueuedTurnDraft,
+    action: () => Promise<void>,
+  ): Promise<void> => {
+    const inFlight = queuedRowActionIdsRef.current;
+    if (inFlight.has(queued.id)) return;
+    inFlight.add(queued.id);
+    try {
+      await action();
+    } finally {
+      inFlight.delete(queued.id);
     }
   };
   const acknowledgeQueuedFailure = (queued: QueuedTurnDraft): void => {
@@ -11502,7 +11520,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     editQueuedTurn();
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     let editable: QueuedTurnDraft;
                     let contentHash: string;
                     try {
@@ -11522,7 +11540,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       return;
                     }
                     editQueuedTurn(editable);
-                  })();
+                  });
                 }}
               >
                 <PencilIcon size={14} />
@@ -11537,7 +11555,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     removeQueuedTurnAt(index);
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     const cancellation = await cancelServerManagedQueuedTurn(
                       queued,
                       queuedScopeKey,
@@ -11546,7 +11564,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       acknowledgeQueuedFailure(queued);
                       removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
-                  })();
+                  });
                 }}
               >
                 <TrashIcon size={14} />
