@@ -34697,14 +34697,14 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 0 14px;
   border: 1px solid var(--accent-border);
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-size: 12px;
   cursor: pointer;
 }
 
 .image-lightbox__svg-notice-run:hover:not([aria-disabled="true"]) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 
 .image-lightbox__svg-notice-run:focus-visible {
