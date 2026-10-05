@@ -113,15 +113,15 @@ test("keystroke after clicking the transcript draws no outline, Tab draws the ri
       return {
         focused: items === document.activeElement,
         outlineStyle: style.outlineStyle,
-        outlineWidth: style.outlineWidth,
       };
     });
     expect(focusState).not.toBeNull();
     // Focus itself must stay (keyboard scrolling depends on it) — only
-    // the viewport-sized ring goes.
+    // the viewport-sized ring goes. A `none` style paints nothing; the
+    // computed width is no evidence either way, since Chromium 152
+    // (Electron 44) reports the `medium` 3px there where 146 reported 0px.
     expect(focusState?.focused).toBe(true);
     expect(focusState?.outlineStyle).toBe("none");
-    expect(focusState?.outlineWidth).toBe("0px");
 
     // Come back by keyboard: this arrival is a Tab stop, and it draws the
     // ring. Tab in from a throwaway stop placed directly before the

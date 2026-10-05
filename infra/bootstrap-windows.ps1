@@ -9,7 +9,7 @@ Start-Transcript -Path C:\bootstrap.log -Append | Out-Null
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Keep these in sync with the repo: .nvmrc and root package.json "packageManager".
-$NodeVersion = "24.14.1"
+$NodeVersion = "24.21.0"
 $PnpmVersion = "10.33.0"
 
 function Update-SessionPath {

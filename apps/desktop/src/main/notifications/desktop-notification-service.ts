@@ -196,6 +196,14 @@ export class DesktopNotificationService {
         params.onClick?.();
       });
       notification.on("close", cleanup);
+      // Since Electron 42, macOS delivers through UNUserNotificationCenter,
+      // which reports a notification it will not show (an unsigned build, or
+      // notifications turned off in System Settings) as `failed`. No `close`
+      // follows, so release it here.
+      notification.on("failed", (_event, error) => {
+        cleanup();
+        notificationLog.warn("native notification failed", { error });
+      });
       if (actions) {
         let handled = false;
         notification.on("action", (event, deprecatedActionIndex) => {
