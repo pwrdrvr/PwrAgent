@@ -5,6 +5,8 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  # Library-owner-approved prerelease trial inside the seven-day maturity window.
+  - '@shutterstock/p-map-iterable@1.2.0-prerelease.1'
   # Slack's 27 Aug 2026 Agent Sessions types are required for this integration.
   - '@slack/types@3.1.0'
   - '@slack/web-api@8.1.0'

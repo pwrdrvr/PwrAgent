@@ -719,7 +719,7 @@ MIT
 - @sapphire/async-queue@1.5.5 | https://github.com/sapphiredev/utilities
 - @sapphire/shapeshift@4.0.0 | https://github.com/sapphiredev/shapeshift
 - @sapphire/snowflake@3.5.5 | https://github.com/sapphiredev/utilities
-- @shutterstock/p-map-iterable@1.1.2 | https://github.com/shutterstock/p-map-iterable
+- @shutterstock/p-map-iterable@1.2.0-prerelease.1 | https://github.com/shutterstock/p-map-iterable
 - @slack/logger@5.0.0 | https://github.com/slackapi/node-slack-sdk
 - @slack/socket-mode@3.0.1 | https://github.com/slackapi/node-slack-sdk
 - @slack/types@3.1.0 | https://github.com/slackapi/node-slack-sdk
@@ -4085,13 +4085,13 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
-@shutterstock/p-map-iterable@1.1.2 (MIT)
-----------------------------------------
+@shutterstock/p-map-iterable@1.2.0-prerelease.1 (MIT)
+-----------------------------------------------------
 
 Applies to:
-- @shutterstock/p-map-iterable@1.1.2 (MIT)
+- @shutterstock/p-map-iterable@1.2.0-prerelease.1 (MIT)
 
-Representative file: @shutterstock/p-map-iterable@1.1.2/LICENSE.md
+Representative file: @shutterstock/p-map-iterable@1.2.0-prerelease.1/LICENSE.md
 
 The MIT License (MIT)
 =====================
