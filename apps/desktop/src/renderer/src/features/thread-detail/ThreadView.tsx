@@ -1345,6 +1345,12 @@ export function ThreadView(props: ThreadViewProps) {
       ? selectedThread.federation.ref.target.instanceId
       : undefined,
   );
+  // A launchpad, or a fork still in setup, has no thread yet. It belongs to
+  // the machine it will start on: App's active federation target is the
+  // chosen peer, else this window's owner, else undefined for the local mark.
+  const launchpadWatermarkIcon = celestialIcons.iconFor(
+    props.activeFederationTarget?.instanceId,
+  );
   // The pending line's scanner goes neutral for a peer's turn on the same
   // predicate the thread row uses, so the transcript, the row and the
   // Attention tab colour one turn the same way.
@@ -3501,6 +3507,7 @@ export function ThreadView(props: ThreadViewProps) {
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
           <div className="thread-view__primary">
+            <CelestialWatermark icon={launchpadWatermarkIcon} />
             <div className="thread-view__launchpad-composer">
               <LaunchpadEnvironmentSetupPending
                 command={
@@ -3661,6 +3668,7 @@ export function ThreadView(props: ThreadViewProps) {
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
           <div className="thread-view__primary">
+            <CelestialWatermark icon={launchpadWatermarkIcon} />
             <div
               aria-label="PwrSuite connections"
               className="thread-view__connections"
