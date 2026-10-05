@@ -162,10 +162,11 @@ test("thread reply Tiptap fork autocomplete shows parameters and completes works
 
     await textbox.fill("/fork --wt n");
     await expect(commands.getByRole("option")).toHaveCount(2);
-    await textbox.press("Tab");
-    await expect(tiptapInput).toHaveAttribute("data-value", "/fork --wt new ");
     await expect(commands.getByRole("option").first()).toContainText("Fork with history in a new worktree");
     await expect(commands.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+    await textbox.press("Tab");
+    // Completion can dismiss the menu; the inserted draft is the result.
+    await expect(tiptapInput).toHaveAttribute("data-value", "/fork --wt new ");
     await expect(app.window.getByRole("button", { name: "Fork", exact: true })).toBeVisible();
     // Completion inserts a command; it must not submit a provider turn.
     expect(await app.getLastStartTurn()).toBeUndefined();
