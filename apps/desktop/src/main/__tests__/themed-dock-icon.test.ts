@@ -75,11 +75,11 @@ describe("themed dock icon", () => {
 
     syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
     syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
-    expect(appliedFiles()).toEqual(["/app/build/dock-icons/blue-dark.png"]);
+    expect(appliedFiles()).toEqual([path.join("/app", "build/dock-icons", "blue-dark.png")]);
 
     // Back to the app's own icon: the padded development icon here.
     syncThemedDockIcon({ darkTheme: "tangerine-dark", themedDockIcon: true });
-    expect(appliedFiles().at(-1)).toBe("/app/build/icon-macos.png");
+    expect(appliedFiles().at(-1)).toBe(path.join("/app", "build/icon-macos.png"));
   });
 
   it("restores the bundle icon in a packaged app when the operator opts out", () => {
@@ -90,7 +90,7 @@ describe("themed dock icon", () => {
     });
     syncThemedDockIcon({ darkTheme: "solarized-dark", themedDockIcon: true });
     expect(appliedFiles().at(-1)).toBe(
-      "/Applications/PwrAgent.app/Contents/Resources/dock-icons/solarized-dark.png",
+      path.join("/Applications/PwrAgent.app/Contents/Resources", "dock-icons", "solarized-dark.png"),
     );
 
     syncThemedDockIcon({ darkTheme: "solarized-dark", themedDockIcon: false });
