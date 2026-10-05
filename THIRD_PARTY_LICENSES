@@ -957,6 +957,7 @@ MIT
 - magic-bytes.js@1.13.0 | https://github.com/LarsKoelpin/magic-bytes
 - markdown-table@3.0.4 | wooorm/markdown-table
 - marked@16.4.2 | https://github.com/markedjs/marked
+- marked@18.0.13 | https://github.com/markedjs/marked
 - math-intrinsics@1.1.0 | https://github.com/es-shims/math-intrinsics
 - mdast-util-find-and-replace@3.0.2 | syntax-tree/mdast-util-find-and-replace
 - mdast-util-from-markdown@2.0.3 | syntax-tree/mdast-util-from-markdown
@@ -9286,6 +9287,7 @@ marked@16.4.2 (MIT)
 
 Applies to:
 - marked@16.4.2 (MIT)
+- marked@18.0.13 (MIT)
 
 Representative file: marked@16.4.2/LICENSE.md
 
