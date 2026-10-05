@@ -10821,6 +10821,17 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * A backend's model catalog, awaited rather than read off a summary that
+   * may still hold fallback models while discovery runs. Thread to-dos check
+   * a handoff card's model against it when the card is written.
+   */
+  async readBackendModelOptions(
+    backend: AppServerBackendKind,
+  ): Promise<BackendLaunchpadOptions | undefined> {
+    return this.getBackendLaunchpadOptions(backend, "thread-todo-model");
+  }
+
+  /**
    * The linked directory a thread's project is filed under: its first link,
    * as the Directories lens and the Star Map read it.
    */

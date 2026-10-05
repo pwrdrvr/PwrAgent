@@ -248,6 +248,119 @@ describe("ThreadTodoService", () => {
     expect(service.list({ status: "open" })).toHaveLength(1);
   });
 
+  it("updates only the fields given and keeps the rest", () => {
+    const service = createService();
+    const todo = service.add({
+      ...THREAD,
+      sourceProject: AGENT,
+      targetProject: SNAP,
+      input: {
+        title: "Build it",
+        detail: "In PwrSnap",
+        action: {
+          type: "start_thread",
+          prompt: "Build the hook",
+          model: "gpt-6.1",
+          reasoningEffort: "medium",
+          workMode: "worktree",
+        },
+      },
+    }).todo;
+    events = [];
+    clock = 5_000;
+
+    const updated = service.update({
+      id: todo.id,
+      action: { model: "gpt-6.1-sol", reasoningEffort: "xhigh", executionMode: "auto" },
+    });
+
+    expect(updated).toMatchObject({
+      title: "Build it",
+      detail: "In PwrSnap",
+      targetProject: SNAP,
+      updatedAt: 5_000,
+      action: {
+        type: "start_thread",
+        prompt: "Build the hook",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "xhigh",
+        executionMode: "auto",
+        workMode: "worktree",
+      },
+    });
+    expect(events).toHaveLength(1);
+    expect(new ThreadTodoStore(db).get(todo.id)?.action).toEqual(updated.action);
+  });
+
+  it("clears optional fields with null and returns a card to its own project", () => {
+    const service = createService();
+    const todo = service.add({
+      ...THREAD,
+      sourceProject: AGENT,
+      targetProject: SNAP,
+      input: {
+        title: "Build it",
+        detail: "Context",
+        action: { type: "start_thread", prompt: "Go", model: "gpt-6.1", executionMode: "auto" },
+      },
+    }).todo;
+
+    const updated = service.update({
+      id: todo.id,
+      detail: null,
+      targetProject: null,
+      action: { model: null, executionMode: null },
+    });
+    expect(updated.detail).toBeUndefined();
+    expect(updated.targetProject).toBeUndefined();
+    expect(updated.sourceProject).toEqual(AGENT);
+    expect(updated.action).toEqual({ type: "start_thread", prompt: "Go" });
+  });
+
+  it("clears a failed run's error when the card changes", async () => {
+    const service = createService({
+      mergePullRequest: vi.fn(),
+      startThread: vi.fn(async () => {
+        throw new Error("model unavailable");
+      }),
+    });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+    await service.runAction(todo.id);
+
+    expect(service.update({ id: todo.id, action: { model: "gpt-6.1" } }).error).toBeUndefined();
+  });
+
+  it("refuses fields the card's action does not have, and a resolved card", () => {
+    const service = createService();
+    const merge = service.add({
+      ...THREAD,
+      input: { title: "Merge", action: { type: "merge_pull_request", pullRequest: "1" } },
+    }).todo;
+    const reminder = service.add({ ...THREAD, input: { title: "Remember" } }).todo;
+
+    expect(() => service.update({ id: merge.id, action: { model: "gpt-6.1" } }))
+      .toThrow("A merge card takes only pullRequest, not model.");
+    expect(service.update({ id: merge.id, action: { pullRequest: "2" } }).action)
+      .toEqual({ type: "merge_pull_request", pullRequest: "2" });
+    expect(() => service.update({ id: reminder.id, action: { prompt: "x" } }))
+      .toThrow(ThreadTodoError);
+    service.resolve({ id: reminder.id, status: "done" });
+    expect(() => service.update({ id: reminder.id, title: "Again" }))
+      .toThrow(expect.objectContaining({ code: "conflict" }));
+  });
+
+  it("finds only the calling thread's cards to update", () => {
+    const service = createService();
+    const todo = service.add({ ...THREAD, input: { key: "k", title: "Mine" } }).todo;
+
+    expect(service.findForThread({ ...THREAD, key: "k" }).id).toBe(todo.id);
+    expect(() => service.findForThread({ backend: "codex", threadId: "thread-b", id: todo.id }))
+      .toThrow(expect.objectContaining({ code: "not_found" }));
+  });
+
   it("lets a thread resolve only its own cards", () => {
     const service = createService();
     const todo = service.add({ ...THREAD, input: { key: "k", title: "Mine" } }).todo;
@@ -368,6 +481,25 @@ describe("ThreadTodoService", () => {
     expectSqliteWriteBudget({
       note: "a merge method picked on a card, then picked again: one upsert, and the unchanged repeat writes nothing; only on an explicit menu pick",
       scenario: "thread-todo-remember-merge-method",
+      writes,
+    });
+  });
+
+  it("costs one commit to edit a card", async () => {
+    const service = createService();
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+    const { writes } = await measureSqliteWrites(() => {
+      service.update({
+        id: todo.id,
+        action: { model: "gpt-6.1-sol", reasoningEffort: "xhigh", executionMode: "auto" },
+      });
+    });
+    expectSqliteWriteBudget({
+      note: "one card edited by update_todo: one commit, only when a thread is asked to change a card",
+      scenario: "thread-todo-edit",
       writes,
     });
   });

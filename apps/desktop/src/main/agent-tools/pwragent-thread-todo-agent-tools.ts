@@ -1,6 +1,7 @@
 import type {
   AppServerBackendKind,
   PwrAgentThreadTodoOperationName,
+  ThreadExecutionMode,
   ThreadTodo,
   ThreadTodoAction,
   ThreadTodoStatus,
@@ -19,7 +20,11 @@ import type {
 } from "./agent-tool-definition.js";
 import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
-import type { AddThreadTodoInput } from "../thread-todos/thread-todo-service.js";
+import type {
+  AddThreadTodoInput,
+  ThreadTodoActionPatch,
+  UpdateThreadTodoInput,
+} from "../thread-todos/thread-todo-service.js";
 import { ThreadTodoError } from "../thread-todos/thread-todo-service.js";
 
 export const PWRAGENT_THREAD_TODO_UNAVAILABLE_MESSAGE =
@@ -27,6 +32,9 @@ export const PWRAGENT_THREAD_TODO_UNAVAILABLE_MESSAGE =
 
 const KEY_MAX_LENGTH = 80;
 const PROJECT_MAX_LENGTH = 1_000;
+const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
+  readonly ThreadExecutionMode[];
+const WORK_MODES = ["local", "worktree"] as const;
 
 type ThreadTodoToolContext = {
   backend: AppServerBackendKind;
@@ -42,6 +50,11 @@ export type PwrAgentThreadTodoHandler = {
     context: ThreadTodoToolContext,
     input: AddThreadTodoInput,
   ) => Promise<{ todo: ThreadTodo; created: boolean }>;
+  update: (
+    context: ThreadTodoToolContext,
+    target: { id?: string; key?: string },
+    input: UpdateThreadTodoInput,
+  ) => Promise<ThreadTodo>;
   list: (
     context: ThreadTodoToolContext,
     status: ThreadTodoStatus | "all",
@@ -115,6 +128,14 @@ async function dispatchOperation(
       }
       const { todo, created } = await handler.add(context, parsed.value);
       return agentToolSuccess({ created, todo: summarizeTodo(todo) });
+    }
+    case "update_todo": {
+      const parsed = normalizeUpdateTodoArgs(args);
+      if (!parsed.ok) {
+        return agentToolFailure({ code: "invalid_arguments", message: parsed.message });
+      }
+      const todo = await handler.update(context, parsed.target, parsed.value);
+      return agentToolSuccess({ todo: summarizeTodo(todo) });
     }
     case "list_todos": {
       const status = args.status === undefined ? "open" : args.status;
@@ -249,8 +270,15 @@ function normalizeAction(
         };
       }
       const workMode = action.workMode;
-      if (workMode !== undefined && workMode !== "local" && workMode !== "worktree") {
+      if (workMode !== undefined && !isOneOf(workMode, WORK_MODES)) {
         return { ok: false, message: "start_thread workMode must be local or worktree." };
+      }
+      const executionMode = action.executionMode;
+      if (executionMode !== undefined && !isOneOf(executionMode, EXECUTION_MODES)) {
+        return {
+          ok: false,
+          message: "start_thread executionMode must be default, auto or full-access.",
+        };
       }
       const title = optionalString(action.title);
       const model = optionalString(action.model);
@@ -263,6 +291,7 @@ function normalizeAction(
           ...(title ? { title: title.slice(0, THREAD_TODO_TITLE_MAX_LENGTH) } : {}),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(executionMode ? { executionMode } : {}),
           ...(workMode ? { workMode } : {}),
         },
       };
@@ -274,6 +303,125 @@ function normalizeAction(
           "add_todo action.type must be start_review, merge_pull_request or start_thread.",
       };
   }
+}
+
+/**
+ * update_todo's fields are a patch: an absent field is left alone, and an
+ * empty string clears an optional one back to its default. That keeps
+ * "use another model" from making the thread restate the whole card.
+ */
+export function normalizeUpdateTodoArgs(
+  args: Record<string, unknown>,
+):
+  | { ok: true; target: { id?: string; key?: string }; value: UpdateThreadTodoInput }
+  | { ok: false; message: string } {
+  const id = optionalString(args.id);
+  const key = optionalString(args.key);
+  if (!id && !key) {
+    return { ok: false, message: "update_todo requires id or key." };
+  }
+  const value: UpdateThreadTodoInput = {};
+  if (args.title !== undefined) {
+    const title = optionalString(args.title);
+    if (!title) {
+      return { ok: false, message: "update_todo title cannot be empty." };
+    }
+    if (title.length > THREAD_TODO_TITLE_MAX_LENGTH) {
+      return {
+        ok: false,
+        message: `update_todo title must be at most ${THREAD_TODO_TITLE_MAX_LENGTH} characters.`,
+      };
+    }
+    value.title = title;
+  }
+  const detail = readClearable(args.detail, "detail", THREAD_TODO_DETAIL_MAX_LENGTH);
+  if (detail && !detail.ok) return detail;
+  if (detail) value.detail = detail.value;
+  const project = readClearable(args.project, "project", PROJECT_MAX_LENGTH);
+  if (project && !project.ok) return project;
+  if (project) value.project = project.value;
+
+  const action: ThreadTodoActionPatch = {};
+  if (args.prompt !== undefined) {
+    const prompt = optionalString(args.prompt);
+    if (!prompt) {
+      return { ok: false, message: "update_todo prompt cannot be empty." };
+    }
+    if (prompt.length > THREAD_TODO_PROMPT_MAX_LENGTH) {
+      return {
+        ok: false,
+        message: `update_todo prompt must be at most ${THREAD_TODO_PROMPT_MAX_LENGTH} characters.`,
+      };
+    }
+    action.prompt = prompt;
+  }
+  const threadTitle = readClearable(args.threadTitle, "threadTitle", THREAD_TODO_TITLE_MAX_LENGTH);
+  if (threadTitle && !threadTitle.ok) return threadTitle;
+  if (threadTitle) action.title = threadTitle.value;
+  for (const field of ["model", "reasoningEffort"] as const) {
+    const parsed = readClearable(args[field], field, PROJECT_MAX_LENGTH);
+    if (parsed && !parsed.ok) return parsed;
+    if (parsed) action[field] = parsed.value;
+  }
+  const executionMode = readClearableChoice(args.executionMode, "executionMode", EXECUTION_MODES);
+  if (executionMode && !executionMode.ok) return executionMode;
+  if (executionMode) action.executionMode = executionMode.value;
+  const workMode = readClearableChoice(args.workMode, "workMode", WORK_MODES);
+  if (workMode && !workMode.ok) return workMode;
+  if (workMode) action.workMode = workMode.value;
+  if (args.pullRequest !== undefined) {
+    const pullRequest = normalizePullRequestReference(args.pullRequest);
+    if (!pullRequest) {
+      return {
+        ok: false,
+        message: "update_todo pullRequest must be a PR number or a github.com pull request URL.",
+      };
+    }
+    action.pullRequest = pullRequest;
+  }
+  if (Object.keys(action).length > 0) value.action = action;
+  if (Object.keys(value).length === 0) {
+    return { ok: false, message: "update_todo needs at least one field to change." };
+  }
+  return {
+    ok: true,
+    target: { ...(id ? { id } : {}), ...(key ? { key } : {}) },
+    value,
+  };
+}
+
+/** Absent → undefined; "" → clear (null); otherwise the trimmed string. */
+function readClearable(
+  value: unknown,
+  name: string,
+  maxLength: number,
+): { ok: true; value: string | null } | { ok: false; message: string } | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    return { ok: false, message: `update_todo ${name} must be a string.` };
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    return { ok: false, message: `update_todo ${name} must be at most ${maxLength} characters.` };
+  }
+  return { ok: true, value: trimmed || null };
+}
+
+function readClearableChoice<T extends string>(
+  value: unknown,
+  name: string,
+  choices: readonly T[],
+): { ok: true; value: T | null } | { ok: false; message: string } | undefined {
+  if (value === undefined) return undefined;
+  if (value === "") return { ok: true, value: null };
+  if (!isOneOf(value, choices)) {
+    return { ok: false, message: `update_todo ${name} must be ${choices.join(", ")}, or empty to clear it.` };
+  }
+  return { ok: true, value };
+}
+
+function isOneOf<T extends string>(value: unknown, choices: readonly T[]): value is T {
+  return typeof value === "string" && (choices as readonly string[]).includes(value);
 }
 
 /**
@@ -334,7 +482,16 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "The operator clicks to run an action, and you never run it.",
         "Do not use cards for progress updates.",
         "Pass a stable key to update one card instead of adding another each turn.",
+        "Use update_todo to change some fields of a card you already raised.",
         "Pass project when the work is for another project, and raise one card per project.",
+      ].join(" ");
+    case "update_todo":
+      return [
+        "Change some fields of one of this thread's open to-do cards, by id or key.",
+        "Fields you omit stay as they are.",
+        "Pass an empty string to clear an optional field back to its default.",
+        "Use it when the operator asks to change a card, such as its model, effort or permissions.",
+        "A model may be named by id or by its display name, and the card stores the id.",
       ].join(" ");
     case "list_todos":
       return "List this thread's to-do cards. Defaults to open cards.";
@@ -402,6 +559,12 @@ function inputSchemaForOperation(
                 type: "string",
                 description: "start_thread only: reasoning effort, such as medium, high or xhigh.",
               },
+              executionMode: {
+                type: "string",
+                enum: [...EXECUTION_MODES],
+                description:
+                  "start_thread only: the new thread's permissions. Default Access is the default, auto is Auto, and full-access is Full Access.",
+              },
               workMode: {
                 type: "string",
                 enum: ["local", "worktree"],
@@ -409,6 +572,45 @@ function inputSchemaForOperation(
                   "start_thread only: worktree starts the thread in a new git worktree from this thread's directory. Local, the default, shares the directory.",
               },
             },
+          },
+        },
+      };
+    case "update_todo":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          id: { type: "string", description: "The card's id, from add_todo or list_todos." },
+          key: { type: "string", description: "An open card's key, instead of its id." },
+          title: { type: "string" },
+          detail: { type: "string", description: "Empty clears it." },
+          project: {
+            type: "string",
+            description: "The project the work is for, by name or path. Empty returns the card to this thread's project.",
+          },
+          prompt: { type: "string", description: "Handoff cards: the new thread's complete first message." },
+          threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },
+          model: {
+            type: "string",
+            description: "Handoff cards: model id or display name. Empty returns to the backend default.",
+          },
+          reasoningEffort: {
+            type: "string",
+            description: "Handoff cards: reasoning effort, such as medium, high or xhigh. Empty returns to the default.",
+          },
+          executionMode: {
+            type: "string",
+            enum: [...EXECUTION_MODES, ""],
+            description: "Handoff cards: the new thread's permissions. Empty returns to Default Access.",
+          },
+          workMode: {
+            type: "string",
+            enum: [...WORK_MODES, ""],
+            description: "Handoff cards: local or worktree. Empty returns to local.",
+          },
+          pullRequest: {
+            type: "string",
+            description: "Merge cards: the PR number or github.com URL.",
           },
         },
       };

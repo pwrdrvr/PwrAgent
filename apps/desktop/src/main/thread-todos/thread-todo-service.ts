@@ -11,6 +11,8 @@ import type {
   ThreadTodoStartedThread,
   ThreadTodoStatus,
   ThreadTodosChangedEvent,
+  ThreadTodoWorkMode,
+  ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -66,6 +68,37 @@ export type AddThreadTodoInput = {
   /** The project name or path the thread named, resolved by the runtime. */
   project?: string;
 };
+
+/**
+ * Changes to one field of a card's action. Absent leaves the field alone;
+ * null clears an optional one back to its default.
+ */
+export type ThreadTodoActionPatch = {
+  prompt?: string;
+  title?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  executionMode?: ThreadExecutionMode | null;
+  workMode?: ThreadTodoWorkMode | null;
+  pullRequest?: string;
+};
+
+export type UpdateThreadTodoInput = {
+  title?: string;
+  detail?: string | null;
+  /** A project name or path, resolved by the runtime; null for the thread's own. */
+  project?: string | null;
+  action?: ThreadTodoActionPatch;
+};
+
+const START_THREAD_PATCH_FIELDS = [
+  "prompt",
+  "title",
+  "model",
+  "reasoningEffort",
+  "executionMode",
+  "workMode",
+] as const;
 
 export class ThreadTodoError extends Error {
   constructor(
@@ -233,6 +266,17 @@ export class ThreadTodoService {
     key?: string;
     status: Exclude<ThreadTodoStatus, "open">;
   }): ThreadTodo {
+    const target = this.findForThread(params);
+    return this.resolve({ id: target.id, status: params.status });
+  }
+
+  /** One of the calling thread's cards, by id or by an open card's key. */
+  findForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    id?: string;
+    key?: string;
+  }): ThreadTodo {
     const target = params.id
       ? this.store.get(params.id)
       : params.key
@@ -252,7 +296,51 @@ export class ThreadTodoService {
         "No to-do with that id or key belongs to this thread.",
       );
     }
-    return this.resolve({ id: target.id, status: params.status });
+    return target;
+  }
+
+  /**
+   * Change some of an open card's fields and keep the rest, so "use another
+   * model" does not make the thread restate the prompt. The runtime has
+   * already resolved the project and checked the model. One commit, and it
+   * clears a failed run's error, since the card now says something else.
+   */
+  update(params: {
+    id: string;
+    title?: string;
+    detail?: string | null;
+    /** Resolved project; null returns the card to its thread's project. */
+    targetProject?: ThreadTodoProject | null;
+    action?: ThreadTodoActionPatch;
+  }): ThreadTodo {
+    const current = this.require(params.id);
+    if (current.status !== "open") {
+      throw new ThreadTodoError(
+        "conflict",
+        "This to-do is already resolved. Raise a new card with add_todo instead.",
+      );
+    }
+    if (this.running.has(current.id)) {
+      throw new ThreadTodoError("conflict", "This to-do's action is running now.");
+    }
+    const action = patchAction(current.action, params.action);
+    const targetProject = params.targetProject === undefined
+      ? current.targetProject
+      : params.targetProject !== null
+        && params.targetProject.key !== current.sourceProject?.key
+        ? params.targetProject
+        : undefined;
+    const todo = this.store.replaceContent({
+      id: current.id,
+      kind: current.kind,
+      title: params.title ?? current.title,
+      detail: params.detail === undefined ? current.detail : params.detail ?? undefined,
+      action,
+      targetProject,
+      now: this.now(),
+    });
+    this.emit(todo);
+    return todo;
   }
 
   /**
@@ -396,4 +484,50 @@ export class ThreadTodoService {
       threadId: todo.threadId,
     });
   }
+}
+
+function patchAction(
+  action: ThreadTodoAction | undefined,
+  patch: ThreadTodoActionPatch | undefined,
+): ThreadTodoAction | undefined {
+  if (!patch || Object.keys(patch).length === 0) {
+    return action;
+  }
+  const fields = Object.keys(patch);
+  if (action?.type === "merge_pull_request") {
+    const misplaced = fields.filter((field) => field !== "pullRequest");
+    if (misplaced.length > 0) {
+      throw new ThreadTodoError(
+        "invalid_arguments",
+        `A merge card takes only pullRequest, not ${misplaced.join(", ")}.`,
+      );
+    }
+    return patch.pullRequest ? { ...action, pullRequest: patch.pullRequest } : action;
+  }
+  if (action?.type === "start_thread") {
+    if (patch.pullRequest !== undefined) {
+      throw new ThreadTodoError(
+        "invalid_arguments",
+        "A handoff card has no pull request to change.",
+      );
+    }
+    const next: StartThreadAction = { ...action };
+    for (const field of START_THREAD_PATCH_FIELDS) {
+      const value = patch[field];
+      if (value === undefined) continue;
+      if (value === null) {
+        // The prompt is required: null cannot clear it.
+        if (field !== "prompt") delete (next as Record<string, unknown>)[field];
+      } else {
+        (next as Record<string, unknown>)[field] = value;
+      }
+    }
+    return next;
+  }
+  throw new ThreadTodoError(
+    "invalid_arguments",
+    action
+      ? "A review card has no action fields to change."
+      : "A reminder has no action to change. Raise a new card with add_todo to add one.",
+  );
 }

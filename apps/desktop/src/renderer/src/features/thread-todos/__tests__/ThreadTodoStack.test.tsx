@@ -207,6 +207,26 @@ describe("ThreadTodoStack", () => {
     expect(view.resolve).toHaveBeenCalledWith(handoff, "done", "handled_elsewhere");
   });
 
+  it("shows a handoff's model and permissions", () => {
+    const handoff = todo({
+      id: "h4",
+      kind: "handoff",
+      action: {
+        type: "start_thread",
+        prompt: "Build it",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "xhigh",
+        executionMode: "auto",
+      },
+    });
+    render(
+      <ThreadTodoStack threadKey="codex:thread-a" todos={[handoff]} view={createView([handoff])} onStartReview={vi.fn()} />,
+    );
+
+    expect(screen.getByText("gpt-6.1-sol · xhigh")).toBeTruthy();
+    expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
+  });
+
   it("copies the handoff prompt", async () => {
     const handoff = todo({
       id: "h3",

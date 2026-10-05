@@ -24,6 +24,7 @@ import {
   type IconProps,
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type { ThreadTodoInstance, ThreadTodoRunOptions } from "./thread-todos-view";
 
@@ -398,6 +399,9 @@ function buildFacts(todo: ThreadTodo): Array<[string, string]> {
     const facts: Array<[string, string]> = [];
     const model = [action.model, action.reasoningEffort].filter(Boolean).join(" · ");
     if (model) facts.push(["Model", model]);
+    if (action.executionMode) {
+      facts.push(["Access", formatExecutionModeLabel(action.executionMode)]);
+    }
     const directory = todo.targetProject
       ? `${todo.targetProject.label}'s directory`
       : "This thread's directory";

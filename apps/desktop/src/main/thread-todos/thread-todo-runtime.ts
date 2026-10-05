@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
@@ -18,7 +19,13 @@ import {
   threadTodoProjectForDirectory,
   type ThreadTodoProjectCandidate,
 } from "./thread-todo-projects.js";
-import { ThreadTodoError, ThreadTodoService } from "./thread-todo-service.js";
+import { resolveThreadTodoModel } from "./thread-todo-models.js";
+import {
+  ThreadTodoError,
+  ThreadTodoService,
+  type AddThreadTodoInput,
+  type ThreadTodoActionPatch,
+} from "./thread-todo-service.js";
 import { ThreadTodoStore } from "./thread-todo-store.js";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
@@ -75,6 +82,7 @@ export function installThreadTodoRuntime(params: {
         ...(action.reasoningEffort
           ? { reasoningEffort: action.reasoningEffort }
           : {}),
+        ...(action.executionMode ? { executionMode: action.executionMode } : {}),
         ...(action.workMode ? { workMode: action.workMode } : {}),
         // Work for another project is not grouped under this thread, as
         // handoff_task does not group it.
@@ -152,6 +160,9 @@ export function installThreadTodoRuntime(params: {
                 ...(action.reasoningEffort
                   ? { reasoningEffort: action.reasoningEffort }
                   : {}),
+                ...(action.executionMode
+                  ? { executionMode: action.executionMode }
+                  : {}),
                 ...(action.workMode ? { workMode: action.workMode } : {}),
                 groupingMode: crossProject ? "none" : "subthread",
               },
@@ -190,28 +201,108 @@ export function installThreadTodoRuntime(params: {
       });
     }
   });
+  // A model the catalog does not list would start the handoff on the
+  // default model without a word, so a card's model is settled when the
+  // card is written. See resolveThreadTodoModel.
+  const settleModel = async (
+    backend: AppServerBackendKind,
+    requested: { model?: string; reasoningEffort?: string },
+  ): Promise<{ model?: string; reasoningEffort?: string }> => {
+    if (!requested.model && !requested.reasoningEffort) return {};
+    const options = await registry.readBackendModelOptions(backend).catch((error: unknown) => {
+      threadTodoLog.warn("could not read models for a to-do", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
+    const resolved = resolveThreadTodoModel(options, requested);
+    if (!resolved.ok) {
+      throw new ThreadTodoError("invalid_arguments", resolved.message);
+    }
+    return { model: resolved.model, reasoningEffort: resolved.reasoningEffort };
+  };
+  const listProjectsForTodo = (): Promise<ThreadTodoProjectCandidate[]> =>
+    listProjects().catch((error: unknown) => {
+      threadTodoLog.warn("could not list projects for a to-do", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [] as ThreadTodoProjectCandidate[];
+    });
+  const matchProject = (
+    query: string,
+    projects: readonly ThreadTodoProjectCandidate[],
+  ): ThreadTodoProject => {
+    const match = matchThreadTodoProject(query, projects);
+    if (!match.ok) {
+      throw new ThreadTodoError("invalid_arguments", match.message);
+    }
+    return match.project;
+  };
+  const settleAddInput = async (
+    backend: AppServerBackendKind,
+    input: AddThreadTodoInput,
+  ): Promise<AddThreadTodoInput> => {
+    const action = input.action;
+    if (action?.type !== "start_thread") return input;
+    const { model, reasoningEffort } = await settleModel(backend, action);
+    const { model: _model, reasoningEffort: _effort, ...rest } = action;
+    return {
+      ...input,
+      action: {
+        ...rest,
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      },
+    };
+  };
   registry.setPwrAgentThreadTodoHandler({
-    add: async (context, input) => {
+    update: async (context, target, input) => {
+      const current = todos.findForThread({ ...context, ...target });
+      let action: ThreadTodoActionPatch | undefined = input.action;
+      const touchesModel = action
+        && (action.model !== undefined || action.reasoningEffort !== undefined);
+      if (action && touchesModel && current.action?.type === "start_thread") {
+        // Check the pair the card will hold, not just the changed half: a
+        // new model may not offer the effort the card already names.
+        const model = action.model === undefined
+          ? current.action.model
+          : action.model ?? undefined;
+        const reasoningEffort = action.reasoningEffort === undefined
+          ? current.action.reasoningEffort
+          : action.reasoningEffort ?? undefined;
+        const settled = await settleModel(current.backend, { model, reasoningEffort });
+        action = {
+          ...action,
+          model: settled.model ?? null,
+          reasoningEffort: settled.reasoningEffort ?? null,
+        };
+      }
+      let targetProject: ThreadTodoProject | null | undefined;
+      if (input.project === null) {
+        targetProject = null;
+      } else if (input.project !== undefined) {
+        targetProject = matchProject(input.project, await listProjectsForTodo());
+      }
+      return todos.update({
+        id: current.id,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.detail !== undefined ? { detail: input.detail } : {}),
+        ...(targetProject !== undefined ? { targetProject } : {}),
+        ...(action ? { action } : {}),
+      });
+    },
+    add: async (context, rawInput) => {
+      const input = await settleAddInput(context.backend, rawInput);
       const [cwd, primaryDirectory, projects] = await Promise.all([
         registry.resolveThreadWorkspaceCwd(context.backend, context.threadId)
           .catch(() => undefined),
         registry.resolveThreadPrimaryDirectory(context.backend, context.threadId)
           .catch(() => undefined),
-        listProjects().catch((error: unknown) => {
-          threadTodoLog.warn("could not list projects for a to-do", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return [] as ThreadTodoProjectCandidate[];
-        }),
+        listProjectsForTodo(),
       ]);
-      let targetProject: ThreadTodoProject | undefined;
-      if (input.project) {
-        const match = matchThreadTodoProject(input.project, projects);
-        if (!match.ok) {
-          throw new ThreadTodoError("invalid_arguments", match.message);
-        }
-        targetProject = match.project;
-      }
+      const targetProject = input.project
+        ? matchProject(input.project, projects)
+        : undefined;
       return todos.add({
         ...context,
         cwd,

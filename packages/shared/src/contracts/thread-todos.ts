@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
 
@@ -16,6 +17,7 @@ import type {
  */
 export const PWRAGENT_THREAD_TODO_OPERATION_NAMES = [
   "add_todo",
+  "update_todo",
   "list_todos",
   "resolve_todo",
 ] as const;
@@ -65,6 +67,8 @@ export type ThreadTodoAction =
       title?: string;
       model?: string;
       reasoningEffort?: string;
+      /** The new thread's permissions. Absent starts it in Default Access. */
+      executionMode?: ThreadExecutionMode;
       workMode?: ThreadTodoWorkMode;
     };
 
