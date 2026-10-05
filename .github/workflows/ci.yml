@@ -376,7 +376,7 @@ jobs:
     name: Windows installer (label-gated)
     # Opt-in only: add the `ci:windows-package` label to a PR to validate the
     # Windows NSIS installer build. Off by default — never runs on normal
-    # PRs/pushes, so the ~15-minute packaging cost is paid only on demand.
+    # PRs/pushes, so the packaging cost is paid only on demand.
     needs: changes
     if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:windows-package') }}
     runs-on: windows-latest
