@@ -151,7 +151,7 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
       '@shutterstock/p-map-iterable':
-        specifier: 1.2.0
+        specifier: ^1.2.0
         version: 1.2.0(aggregate-error@3.1.0)
       '@tiptap/extension-mention':
         specifier: ^3.22.5
