@@ -17,7 +17,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 68;
+export const CURRENT_STATE_DB_USER_VERSION = 69;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -551,6 +551,35 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_thread_actions_thread
 CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_thread_actions_queue
   ON scheduled_thread_actions(queue_entry_id)
   WHERE queue_entry_id IS NOT NULL;
+`;
+
+// Cards a thread raises for the operator (review, merge, start a proposed
+// thread, or a reminder). Written once per tool call or operator click, never
+// per streamed event. The partial unique index enforces "one open card per
+// key per thread"; a done card frees its key for the next one.
+const THREAD_TODO_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todos (
+  todo_id      TEXT PRIMARY KEY,
+  backend      TEXT NOT NULL,
+  thread_id    TEXT NOT NULL,
+  todo_key     TEXT,
+  kind         TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  detail       TEXT,
+  action_json  TEXT,
+  cwd          TEXT,
+  result_json  TEXT,
+  error        TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  resolved_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_thread_todos_status_thread
+  ON thread_todos(status, backend, thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_open_key
+  ON thread_todos(backend, thread_id, todo_key)
+  WHERE status = 'open' AND todo_key IS NOT NULL;
 `;
 
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
@@ -1879,6 +1908,12 @@ export class StateDb {
           db.pragma("user_version = 68");
         })();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 69) {
+        db.transaction(() => {
+          db.exec(THREAD_TODO_SCHEMA);
+          db.pragma("user_version = 69");
+        })();
+      }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2589,6 +2624,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(REMOTE_THREAD_TARGET_SCHEMA);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     db.exec(STAR_MAP_WORKSPACE_SCHEMA);
+    db.exec(THREAD_TODO_SCHEMA);
     db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");

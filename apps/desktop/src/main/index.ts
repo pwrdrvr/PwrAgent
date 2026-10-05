@@ -34,6 +34,7 @@ import {
   disposeScheduledActionIpcHandlers,
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
+import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
 import {
   disposeScheduledThreadActionService,
 } from "./scheduled-actions/scheduled-thread-action-service";
@@ -1589,6 +1590,7 @@ export function bootstrapApp(): void {
     });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
+    registerThreadTodoIpcHandlers();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();

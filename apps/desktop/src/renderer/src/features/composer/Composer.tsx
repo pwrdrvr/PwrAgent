@@ -311,6 +311,18 @@ export type ComposerProps = {
     text: string;
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
+  /**
+   * Opens the `/review` panel from outside the composer, as a to-do card's
+   * Start review does. The operator still picks the target and reviewer.
+   * Each id opens the panel once.
+   */
+  reviewRequest?: {
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+  };
+  /** A review this composer submitted was accepted by the backend. */
+  onReviewStarted?: () => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -3925,6 +3937,39 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
+  const appliedReviewRequestId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.reviewRequest;
+    if (!request || appliedReviewRequestId.current === request.id) {
+      return;
+    }
+    if (
+      request.threadId !== props.thread?.id
+      || request.backend !== props.thread?.source
+    ) {
+      appliedReviewRequestId.current = request.id;
+      return;
+    }
+    if (props.disabled) return;
+    appliedReviewRequestId.current = request.id;
+    if (reviewConfig) {
+      inputRef.current?.focus();
+      return;
+    }
+    // A draft in progress is parked in the recovery journal, where ArrowUp
+    // brings it back, rather than overwritten by the review command.
+    abandonComposerDraftSnapshot(composerScopeKey);
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: "/review",
+      expectedSkillTokensSignature: getComposerSkillTokensSignature([]),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    enterReviewComposer();
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard opens once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -6240,6 +6285,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         })?.catch(() => undefined);
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
+      props.onReviewStarted?.();
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
       }

@@ -915,6 +915,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-todo-add-update-resolve": {
+    "commits": 3,
+    "note": "one card raised, updated in place by key, then resolved: one commit each (~11 KB), none per turn or event; ~0.55 MB/day at 50 card operations",
+    "observedWalBytes": 32960,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "thread-usage-finalization": {
     "commits": 1,
     "note": "one successor pricing flush finalizes its predecessor in the same transaction",

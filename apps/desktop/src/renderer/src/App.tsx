@@ -142,6 +142,11 @@ import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActi
 import { useIndependentQueueProjection } from "./lib/useIndependentQueueProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { useThreadDraftIndicators, useUnassignedThreadDraftCount } from "./lib/useThreadDraftIndicators";
+import {
+  ThreadTodoCountsContext,
+  useThreadTodos,
+} from "./features/thread-todos/useThreadTodos";
+import type { ThreadTodosView } from "./features/thread-todos/thread-todos-view";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -2306,6 +2311,47 @@ function DesktopAppShell(props: {
     threads: navigation.threads,
   });
   const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
+  const threadTodoController = useThreadTodos(desktopApi);
+  const localThreadTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    for (const thread of navigation.threads) {
+      if (!thread.federation) {
+        titles.set(buildThreadIdentityKey(thread.source, thread.id), thread.title);
+      }
+    }
+    return titles;
+  }, [navigation.threads]);
+  const listThreadTodos = desktopApi?.listThreadTodos;
+  const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
+    if (!listThreadTodos || readRendererFederationTarget()) return undefined;
+    const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
+      showThreadFromLink({ backend, threadId });
+    };
+    return {
+      open: threadTodoController.openTodos,
+      openByThreadKey: threadTodoController.openByThreadKey,
+      revision: threadTodoController.revision,
+      runningIds: threadTodoController.runningIds,
+      threadTitle: (todo) =>
+        localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
+          ?? "Untitled thread",
+      resolve: (todo, status) => threadTodoController.resolve(todo.id, status),
+      run: (todo) => threadTodoController.runAction(todo.id),
+      openThread: (todo) => showTodoThread(todo.backend, todo.threadId),
+      openStartedThread: (todo) => {
+        if (todo.startedThread) {
+          showTodoThread(todo.startedThread.backend, todo.startedThread.threadId);
+        }
+      },
+      listResolved: async () => {
+        const response = await listThreadTodos({ status: "all" });
+        return response.todos
+          .filter((todo) => todo.status !== "open")
+          .sort((left, right) =>
+            (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
+      },
+    };
+  }, [listThreadTodos, localThreadTitles, showThreadFromLink, threadTodoController]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a
@@ -3233,6 +3279,7 @@ function DesktopAppShell(props: {
     mastheadActions,
     historyNav,
     starMap: starMapControls,
+    threadTodos: threadTodosView,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
@@ -3392,6 +3439,7 @@ function DesktopAppShell(props: {
 
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
+    <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -3954,6 +4002,7 @@ function DesktopAppShell(props: {
       </div>
 
     </TranscriptLinkProvider>
+    </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );
 }

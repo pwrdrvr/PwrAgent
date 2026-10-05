@@ -20,6 +20,14 @@ import {
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import type {
+  ListThreadTodosRequest,
+  ListThreadTodosResponse,
+  ResolveThreadTodoRequest,
+  RunThreadTodoActionRequest,
+  ThreadTodoMutationResponse,
+  ThreadTodosChangedEvent,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
@@ -586,6 +594,10 @@ import {
   SCHEDULED_ACTIONS_LIST_CHANNEL,
   SCHEDULED_ACTIONS_SEND_NOW_CHANNEL,
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
+  THREAD_TODOS_CHANGED_EVENT_CHANNEL,
+  THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_RESOLVE_CHANNEL,
+  THREAD_TODOS_RUN_ACTION_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -2054,6 +2066,30 @@ const desktopApi = Object.freeze({
     request: ReleaseQueuedTurnRequest,
   ): Promise<ReleaseQueuedTurnResponse> =>
     await ipcRenderer.invoke(AGENT_RELEASE_QUEUED_TURN_CHANNEL, request),
+  listThreadTodos: async (
+    request?: ListThreadTodosRequest,
+  ): Promise<ListThreadTodosResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {}),
+  resolveThreadTodo: async (
+    request: ResolveThreadTodoRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_RESOLVE_CHANNEL, request),
+  runThreadTodoAction: async (
+    request: RunThreadTodoActionRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_RUN_ACTION_CHANNEL, request),
+  onThreadTodosChanged: (
+    callback: (event: ThreadTodosChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ThreadTodosChangedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
   listScheduledThreadActions: async (
     request?: ListScheduledThreadActionsRequest,
     consumerId?: string,

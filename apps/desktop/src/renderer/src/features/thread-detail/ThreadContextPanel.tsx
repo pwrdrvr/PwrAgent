@@ -22,6 +22,7 @@ import type {
   CodexEnvironmentActionRun,
   ThreadCompactionRecord,
   ThreadPricingSummary,
+  ThreadTodo,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
@@ -39,6 +40,7 @@ import {
   ServerIcon,
   SubAgentsIcon,
   TerminalIcon,
+  TodoIcon,
   ToolCallsIcon,
   type IconProps,
 } from "../../icons";
@@ -47,6 +49,8 @@ import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
+import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
+import type { ThreadTodosView } from "../thread-todos/thread-todos-view";
 import { PrActivityPanel } from "./context-panels/PrActivityPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
@@ -81,6 +85,7 @@ type ContextTab = {
 
 const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
+  { id: "todos", label: "To-dos", Icon: TodoIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
@@ -94,6 +99,12 @@ const CONTEXT_TABS: ContextTab[] = [
 ];
 
 type ThreadContextPanelProps = {
+  /** The To-dos tab. Absent in a window that fronts a peer. */
+  todos?: {
+    view: ThreadTodosView;
+    threadKey: string;
+    onStartReview: (todo: ThreadTodo) => void;
+  };
   activeTurnId?: string;
   backendError?: string;
   backends: BackendSummary[];
@@ -255,6 +266,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? "info"
       : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
         ? "info"
+      : props.activeTab === "todos" && !props.todos
+        ? "info"
       : props.activeTab;
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
@@ -267,6 +280,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     props.thread
       ? (tab.id !== "pricing" || threadPricingSummaryEnabled)
         && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
+        && (tab.id !== "todos" || props.todos !== undefined)
       : tab.id === "providers",
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
@@ -662,9 +676,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const isActive = tab.id === activeTab;
     const TabIcon = tab.Icon;
     const commandCount = tab.id === "actions" ? props.backgroundTerminals?.terminals?.length ?? 0 : 0;
+    const todoCount = tab.id === "todos" && props.todos
+      ? props.todos.view.openByThreadKey.get(props.todos.threadKey)?.length ?? 0
+      : 0;
     const label = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
-      : tab.label;
+      : todoCount
+        ? `${tab.label} · ${todoCount} open for this thread`
+        : tab.label;
     return (
       <button
         key={tab.id}
@@ -681,6 +700,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       >
         <TabIcon size={18} aria-hidden="true" />
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
+        {todoCount > 0 ? <span className="context-rail__activity context-rail__activity--todos" aria-hidden="true">{todoCount > 9 ? "9+" : todoCount}</span> : null}
       </button>
     );
   }
@@ -740,6 +760,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
             initialLoadDurationMs={props.initialLoadDurationMs}
+          />
+        );
+      case "todos":
+        if (!props.thread || !props.todos) return null;
+        return (
+          <ThreadTodosPanel
+            view={props.todos.view}
+            threadKey={props.todos.threadKey}
+            onStartReview={props.todos.onStartReview}
           />
         );
       case "edits":

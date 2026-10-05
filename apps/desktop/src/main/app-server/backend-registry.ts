@@ -547,6 +547,10 @@ import {
   readPwrAgentStarMapDynamicToolCall,
 } from "../agent-tools/pwragent-star-map-codex-tools";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
+import {
+  buildPwrAgentThreadTodoToolRouter,
+  type PwrAgentThreadTodoHandler,
+} from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
@@ -9050,6 +9054,7 @@ export class DesktopBackendRegistry {
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
+  private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly changingCodexAgentThreadIds = new Set<string>();
@@ -10015,6 +10020,7 @@ export class DesktopBackendRegistry {
                 tokenMiserStore: this.tokenMiserStore,
                 tokenMiserFocused: this.tokenMiserService?.focused,
                 starMapHandler: this.starMapHandler,
+                threadTodoHandler: this.threadTodoHandler,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -10794,6 +10800,24 @@ export class DesktopBackendRegistry {
     handler: PwrAgentStarMapHandler | null | undefined,
   ): void {
     this.starMapHandler = handler ?? undefined;
+  }
+
+  setPwrAgentThreadTodoHandler(
+    handler: PwrAgentThreadTodoHandler | null | undefined,
+  ): void {
+    this.threadTodoHandler = handler ?? undefined;
+  }
+
+  /**
+   * The thread's workspace directory, as handoff and review resolve it. Thread
+   * to-dos capture it when a card is raised, so the card's merge or new thread
+   * runs where the raising thread worked.
+   */
+  async resolveThreadWorkspaceCwd(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<string | undefined> {
+    return await this.resolveThreadEnvironmentCwd(backend, threadId);
   }
 
   setFederatedThreadMessageHandler(
@@ -16812,6 +16836,7 @@ export class DesktopBackendRegistry {
       // never enabled the feature.
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
       starMapHandler: this.starMapHandler,
+      threadTodoHandler: this.threadTodoHandler,
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -25709,6 +25734,7 @@ export class DesktopBackendRegistry {
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
+        threadTodoHandler: this.threadTodoHandler,
       }),
     ), discoveryEnabled, eagerTools);
   }
@@ -35780,6 +35806,24 @@ export class DesktopBackendRegistry {
         backend,
         call: starMapToolCall,
         handler: this.starMapHandler,
+      });
+    }
+
+    const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(
+      this.threadTodoHandler,
+    );
+    if (hostToolCall && threadTodoRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "To-do tool calls must originate from an active turn on the owning thread.",
+        });
+      }
+      return await threadTodoRouter.handleDynamicToolCall({
+        backend,
+        call: hostToolCall,
       });
     }
 

@@ -162,6 +162,41 @@ export class GithubPrFetcher {
       options.ghAvailableCacheTtlMs ?? DEFAULT_GH_AVAILABLE_CACHE_TTL_MS;
   }
 
+  /**
+   * Squash-merge one PR with the operator's gh. Run only from an explicit
+   * operator click (a thread to-do's confirmed Squash merge). `pullRequest` is
+   * a number, resolved against the repository at `cwd`, or a github.com URL.
+   * The branch is left alone: `--delete-branch` would also check out the
+   * default branch in `cwd`, which may be the thread's worktree.
+   */
+  async mergePullRequest(params: {
+    cwd?: string;
+    pullRequest: string;
+  }): Promise<{ summary: string }> {
+    const command = await this.resolveGhCommand();
+    try {
+      await execFileAsync(
+        command,
+        ["pr", "merge", params.pullRequest, "--squash"],
+        {
+          ...(params.cwd ? { cwd: params.cwd } : {}),
+          env: buildPwrAgentChildProcessEnv(process.env),
+          timeout: 60_000,
+          encoding: "utf8",
+        },
+      );
+    } catch (error) {
+      const err = error as { stderr?: string; message?: string };
+      const detail = err.stderr?.trim() || err.message || String(error);
+      throw new Error(`gh pr merge failed: ${detail.split("\n")[0]}`);
+    }
+    return {
+      summary: /^\d+$/.test(params.pullRequest)
+        ? `Squash-merged #${params.pullRequest}`
+        : "Squash-merged",
+    };
+  }
+
   async isGhAvailable(): Promise<boolean> {
     if (
       this.ghAvailableCache
