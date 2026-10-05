@@ -370,7 +370,7 @@ assertWorkflowJobRunner(
   ciWorkflow,
   ".github/workflows/ci.yml",
   "windows-package",
-  "windows-2022",
+  "windows-latest",
 );
 assertWorkflowJobRunner(
   ciWorkflow,
@@ -472,7 +472,7 @@ assertWorkflowJobRunner(
   releaseWorkflow,
   ".github/workflows/release.yml",
   "windows-prepare",
-  "windows-2022",
+  "windows-latest",
 );
 assertWorkflowJobRunner(
   releaseWorkflow,

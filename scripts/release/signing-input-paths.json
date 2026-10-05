@@ -18,6 +18,7 @@
     "apps/desktop/scripts/verify-bundled-git.mjs",
     "apps/desktop/scripts/packaged-html-rules.mjs",
     "apps/desktop/scripts/asar-entry-paths.mjs",
+    "apps/desktop/scripts/stage-native-prebuilds.mjs",
     "apps/desktop/node_modules",
     "node_modules"
   ],
@@ -33,6 +34,7 @@
     "apps/desktop/scripts/verify-bundled-git.mjs",
     "apps/desktop/scripts/packaged-html-rules.mjs",
     "apps/desktop/scripts/asar-entry-paths.mjs",
+    "apps/desktop/scripts/stage-native-prebuilds.mjs",
     "apps/desktop/scripts/windows-release-artifacts.mjs",
     "scripts/release/install-trusted-signing.ps1"
   ]

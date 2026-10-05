@@ -4,7 +4,6 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getNativeBinding } from "../state/native-binding";
 import {
   CURRENT_STATE_DB_USER_VERSION,
   SQLITE_AUTO_VACUUM_INCREMENTAL,
@@ -763,11 +762,7 @@ describe("StateDb", () => {
     // A database created the way every pre-fix profile was: WAL first, so the
     // `auto_vacuum` assignment lands on a file that already has a header.
     const openLegacyDatabase = (dbPath: string, fragmented = true) => {
-      const nativeBinding = getNativeBinding();
-      const legacy = new Database(
-        dbPath,
-        nativeBinding ? { nativeBinding } : {},
-      );
+      const legacy = new Database(dbPath);
       legacy.pragma("journal_mode = WAL");
       legacy.pragma("auto_vacuum = INCREMENTAL");
       legacy.exec("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)");
@@ -2446,8 +2441,7 @@ function createLegacyThreadSearchFtsDb(
 }
 
 function openRawDb(dbPath: string): BetterSqlite3.Database {
-  const nativeBinding = getNativeBinding();
-  return new Database(dbPath, nativeBinding ? { nativeBinding } : {});
+  return new Database(dbPath);
 }
 
 function existingTables(): string[] {
